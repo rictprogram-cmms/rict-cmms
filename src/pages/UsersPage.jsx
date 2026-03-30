@@ -10,6 +10,7 @@ import {
   Trash2, AlertTriangle, UserMinus, Wifi, KeyRound, Copy, Check,
   RefreshCcw
 } from 'lucide-react'
+import toast from 'react-hot-toast'
 
 const ROLES = ['Instructor', 'Work Study', 'Student']
 const STATUSES = ['Active', 'Inactive', 'Archived']
@@ -83,6 +84,7 @@ export default function UsersPage() {
   const [archiveConfirm, setArchiveConfirm] = useState(null)
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [resetConfirm, setResetConfirm] = useState(null)
+  const [showAddUser, setShowAddUser] = useState(false)
 
   // Auto-refresh when users are updated (e.g. approved via NotificationBell)
   useEffect(() => {
@@ -160,46 +162,59 @@ export default function UsersPage() {
         <h1 className="text-lg font-bold text-surface-900 flex items-center gap-2">
           <Users size={20} className="text-brand-600" /> User Management
         </h1>
-        {requests.length > 0 && (
-          <button onClick={() => setTab(tab === 'requests' ? 'users' : 'requests')}
-            className="px-3 py-1.5 rounded-lg bg-yellow-100 text-yellow-800 text-xs font-medium flex items-center gap-1.5">
-            <AlertCircle size={14} /> {requests.length} Pending Request{requests.length !== 1 ? 's' : ''}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Add User button — visible on Users tab for instructors with edit_users */}
+          {hasPerm('edit_users') && tab === 'users' && (
+            <button
+              onClick={() => setShowAddUser(true)}
+              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 flex items-center gap-1.5 transition-colors"
+            >
+              <UserPlus size={14} /> Add User
+            </button>
+          )}
+          {requests.length > 0 && (
+            <button onClick={() => setTab(tab === 'requests' ? 'users' : 'requests')}
+              className="px-3 py-1.5 rounded-lg bg-yellow-100 text-yellow-800 text-xs font-medium flex items-center gap-1.5">
+              <AlertCircle size={14} /> {requests.length} Pending Request{requests.length !== 1 ? 's' : ''}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tab Toggle */}
-      <div className="flex gap-1 bg-surface-100 rounded-xl p-1">
-        <button onClick={() => setTab('users')}
+      <div className="flex gap-1 bg-surface-100 rounded-xl p-1" role="tablist" aria-label="User management sections">
+        <button onClick={() => setTab('users')} role="tab" aria-selected={tab === 'users'} aria-controls="panel-users" id="tab-users"
           className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${tab === 'users' ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500'}`}>
           <Users size={14} className="inline mr-1" /> Users ({users.length})
         </button>
-        <button onClick={() => setTab('requests')}
+        <button onClick={() => setTab('requests')} role="tab" aria-selected={tab === 'requests'} aria-controls="panel-requests" id="tab-requests"
           className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${tab === 'requests' ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500'}`}>
           <UserPlus size={14} className="inline mr-1" /> Requests ({requests.length})
         </button>
       </div>
 
       {tab === 'requests' ? (
-        <AccessRequestsPanel requests={requests} loading={reqLoading} onRefresh={() => { refreshReqs(); refresh() }} />
+        <div role="tabpanel" id="panel-requests" aria-labelledby="tab-requests">
+          <AccessRequestsPanel requests={requests} loading={reqLoading} onRefresh={() => { refreshReqs(); refresh() }} />
+        </div>
       ) : (
-        <>
+        <div role="tabpanel" id="panel-users" aria-labelledby="tab-users">
           {/* Filters */}
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 mb-4">
             <div className="relative flex-1 min-w-[200px]">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
               <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search users..." className="input pl-9 text-sm" />
+                placeholder="Search users..." className="input pl-9 text-sm" aria-label="Search users" />
             </div>
-            <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className="input text-sm w-auto">
+            <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className="input text-sm w-auto" aria-label="Filter by role">
               <option value="">All Roles</option>
               {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-sm w-auto">
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-sm w-auto" aria-label="Filter by status">
               <option value="">All Status</option>
               {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <select value={badgeFilter} onChange={e => setBadgeFilter(e.target.value)} className="input text-sm w-auto">
+            <select value={badgeFilter} onChange={e => setBadgeFilter(e.target.value)} className="input text-sm w-auto" aria-label="Filter by badge">
               <option value="">All Badges</option>
               <option value="assigned">Has Badge</option>
               <option value="missing">No Badge</option>
@@ -208,12 +223,13 @@ export default function UsersPage() {
             <button
               onClick={() => setOnlineFilter(f => !f)}
               title="Show only currently online users"
+              aria-pressed={onlineFilter}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                 onlineFilter
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
                   : 'bg-white border-surface-200 text-surface-500 hover:border-emerald-300 hover:text-emerald-600'
               }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${onlineFilter ? 'bg-emerald-500' : 'bg-surface-300'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${onlineFilter ? 'bg-emerald-500' : 'bg-surface-300'}`} aria-hidden="true" />
               Online Only
               {onlineFilter && (
                 <span className="ml-0.5 bg-emerald-100 text-emerald-700 rounded-full px-1.5 py-0 text-[10px] font-semibold">
@@ -225,7 +241,7 @@ export default function UsersPage() {
 
           {/* Selection Toolbar */}
           {selectedCount > 0 && (
-            <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2 flex items-center gap-3 text-sm">
+            <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2 flex items-center gap-3 text-sm mb-4">
               <span className="text-brand-700 font-medium">{selectedCount} selected</span>
               <button onClick={() => setShowCompose(true)} className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1">
                 <Mail size={12} /> Send Message
@@ -253,21 +269,22 @@ export default function UsersPage() {
           ) : (
             <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm" role="table">
                   <thead>
                     <tr className="bg-surface-50 text-left">
-                      <th className="px-3 py-2.5 w-8">
+                      <th scope="col" className="px-3 py-2.5 w-8">
                         <input type="checkbox" onChange={e => toggleAll(e.target.checked)}
-                          checked={selectedCount > 0 && selectedCount === filtered.length} className="rounded" />
+                          checked={selectedCount > 0 && selectedCount === filtered.length} className="rounded"
+                          aria-label="Select all users" />
                       </th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Name</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Email</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Role</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Status</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Badge</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Classes</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600">Last Active</th>
-                      <th className="px-3 py-2.5 text-xs font-semibold text-surface-600 text-center">Actions</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Name</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Email</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Role</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Status</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Badge</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Classes</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Last Active</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-100">
@@ -291,7 +308,8 @@ export default function UsersPage() {
                         <tr key={u.id} className={`hover:bg-surface-50 transition-colors ${u.status === 'Archived' ? 'opacity-60' : ''}`}>
                           <td className="px-3 py-2">
                             <input type="checkbox" checked={!!selectedUsers[u.id]}
-                              onChange={() => toggleSelect(u.id)} className="rounded" />
+                              onChange={() => toggleSelect(u.id)} className="rounded"
+                              aria-label={`Select ${u.first_name} ${u.last_name}`} />
                           </td>
                           <td className="px-3 py-2 font-medium text-surface-900">
                             <span className="inline-flex items-center gap-1.5">
@@ -302,11 +320,12 @@ export default function UsersPage() {
                                     : 'bg-surface-200 ring-surface-200'
                                 }`}
                                 title={dotTitle}
+                                aria-hidden="true"
                               />
                               {u.first_name} {u.last_name}
                               {u.time_clock_only === 'Yes' && (
                                 <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 font-semibold border border-sky-200" title="Time Clock Only – excluded from rotations and TV displays">
-                                  <Clock size={12} /> TCO
+                                  <Clock size={12} aria-hidden="true" /> TCO
                                 </span>
                               )}
                             </span>
@@ -330,11 +349,11 @@ export default function UsersPage() {
                           <td className="px-3 py-2">
                             {hasBadge ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700">
-                                <CheckCircle2 size={12} /> Assigned
+                                <CheckCircle2 size={12} aria-hidden="true" /> Assigned
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600">
-                                <AlertTriangle size={12} /> Missing
+                                <AlertTriangle size={12} aria-hidden="true" /> Missing
                               </span>
                             )}
                           </td>
@@ -347,7 +366,7 @@ export default function UsersPage() {
                             ].filter(Boolean).join('\n') || 'Never active'}>
                             {isOnline ? (
                               <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
                                 Online{activeDuration ? ` · ${activeDuration}` : ''}
                               </span>
                             ) : lastActiveFormatted ? (
@@ -362,6 +381,7 @@ export default function UsersPage() {
                                 {/* Edit */}
                                 <button onClick={() => setEditingUser(u)}
                                   title="Edit User"
+                                  aria-label={`Edit ${u.first_name} ${u.last_name}`}
                                   className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600">
                                   <Edit3 size={14} />
                                 </button>
@@ -369,6 +389,7 @@ export default function UsersPage() {
                                 {u.role !== 'Instructor' && (
                                   <button onClick={() => setResetConfirm(u)}
                                     title="Reset Password"
+                                    aria-label={`Reset password for ${u.first_name} ${u.last_name}`}
                                     className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-600">
                                     <KeyRound size={14} />
                                   </button>
@@ -377,6 +398,7 @@ export default function UsersPage() {
                                 {u.status !== 'Archived' ? (
                                   <button onClick={() => setArchiveConfirm(u)}
                                     title="Archive User"
+                                    aria-label={`Archive ${u.first_name} ${u.last_name}`}
                                     className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-600">
                                     <UserMinus size={14} />
                                   </button>
@@ -386,6 +408,7 @@ export default function UsersPage() {
                                     refresh()
                                   }}
                                     title="Reactivate User"
+                                    aria-label={`Reactivate ${u.first_name} ${u.last_name}`}
                                     className="p-1.5 rounded-lg hover:bg-emerald-50 text-surface-400 hover:text-emerald-600">
                                     <UserCheck size={14} />
                                   </button>
@@ -394,6 +417,7 @@ export default function UsersPage() {
                                 {isSuperAdmin && (
                                   <button onClick={() => setDeleteConfirm(u)}
                                     title="Permanently Delete"
+                                    aria-label={`Permanently delete ${u.first_name} ${u.last_name}`}
                                     className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600">
                                     <X size={14} />
                                   </button>
@@ -408,6 +432,14 @@ export default function UsersPage() {
                 </table>
               </div>
             </div>
+          )}
+
+          {/* Add User Modal */}
+          {showAddUser && (
+            <AddUserModal
+              onClose={() => setShowAddUser(false)}
+              onAdded={() => { setShowAddUser(false); refresh() }}
+            />
           )}
 
           {/* Edit User Modal */}
@@ -444,8 +476,183 @@ export default function UsersPage() {
               onClose={() => setShowCompose(false)}
               onSent={() => { setShowCompose(false); setSelectedUsers({}) }} />
           )}
-        </>
+        </div>
       )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADD USER MODAL
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Quick-add a user as a Student (default). After creation the instructor can
+// use the Edit modal to change role, set TCO, assign classes, etc.
+
+function AddUserModal({ onClose, onAdded }) {
+  const { profile } = useAuth()
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [email, setEmail] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const userName = profile
+    ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
+    : 'Unknown'
+
+  const canSubmit = firstName.trim() && lastName.trim() && email.trim()
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return
+
+    const trimmedEmail = email.toLowerCase().trim()
+    const trimmedFirst = firstName.trim()
+    const trimmedLast = lastName.trim()
+
+    // Basic email format check
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      toast.error('Please enter a valid email address.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      // Check if a profile with this email already exists
+      const { data: existing } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', trimmedEmail)
+        .maybeSingle()
+
+      if (existing) {
+        toast.error('A user with this email already exists.')
+        setSaving(false)
+        return
+      }
+
+      // Create profile — always defaults to Student / Active
+      const uuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+      const { error } = await supabase.from('profiles').insert({
+        id: uuid,
+        email: trimmedEmail,
+        first_name: trimmedFirst,
+        last_name: trimmedLast,
+        role: 'Student',
+        status: 'Active'
+      })
+
+      if (error) throw error
+
+      // Audit log
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Add User',
+          entity_type: 'User',
+          entity_id: uuid,
+          details: `Manually added user: ${trimmedFirst} ${trimmedLast} (${trimmedEmail}) as Student`
+        })
+      } catch {}
+
+      toast.success(`${trimmedFirst} ${trimmedLast} added as Student!`)
+      onAdded()
+    } catch (err) {
+      toast.error(err.message || 'Failed to add user')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Close on Escape key
+  useEffect(() => {
+    const handleKey = (e) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="add-user-title">
+      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center">
+              <UserPlus size={16} className="text-brand-600" />
+            </div>
+            <h3 id="add-user-title" className="text-sm font-bold text-surface-900">Add User</h3>
+          </div>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Info note */}
+        <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-200">
+          <AlertCircle size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-blue-700 leading-snug">
+            New users are added as <strong>Student</strong> by default. Use the Edit button after
+            creation to change role, assign classes, or set Time Clock Only (TCO).
+          </p>
+        </div>
+
+        {/* Name fields */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="add-first-name" className="label">First Name</label>
+            <input
+              id="add-first-name"
+              type="text"
+              value={firstName}
+              onChange={e => setFirstName(e.target.value)}
+              className="input text-sm"
+              placeholder="First Name"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label htmlFor="add-last-name" className="label">Last Name</label>
+            <input
+              id="add-last-name"
+              type="text"
+              value={lastName}
+              onChange={e => setLastName(e.target.value)}
+              className="input text-sm"
+              placeholder="Last Name"
+            />
+          </div>
+        </div>
+
+        {/* Email */}
+        <div>
+          <label htmlFor="add-email" className="label">Email Address</label>
+          <input
+            id="add-email"
+            type="email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            className="input text-sm"
+            placeholder="student@example.edu"
+          />
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={handleSubmit}
+            disabled={saving || !canSubmit}
+            className="flex-1 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-colors"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
+            {saving ? 'Adding...' : 'Add User'}
+          </button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200 transition-colors">
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -502,7 +709,8 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="reset-pw-title">
       <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
 
         {/* Header */}
@@ -511,9 +719,9 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
             <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
               <KeyRound size={16} className="text-amber-600" />
             </div>
-            <h3 className="text-sm font-bold text-surface-900">Reset Password</h3>
+            <h3 id="reset-pw-title" className="text-sm font-bold text-surface-900">Reset Password</h3>
           </div>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close"><X size={16} /></button>
         </div>
 
         {/* Who */}
@@ -534,11 +742,12 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
 
         {/* Password field */}
         <div className="space-y-1.5">
-          <label className="label">Temporary Password</label>
+          <label htmlFor="temp-password" className="label">Temporary Password</label>
           <div className="flex gap-2">
             {/* Input */}
             <div className="relative flex-1">
               <input
+                id="temp-password"
                 type={showPassword ? 'text' : 'password'}
                 value={tempPassword}
                 onChange={e => setTempPassword(e.target.value)}
@@ -551,6 +760,7 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
                 onClick={() => setShowPassword(v => !v)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-surface-400 hover:text-surface-600"
                 title={showPassword ? 'Hide password' : 'Show password'}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -560,6 +770,7 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
               type="button"
               onClick={handleRegenerate}
               title="Generate new password"
+              aria-label="Generate new password"
               className="p-2 rounded-lg border border-surface-200 bg-white text-surface-500 hover:text-brand-600 hover:border-brand-300 transition-colors"
             >
               <RefreshCcw size={14} />
@@ -569,6 +780,7 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
               type="button"
               onClick={handleCopy}
               title="Copy to clipboard"
+              aria-label="Copy to clipboard"
               className={`p-2 rounded-lg border transition-colors ${
                 copied
                   ? 'border-emerald-300 bg-emerald-50 text-emerald-600'
@@ -621,14 +833,15 @@ function ArchiveConfirmModal({ user, actions, onClose, onDone }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="archive-user-title">
       <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
             <Archive size={20} className="text-amber-600" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-surface-900">Archive User</h3>
+            <h3 id="archive-user-title" className="text-sm font-bold text-surface-900">Archive User</h3>
             <p className="text-xs text-surface-500">Remove from active rotations</p>
           </div>
         </div>
@@ -679,14 +892,15 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
       <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
             <Trash2 size={20} className="text-red-600" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-red-700">Permanently Delete User</h3>
+            <h3 id="delete-user-title" className="text-sm font-bold text-red-700">Permanently Delete User</h3>
             <p className="text-xs text-surface-500">This action cannot be undone</p>
           </div>
         </div>
@@ -720,10 +934,10 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
         ) : (
           <>
             <div className="space-y-2">
-              <label className="text-xs font-medium text-surface-700">
+              <label htmlFor="confirm-delete-name" className="text-xs font-medium text-surface-700">
                 Type <span className="font-bold text-red-600">{fullName}</span> to confirm:
               </label>
-              <input value={typedName} onChange={e => setTypedName(e.target.value)}
+              <input id="confirm-delete-name" value={typedName} onChange={e => setTypedName(e.target.value)}
                 className="input text-sm" placeholder="Type full name here..."
                 autoFocus />
               {typedName && !nameMatches && (
@@ -772,58 +986,59 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="edit-user-title">
       <div className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-surface-900">Edit User</h3>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+          <h3 id="edit-user-title" className="text-sm font-bold text-surface-900">Edit User</h3>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close"><X size={16} /></button>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">First Name</label>
-            <input value={form.firstName} onChange={e => setForm(f => ({ ...f, firstName: e.target.value }))} className="input text-sm" />
+            <label htmlFor="edit-first-name" className="label">First Name</label>
+            <input id="edit-first-name" value={form.firstName} onChange={e => setForm(f => ({ ...f, firstName: e.target.value }))} className="input text-sm" />
           </div>
           <div>
-            <label className="label">Last Name</label>
-            <input value={form.lastName} onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} className="input text-sm" />
+            <label htmlFor="edit-last-name" className="label">Last Name</label>
+            <input id="edit-last-name" value={form.lastName} onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} className="input text-sm" />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">Role</label>
-            <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} className="input text-sm">
+            <label htmlFor="edit-role" className="label">Role</label>
+            <select id="edit-role" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} className="input text-sm">
               {ROLES.map(r => <option key={r}>{r}</option>)}
             </select>
           </div>
           <div>
-            <label className="label">Status</label>
-            <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
+            <label htmlFor="edit-status" className="label">Status</label>
+            <select id="edit-status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
               {STATUSES.map(s => <option key={s}>{s}</option>)}
             </select>
           </div>
         </div>
 
         <div>
-          <label className="label">Classes (comma-separated)</label>
-          <input value={form.classes} onChange={e => setForm(f => ({ ...f, classes: e.target.value }))}
+          <label htmlFor="edit-classes" className="label">Classes (comma-separated)</label>
+          <input id="edit-classes" value={form.classes} onChange={e => setForm(f => ({ ...f, classes: e.target.value }))}
             className="input text-sm" placeholder="RICT-101, RICT-201" />
         </div>
 
         <div>
-          <label className="label">Card ID / Badge</label>
-          <input value={form.cardId} onChange={e => setForm(f => ({ ...f, cardId: e.target.value }))}
+          <label htmlFor="edit-card-id" className="label">Card ID / Badge</label>
+          <input id="edit-card-id" value={form.cardId} onChange={e => setForm(f => ({ ...f, cardId: e.target.value }))}
             className="input text-sm" placeholder="Scan or enter card ID" />
           {form.cardId && (
             <p className="text-[10px] text-surface-400 mt-1">Current: {form.cardId}</p>
           )}
         </div>
 
-        <label className="flex items-center gap-2 text-sm">
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
           <input type="checkbox" checked={form.timeClockOnly}
             onChange={e => setForm(f => ({ ...f, timeClockOnly: e.target.checked }))} className="rounded" />
-          Time Clock Only (no app login)
+          <span>Time Clock Only (no app login)</span>
         </label>
 
         <div className="flex gap-2 pt-1">
@@ -1015,6 +1230,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
               value={manualFirst}
               onChange={e => setManualFirst(e.target.value)}
               className="input text-sm"
+              aria-label="First Name"
             />
             <input
               type="text"
@@ -1022,6 +1238,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
               value={manualLast}
               onChange={e => setManualLast(e.target.value)}
               className="input text-sm"
+              aria-label="Last Name"
             />
           </div>
           <input
@@ -1030,12 +1247,14 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
             value={manualEmail}
             onChange={e => setManualEmail(e.target.value)}
             className="input text-sm w-full"
+            aria-label="Email Address"
           />
           <div className="flex items-center gap-2">
             <select
               value={manualRole}
               onChange={e => setManualRole(e.target.value)}
               className="input text-sm"
+              aria-label="Role"
             >
               <option value="Student">Student</option>
               <option value="Work Study">Work Study</option>
@@ -1137,11 +1356,12 @@ function ComposeModal({ users, selectedIds, templates, onClose, onSent }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="compose-title">
       <div className="bg-white rounded-2xl w-full max-w-lg p-5 space-y-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-surface-900">Compose Message</h3>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+          <h3 id="compose-title" className="text-sm font-bold text-surface-900">Compose Message</h3>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close"><X size={16} /></button>
         </div>
 
         {/* Recipients */}
@@ -1158,23 +1378,23 @@ function ComposeModal({ users, selectedIds, templates, onClose, onSent }) {
           <select onChange={e => {
             const t = templates[parseInt(e.target.value)]
             if (t) { setSubject(t.subject); setBody(t.body) }
-          }} className="input text-sm">
+          }} className="input text-sm" aria-label="Use a message template">
             <option value="">Use template...</option>
             {templates.map((t, i) => <option key={i} value={i}>{t.template_name}</option>)}
           </select>
         )}
 
         <div>
-          <label className="label">Subject</label>
-          <input value={subject} onChange={e => setSubject(e.target.value)} className="input text-sm" placeholder="Subject..." />
+          <label htmlFor="compose-subject" className="label">Subject</label>
+          <input id="compose-subject" value={subject} onChange={e => setSubject(e.target.value)} className="input text-sm" placeholder="Subject..." />
         </div>
         <div>
-          <label className="label">Message</label>
-          <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} className="input text-sm" placeholder="Write your message..." />
+          <label htmlFor="compose-body" className="label">Message</label>
+          <textarea id="compose-body" value={body} onChange={e => setBody(e.target.value)} rows={5} className="input text-sm" placeholder="Write your message..." />
         </div>
         <div>
-          <label className="label">Expires (optional)</label>
-          <input type="date" value={expires} onChange={e => setExpires(e.target.value)} className="input text-sm" />
+          <label htmlFor="compose-expires" className="label">Expires (optional)</label>
+          <input id="compose-expires" type="date" value={expires} onChange={e => setExpires(e.target.value)} className="input text-sm" />
         </div>
 
         <div className="flex gap-2 pt-1">
