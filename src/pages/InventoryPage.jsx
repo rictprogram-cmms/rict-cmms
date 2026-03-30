@@ -70,8 +70,7 @@ export default function InventoryPage() {
 
   // Inventory permissions (add_items, edit_items, delete_items, adjust_quantity, print_labels, etc.)
   const { hasPerm } = usePermissions('Inventory');
-  // view_low_stock lives on the Purchase Orders page permissions
-  const { hasPerm: hasPOPerm } = usePermissions('Purchase Orders');
+  // view_low_stock permission now lives on the Inventory page (moved via SQL)
 
   const getImageUrl = (fileId) => {
     if (!fileId) return '';
@@ -480,7 +479,7 @@ export default function InventoryPage() {
           </select>
           <select className="filter-select" value={stockFilter} onChange={e => setStockFilter(e.target.value)}>
             <option value="">All Stock Levels</option>
-            {hasPOPerm('view_low_stock') && <option value="low">Low Stock</option>}
+            {hasPerm('view_low_stock') && <option value="low">Low Stock</option>}
             <option value="ok">In Stock</option>
           </select>
           <label className="checkbox-filter">
@@ -495,7 +494,7 @@ export default function InventoryPage() {
           <button className="btn btn-sm btn-secondary" onClick={() => navigate('/inventory/scan')}>
             <span className="material-icons">qr_code_scanner</span>Cycle Count
           </button>
-          {hasPOPerm('view_low_stock') && (
+          {hasPerm('view_low_stock') && (
             <button className="btn btn-sm btn-secondary" onClick={() => window.location.hash = '#purchaseorders'}>
               <span className="material-icons">shopping_cart</span>Purchase Orders
             </button>
@@ -509,7 +508,7 @@ export default function InventoryPage() {
       </div>
 
       {/* Low Stock Banner — only visible to users with view_low_stock permission */}
-      {lowStockCount > 0 && hasPOPerm('view_low_stock') && (
+      {lowStockCount > 0 && hasPerm('view_low_stock') && (
         <div className="alert-banner">
           <span className="material-icons">warning</span>
           <strong>{lowStockCount}</strong> items low on stock
