@@ -1088,7 +1088,8 @@ export default function TimeClockPage() {
   // entry required. Any "Work Study" class in profile.classes is skipped to avoid
   // duplicates (safe to deactivate CLS1007 in Settings).
   async function buildClassList(profile) {
-    const isWorkStudy = (profile.role || '').toLowerCase() === 'work_study'
+    const isWorkStudy = (profile.role || '').toLowerCase() === 'work study'
+    const isTCO = profile.time_clock_only === 'Yes'
 
     const userClasses = (profile.classes || '').toString()
     // Also detect if "Work Study" is manually listed in the classes field
@@ -1111,7 +1112,8 @@ export default function TimeClockPage() {
 
     // ── Auto-inject Work Study option for work_study role users ──
     // Also inject if "Work Study" is listed in profile.classes (e.g. TCO Student users)
-    if (isWorkStudy || hasWorkStudyClass) {
+    // Also inject for TCO (Time Clock Only) users — they are hired work study
+    if (isWorkStudy || hasWorkStudyClass || isTCO) {
       classDetails.push({
         classId: 'WORK_STUDY',
         courseId: 'Work Study',
@@ -1119,7 +1121,7 @@ export default function TimeClockPage() {
         requiredHours: 20,
         isWorkStudy: true,
       })
-      console.log('[TimeClock] Work Study option injected for role=work_study or classes=Work Study')
+      console.log('[TimeClock] Work Study option injected for role=work study, classes=Work Study, or TCO')
     }
 
     if (classNames.length > 0) {
@@ -1171,24 +1173,27 @@ export default function TimeClockPage() {
       }
     }
 
-    // Add Volunteer option
-    classDetails.push({
-      classId: 'VOLUNTEER',
-      courseId: 'Volunteer',
-      courseName: 'Volunteer hours (requires instructor approval)',
-      requiredHours: 10,
-      isVolunteer: true,
-    })
+    // Add Volunteer and Club Activity options (not for TCO users — they only use Work Study)
+    if (!isTCO) {
+      // Add Volunteer option
+      classDetails.push({
+        classId: 'VOLUNTEER',
+        courseId: 'Volunteer',
+        courseName: 'Volunteer hours (requires instructor approval)',
+        requiredHours: 10,
+        isVolunteer: true,
+      })
 
-    // Add Club Activity option — everyone sees this.
-    // Treated like volunteer (auto-approved) but only 0.25 hrs credit per actual hour.
-    classDetails.push({
-      classId: 'CLUB_ACTIVITY',
-      courseId: 'Club Activity',
-      courseName: '0.25 hrs credit per hour attended',
-      requiredHours: 0,
-      isClubActivity: true,
-    })
+      // Add Club Activity option — everyone sees this.
+      // Treated like volunteer (auto-approved) but only 0.25 hrs credit per actual hour.
+      classDetails.push({
+        classId: 'CLUB_ACTIVITY',
+        courseId: 'Club Activity',
+        courseName: '0.25 hrs credit per hour attended',
+        requiredHours: 0,
+        isClubActivity: true,
+      })
+    }
 
     console.log('[TimeClock] Final class list:', classDetails.map(c =>
       `courseId="${c.courseId}" courseName="${c.courseName}" classId="${c.classId}"`

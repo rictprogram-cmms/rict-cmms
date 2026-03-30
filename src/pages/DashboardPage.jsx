@@ -391,6 +391,7 @@ function InstructorOverview({ navigate }) {
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [signups, setSignups] = useState([]);
   const [clockEntries, setClockEntries] = useState([]);
+  const [tcoEmails, setTcoEmails] = useState(new Set());
   const [lateWOs, setLateWOs] = useState([]);
   const [lateModalOpen, setLateModalOpen] = useState(false);
   const [dayLoading, setDayLoading] = useState(true);
@@ -447,7 +448,7 @@ function InstructorOverview({ navigate }) {
   const fetchDayData = useCallback(async () => {
     setDayLoading(true);
     try {
-      const [{ data: su }, { data: tc }] = await Promise.all([
+      const [{ data: su }, { data: tc }, { data: tcoProfiles }] = await Promise.all([
         supabase.from('lab_signup')
           .select('signup_id, user_name, user_email, start_time, end_time, status')
           .eq('date', dateStr).eq('status', 'Confirmed')
@@ -456,9 +457,16 @@ function InstructorOverview({ navigate }) {
           .select('record_id, user_name, user_email, punch_in, punch_out, status, entry_type')
           .gte('punch_in', dateStr + 'T00:00:00').lte('punch_in', dateStr + 'T23:59:59')
           .order('punch_in', { ascending: true }),
+        // Fetch TCO emails so Day View can show "Work Study" instead of "Walk-in"
+        supabase.from('profiles')
+          .select('email, time_clock_only')
+          .eq('time_clock_only', 'Yes'),
       ]);
       setSignups(su || []);
       setClockEntries(tc || []);
+      const emails = new Set();
+      (tcoProfiles || []).forEach(p => { if (p.email) emails.add(p.email.toLowerCase()); });
+      setTcoEmails(emails);
     } catch (err) { console.error('Day view fetch error:', err); }
     setDayLoading(false);
   }, [dateStr]);
@@ -736,7 +744,10 @@ function InstructorOverview({ navigate }) {
                   const isPunchedIn = person.clockEntries.some(c => c.status === 'Punched In');
                   const hasLeft = person.clockEntries.some(c => c.status === 'Punched Out');
                   const hasSignup = person.signupSlots.length > 0;
-                  const isWalkIn = !hasSignup && person.clockEntries.length > 0;
+                  const isWorkStudyPunch = person.clockEntries.some(c => c.entry_type === 'Work Study');
+                  const isPersonTCO = tcoEmails.has((person.user_email || '').toLowerCase());
+                  const isWorkStudy = isWorkStudyPunch || isPersonTCO;
+                  const isWalkIn = !hasSignup && person.clockEntries.length > 0 && !isWorkStudy;
                   const activeEntry = person.clockEntries.find(c => c.status === 'Punched In');
                   const punchInTime = activeEntry ? formatTimestamp12(activeEntry.punch_in) : null;
 
@@ -750,6 +761,7 @@ function InstructorOverview({ navigate }) {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusDot, flexShrink: 0 }} />
                         <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1a1a2e', flex: 1 }}>{person.user_name}</span>
+                        {isWorkStudy && <span className="dash-badge-work-study">Work Study</span>}
                         {isWalkIn && <span className="dash-badge-walk-in">Walk-in</span>}
                         {isPunchedIn && <span className="dash-badge-in">In Lab</span>}
                         {hasLeft && !isPunchedIn && <span className="dash-badge-left">Left</span>}
@@ -1081,6 +1093,7 @@ export default function DashboardPage() {
         .dash-badge-left { font-size: 0.68rem; font-weight: 600; background: #f1f3f5; color: #868e96; padding: 2px 8px; border-radius: 4px; }
         .dash-badge-expected { font-size: 0.68rem; font-weight: 600; background: #fff9db; color: #664d03; padding: 2px 8px; border-radius: 4px; }
         .dash-badge-walk-in { font-size: 0.65rem; font-weight: 600; background: #fff4e6; color: #d9480f; padding: 1px 6px; border-radius: 4px; }
+        .dash-badge-work-study { font-size: 0.65rem; font-weight: 600; background: #dbeafe; color: #1d4ed8; padding: 1px 6px; border-radius: 4px; }
 
         .dash-late-wo-item {
           display: flex; align-items: center; gap: 12px;

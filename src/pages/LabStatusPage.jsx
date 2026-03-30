@@ -640,7 +640,7 @@ export default function LabStatusPage() {
   const fetchData = useCallback(async () => {
     const todayStr = toLocalDateStr(new Date());
     try {
-      const [{ data: clockData }, { data: helpData }] = await Promise.all([
+      const [{ data: clockData }, { data: helpData }, { data: profilesData }] = await Promise.all([
         supabase
           .from('time_clock')
           .select('record_id, user_name, user_email, punch_in, course_id, entry_type')
@@ -654,13 +654,34 @@ export default function LabStatusPage() {
           .select('request_id, user_name, location, requested_at, status, acknowledged_at, acknowledged_by')
           .in('status', ['pending', 'acknowledged'])
           .order('requested_at', { ascending: true }),
+
+        // Fetch TCO emails so we can force-display them as Work Study
+        supabase
+          .from('profiles')
+          .select('email, time_clock_only')
+          .eq('time_clock_only', 'Yes'),
       ]);
+
+      // Build a set of TCO emails for quick lookup
+      const tcoEmails = new Set();
+      (profilesData || []).forEach(p => {
+        if (p.email) tcoEmails.add(p.email.toLowerCase());
+      });
 
       const seen = new Set();
       const unique = [];
       for (const row of (clockData || [])) {
         const key = (row.user_email || row.record_id || '').toLowerCase();
-        if (!seen.has(key)) { seen.add(key); unique.push(row); }
+        if (!seen.has(key)) {
+          seen.add(key);
+          // TCO users always display as Work Study, even if they punched in
+          // under a different type (e.g. before this fix was deployed)
+          if (tcoEmails.has(key) && row.entry_type !== 'Work Study') {
+            row.entry_type = 'Work Study';
+            row.course_id = 'Work Study';
+          }
+          unique.push(row);
+        }
       }
 
       setPunchedIn(unique);
