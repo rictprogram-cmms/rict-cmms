@@ -16,7 +16,9 @@
  *
  * Sound unlock overlay
  *   • Browsers block audio until a user gesture occurs (Autoplay Policy)
- *   • A full-screen overlay is shown on first load, dismissed by any tap/click
+ *   • Instructor selects their name to unlock audio AND identify themselves
+ *   • When acknowledging a help request, the selected instructor's name is
+ *     written to acknowledged_by so all kiosks + TV Display show who is responding
  *
  * Weather
  *   • Open-Meteo API (free, no key) — St. Cloud, MN — refreshes every 10 min
@@ -72,7 +74,14 @@ function formatTimestamp12(ts) {
 
 function minutesAgo(ts) {
   if (!ts) return '';
-  const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+  // Fake-UTC convention: the stored timestamp's UTC components are actually local time.
+  // Build a real local Date from those components so the diff against Date.now() is correct.
+  const d = new Date(ts);
+  const localEquiv = new Date(
+    d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+    d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()
+  );
+  const diff = Math.floor((Date.now() - localEquiv.getTime()) / 60000);
   if (diff < 1) return 'just now';
   if (diff === 1) return '1 min ago';
   if (diff < 60) return `${diff} min ago`;
@@ -216,21 +225,30 @@ function useAutoScroll(containerRef, itemCount, audioUnlocked) {
   }, [itemCount, audioUnlocked]);
 }
 
-// ─── Sound Unlock Overlay ────────────────────────────────────────────────────
+// ─── Sound Unlock Overlay — Instructor Selection ────────────────────────────
+//
+// Shows instructor names as large touch-friendly buttons. Tapping a name:
+//   1. Enables audio (satisfies browser Autoplay Policy)
+//   2. Sets the active instructor for this kiosk session
+//
+// All 3 kiosks can have different instructors signed in simultaneously.
 
-function SoundUnlockOverlay({ onUnlock }) {
+function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructor }) {
   return (
     <div
-      onClick={onUnlock}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Select your name to enable alarm sounds"
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         background: 'rgba(10, 12, 18, 0.94)',
         backdropFilter: 'blur(8px)',
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
-        gap: 24, cursor: 'pointer', userSelect: 'none',
+        gap: 28, userSelect: 'none',
       }}
     >
+      {/* Bell icon */}
       <div style={{
         width: 88, height: 88, borderRadius: '50%',
         background: 'linear-gradient(135deg, #1e3a5f, #1971c2)',
@@ -242,34 +260,96 @@ function SoundUnlockOverlay({ onUnlock }) {
         </span>
       </div>
 
+      {/* Heading */}
       <div style={{ textAlign: 'center', padding: '0 60px' }}>
         <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e9ecef', marginBottom: 8 }}>
-          Tap anywhere to enable alarm sounds
+          Select your name to enable alarm sounds
         </div>
         <div style={{ fontSize: '0.88rem', color: '#6c757d', lineHeight: 1.6 }}>
           This kiosk plays an audible alert when a student requests help.
-          One tap is required to activate audio for this session.
+          Your name will be shown when you respond to requests.
         </div>
       </div>
 
+      {/* Instructor buttons */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        background: '#1c2333', border: '1px solid #2d3748',
-        borderRadius: 24, padding: '12px 24px',
-        animation: 'overlayPromptFade 1.8s ease-in-out infinite',
+        display: 'flex', flexDirection: 'column', gap: 12,
+        width: '100%', maxWidth: 420, padding: '0 40px',
       }}>
-        <span className="material-icons" style={{ fontSize: '1.1rem', color: '#4ade80' }}>touch_app</span>
-        <span style={{ fontSize: '0.9rem', color: '#a0aec0', fontWeight: 600 }}>Tap to continue</span>
+        {loadingInstructors ? (
+          <div style={{ textAlign: 'center', color: '#6c757d', fontSize: '0.9rem', padding: 20 }}>
+            <span className="material-icons" style={{ fontSize: '1.4rem', marginBottom: 6, display: 'block' }}>hourglass_empty</span>
+            Loading instructors…
+          </div>
+        ) : instructors.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#6c757d', fontSize: '0.9rem', padding: 20 }}>
+            No instructors found. Contact admin.
+          </div>
+        ) : (
+          instructors.map((inst) => (
+            <button
+              key={inst.email}
+              onClick={() => onSelectInstructor(inst)}
+              aria-label={`Sign in as ${inst.displayName}`}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 14,
+                width: '100%',
+                padding: '16px 24px',
+                background: '#1c2333',
+                border: '2px solid #2d3748',
+                borderRadius: 14,
+                cursor: 'pointer',
+                transition: 'background 0.15s, border-color 0.15s, transform 0.1s',
+                WebkitTapHighlightColor: 'transparent',
+                touchAction: 'manipulation',
+              }}
+              onPointerDown={(e) => {
+                e.currentTarget.style.transform = 'scale(0.97)';
+                e.currentTarget.style.borderColor = '#228be6';
+                e.currentTarget.style.background = '#1e3a5f';
+              }}
+              onPointerUp={(e) => {
+                e.currentTarget.style.transform = 'scale(1)';
+              }}
+              onPointerLeave={(e) => {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.borderColor = '#2d3748';
+                e.currentTarget.style.background = '#1c2333';
+              }}
+            >
+              {/* Avatar circle */}
+              <div style={{
+                width: 48, height: 48, borderRadius: '50%', flexShrink: 0,
+                background: 'linear-gradient(135deg, #228be6, #1971c2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 700, fontSize: '1.1rem', color: '#fff',
+              }}>
+                {inst.initials}
+              </div>
+
+              {/* Name */}
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#e9ecef' }}>
+                  {inst.displayName}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#6c757d', marginTop: 2 }}>
+                  Tap to sign in to this kiosk
+                </div>
+              </div>
+
+              {/* Arrow */}
+              <span className="material-icons" style={{ color: '#4a5568', fontSize: '1.4rem' }}>
+                arrow_forward
+              </span>
+            </button>
+          ))
+        )}
       </div>
 
       <style>{`
         @keyframes overlayBellPulse {
           0%, 100% { box-shadow: 0 0 0 0 rgba(34,139,230,0.4); }
           50%       { box-shadow: 0 0 0 22px rgba(34,139,230,0); }
-        }
-        @keyframes overlayPromptFade {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.5; }
         }
       `}</style>
     </div>
@@ -537,12 +617,49 @@ export default function LabStatusPage() {
   const [loading, setLoading]           = useState(true);
   const [lastUpdated, setLastUpdated]   = useState(null);
 
-  // ── Sound unlock ──
-  const [audioUnlocked, setAudioUnlocked] = useState(false);
-  const handleUnlock = useCallback(() => setAudioUnlocked(true), []);
+  // ── Sound unlock + Instructor selection ──
+  const [audioUnlocked, setAudioUnlocked]       = useState(false);
+  const [selectedInstructor, setSelectedInstructor] = useState(null);
+  const [instructors, setInstructors]             = useState([]);
+  const [loadingInstructors, setLoadingInstructors] = useState(true);
 
   const hasPending = helpRequests.some(r => r.status === 'pending');
   useAlarm(hasPending, audioUnlocked);
+
+  // ── Fetch instructor list for the overlay ──────────────────────────────────
+  useEffect(() => {
+    async function loadInstructors() {
+      try {
+        const { data } = await supabase
+          .from('profiles')
+          .select('email, first_name, last_name, role')
+          .eq('role', 'Instructor')
+          .eq('status', 'Active')
+          .neq('email', 'rictprogram@gmail.com')   // Exclude super admin utility account
+          .order('first_name', { ascending: true });
+
+        const list = (data || []).map(p => {
+          const first = (p.first_name || '').trim();
+          const last  = (p.last_name || '').trim();
+          const displayName = `${first} ${last}`.trim() || p.email;
+          const initials = (first.charAt(0) + last.charAt(0)).toUpperCase() || '?';
+          return { email: p.email, displayName, initials, firstName: first };
+        });
+
+        setInstructors(list);
+      } catch (err) {
+        console.error('[LabStatus] Error loading instructors:', err);
+      }
+      setLoadingInstructors(false);
+    }
+    loadInstructors();
+  }, []);
+
+  // ── Handle instructor selection (unlocks audio + identifies instructor) ────
+  const handleSelectInstructor = useCallback((instructor) => {
+    setSelectedInstructor(instructor);
+    setAudioUnlocked(true);
+  }, []);
 
   // ── Auto-scroll (names list) ──────────────────────────────────────────────
   const namesScrollRef = useRef(null);
@@ -711,12 +828,14 @@ export default function LabStatusPage() {
   // ── Touch interactions ───────────────────────────────────────────────────
 
   const acknowledgeRequest = useCallback(async (requestId) => {
+    // Use the selected instructor's name, fall back to 'Instructor' if somehow unset
+    const responderName = selectedInstructor?.displayName || 'Instructor';
     try {
       await supabase
         .from('help_requests')
         .update({
           status: 'acknowledged',
-          acknowledged_by: 'Instructor',
+          acknowledged_by: responderName,
           acknowledged_at: new Date().toISOString(),
         })
         .eq('request_id', requestId)
@@ -725,7 +844,7 @@ export default function LabStatusPage() {
     } catch (err) {
       console.error('[LabStatus] Acknowledge error:', err);
     }
-  }, [fetchData]);
+  }, [fetchData, selectedInstructor]);
 
   const resolveRequest = useCallback(async (requestId) => {
     try {
@@ -793,7 +912,13 @@ export default function LabStatusPage() {
       overflow: 'hidden',
     }}>
 
-      {!audioUnlocked && <SoundUnlockOverlay onUnlock={handleUnlock} />}
+      {!audioUnlocked && (
+        <SoundUnlockOverlay
+          instructors={instructors}
+          loadingInstructors={loadingInstructors}
+          onSelectInstructor={handleSelectInstructor}
+        />
+      )}
 
       {/* ══ HEADER  58px ════════════════════════════════════════════════════ */}
       <header style={{
@@ -1081,11 +1206,20 @@ export default function LabStatusPage() {
         flexShrink: 0,
       }}>
         <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>RICT CMMS · rict-cmms.vercel.app</span>
-        <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>
-          {lastUpdated
-            ? `Last updated: ${lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
-            : ''}
-        </span>
+
+        {/* Show which instructor is signed in on THIS kiosk */}
+        {selectedInstructor ? (
+          <span style={{ fontSize: '0.6rem', color: '#228be6', fontWeight: 600 }}>
+            Signed in: {selectedInstructor.displayName}
+          </span>
+        ) : (
+          <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>
+            {lastUpdated
+              ? `Last updated: ${lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+              : ''}
+          </span>
+        )}
+
         <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>Auto-refreshes every 30 s</span>
       </footer>
 

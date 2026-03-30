@@ -625,8 +625,17 @@ export default function TVDisplayPage() {
                         color: isAcked ? '#22c55e' : '#ef4444',
                         background: isAcked ? '#22c55e15' : '#ef444415',
                         animation: isAcked ? 'none' : 'helpTextPulse 1.5s ease-in-out infinite',
+                        display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
+                        gap: 2, lineHeight: 1.3,
                       }}>
-                        {isAcked ? '✓ Acknowledged' : 'Waiting...'}
+                        <span>{isAcked ? '✓ Responding' : 'Waiting...'}</span>
+                        {isAcked && h.acknowledgedBy && (
+                          <span style={{
+                            fontSize: '0.85rem', fontWeight: 700, color: '#86efac',
+                          }}>
+                            {h.acknowledgedBy}
+                          </span>
+                        )}
                       </div>
                     </div>
                   )
