@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
@@ -46,7 +47,8 @@ function fmtMoney(v) {
 export default function PurchaseOrdersPage() {
   const { profile } = useAuth()
   const { hasPerm, permsLoading } = usePermissions('Purchase Orders')
-  const [tab, setTab] = useState('dashboard')
+  const location = useLocation()
+  const [tab, setTab] = useState(location.state?.tab || 'dashboard')
   const [viewingOrder, setViewingOrder] = useState(null)
   const [autoReceive, setAutoReceive] = useState(false)
 
