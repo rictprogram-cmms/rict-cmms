@@ -311,7 +311,7 @@ export function usePOActions() {
 
       const { error } = await supabase.from('orders').insert({
         order_id: orderId,
-        vendor_id: orderData.vendorId || '',
+        vendor_id: orderData.vendorId || null,
         vendor_name: orderData.vendorName || '',
         other_vendor: orderData.otherVendor || '',
         work_order_id: orderData.workOrderId || '',
