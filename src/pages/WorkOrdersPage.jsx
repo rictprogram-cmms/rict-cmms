@@ -1038,7 +1038,7 @@ export default function WorkOrdersPage() {
 
           const unitPrice = parseFloat(li.unitPrice) || 0;
           const qty = parseInt(li.quantity) || 0;
-          await supabase.from('order_line_items').insert({
+          const { error: lineErr } = await supabase.from('order_line_items').insert({
             line_id: lineId, order_id: orderId, part_number: li.partNumber || '',
             description: li.description || '', link: li.link || '',
             unit_price: unitPrice.toFixed(2), quantity: qty,
@@ -1046,6 +1046,10 @@ export default function WorkOrdersPage() {
             status: 'Pending', inventory_part_id: li.inventoryPartId || '',
             wo_id: currentWO.wo_id
           });
+          if (lineErr) {
+            console.error(`Failed to insert line item for PO ${orderId}:`, lineErr);
+            throw new Error(`Failed to save line item: ${lineErr.message}`);
+          }
         }
 
         // Update PO total and reset to Pending for re-approval
@@ -1078,7 +1082,7 @@ export default function WorkOrdersPage() {
         }
 
         const { error } = await supabase.from('orders').insert({
-          order_id: orderId, vendor_id: poForm.vendorId || '', vendor_name: poForm.vendorName || '',
+          order_id: orderId, vendor_id: poForm.vendorId || null, vendor_name: poForm.vendorName || '',
           other_vendor: poForm.otherVendor || '', work_order_id: currentWO.wo_id,
           order_date: now, ordered_by: userName, status: 'Pending',
           total: newLineTotal.toFixed(2), notes: poForm.notes || '',
@@ -1102,7 +1106,7 @@ export default function WorkOrdersPage() {
 
           const unitPrice = parseFloat(li.unitPrice) || 0;
           const qty = parseInt(li.quantity) || 0;
-          await supabase.from('order_line_items').insert({
+          const { error: lineErr2 } = await supabase.from('order_line_items').insert({
             line_id: lineId, order_id: orderId, part_number: li.partNumber || '',
             description: li.description || '', link: li.link || '',
             unit_price: unitPrice.toFixed(2), quantity: qty,
@@ -1110,6 +1114,10 @@ export default function WorkOrdersPage() {
             status: 'Pending', inventory_part_id: li.inventoryPartId || '',
             wo_id: currentWO.wo_id
           });
+          if (lineErr2) {
+            console.error(`Failed to insert line item for PO ${orderId}:`, lineErr2);
+            throw new Error(`Failed to save line item: ${lineErr2.message}`);
+          }
         }
       }
 
