@@ -495,7 +495,7 @@ export default function InventoryPage() {
             <span className="material-icons">qr_code_scanner</span>Cycle Count
           </button>
           {hasPerm('view_low_stock') && (
-            <button className="btn btn-sm btn-secondary" onClick={() => window.location.hash = '#purchaseorders'}>
+            <button className="btn btn-sm btn-secondary" onClick={() => navigate('/purchase-orders', { state: { tab: 'lowstock' } })}>
               <span className="material-icons">shopping_cart</span>Purchase Orders
             </button>
           )}
@@ -512,7 +512,7 @@ export default function InventoryPage() {
         <div className="alert-banner">
           <span className="material-icons">warning</span>
           <strong>{lowStockCount}</strong> items low on stock
-          <button className="btn btn-sm btn-primary" onClick={() => window.location.hash = '#purchaseorders'}>
+          <button className="btn btn-sm btn-primary" onClick={() => navigate('/purchase-orders', { state: { tab: 'lowstock' } })}>
             <span className="material-icons">shopping_cart</span>Purchase Orders
           </button>
         </div>
