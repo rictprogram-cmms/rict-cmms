@@ -1026,13 +1026,8 @@ export default function WorkOrdersPage() {
         for (const li of poLines) {
           let lineId;
           try {
-            const { data: counter } = await supabase.from('counters')
-              .select('current_value, prefix').eq('counter_name', 'OrderLine').maybeSingle();
-            if (counter) {
-              const nextVal = (counter.current_value || 1000) + 1;
-              lineId = `${counter.prefix}${String(nextVal).padStart(4, '0')}`;
-              await supabase.from('counters').update({ current_value: nextVal, updated_at: now }).eq('counter_name', 'OrderLine');
-            }
+            const { data: lid } = await supabase.rpc('get_next_id', { p_type: 'OrderLine' });
+            lineId = lid;
           } catch {}
           if (!lineId) lineId = `OLI${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
@@ -1066,13 +1061,8 @@ export default function WorkOrdersPage() {
       } else {
         // ── CREATE NEW PO ──
         try {
-          const { data: counter } = await supabase.from('counters')
-            .select('current_value, prefix').eq('counter_name', 'Order').maybeSingle();
-          if (counter) {
-            const nextVal = (counter.current_value || 1000) + 1;
-            orderId = `${counter.prefix}${String(nextVal).padStart(4, '0')}`;
-            await supabase.from('counters').update({ current_value: nextVal, updated_at: now }).eq('counter_name', 'Order');
-          }
+          const { data: oid } = await supabase.rpc('get_next_id', { p_type: 'Order' });
+          if (oid) orderId = oid;
         } catch {}
         if (!orderId) {
           const { data: maxRow } = await supabase.from('orders').select('order_id').order('order_id', { ascending: false }).limit(1).maybeSingle();
@@ -1094,13 +1084,8 @@ export default function WorkOrdersPage() {
         for (const li of poLines) {
           let lineId;
           try {
-            const { data: counter } = await supabase.from('counters')
-              .select('current_value, prefix').eq('counter_name', 'OrderLine').maybeSingle();
-            if (counter) {
-              const nextVal = (counter.current_value || 1000) + 1;
-              lineId = `${counter.prefix}${String(nextVal).padStart(4, '0')}`;
-              await supabase.from('counters').update({ current_value: nextVal, updated_at: now }).eq('counter_name', 'OrderLine');
-            }
+            const { data: lid } = await supabase.rpc('get_next_id', { p_type: 'OrderLine' });
+            lineId = lid;
           } catch {}
           if (!lineId) lineId = `OLI${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
