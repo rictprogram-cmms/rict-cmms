@@ -330,7 +330,7 @@ export function usePOActions() {
         const lineId = await getNextLineId()
         const unitPrice = parseFloat(li.unitPrice) || 0
         const qty = parseInt(li.quantity) || 0
-        await supabase.from('order_line_items').insert({
+        const { error: lineErr } = await supabase.from('order_line_items').insert({
           line_id: lineId,
           order_id: orderId,
           part_number: li.partNumber || '',
@@ -344,6 +344,10 @@ export function usePOActions() {
           inventory_part_id: li.inventoryPartId || '',
           wo_id: orderData.workOrderId || ''
         })
+        if (lineErr) {
+          console.error(`Failed to insert line item for PO ${orderId}:`, lineErr)
+          throw new Error(`Failed to save line item: ${lineErr.message}`)
+        }
       }
 
       // Audit log
@@ -729,7 +733,7 @@ export function usePOActions() {
           const qty = parseInt(li.quantity) || 1
           const subtotal = unitPrice * qty
           addedTotal += subtotal
-          await supabase.from('order_line_items').insert({
+          const { error: lineErr } = await supabase.from('order_line_items').insert({
             line_id: lineId,
             order_id: orderId,
             part_number: li.partNumber || '',
@@ -742,6 +746,10 @@ export function usePOActions() {
             status: 'Pending',
             inventory_part_id: li.inventoryPartId || '',
           })
+          if (lineErr) {
+            console.error(`Failed to insert line item for PO ${orderId}:`, lineErr)
+            throw new Error(`Failed to save line item: ${lineErr.message}`)
+          }
         }
         // Update order total
         const { data: currentOrder } = await supabase.from('orders').select('total, status').eq('order_id', orderId).single()
