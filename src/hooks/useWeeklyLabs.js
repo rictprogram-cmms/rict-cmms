@@ -626,14 +626,15 @@ export function useLabTrackerActions() {
         }
       }
 
-      // Cancel signups for dates after today within the week
-      if (latestWeekEnd > todayStr) {
+      // Cancel remaining signups for today and the rest of the week
+      // (student is done — no reason to keep any Confirmed signups)
+      {
         const { error: signupError } = await supabase
           .from('lab_signup')
           .update({ status: 'Cancelled' })
           .eq('user_email', userEmail)
           .eq('status', 'Confirmed')
-          .gt('date', todayStr)
+          .gte('date', todayStr)
           .lte('date', latestWeekEnd)
 
         if (signupError) {
