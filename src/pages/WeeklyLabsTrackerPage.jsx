@@ -1331,9 +1331,10 @@ function StudentView() {
             </h3>
           </div>
 
-          {trackedWeekInfos.map(({ cls, currentWeek, status }) => {
+          {currentWeekInfos.map(({ cls, currentWeek, status }) => {
             const labDone = status?.labComplete
             const allDone = status?.allDone
+            const isTracked = cls.trackingType !== 'None'
 
             return (
               <div key={cls.className} className="px-4 py-3 border-b border-surface-100 last:border-b-0">
@@ -1343,7 +1344,11 @@ function StudentView() {
                     {cls.description && <span className="ml-2 text-xs text-surface-400">{cls.description}</span>}
                   </div>
                   <div className="flex items-center gap-2">
-                    {allDone ? (
+                    {!isTracked ? (
+                      <span className="flex items-center gap-1 text-xs font-medium text-surface-500 bg-surface-50 px-3 py-1.5 rounded-full border border-surface-200">
+                        Lab tracked in D2L
+                      </span>
+                    ) : allDone ? (
                       <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
                         <BadgeCheck size={14} /> Done
                       </span>
@@ -1357,7 +1362,7 @@ function StudentView() {
                       </span>
                     )}
 
-                    {!labDone && !allDone && (
+                    {isTracked && !labDone && !allDone && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
