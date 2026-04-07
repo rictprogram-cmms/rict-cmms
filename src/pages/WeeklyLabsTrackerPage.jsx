@@ -1183,11 +1183,11 @@ function StudentView() {
   }
 
   if (!report || report.classes.length === 0) {
-    const hasEnrolledClasses = (profile?.classes || '').split(',').filter(c => c.trim()).length > 0
-    return <EmptyState text={hasEnrolledClasses
-      ? "None of your current classes use the weekly lab tracker"
-      : "You are not enrolled in any classes"} />
+    return <EmptyState text="You are not enrolled in any classes" />
   }
+
+  // Separate tracked classes (have weekly lab tracker) from non-tracked
+  const trackedClasses = report.classes.filter(cls => cls.trackingType !== 'None')
 
   // Determine current week for each class
   const today = new Date()
@@ -1218,7 +1218,14 @@ function StudentView() {
     return { cls, currentWeek, status: ws }
   }).filter(info => info.currentWeek)
 
-  const allClassesDone = currentWeekInfos.length > 0 && currentWeekInfos.every(info => info.status?.allDone)
+  // Tracked classes need lab sign-off; non-tracked are automatically satisfied
+  const trackedWeekInfos = currentWeekInfos.filter(info => info.cls.trackingType !== 'None')
+
+  // "All done" banner only shows when tracked classes exist AND all have allDone=true
+  // Students with only non-tracked classes always see the All Done button flow
+  const allClassesDone = currentWeekInfos.length > 0 &&
+    trackedWeekInfos.length > 0 &&
+    trackedWeekInfos.every(info => info.status?.allDone)
 
   // Build week date label from the first class that has a current week
   const firstWeekInfo = currentWeekInfos[0]
@@ -1265,7 +1272,8 @@ function StudentView() {
   // Open All Done modal
   const openAllDone = () => {
     const classNames = currentWeekInfos.map(info => info.cls.className)
-    const labStatuses = currentWeekInfos.map(info => ({
+    // Lab statuses only for tracked classes (non-tracked don't need sign-off)
+    const labStatuses = trackedWeekInfos.map(info => ({
       className: info.cls.className,
       labComplete: info.status?.labComplete || false,
       allDone: info.status?.allDone || false,
@@ -1287,9 +1295,12 @@ function StudentView() {
 
   // Handle All Done badge verification
   const handleAllDone = async (instructor) => {
+    // Pass all classes so markAllDone can compute week dates for signup cancellation;
+    // trackingType tells markAllDone which classes to skip tracker row creation for
     const classInfos = currentWeekInfos.map(info => ({
       className: info.cls.className,
       classId: info.cls.classId || '',
+      trackingType: info.cls.trackingType || 'Weekly',
       weekNumber: info.currentWeek.weekNumber,
       weekStartDate: info.currentWeek.startDate,
       weekEndDate: info.currentWeek.endDate,
@@ -1320,7 +1331,7 @@ function StudentView() {
             </h3>
           </div>
 
-          {currentWeekInfos.map(({ cls, currentWeek, status }) => {
+          {trackedWeekInfos.map(({ cls, currentWeek, status }) => {
             const labDone = status?.labComplete
             const allDone = status?.allDone
 
@@ -1372,8 +1383,9 @@ function StudentView() {
               </span>
             </div>
           ) : (() => {
-            const allLabsSigned = currentWeekInfos.length > 0 && currentWeekInfos.every(info => info.status?.labComplete)
-            const unsignedCount = currentWeekInfos.filter(info => !info.status?.labComplete).length
+            // Only tracked classes need lab sign-off; non-tracked are automatically satisfied
+            const allLabsSigned = trackedWeekInfos.length === 0 || trackedWeekInfos.every(info => info.status?.labComplete)
+            const unsignedCount = trackedWeekInfos.filter(info => !info.status?.labComplete).length
             return (
               <div className={`mt-4 p-4 rounded-xl border-2 ${allLabsSigned ? 'bg-gradient-to-r from-emerald-50 to-teal-50 border-emerald-200' : 'bg-surface-50 border-surface-200'}`}>
                 <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -1384,7 +1396,9 @@ function StudentView() {
                     </h4>
                     {allLabsSigned ? (
                       <p className="text-xs text-emerald-700 mt-1">
-                        All labs signed off — make sure no work orders are open or late, and no outstanding tasks remain from your instructor. An instructor badge swipe is required to confirm.
+                        {trackedWeekInfos.length > 0
+                          ? 'All labs signed off — make sure no work orders are open or late, and no outstanding tasks remain from your instructor. An instructor badge swipe is required to confirm.'
+                          : 'Make sure no work orders are open or late, and no outstanding tasks remain from your instructor. An instructor badge swipe is required to confirm.'}
                       </p>
                     ) : (
                       <p className="text-xs text-amber-700 mt-1 flex items-center gap-1.5">
@@ -1435,7 +1449,7 @@ function StudentView() {
       </button>
 
       {/* All Weeks Tables */}
-      {showHistory && report.classes.map(cls => {
+      {showHistory && trackedClasses.map(cls => {
         const totalWeeks = cls.totalWeeks || 8
         const classWeeks = cls.classWeeks || []
 
