@@ -1911,7 +1911,7 @@ function ClassesSection() {
             </div>
 
             {/* Date hint */}
-            {form.start_date && form.end_date && (
+            {form.start_date && form.end_date && form.tracking_type !== 'None' && (
               <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
                 <Calendar size={13} />
                 Start/End dates determine the weekly lab tracker weeks. Weeks run Monday–Thursday.
@@ -2045,9 +2045,16 @@ function ClassesSection() {
                         )}
                       </td>
                       <td className="px-4 py-2">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-                          cls.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-surface-100 text-surface-500'
-                        }`}>{cls.status}</span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                            cls.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-surface-100 text-surface-500'
+                          }`}>{cls.status}</span>
+                          {(cls.tracking_type === 'None') && (
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-surface-100 text-surface-500 border border-surface-200">
+                              No Tracker
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex gap-1">

@@ -261,7 +261,8 @@ export function useStudentLabReport() {
         .select('*')
         .or(`user_id.eq.${profile.id},user_email.eq.${profile.email}`)
 
-      const classes = (classesData || []).map(cls => {
+      // Skip classes that don't use the weekly lab tracker
+      const classes = (classesData || []).filter(cls => (cls.tracking_type || 'Weekly') !== 'None').map(cls => {
         const classWeeks = buildClassWeeks({
           startDate: cls.start_date,
           endDate: cls.end_date,
