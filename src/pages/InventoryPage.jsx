@@ -59,6 +59,9 @@ export default function InventoryPage() {
   // Toast
   const [toast, setToast] = useState(null);
 
+  // On-order quantities keyed by inventory part_id
+  const [onOrderMap, setOnOrderMap] = useState({});
+
   // Track whether initial data load has completed — prevents loading spinner on tab switch
   const hasLoadedRef = useRef(false);
 
@@ -131,6 +134,13 @@ export default function InventoryPage() {
           loadInventory(); // silent refresh — no spinner
         }
       })
+      // Also refresh when POs or line items change (on-order badge updates)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        if (hasLoadedRef.current) loadInventory();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, () => {
+        if (hasLoadedRef.current) loadInventory();
+      })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);
@@ -151,8 +161,35 @@ export default function InventoryPage() {
     // Only show loading spinner on initial load — background refreshes update silently
     if (!hasLoadedRef.current) setLoading(true);
     try {
+      // Fetch inventory items
       const { data, error } = await supabase.from('inventory').select('*').order('part_name');
       if (error) throw error;
+
+      // Fetch on-order quantities: line items from active POs (Pending, Approved, Ordered)
+      // where inventory_part_id is populated
+      let orderMap = {};
+      try {
+        const { data: lineItems } = await supabase
+          .from('order_line_items')
+          .select('inventory_part_id, quantity, received_qty, order_id, orders!inner(status)')
+          .neq('inventory_part_id', '')
+          .in('orders.status', ['Pending', 'Approved', 'Ordered']);
+
+        if (lineItems) {
+          for (const li of lineItems) {
+            const partId = li.inventory_part_id;
+            const pending = (li.quantity || 0) - (li.received_qty || 0);
+            if (pending > 0 && partId) {
+              orderMap[partId] = (orderMap[partId] || 0) + pending;
+            }
+          }
+        }
+      } catch (e) {
+        // Non-critical — badge just won't show
+        console.warn('Could not fetch on-order data:', e);
+      }
+      setOnOrderMap(orderMap);
+
       const mapped = (data || []).map(item => ({
         ...item,
         isLowStock: (item.qty_in_stock || 0) <= (item.min_qty || 0),
@@ -416,11 +453,13 @@ export default function InventoryPage() {
 
     const rows = listData.map(item => {
       const qtyClass = item.isLowStock ? 'color:#c92a2a;font-weight:bold' : '';
+      const onOrder = onOrderMap[item.part_id];
+      const onOrderStr = onOrder > 0 ? ` <span style="color:#364fc7;font-size:10px">(${onOrder} on order)</span>` : '';
       return `<tr>
         <td>${item.part_id}</td>
         <td>${item.part_name}</td>
         <td>${item.supplier_part_number || '—'}</td>
-        <td style="${qtyClass}">${item.qty_in_stock ?? 0}</td>
+        <td style="${qtyClass}">${item.qty_in_stock ?? 0}${onOrderStr}</td>
         <td>${item.min_qty ?? 0} / ${item.max_qty ?? 0}</td>
         <td>${item.location || '—'}</td>
         <td>${item.primary_supplier || '—'}</td>
@@ -578,7 +617,15 @@ export default function InventoryPage() {
                       <strong>{highlightMatch(item.part_name)}</strong><br /><small style={{ color: '#868e96' }}>{highlightMatch(item.part_id)}</small>
                     </td>
                     <td>{highlightMatch(item.supplier_part_number || '-')}</td>
-                    <td><span className={`qty-badge ${qtyClass}`}>{item.qty_in_stock ?? 0}</span></td>
+                    <td>
+                      <span className={`qty-badge ${qtyClass}`}>{item.qty_in_stock ?? 0}</span>
+                      {onOrderMap[item.part_id] > 0 && (
+                        <div className="on-order-badge" title={`${onOrderMap[item.part_id]} on order`}>
+                          <span className="material-icons" style={{ fontSize: '0.8rem' }}>local_shipping</span>
+                          {onOrderMap[item.part_id]} on order
+                        </div>
+                      )}
+                    </td>
                     <td className="min-max">{item.min_qty ?? 0} / {item.max_qty ?? 0}</td>
                     <td>{highlightMatch(item.location || '-')}</td>
                     <td>{highlightMatch(item.primary_supplier || '-')}</td>
@@ -718,6 +765,12 @@ export default function InventoryPage() {
                 <div className="detail-item">
                   <label>Qty In Stock</label>
                   <span className={`qty-badge ${currentItem.isLowStock ? 'low' : 'ok'}`}>{currentItem.qty_in_stock ?? 0}</span>
+                  {onOrderMap[currentItem.part_id] > 0 && (
+                    <div className="on-order-badge" style={{ marginTop: 6 }}>
+                      <span className="material-icons" style={{ fontSize: '0.8rem' }}>local_shipping</span>
+                      {onOrderMap[currentItem.part_id]} on order
+                    </div>
+                  )}
                 </div>
                 <div className="detail-item">
                   <label>Min / Max</label>
@@ -892,6 +945,7 @@ export default function InventoryPage() {
         .qty-badge { padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 0.85rem; }
         .qty-badge.low { background: #ffe3e3; color: #c92a2a; }
         .qty-badge.ok { background: #d3f9d8; color: #2b8a3e; }
+        .on-order-badge { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #dbe4ff; color: #364fc7; white-space: nowrap; }
         .min-max { font-size: 0.85rem; color: #868e96; }
 
         .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; }
