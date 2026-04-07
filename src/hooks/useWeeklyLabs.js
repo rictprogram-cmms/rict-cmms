@@ -261,8 +261,7 @@ export function useStudentLabReport() {
         .select('*')
         .or(`user_id.eq.${profile.id},user_email.eq.${profile.email}`)
 
-      // Skip classes that don't use the weekly lab tracker
-      const classes = (classesData || []).filter(cls => (cls.tracking_type || 'Weekly') !== 'None').map(cls => {
+      const classes = (classesData || []).map(cls => {
         const classWeeks = buildClassWeeks({
           startDate: cls.start_date,
           endDate: cls.end_date,
@@ -291,6 +290,7 @@ export function useStudentLabReport() {
           classId: cls.class_id,
           description: cls.course_name || '',
           requiredHours: cls.required_hours || 0,
+          trackingType: cls.tracking_type || 'Weekly',
           totalWeeks,
           classWeeks,
           weeks,
@@ -568,7 +568,10 @@ export function useLabTrackerActions() {
 
     try {
       // For each class, mark as all_done + lab_complete + required_hours_met
+      // (skip tracker row creation for classes that don't use the weekly lab tracker)
       for (const cls of classInfos) {
+        if (cls.trackingType === 'None') continue
+
         const existing = await findExistingRecord(userId, userEmail, cls.className, cls.weekNumber)
 
         if (existing) {
