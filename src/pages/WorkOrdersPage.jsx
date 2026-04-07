@@ -23,6 +23,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
+import RejectionModal from '@/components/RejectionModal';
+import { useRejectionNotification } from '@/hooks/useRejectionNotification';
 
 // Custom status select dropdown with color swatches
 function StatusSelectComponent({ statuses: statusList, value, onChange, id, className, style, placeholder, allOption, colorMap }) {
@@ -205,6 +207,10 @@ export default function WorkOrdersPage() {
 
   // Toast
   const [toast, setToast] = useState(null);
+
+  // Rejection modal
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const { sendRejectionNotification } = useRejectionNotification();
 
   // Page-level assignee tooltip state — rendered outside .card so overflow:hidden can't clip it
   const [assigneeTooltip, setAssigneeTooltip] = useState(null); // { x, y, goDown, names }
@@ -1723,25 +1729,43 @@ export default function WorkOrdersPage() {
     setLoading(false);
   };
 
-  const rejectRequest = async (requestId) => {
-    const reason = prompt('Reason for rejection (optional):');
-    if (reason === null) return;
+  const rejectRequest = (req) => {
+    setRejectTarget(req);
+  };
+
+  const handleRejectConfirm = async (reason) => {
+    if (!rejectTarget) return;
     try {
       const userName = profile ? `${profile.first_name} ${profile.last_name?.charAt(0)}.` : '';
       const { data: rejRows, error: rejErr } = await supabase.from('work_order_requests').update({
         status: 'Rejected',
-        rejection_reason: reason || '',
+        rejection_reason: reason,
         processed_by: userName,
         processed_date: new Date().toISOString()
-      }).eq('request_id', requestId).select();
+      }).eq('request_id', rejectTarget.request_id).select();
       if (rejErr) throw rejErr;
       if (!rejRows || rejRows.length === 0) {
-        showToast('Reject failed — you may not have permission.', 'error');
-        return;
+        throw new Error('Reject failed — you may not have permission.');
       }
-      showToast('Request rejected', 'info');
+
+      // Notify the student
+      await sendRejectionNotification({
+        recipientEmail: rejectTarget.email,
+        recipientName: rejectTarget.name || rejectTarget.email || '',
+        requestType: 'Work Order Request',
+        requestId: rejectTarget.request_id,
+        reason,
+        extraDetails: rejectTarget.asset_name
+          ? `Asset: ${rejectTarget.asset_name}\nDescription: ${rejectTarget.description || ''}`
+          : rejectTarget.description || '',
+      });
+
+      showToast('Request rejected & student notified', 'info');
+      setRejectTarget(null);
       loadRequests();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    } catch (e) {
+      throw new Error(e.message || 'Failed to reject request');
+    }
   };
 
   // ---------- FILTER ----------
@@ -2118,7 +2142,7 @@ export default function WorkOrdersPage() {
                       {hasPerm('create_wo') && (
                         <>
                           <button className="action-btn approve" onClick={() => openApproveModalFn(req)} title="Approve"><span className="material-icons">check_circle</span></button>
-                          <button className="action-btn reject" onClick={() => rejectRequest(req.request_id)} title="Reject"><span className="material-icons">cancel</span></button>
+                          <button className="action-btn reject" onClick={() => rejectRequest(req)} title="Reject"><span className="material-icons">cancel</span></button>
                         </>
                       )}
                     </td>
@@ -2975,6 +2999,22 @@ export default function WorkOrdersPage() {
           </div>
         </div>
       )}
+
+      {/* ── Rejection Modal for WO Requests ── */}
+      <RejectionModal
+        open={!!rejectTarget}
+        title="Reject Work Order Request"
+        subtitle={rejectTarget
+          ? `${rejectTarget.name || rejectTarget.email || 'Unknown'} — ${rejectTarget.asset_name || 'No asset'}`
+          : ''
+        }
+        requestType="Work Order Request"
+        requestId={rejectTarget?.request_id || ''}
+        recipientEmail={rejectTarget?.email || ''}
+        recipientName={rejectTarget?.name || ''}
+        onConfirm={handleRejectConfirm}
+        onClose={() => setRejectTarget(null)}
+      />
 
       {/* Styles */}
       <style>{`

@@ -36,6 +36,7 @@ import {
   FileText, Calendar, ArrowLeft, BookOpen, BadgeCheck,
   ChevronDown, ChevronUp, FilePenLine, MessageCircle
 } from 'lucide-react'
+import PendingTimeRequestsPanel from '@/components/PendingTimeRequestsPanel'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -573,6 +574,8 @@ export default function TimeCardsPage() {
             label="Individual Time Card" onClick={() => setTab('timecard')} />
           <TabBtn active={tab === 'classweekly'} icon={<Users size={16} />}
             label="Class Weekly Report" onClick={() => setTab('classweekly')} />
+          <TabBtn active={tab === 'pending'} icon={<Clock size={16} />}
+            label="Pending Requests" onClick={() => setTab('pending')} />
         </div>
       )}
 
@@ -726,6 +729,11 @@ export default function TimeCardsPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ─── Pending Time Entry Requests (Instructor) ─────────── */}
+      {tab === 'pending' && isInstructor && (
+        <PendingTimeRequestsPanel actions={actions} />
       )}
 
       {/* ─── Modals ────────────────────────────────────────────────────── */}
