@@ -1034,7 +1034,7 @@ function InstructorView() {
             className="w-full px-3 py-2.5 border border-surface-200 rounded-lg text-sm bg-white"
           >
             <option value="">— Select Class —</option>
-            {classes.map(cls => (
+            {classes.filter(cls => cls.trackingType !== 'None').map(cls => (
               <option key={cls.classId} value={cls.className}>
                 {cls.className}{cls.description ? ` — ${cls.description}` : ''}
               </option>
@@ -1183,7 +1183,10 @@ function StudentView() {
   }
 
   if (!report || report.classes.length === 0) {
-    return <EmptyState text="You are not enrolled in any classes" />
+    const hasEnrolledClasses = (profile?.classes || '').split(',').filter(c => c.trim()).length > 0
+    return <EmptyState text={hasEnrolledClasses
+      ? "None of your current classes use the weekly lab tracker"
+      : "You are not enrolled in any classes"} />
   }
 
   // Determine current week for each class
