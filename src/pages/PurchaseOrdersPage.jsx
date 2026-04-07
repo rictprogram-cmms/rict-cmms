@@ -5,6 +5,8 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
 import { usePODashboard, usePOList, usePODetail, useVendors, usePOActions, useLowStockItems } from '@/hooks/usePurchaseOrders'
 import toast from 'react-hot-toast'
+import RejectionModal from '@/components/RejectionModal'
+import { useRejectionNotification } from '@/hooks/useRejectionNotification'
 import {
   ShoppingCart, Plus, Search, Filter, Package, Truck, CheckCircle2,
   XCircle, Clock, DollarSign, AlertTriangle, ChevronRight, Eye,
@@ -420,8 +422,8 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   const actions = usePOActions()
   const [receiveMode, setReceiveMode] = useState(false)
   const [recQtys, setRecQtys] = useState({})
-  const [rejectReason, setRejectReason] = useState('')
-  const [showReject, setShowReject] = useState(false)
+  const [showRejectModal, setShowRejectModal] = useState(false)
+  const { sendRejectionNotification } = useRejectionNotification()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const autoReceiveTriggeredRef = useRef(false)
 
@@ -453,9 +455,44 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
     await actions.approveOrder(orderId)
     refresh()
   }
-  const handleReject = async () => {
-    await actions.rejectOrder(orderId, rejectReason)
-    setShowReject(false)
+  const handleReject = async (reason) => {
+    await actions.rejectOrder(orderId, reason)
+
+    // Notify the person who created the PO
+    if (order?.ordered_by) {
+      try {
+        // Look up email from the ordered_by name
+        const nameParts = (order.ordered_by || '').split(' ')
+        const firstName = nameParts[0] || ''
+        const { data: creator } = await supabase
+          .from('profiles')
+          .select('email, first_name, last_name')
+          .ilike('first_name', firstName)
+          .eq('status', 'Active')
+          .limit(5)
+
+        // Match by checking the formatted name pattern "First L."
+        const match = (creator || []).find(p => {
+          const formatted = `${p.first_name} ${(p.last_name || '').charAt(0)}.`
+          return formatted === order.ordered_by
+        })
+
+        if (match?.email) {
+          await sendRejectionNotification({
+            recipientEmail: match.email,
+            recipientName: order.ordered_by,
+            requestType: 'Purchase Order',
+            requestId: orderId,
+            reason,
+            extraDetails: `Vendor: ${order.vendor_name || ''}`,
+          })
+        }
+      } catch (err) {
+        console.warn('PO rejection notification lookup failed:', err.message)
+      }
+    }
+
+    setShowRejectModal(false)
     refresh()
   }
   const handleMarkOrdered = async () => {
@@ -669,7 +706,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             <button onClick={handleApprove} className="btn-primary text-xs gap-1" disabled={actions.saving}>
               <Check size={14} /> Approve
             </button>
-            <button onClick={() => setShowReject(true)} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700">
+            <button onClick={() => setShowRejectModal(true)} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700">
               <Ban size={14} /> Reject
             </button>
           </>
@@ -707,17 +744,17 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
       </div>
 
       {/* Reject Modal */}
-      {showReject && (
-        <div className="bg-white rounded-xl border border-red-200 p-4">
-          <h4 className="text-sm font-semibold text-red-700 mb-2">Reject Order</h4>
-          <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)}
-            placeholder="Reason for rejection..." className="input text-sm mb-2" rows={2} />
-          <div className="flex gap-2">
-            <button onClick={handleReject} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium" disabled={actions.saving}>Reject</button>
-            <button onClick={() => setShowReject(false)} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs">Cancel</button>
-          </div>
-        </div>
-      )}
+      <RejectionModal
+        open={showRejectModal}
+        title="Reject Purchase Order"
+        subtitle={`${orderId} — ${order?.vendor_name || 'Unknown vendor'} (ordered by ${order?.ordered_by || 'unknown'})`}
+        requestType="Purchase Order"
+        requestId={orderId}
+        recipientEmail=""
+        recipientName={order?.ordered_by || ''}
+        onConfirm={handleReject}
+        onClose={() => setShowRejectModal(false)}
+      />
 
       {/* Delete Confirmation */}
       {showDeleteConfirm && (

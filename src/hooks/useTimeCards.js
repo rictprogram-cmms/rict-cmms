@@ -1008,7 +1008,226 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     }
   }
 
-  return { saving, addEntry, submitTimeRequest, submitEditRequest, updateEntry, deleteEntry, punchOutEntry }
+  // ── Instructor: approve a pending time entry request ──
+  const approveTimeRequest = async (request) => {
+    if (!canEdit) { toast.error('Not authorized'); return }
+    setSaving(true)
+    try {
+      if (request.entry_type === 'New') {
+        // ── NEW request: create a time_clock entry from the request data ──
+        const { data: reqUser } = await supabase
+          .from('profiles')
+          .select('user_id, first_name, last_name, email')
+          .eq('email', request.user_email)
+          .maybeSingle()
+
+        if (!reqUser) throw new Error('Student profile not found')
+
+        const date = request.requested_date
+        const piStr = `${date}T${request.start_time}Z`
+        const poStr = request.end_time ? `${date}T${request.end_time}Z` : null
+
+        const piDate = new Date(piStr)
+        const poDate = poStr ? new Date(poStr) : null
+        const totalHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
+
+        // Generate next TC record_id
+        const { data: latest } = await supabase
+          .from('time_clock')
+          .select('record_id')
+          .like('record_id', 'TC%')
+          .order('record_id', { ascending: false })
+          .limit(1)
+
+        let nextNum = 1
+        if (latest && latest.length > 0) {
+          const num = parseInt(latest[0].record_id.replace(/\D/g, ''))
+          if (!isNaN(num)) nextNum = num + 1
+        }
+        const recordId = `TC${String(nextNum).padStart(6, '0')}`
+
+        // Compute week_start (Monday) using UTC (local-as-UTC convention)
+        const day = piDate.getUTCDay()
+        const mondayOffset = day === 0 ? -6 : 1 - day
+        const weekStartDate = new Date(Date.UTC(piDate.getUTCFullYear(), piDate.getUTCMonth(), piDate.getUTCDate() + mondayOffset))
+        const weekStart = `${weekStartDate.getUTCFullYear()}-${String(weekStartDate.getUTCMonth()+1).padStart(2,'0')}-${String(weekStartDate.getUTCDate()).padStart(2,'0')}`
+
+        const uName = `${reqUser.first_name} ${(reqUser.last_name || '').charAt(0)}.`
+
+        const { error: insertErr } = await supabase.from('time_clock').insert({
+          record_id: recordId,
+          user_id: reqUser.user_id,
+          user_name: uName,
+          user_email: reqUser.email,
+          class_id: request.class_id || '',
+          course_id: request.course_id || '',
+          punch_in: piStr,
+          punch_out: poStr,
+          total_hours: totalHours,
+          status: poDate ? 'Punched Out' : 'Punched In',
+          week_start: weekStart,
+        })
+        if (insertErr) throw insertErr
+
+      } else if (request.entry_type === 'Edit') {
+        // ── EDIT request: update the existing time_clock entry ──
+        if (!request.time_clock_record_id) throw new Error('No linked time clock record')
+
+        const date = request.requested_date
+        const piStr = `${date}T${request.start_time}Z`
+        const poStr = request.end_time ? `${date}T${request.end_time}Z` : null
+
+        const piDate = new Date(piStr)
+        const poDate = poStr ? new Date(poStr) : null
+        const totalHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
+
+        const updateFields = {
+          punch_in: piStr,
+          total_hours: totalHours,
+          status: poDate ? 'Punched Out' : 'Punched In',
+        }
+        // Only update punch_out if the edit request includes one
+        // (student may have only changed punch_in while still clocked in)
+        if (poStr) {
+          updateFields.punch_out = poStr
+        }
+
+        const { error: updateErr } = await supabase
+          .from('time_clock')
+          .update(updateFields)
+          .eq('record_id', request.time_clock_record_id)
+        if (updateErr) throw updateErr
+      }
+
+      // ── Mark the request as Approved ──
+      const { error: statusErr } = await supabase
+        .from('time_entry_requests')
+        .update({
+          status: 'Approved',
+          reviewed_by: userName,
+          review_date: new Date().toISOString(),
+        })
+        .eq('request_id', request.request_id)
+      if (statusErr) throw statusErr
+
+      // ── Audit log ──
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: `${profile.first_name || ''} ${profile.last_name || ''}`.trim(),
+          action: 'Approve',
+          entity_type: 'Time Entry Request',
+          entity_id: request.request_id,
+          details: `Approved ${request.entry_type} request for ${request.user_name || request.user_email}: ${request.course_id || request.class_id} on ${request.requested_date}`,
+        })
+      } catch {}
+
+      toast.success(`Request ${request.request_id} approved`)
+      return { success: true }
+    } catch (err) {
+      console.error('Approve time request error:', err)
+      toast.error(err.message || 'Failed to approve request')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ── Instructor: reject a pending time entry request ──
+  // Reason is required and comes from the RejectionModal.
+  // The caller (TimeCardsPage) is responsible for calling sendRejectionNotification.
+  const rejectTimeRequest = async (requestId, reason) => {
+    if (!canEdit) { toast.error('Not authorized'); return }
+    setSaving(true)
+    try {
+      const { data: rejRows, error } = await supabase
+        .from('time_entry_requests')
+        .update({
+          status: 'Rejected',
+          rejection_reason: reason,
+          reviewed_by: userName,
+          review_date: new Date().toISOString(),
+        })
+        .eq('request_id', requestId)
+        .select()
+
+      if (error) throw error
+      if (!rejRows || rejRows.length === 0) {
+        toast.error('Reject failed — you may not have permission.')
+        setSaving(false)
+        return
+      }
+
+      // ── Audit log ──
+      try {
+        const req = rejRows[0]
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: `${profile.first_name || ''} ${profile.last_name || ''}`.trim(),
+          action: 'Reject',
+          entity_type: 'Time Entry Request',
+          entity_id: requestId,
+          details: `Rejected ${req.entry_type || ''} request for ${req.user_name || req.user_email}. Reason: ${reason}`,
+        })
+      } catch {}
+
+      toast.success(`Request ${requestId} rejected`)
+      return { success: true }
+    } catch (err) {
+      console.error('Reject time request error:', err)
+      toast.error(err.message || 'Failed to reject request')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return {
+    saving, addEntry, submitTimeRequest, submitEditRequest,
+    updateEntry, deleteEntry, punchOutEntry,
+    approveTimeRequest, rejectTimeRequest,
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Pending Time Entry Requests (Instructor view)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function usePendingTimeRequests({ enabled = false } = {}) {
+  const [requests, setRequests] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  const fetchRequests = useCallback(async () => {
+    if (!enabled) return
+    setLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('time_entry_requests')
+        .select('*')
+        .eq('status', 'Pending')
+        .order('created_at', { ascending: true })
+      if (error) throw error
+      setRequests(data || [])
+    } catch (err) {
+      console.error('Fetch pending time requests error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [enabled])
+
+  useEffect(() => { fetchRequests() }, [fetchRequests])
+
+  // Real-time: refresh when time_entry_requests change
+  useEffect(() => {
+    if (!enabled) return
+    const channel = supabase
+      .channel('pending-time-requests-rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => {
+        fetchRequests()
+      })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [enabled, fetchRequests])
+
+  return { requests, loading, refresh: fetchRequests }
 }
 
 export { getWeekRange, toDateStr }

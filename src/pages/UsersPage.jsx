@@ -11,6 +11,8 @@ import {
   RefreshCcw
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import RejectionModal from '@/components/RejectionModal'
+import { useRejectionNotification } from '@/hooks/useRejectionNotification'
 
 const ROLES = ['Instructor', 'Work Study', 'Student']
 const STATUSES = ['Active', 'Inactive', 'Archived']
@@ -1065,6 +1067,8 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
   const [manualLast, setManualLast] = useState('')
   const [manualRole, setManualRole] = useState('Student')
   const [manualLoading, setManualLoading] = useState(false)
+  const [rejectTarget, setRejectTarget] = useState(null)
+  const { sendRejectionNotification } = useRejectionNotification()
 
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
 
@@ -1117,25 +1121,39 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
   }
 
   const reject = async (req) => {
-    const reason = prompt('Reason for rejection:')
-    if (reason === null) return
-    setProcessing(req.request_id)
+    setRejectTarget(req)
+  }
+
+  const handleRejectConfirm = async (reason) => {
+    if (!rejectTarget) return
+    setProcessing(rejectTarget.request_id)
     try {
       const { error } = await supabase.from('access_requests').update({
         status: 'Rejected',
         processed_by: userName,
         processed_date: new Date().toISOString(),
-      }).eq('request_id', req.request_id)
+        notes: reason,
+      }).eq('request_id', rejectTarget.request_id)
 
       if (error) {
         await supabase.from('access_requests')
-          .update({ status: 'Rejected' })
-          .eq('request_id', req.request_id)
+          .update({ status: 'Rejected', notes: reason })
+          .eq('request_id', rejectTarget.request_id)
       }
 
+      // Notify the student (they have an email even though they don't have a profile yet)
+      await sendRejectionNotification({
+        recipientEmail: rejectTarget.email,
+        recipientName: `${rejectTarget.first_name || ''} ${rejectTarget.last_name || ''}`.trim(),
+        requestType: 'Access Request',
+        requestId: rejectTarget.request_id,
+        reason,
+      })
+
+      setRejectTarget(null)
       onRefresh()
     } catch (err) {
-      alert('Error: ' + err.message)
+      throw new Error(err.message || 'Failed to reject request')
     } finally {
       setProcessing(null)
     }
@@ -1205,6 +1223,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
   if (loading) return <div className="text-center py-12 text-surface-400">Loading requests...</div>
 
   return (
+    <>
     <div className="space-y-4">
       {/* Manual Add User button */}
       <div className="flex justify-end">
@@ -1311,6 +1330,23 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
         ))
       )}
     </div>
+
+    {/* ── Rejection Modal ── */}
+    <RejectionModal
+      open={!!rejectTarget}
+      title="Reject Registration Request"
+      subtitle={rejectTarget
+        ? `${rejectTarget.first_name || ''} ${rejectTarget.last_name || ''} (${rejectTarget.email})`
+        : ''
+      }
+      requestType="Access Request"
+      requestId={rejectTarget?.request_id || ''}
+      recipientEmail={rejectTarget?.email || ''}
+      recipientName={rejectTarget ? `${rejectTarget.first_name || ''} ${rejectTarget.last_name || ''}`.trim() : ''}
+      onConfirm={handleRejectConfirm}
+      onClose={() => { setRejectTarget(null); setProcessing(null) }}
+    />
+    </>
   )
 }
 
