@@ -336,7 +336,14 @@ function StudentView() {
       </div>
 
       {/* Stats Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {!stats.hasRequirement || stats.totalRequired === 0 ? (
+        <div className="bg-white rounded-xl border border-surface-200 p-6 text-center">
+          <Heart size={32} className="mx-auto mb-2 text-surface-300" />
+          <p className="text-sm font-medium text-surface-600">No volunteer hours required</p>
+          <p className="text-xs text-surface-400 mt-1">None of your current classes require volunteer hours this semester.</p>
+        </div>
+      ) : (
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${stats.midpointApplies && stats.secondHalfApplies ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-4`}>
         <div className="bg-white rounded-xl border border-surface-200 p-6 flex flex-col items-center">
           <ProgressRing progress={stats.progress} approvedHours={stats.approvedHours} totalRequired={stats.totalRequired} />
           <div className="mt-3 text-center">
@@ -355,10 +362,11 @@ function StudentView() {
           </div>
         </div>
 
+        {stats.midpointApplies && (
         <div className="bg-white rounded-xl border border-surface-200 p-6">
           <div className="flex items-center gap-2 mb-3">
             <Target size={18} className="text-purple-500" />
-            <h3 className="text-sm font-semibold text-surface-700">Midpoint Checkpoint</h3>
+            <h3 className="text-sm font-semibold text-surface-700">1st Half Checkpoint</h3>
           </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
@@ -375,6 +383,30 @@ function StudentView() {
             </div>
           </div>
         </div>
+        )}
+
+        {stats.secondHalfApplies && (
+        <div className="bg-white rounded-xl border border-surface-200 p-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Target size={18} className="text-indigo-500" />
+            <h3 className="text-sm font-semibold text-surface-700">2nd Half Checkpoint</h3>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-surface-500">Requirement</span>
+              <span className="text-sm font-medium text-surface-800">{stats.secondHalfTarget}h (Weeks {stats.midpointWeek + 1}–{stats.midpointWeek * 2})</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-surface-500">Earned toward 2nd Half</span>
+              <span className="text-sm font-bold text-indigo-600">{fmtHoursMin(stats.secondHalfHours)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-surface-500">Status</span>
+              <SecondHalfBadge status={stats.secondHalfStatus} hours={stats.secondHalfHours} target={stats.secondHalfTarget} />
+            </div>
+          </div>
+        </div>
+        )}
 
         <div className="bg-white rounded-xl border border-surface-200 p-6">
           <div className="flex items-center gap-2 mb-3">
@@ -401,6 +433,7 @@ function StudentView() {
           </div>
         </div>
       </div>
+      )}
 
       {/* How to Log Hours Info */}
       <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
@@ -961,9 +994,12 @@ function InstructorView() {
       <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-3">
         <Award size={16} className="text-purple-500 mt-0.5 flex-shrink-0" />
         <div className="text-sm text-purple-800">
-          <strong>Requirements:</strong> {settings.totalHoursRequired}h total per semester
-          &nbsp;·&nbsp; {settings.midpointHours}h by Week {settings.midpointWeek} (midpoint)
+          <strong>Requirements:</strong> {settings.midpointHours}h per half
+          &nbsp;·&nbsp; Based on enrolled classes with volunteer requirement
           &nbsp;·&nbsp; Currently Week {summary.currentWeek}
+          {summary.noRequirement > 0 && (
+            <span className="text-purple-500"> &nbsp;·&nbsp; {summary.noRequirement} student{summary.noRequirement !== 1 ? 's' : ''} with no requirement</span>
+          )}
         </div>
       </div>
 
@@ -1013,9 +1049,11 @@ function InstructorView() {
                 <tr className="bg-surface-50 text-left">
                   <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Student</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Approved</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Required</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Pending</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase w-[140px]">Progress</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Midpoint</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">1st Half</th>
+                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">2nd Half</th>
                   <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Status</th>
                   <th className="px-4 py-2.5 w-8"></th>
                 </tr>
@@ -1035,6 +1073,13 @@ function InstructorView() {
                         <span className="font-bold text-emerald-600">{fmtHoursMin(s.approvedHours)}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
+                        {s.totalRequired > 0 ? (
+                          <span className="text-xs font-medium text-surface-600">{fmtHoursMin(s.totalRequired)}</span>
+                        ) : (
+                          <span className="text-xs text-surface-300">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
                         {s.pendingHours > 0 ? (
                           <span className="text-amber-600 font-medium">{fmtHoursMin(s.pendingHours)}</span>
                         ) : (
@@ -1047,7 +1092,16 @@ function InstructorView() {
                           <span className="text-xs font-medium text-surface-500 w-8 text-right">{s.progress}%</span>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-center"><MidpointBadge status={s.midpointStatus} /></td>
+                      <td className="px-4 py-3 text-center">
+                        {s.midpointApplies ? <MidpointBadge status={s.midpointStatus} /> : <span className="text-xs text-surface-300">N/A</span>}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {s.secondHalfApplies ? (
+                          <SecondHalfBadge status={s.secondHalfStatus} hours={s.secondHalfHours} target={settings.midpointHours} />
+                        ) : (
+                          <span className="text-xs text-surface-300">N/A</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-center"><OverallStatusBadge status={s.overallStatus} /></td>
                       <td className="px-4 py-3 text-center">
                         {expandedStudent === s.email
@@ -1057,7 +1111,7 @@ function InstructorView() {
                     </tr>
                     {expandedStudent === s.email && (
                       <tr>
-                        <td colSpan={7} className="bg-surface-50 px-0 py-0">
+                        <td colSpan={9} className="bg-surface-50 px-0 py-0">
                           <StudentDetailPanel studentEmail={s.email} studentName={s.name} />
                         </td>
                       </tr>
@@ -1114,6 +1168,35 @@ function OverallStatusBadge({ status }) {
       {c.label}
     </span>
   )
+}
+
+
+// ─── Second Half Status Badge ───────────────────────────────────────────────
+
+function SecondHalfBadge({ status, hours, target }) {
+  const configs = {
+    met:      { label: 'Met',         bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
+    on_track: { label: 'On Track',    bg: 'bg-blue-50',    text: 'text-blue-700',    border: 'border-blue-200'   },
+    at_risk:  { label: 'At Risk',     bg: 'bg-amber-50',   text: 'text-amber-700',   border: 'border-amber-200'  },
+    overdue:  { label: 'Overdue',     bg: 'bg-red-50',     text: 'text-red-700',     border: 'border-red-200'    },
+    pending:  { label: '—',           bg: 'bg-surface-50',  text: 'text-surface-400', border: 'border-surface-200' },
+  }
+  const c = configs[status] || configs.pending
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-full border font-medium ${c.bg} ${c.text} ${c.border}`}>
+        {c.label}
+      </span>
+      {status !== 'pending' && (
+        <span className="text-[10px] text-surface-400">{fmtHoursMin(hours)}/{fmtHoursMin(target)}</span>
+      )}
+    </div>
+  )
+}
+
+function secondHalfStatusLabel(status) {
+  const map = { met: '✓ Met', on_track: 'On Track', at_risk: 'At Risk', overdue: 'Overdue', pending: '—' }
+  return map[status] || '—'
 }
 
 
@@ -1752,7 +1835,7 @@ function VolunteerReportView({ reportData, onClose }) {
               <span className="font-bold text-surface-900">{fmtHoursMin(requirements.totalRequired)}</span>
             </div>
             <div>
-              <span className="text-surface-500">Midpoint:</span>{' '}
+              <span className="text-surface-500">1st Half:</span>{' '}
               <span className="font-bold text-surface-900">{fmtHoursMin(requirements.midpointHours)} by Week {requirements.midpointWeek}</span>
             </div>
             <div>
@@ -1797,7 +1880,8 @@ function VolunteerReportView({ reportData, onClose }) {
                   <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Approved Hrs</th>
                   <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Required</th>
                   <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Progress</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Midpoint</th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">1st Half</th>
+                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">2nd Half</th>
                   <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Status</th>
                   <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Entries</th>
                 </tr>
@@ -1813,7 +1897,7 @@ function VolunteerReportView({ reportData, onClose }) {
                       {fmtHoursMin(s.approvedHours)}
                     </td>
                     <td className="px-3 py-2 text-center text-surface-600">
-                      {fmtHoursMin(requirements.totalRequired)}
+                      {fmtHoursMin(s.totalRequired || requirements.totalRequired)}
                     </td>
                     <td className="px-3 py-2 text-center">
                       <div className="flex items-center gap-2 justify-center">
@@ -1835,6 +1919,20 @@ function VolunteerReportView({ reportData, onClose }) {
                       }`}>
                         {midpointStatusLabel(s.midpointStatus)}
                       </span>
+                    </td>
+                    <td className="px-3 py-2 text-center text-xs font-medium">
+                      <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-medium ${
+                        s.secondHalfStatus === 'met' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                        s.secondHalfStatus === 'on_track' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                        s.secondHalfStatus === 'at_risk' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                        s.secondHalfStatus === 'overdue' ? 'bg-red-50 text-red-700 border-red-200' :
+                        'bg-surface-50 text-surface-400 border-surface-200'
+                      }`}>
+                        {secondHalfStatusLabel(s.secondHalfStatus)}
+                      </span>
+                      {s.secondHalfStatus !== 'pending' && (
+                        <div className="text-[10px] text-surface-400 mt-0.5">{fmtHoursMin(s.secondHalfHours)}/{fmtHoursMin(requirements.midpointHours)}</div>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-center">
                       <span className={`px-1.5 py-0.5 rounded-full border text-[10px] font-medium ${
@@ -1874,7 +1972,7 @@ function VolunteerReportView({ reportData, onClose }) {
               </div>
               <div className="text-right">
                 <div className="text-2xl font-bold text-emerald-600">{fmtHoursMin(s.approvedHours)}</div>
-                <div className="text-xs text-surface-400">of {fmtHoursMin(requirements.totalRequired)} required</div>
+                <div className="text-xs text-surface-400">of {fmtHoursMin(s.totalRequired || requirements.totalRequired)} required</div>
                 <div className="mt-1">
                   <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${
                     s.overallStatus === 'complete' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
@@ -1889,7 +1987,7 @@ function VolunteerReportView({ reportData, onClose }) {
             </div>
 
             {/* Mini stats row */}
-            <div className="mt-4 grid grid-cols-4 gap-4 pt-4 border-t border-surface-100 print:border-t print:border-gray-300">
+            <div className="mt-4 grid grid-cols-5 gap-4 pt-4 border-t border-surface-100 print:border-t print:border-gray-300">
               <div>
                 <div className="text-xs text-surface-500 mb-0.5">Approved Hours</div>
                 <div className="text-base font-bold text-emerald-600">{fmtHoursMin(s.approvedHours)}</div>
@@ -1899,8 +1997,17 @@ function VolunteerReportView({ reportData, onClose }) {
                 <div className="text-base font-bold text-surface-800">{s.progress}%</div>
               </div>
               <div>
-                <div className="text-xs text-surface-500 mb-0.5">Midpoint</div>
+                <div className="text-xs text-surface-500 mb-0.5">1st Half</div>
                 <div className="text-base font-bold text-surface-800">{midpointStatusLabel(s.midpointStatus)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-surface-500 mb-0.5">2nd Half</div>
+                <div className="text-base font-bold text-surface-800">
+                  {secondHalfStatusLabel(s.secondHalfStatus)}
+                  {s.secondHalfStatus !== 'pending' && (
+                    <span className="text-xs font-normal text-surface-400 ml-1">({fmtHoursMin(s.secondHalfHours)}/{fmtHoursMin(requirements.midpointHours)})</span>
+                  )}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-surface-500 mb-0.5">Total Entries</div>

@@ -78,6 +78,80 @@ async function generateTerRequestId() {
 }
 
 
+// ─── Class Period Detection ─────────────────────────────────────────────────
+
+/**
+ * Determine which half of the semester a class falls in.
+ * Returns 'first', 'second', or 'full'.
+ *
+ * We compute a midpoint date from semesterStart + midpointWeek weeks.
+ * - Class ends on or before midpoint date → first half
+ * - Class starts after midpoint date → second half
+ * - Otherwise → full semester (spans both halves)
+ */
+function getClassPeriod(cls, semesterStart, midpointWeek) {
+  if (!cls.start_date || !cls.end_date || !semesterStart || !midpointWeek) return 'full'
+
+  // Midpoint date = start of the week *after* the midpoint week
+  // e.g. if semesterStart is Jan 12 and midpointWeek is 8,
+  // midpointDate = Jan 12 + (8 * 7) = Mar 9 (Monday of week 9)
+  const semStart = new Date(semesterStart + 'T00:00:00')
+  const midpointDate = new Date(semStart)
+  midpointDate.setDate(midpointDate.getDate() + (midpointWeek * 7))
+
+  const classEnd = new Date(cls.end_date + 'T00:00:00')
+  const classStart = new Date(cls.start_date + 'T00:00:00')
+
+  if (classEnd < midpointDate) return 'first'
+  if (classStart >= midpointDate) return 'second'
+  return 'full'
+}
+
+/**
+ * Given a student's enrolled course IDs and the qualifying classes,
+ * compute their personalized volunteer requirement.
+ */
+function getStudentRequirements(studentCourseIds, qualifyingClasses, hoursPerHalf) {
+  if (!studentCourseIds || studentCourseIds.length === 0 || !qualifyingClasses || qualifyingClasses.length === 0) {
+    return { totalRequired: 0, midpointApplies: false, secondHalfApplies: false, hasRequirement: false }
+  }
+
+  // Find which qualifying classes this student is enrolled in
+  const enrolled = qualifyingClasses.filter(c => studentCourseIds.includes(c.course_id))
+  if (enrolled.length === 0) {
+    return { totalRequired: 0, midpointApplies: false, secondHalfApplies: false, hasRequirement: false }
+  }
+
+  const coversFirst = enrolled.some(c => c.period === 'first' || c.period === 'full')
+  const coversSecond = enrolled.some(c => c.period === 'second' || c.period === 'full')
+  const totalRequired = (coversFirst ? hoursPerHalf : 0) + (coversSecond ? hoursPerHalf : 0)
+
+  return { totalRequired, midpointApplies: coversFirst, secondHalfApplies: coversSecond, hasRequirement: true }
+}
+
+/**
+ * Fetch active classes that have requires_volunteer_hours = true,
+ * and annotate each with its period ('first', 'second', 'full').
+ */
+async function fetchQualifyingClasses(semesterStart, midpointWeek) {
+  const { data, error } = await supabase
+    .from('classes')
+    .select('class_id, course_id, course_name, start_date, end_date, requires_volunteer_hours')
+    .eq('status', 'Active')
+    .eq('requires_volunteer_hours', true)
+
+  if (error) {
+    console.warn('Failed to fetch qualifying classes:', error)
+    return []
+  }
+
+  return (data || []).map(cls => ({
+    ...cls,
+    period: getClassPeriod(cls, semesterStart, midpointWeek),
+  }))
+}
+
+
 // ─── Volunteer Settings ──────────────────────────────────────────────────────
 
 export function useVolunteerSettings() {
@@ -116,8 +190,19 @@ export function useVolunteerSettings() {
       let semesterEnd = map.volunteer_semester_end || ''
       let currentSemester = map.volunteer_current_semester || ''
 
-      // 2. If volunteer semester dates aren't configured, fall back to active class dates
-      if (!semesterStart || !semesterEnd) {
+      // 2. If volunteer semester dates aren't configured OR are stale
+      //    (today is past the configured end date), fall back to active class dates.
+      //    This auto-detects a new semester without manual settings updates.
+      const today = new Date()
+      const configuredEndIsStale = semesterEnd && new Date(semesterEnd + 'T23:59:59') < today
+
+      if (!semesterStart || !semesterEnd || configuredEndIsStale) {
+        // Clear stale values so they get overwritten by active class dates
+        if (configuredEndIsStale) {
+          semesterStart = ''
+          semesterEnd = ''
+          currentSemester = ''
+        }
         try {
           const { data: classData } = await supabase
             .from('classes')
@@ -193,6 +278,7 @@ export function useVolunteerData() {
   const [pendingEntries, setPendingEntries] = useState([])  // pending time_entry_requests (manual submissions)
   const [rejectedEntries, setRejectedEntries] = useState([]) // recently rejected requests
   const [pendingEditRequests, setPendingEditRequests] = useState([]) // pending edit requests keyed by time_clock_record_id
+  const [qualifyingClasses, setQualifyingClasses] = useState([]) // classes with requires_volunteer_hours
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const hasLoadedRef = useRef(false)
@@ -206,6 +292,10 @@ export function useVolunteerData() {
     try {
       const semStart = settings.semesterStart || `${new Date().getFullYear()}-01-01`
       const semEnd = settings.semesterEnd || toDateStr(new Date())
+
+      // 0. Fetch qualifying classes (requires_volunteer_hours = true)
+      const qClasses = await fetchQualifyingClasses(settings.semesterStart, settings.midpointWeek)
+      setQualifyingClasses(qClasses)
 
       // 1. All completed volunteer + club activity time_clock entries (approval_status = 'Approved').
       // Club Activity total_hours is already the credited amount (0.25x actual).
@@ -277,25 +367,57 @@ export function useVolunteerData() {
 
   // ── Computed stats ──
   const stats = useMemo(() => {
+    // Parse student's enrolled course IDs from profile
+    const studentCourseIds = (profile?.classes || '').split(',').map(c => c.trim()).filter(Boolean)
+    const reqs = getStudentRequirements(studentCourseIds, qualifyingClasses, settings.midpointHours)
+
+    // If no qualifying classes found but qualifyingClasses haven't loaded yet, fall back to settings
+    const totalRequired = reqs.hasRequirement ? reqs.totalRequired : settings.totalHoursRequired
+    const midpointApplies = reqs.hasRequirement ? reqs.midpointApplies : true
+    const secondHalfApplies = reqs.hasRequirement ? reqs.secondHalfApplies : true
+
     const approvedHours = entries.reduce((sum, e) => sum + (parseFloat(e.total_hours) || 0), 0)
     const pendingHours = pendingEntries.reduce((sum, e) => sum + (parseFloat(e.total_hours) || 0), 0)
-    const remaining = Math.max(0, settings.totalHoursRequired - approvedHours)
-    const progress = settings.totalHoursRequired > 0
-      ? Math.min(100, Math.round((approvedHours / settings.totalHoursRequired) * 100))
+    const remaining = Math.max(0, totalRequired - approvedHours)
+    const progress = totalRequired > 0
+      ? Math.min(100, Math.round((approvedHours / totalRequired) * 100))
       : 0
-    const isComplete = approvedHours >= settings.totalHoursRequired
+    const isComplete = totalRequired > 0 ? approvedHours >= totalRequired : true
 
     const currentWeek = getWeekNumber(settings.semesterStart)
     const pastMidpoint = currentWeek > settings.midpointWeek
     const atMidpoint = currentWeek === settings.midpointWeek
-    const midpointMet = approvedHours >= settings.midpointHours
-    let midpointStatus = 'on_track'
-    if (midpointMet) {
-      midpointStatus = 'met'
-    } else if (pastMidpoint) {
-      midpointStatus = 'overdue'
-    } else if (currentWeek >= settings.midpointWeek - 2) {
-      midpointStatus = 'at_risk'
+
+    // ── Midpoint tracking ──
+    const midpointRequired = midpointApplies ? settings.midpointHours : 0
+    const midpointMet = !midpointApplies || approvedHours >= midpointRequired
+    let midpointStatus = 'not_applicable'
+    if (midpointApplies) {
+      midpointStatus = 'on_track'
+      if (midpointMet) midpointStatus = 'met'
+      else if (pastMidpoint) midpointStatus = 'overdue'
+      else if (currentWeek >= settings.midpointWeek - 2) midpointStatus = 'at_risk'
+    }
+
+    // ── Second-half tracking ──
+    const secondHalfTarget = secondHalfApplies ? settings.midpointHours : 0
+    const secondHalfHours = secondHalfApplies ? Math.max(0, approvedHours - (midpointApplies ? settings.midpointHours : 0)) : 0
+    const secondHalfProgress = secondHalfTarget > 0
+      ? Math.min(100, Math.round((secondHalfHours / secondHalfTarget) * 100))
+      : 0
+    const totalSemesterWeeks = settings.midpointWeek * 2
+    const secondHalfWeeksElapsed = Math.max(0, currentWeek - settings.midpointWeek)
+    const secondHalfTotalWeeks = totalSemesterWeeks - settings.midpointWeek
+
+    let secondHalfStatus = 'not_applicable'
+    if (secondHalfApplies) {
+      secondHalfStatus = 'pending'
+      if (pastMidpoint || atMidpoint) {
+        if (secondHalfHours >= secondHalfTarget) secondHalfStatus = 'met'
+        else if (secondHalfWeeksElapsed >= secondHalfTotalWeeks) secondHalfStatus = 'overdue'
+        else if (secondHalfWeeksElapsed >= secondHalfTotalWeeks - 2) secondHalfStatus = 'at_risk'
+        else secondHalfStatus = 'on_track'
+      }
     }
 
     return {
@@ -309,11 +431,18 @@ export function useVolunteerData() {
       atMidpoint,
       midpointMet,
       midpointStatus,
-      totalRequired: settings.totalHoursRequired,
-      midpointRequired: settings.midpointHours,
+      totalRequired,
+      midpointRequired,
+      midpointApplies,
       midpointWeek: settings.midpointWeek,
+      secondHalfTarget,
+      secondHalfHours: roundToMinute(secondHalfHours),
+      secondHalfProgress,
+      secondHalfStatus,
+      secondHalfApplies,
+      hasRequirement: reqs.hasRequirement,
     }
-  }, [entries, pendingEntries, settings])
+  }, [entries, pendingEntries, settings, profile?.classes, qualifyingClasses])
 
   // ── Submit manual volunteer entry ──
   const submitVolunteerEntry = async (date, startTime, endTime, reason) => {
@@ -536,7 +665,7 @@ export function useVolunteerOverview() {
       // 1. Get all Student + Work Study users (active, excluding time_clock_only)
       const { data: profilesData, error: profErr } = await supabase
         .from('profiles')
-        .select('user_id, email, first_name, last_name, role, status, time_clock_only')
+        .select('user_id, email, first_name, last_name, role, status, time_clock_only, classes')
         .eq('status', 'Active')
         .in('role', ['Student', 'Work Study'])
         .order('last_name')
@@ -546,6 +675,9 @@ export function useVolunteerOverview() {
       const allStudents = (profilesData || []).filter(s =>
         !s.time_clock_only || s.time_clock_only === '' || s.time_clock_only === 'No'
       )
+
+      // 1b. Fetch qualifying classes (requires_volunteer_hours = true)
+      const qClasses = await fetchQualifyingClasses(settings.semesterStart, settings.midpointWeek)
 
       // 2. Fetch ALL volunteer time_clock entries for the semester
       const { data: tcData, error: tcErr } = await supabase
@@ -585,24 +717,68 @@ export function useVolunteerOverview() {
       const pastMidpoint = currentWeek > settings.midpointWeek
 
       const studentSummaries = allStudents.map(s => {
+        // Parse this student's enrolled course IDs
+        const studentCourseIds = (s.classes || '').split(',').map(c => c.trim()).filter(Boolean)
+        const reqs = getStudentRequirements(studentCourseIds, qClasses, settings.midpointHours)
+
+        // Use per-student requirement, or fall back to global settings if no qualifying classes data
+        const totalRequired = reqs.hasRequirement ? reqs.totalRequired : settings.totalHoursRequired
+        const midpointApplies = reqs.hasRequirement ? reqs.midpointApplies : true
+        const secondHalfApplies = reqs.hasRequirement ? reqs.secondHalfApplies : true
+
         const approvedHours = roundToMinute(approvedByEmail[s.email] || 0)
         const pendingHours = roundToMinute(pendingReqByEmail[s.email] || 0)
-        const remaining = Math.max(0, settings.totalHoursRequired - approvedHours)
-        const progress = settings.totalHoursRequired > 0
-          ? Math.min(100, Math.round((approvedHours / settings.totalHoursRequired) * 100))
+        const remaining = Math.max(0, totalRequired - approvedHours)
+        const progress = totalRequired > 0
+          ? Math.min(100, Math.round((approvedHours / totalRequired) * 100))
           : 0
-        const isComplete = approvedHours >= settings.totalHoursRequired
-        const midpointMet = approvedHours >= settings.midpointHours
+        const isComplete = totalRequired > 0 ? approvedHours >= totalRequired : true
 
-        let midpointStatus = 'on_track'
-        if (midpointMet) midpointStatus = 'met'
-        else if (pastMidpoint) midpointStatus = 'overdue'
-        else if (currentWeek >= settings.midpointWeek - 2) midpointStatus = 'at_risk'
+        // Midpoint tracking
+        const midpointRequired = midpointApplies ? settings.midpointHours : 0
+        const midpointMet = !midpointApplies || approvedHours >= midpointRequired
+        let midpointStatus = 'not_applicable'
+        if (midpointApplies) {
+          midpointStatus = 'on_track'
+          if (midpointMet) midpointStatus = 'met'
+          else if (pastMidpoint) midpointStatus = 'overdue'
+          else if (currentWeek >= settings.midpointWeek - 2) midpointStatus = 'at_risk'
+        }
 
         let overallStatus = 'on_track'
         if (isComplete) overallStatus = 'complete'
-        else if (midpointStatus === 'overdue') overallStatus = 'behind'
-        else if (midpointStatus === 'at_risk') overallStatus = 'at_risk'
+        else if (!reqs.hasRequirement || totalRequired === 0) overallStatus = 'complete'
+        else if (midpointApplies && midpointStatus === 'overdue') overallStatus = 'behind'
+        else if (midpointApplies && midpointStatus === 'at_risk') overallStatus = 'at_risk'
+
+        // Second-half tracking
+        const secondHalfTarget = secondHalfApplies ? settings.midpointHours : 0
+        const secondHalfHours = secondHalfApplies
+          ? roundToMinute(Math.max(0, approvedHours - (midpointApplies ? settings.midpointHours : 0)))
+          : 0
+        const secondHalfProgress = secondHalfTarget > 0
+          ? Math.min(100, Math.round((secondHalfHours / secondHalfTarget) * 100))
+          : 0
+        const totalSemesterWeeks = settings.midpointWeek * 2
+        const secondHalfWeeksElapsed = Math.max(0, currentWeek - settings.midpointWeek)
+        const secondHalfTotalWeeks = totalSemesterWeeks - settings.midpointWeek
+
+        let secondHalfStatus = 'not_applicable'
+        if (secondHalfApplies) {
+          secondHalfStatus = 'pending'
+          if (pastMidpoint) {
+            if (secondHalfHours >= secondHalfTarget) secondHalfStatus = 'met'
+            else if (secondHalfWeeksElapsed >= secondHalfTotalWeeks) secondHalfStatus = 'overdue'
+            else if (secondHalfWeeksElapsed >= secondHalfTotalWeeks - 2) secondHalfStatus = 'at_risk'
+            else secondHalfStatus = 'on_track'
+          }
+        }
+
+        // For second-half-only students who haven't met their requirement, check timing
+        if (!midpointApplies && secondHalfApplies && !isComplete) {
+          if (secondHalfStatus === 'overdue') overallStatus = 'behind'
+          else if (secondHalfStatus === 'at_risk') overallStatus = 'at_risk'
+        }
 
         return {
           userId: s.user_id,
@@ -616,9 +792,16 @@ export function useVolunteerOverview() {
           remaining,
           progress,
           isComplete,
+          totalRequired,
+          midpointApplies,
           midpointMet,
           midpointStatus,
           overallStatus,
+          secondHalfApplies,
+          secondHalfHours,
+          secondHalfProgress,
+          secondHalfStatus,
+          hasRequirement: reqs.hasRequirement,
         }
       })
 
@@ -647,13 +830,15 @@ export function useVolunteerOverview() {
   }, [isInstructor, fetchOverview])
 
   const summary = useMemo(() => {
-    const total = students.length
-    const complete = students.filter(s => s.overallStatus === 'complete').length
-    const onTrack = students.filter(s => s.overallStatus === 'on_track').length
-    const atRisk = students.filter(s => s.overallStatus === 'at_risk').length
-    const behind = students.filter(s => s.overallStatus === 'behind').length
+    const withReq = students.filter(s => s.hasRequirement && s.totalRequired > 0)
+    const total = withReq.length
+    const complete = withReq.filter(s => s.overallStatus === 'complete').length
+    const onTrack = withReq.filter(s => s.overallStatus === 'on_track').length
+    const atRisk = withReq.filter(s => s.overallStatus === 'at_risk').length
+    const behind = withReq.filter(s => s.overallStatus === 'behind').length
+    const noRequirement = students.filter(s => !s.hasRequirement || s.totalRequired === 0).length
     const currentWeek = getWeekNumber(settings.semesterStart)
-    return { total, complete, onTrack, atRisk, behind, currentWeek }
+    return { total, complete, onTrack, atRisk, behind, noRequirement, currentWeek, totalAll: students.length }
   }, [students, settings])
 
   return {

@@ -1703,6 +1703,7 @@ function ClassesSection() {
     setForm({
       course_id: '', course_name: '', required_hours: 0, instructor: '',
       semester: '', status: 'Active', tracking_type: 'Weekly',
+      requires_volunteer_hours: false,
       start_date: '', end_date: '',
       spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: ''
     })
@@ -1719,6 +1720,7 @@ function ClassesSection() {
       semester: cls.semester || '',
       status: cls.status || 'Active',
       tracking_type: cls.tracking_type || 'Weekly',
+      requires_volunteer_hours: cls.requires_volunteer_hours || false,
       start_date: cls.start_date ? String(cls.start_date).substring(0, 10) : '',
       end_date: cls.end_date ? String(cls.end_date).substring(0, 10) : '',
       spring_break_start: cls.spring_break_start ? String(cls.spring_break_start).substring(0, 10) : '',
@@ -1889,6 +1891,17 @@ function ClassesSection() {
                   <option value="None">None</option>
                 </select>
               </div>
+              <div className="flex items-end pb-1.5">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.requires_volunteer_hours || false}
+                    onChange={e => setForm(f => ({ ...f, requires_volunteer_hours: e.target.checked }))}
+                    className="w-4 h-4 rounded border-surface-300 text-purple-600 focus:ring-purple-500"
+                  />
+                  <span className="text-xs font-medium text-surface-700">Requires Volunteer Hours</span>
+                </label>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -2046,6 +2059,11 @@ function ClassesSection() {
                               No Tracker
                             </span>
                           )}
+                          {cls.requires_volunteer_hours && (
+                            <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200">
+                              Volunteer
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-2">
@@ -2139,6 +2157,7 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         required_hours: cls.required_hours,
         instructor: cls.instructor,
         tracking_type: cls.tracking_type || 'Weekly',
+        requires_volunteer_hours: cls.requires_volunteer_hours || false,
         status: 'Active',
         semester: form.semester,
         start_date: form.start_date,
