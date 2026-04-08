@@ -224,11 +224,13 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
       const userClasses = (profile.classes || '').split(',').map(c => c.trim()).filter(Boolean)
 
       if (userClasses.length > 0 && profile.role !== 'Instructor') {
+        const todayStr = new Date().toISOString().substring(0, 10)
         const { data: classData } = await supabase
           .from('classes')
           .select('class_id, course_id, course_name, required_hours')
           .in('course_id', userClasses)
           .eq('status', 'Active')
+          .or(`start_date.is.null,start_date.lte.${todayStr}`)
 
         classes = (classData || []).map(c => ({
           classId: c.class_id,

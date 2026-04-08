@@ -19,10 +19,12 @@ export function useLabClasses() {
   const [loading, setLoading] = useState(true)
 
   const fetch = useCallback(async () => {
+    const todayStr = new Date().toISOString().substring(0, 10)
     const { data, error } = await supabase
       .from('classes')
       .select('*')
       .eq('status', 'Active')
+      .or(`start_date.is.null,start_date.lte.${todayStr}`)
       .order('course_id')
 
     if (error) {
@@ -248,12 +250,14 @@ export function useStudentLabReport() {
         return
       }
 
-      // Get class configs
+      // Get class configs — exclude future classes not yet in session
+      const todayStr = new Date().toISOString().substring(0, 10)
       const { data: classesData } = await supabase
         .from('classes')
         .select('*')
         .in('course_id', userClasses)
         .eq('status', 'Active')
+        .or(`start_date.is.null,start_date.lte.${todayStr}`)
 
       // Get tracker data for this user
       const { data: trackerData } = await supabase

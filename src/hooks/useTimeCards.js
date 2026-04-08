@@ -123,9 +123,12 @@ export function useClassesList({ includeInactive = false } = {}) {
   const fetch = useCallback(async () => {
     try {
       let query = supabase.from('classes').select('*').order('course_id')
-      // When includeInactive is false, restrict to Active only.
+      // When includeInactive is false, restrict to Active only and exclude future classes.
       // When true, fetch all so historical reports can reference old classes.
-      if (!includeInactive) query = query.eq('status', 'Active')
+      if (!includeInactive) {
+        const todayStr = new Date().toISOString().substring(0, 10)
+        query = query.eq('status', 'Active').or(`start_date.is.null,start_date.lte.${todayStr}`)
+      }
       const { data, error } = await query
       if (error) throw error
       setClasses(data || [])
