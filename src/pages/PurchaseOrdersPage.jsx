@@ -11,7 +11,8 @@ import {
   ShoppingCart, Plus, Search, Filter, Package, Truck, CheckCircle2,
   XCircle, Clock, DollarSign, AlertTriangle, ChevronRight, Eye,
   Printer, X, Check, Ban, Send, FileText, Link, Trash2, ArrowLeft,
-  TrendingUp, BarChart3, Loader2, SlidersHorizontal, ScanLine
+  TrendingUp, BarChart3, Loader2, SlidersHorizontal, ScanLine,
+  Pencil
 } from 'lucide-react'
 
 const STATUS_COLORS = {
@@ -41,6 +42,9 @@ function fmtDate(d) {
 function fmtMoney(v) {
   return '$' + (parseFloat(v) || 0).toFixed(2)
 }
+
+// Statuses where line items can be edited
+const EDITABLE_STATUSES = ['Pending', 'Approved', 'Ordered']
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
@@ -383,12 +387,12 @@ function OrdersTab({ onViewOrder, hasPerm }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
-                  <th className="px-4 py-2.5 font-semibold text-surface-600 text-xs">PO #</th>
-                  <th className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Vendor</th>
-                  <th className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Ordered By</th>
-                  <th className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Date</th>
-                  <th className="px-4 py-2.5 font-semibold text-surface-600 text-xs text-right">Total</th>
-                  <th className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Status</th>
+                  <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs">PO #</th>
+                  <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Vendor</th>
+                  <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Ordered By</th>
+                  <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Date</th>
+                  <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs text-right">Total</th>
+                  <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -427,6 +431,19 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const autoReceiveTriggeredRef = useRef(false)
 
+  // ── Edit mode state ──────────────────────────────────────────────
+  const [editMode, setEditMode] = useState(false)
+  // editValues: { [line_id]: { unitPrice: string, quantity: string } }
+  const [editValues, setEditValues] = useState({})
+  const [editSavingId, setEditSavingId] = useState(null) // line_id currently saving
+
+  // ── Add line item state ──────────────────────────────────────────
+  const [showAddLine, setShowAddLine] = useState(false)
+  const [newLine, setNewLine] = useState({ partNumber: '', description: '', link: '', unitPrice: '', quantity: 1, inventoryPartId: '' })
+  const [addInvSearch, setAddInvSearch] = useState('')
+  const [addInvResults, setAddInvResults] = useState([])
+  const [addSaving, setAddSaving] = useState(false)
+
   // Permission-based action checks
   const canApprove = hasPerm('approve_po')
   const canSend = hasPerm('send_po')
@@ -434,6 +451,9 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   const canCancel = hasPerm('cancel_po')
   const canPrint = hasPerm('print_po')
   const canEdit = hasPerm('edit_po')
+
+  // Whether this order's line items can be edited
+  const isEditable = canEdit && order && EDITABLE_STATUSES.includes(order.status)
 
   // Auto-enter receive mode when opened via QR scan
   useEffect(() => {
@@ -450,6 +470,87 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
 
   if (loading) return <div className="text-center py-12 text-surface-400">Loading...</div>
   if (!order) return <div className="text-center py-12 text-surface-400">Order not found</div>
+
+  // ── Edit mode helpers ────────────────────────────────────────────
+  const enterEditMode = () => {
+    const vals = {}
+    lineItems.forEach(li => {
+      vals[li.line_id] = {
+        unitPrice: (parseFloat(li.unit_price) || 0).toString(),
+        quantity: (parseInt(li.quantity) || 1).toString()
+      }
+    })
+    setEditValues(vals)
+    setEditMode(true)
+    setReceiveMode(false)
+  }
+  const exitEditMode = () => {
+    setEditMode(false)
+    setEditValues({})
+    setEditSavingId(null)
+  }
+  const updateEditValue = (lineId, field, value) => {
+    setEditValues(prev => ({
+      ...prev,
+      [lineId]: { ...prev[lineId], [field]: value }
+    }))
+  }
+  const handleSaveLineEdit = async (lineId) => {
+    const vals = editValues[lineId]
+    if (!vals) return
+    setEditSavingId(lineId)
+    const ok = await actions.updateLineItem(orderId, lineId, {
+      unitPrice: vals.unitPrice,
+      quantity: vals.quantity
+    })
+    setEditSavingId(null)
+    if (ok) refresh()
+  }
+  const handleDeleteLine = async (lineId) => {
+    if (!confirm('Remove this line item?')) return
+    setEditSavingId(lineId)
+    const ok = await actions.deleteLineItem(orderId, lineId)
+    setEditSavingId(null)
+    if (ok) {
+      // Remove from editValues
+      setEditValues(prev => {
+        const next = { ...prev }
+        delete next[lineId]
+        return next
+      })
+      refresh()
+    }
+  }
+
+  // ── Add line item helpers ────────────────────────────────────────
+  const searchInventoryForAdd = async (term) => {
+    if (term.length < 2) { setAddInvResults([]); return }
+    const { data } = await supabase.from('inventory').select('part_id, part_name, supplier_part_number, qty_in_stock')
+      .eq('status', 'Active').or(`part_name.ilike.%${term}%,part_id.ilike.%${term}%,supplier_part_number.ilike.%${term}%`).limit(10)
+    setAddInvResults(data || [])
+  }
+  const selectInventoryItem = (item) => {
+    setNewLine(prev => ({
+      ...prev,
+      partNumber: item.supplier_part_number || item.part_id,
+      description: item.part_name,
+      inventoryPartId: item.part_id
+    }))
+    setAddInvSearch('')
+    setAddInvResults([])
+  }
+  const handleAddLineSubmit = async () => {
+    if (!newLine.description.trim()) { toast.error('Description is required'); return }
+    setAddSaving(true)
+    try {
+      await actions.addLineToOrder(orderId, [newLine])
+      setNewLine({ partNumber: '', description: '', link: '', unitPrice: '', quantity: 1, inventoryPartId: '' })
+      setShowAddLine(false)
+      refresh()
+    } catch {} finally {
+      setAddSaving(false)
+    }
+  }
 
   const handleApprove = async () => {
     await actions.approveOrder(orderId)
@@ -680,11 +781,26 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
     if (order.received_date) timeline.push({ status: 'Received', date: order.received_date, by: order.received_by, icon: '✅' })
   }
 
+  // Calculate whether a line's edit values differ from the original
+  const lineHasChanges = (li) => {
+    const ev = editValues[li.line_id]
+    if (!ev) return false
+    return ev.unitPrice !== (parseFloat(li.unit_price) || 0).toString() ||
+           ev.quantity !== (parseInt(li.quantity) || 1).toString()
+  }
+
+  // Computed subtotal for edit mode
+  const editSubtotal = (lineId) => {
+    const ev = editValues[lineId]
+    if (!ev) return 0
+    return (parseFloat(ev.unitPrice) || 0) * (parseInt(ev.quantity) || 0)
+  }
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="p-2 rounded-lg hover:bg-surface-100"><ArrowLeft size={18} /></button>
+        <button onClick={onBack} className="p-2 rounded-lg hover:bg-surface-100" aria-label="Go back"><ArrowLeft size={18} /></button>
         <div className="flex-1">
           <h2 className="text-lg font-bold text-surface-900">{orderId}</h2>
           <p className="text-sm text-surface-500">{order.vendor_name || order.other_vendor}</p>
@@ -722,6 +838,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             lineItems.forEach(li => { qtys[li.line_id] = parseInt(li.received_qty) || 0 })
             setRecQtys(qtys)
             setReceiveMode(true)
+            setEditMode(false)
           }} className="btn-primary text-xs gap-1">
             <Package size={14} /> Receive Items
           </button>
@@ -816,57 +933,219 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
       <div className="bg-white rounded-xl border border-surface-200">
         <div className="px-4 py-3 border-b border-surface-100 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-surface-900">Line Items ({lineItems.length})</h3>
-          {receiveMode && (
-            <div className="flex gap-2">
-              <button onClick={handleReceive} className="btn-primary text-xs" disabled={actions.saving}>
-                {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
+          <div className="flex gap-2">
+            {/* Edit mode toggle */}
+            {isEditable && !receiveMode && !editMode && (
+              <button onClick={enterEditMode}
+                className="px-2.5 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 flex items-center gap-1 transition-colors"
+                aria-label="Edit line items">
+                <Pencil size={12} /> Edit
               </button>
-              <button onClick={() => setReceiveMode(false)} className="px-2 py-1 rounded bg-surface-100 text-xs">Cancel</button>
-            </div>
-          )}
+            )}
+            {editMode && (
+              <button onClick={exitEditMode}
+                className="px-2.5 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 transition-colors">
+                Done Editing
+              </button>
+            )}
+            {/* Receive mode controls */}
+            {receiveMode && (
+              <>
+                <button onClick={handleReceive} className="btn-primary text-xs" disabled={actions.saving}>
+                  {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
+                </button>
+                <button onClick={() => setReceiveMode(false)} className="px-2 py-1 rounded bg-surface-100 text-xs">Cancel</button>
+              </>
+            )}
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-50 text-left">
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600">Part #</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600">Description</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600">WO</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600 text-right">Price</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Qty</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600 text-right">Subtotal</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Received</th>
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600">Status</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Part #</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Description</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">WO</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-right">Price</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Qty</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-right">Subtotal</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Received</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Status</th>
+                {editMode && <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-100">
-              {lineItems.map(li => (
-                <tr key={li.line_id} className="hover:bg-surface-50">
-                  <td className="px-4 py-2 font-mono text-xs">{li.part_number || '—'}</td>
-                  <td className="px-4 py-2">
-                    <div className="text-surface-700">{li.description || '—'}</div>
-                    {li.link && <a href={li.link} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:underline flex items-center gap-0.5"><Link size={10} />Link</a>}
-                  </td>
-                  <td className="px-4 py-2 text-xs font-medium text-surface-500">{li.wo_id || order.work_order_id || '—'}</td>
-                  <td className="px-4 py-2 text-right">{fmtMoney(li.unit_price)}</td>
-                  <td className="px-4 py-2 text-center">{li.quantity}</td>
-                  <td className="px-4 py-2 text-right font-medium">{fmtMoney(li.subtotal)}</td>
-                  <td className="px-4 py-2 text-center">
-                    {receiveMode ? (
-                      <input type="number" min={0} max={li.quantity}
-                        value={recQtys[li.line_id] ?? (parseInt(li.received_qty) || 0)}
-                        onChange={e => setRecQtys(prev => ({ ...prev, [li.line_id]: parseInt(e.target.value) || 0 }))}
-                        className="input text-sm w-16 text-center" />
-                    ) : (
-                      <span>{li.received_qty || 0} / {li.quantity}</span>
+              {lineItems.map(li => {
+                const ev = editValues[li.line_id]
+                const isSaving = editSavingId === li.line_id
+                return (
+                  <tr key={li.line_id} className="hover:bg-surface-50">
+                    <td className="px-4 py-2 font-mono text-xs">{li.part_number || '—'}</td>
+                    <td className="px-4 py-2">
+                      <div className="text-surface-700">{li.description || '—'}</div>
+                      {li.link && <a href={li.link} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:underline flex items-center gap-0.5"><Link size={10} />Link</a>}
+                    </td>
+                    <td className="px-4 py-2 text-xs font-medium text-surface-500">{li.wo_id || order.work_order_id || '—'}</td>
+                    <td className="px-4 py-2 text-right">
+                      {editMode && ev ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={ev.unitPrice}
+                          onChange={e => updateEditValue(li.line_id, 'unitPrice', e.target.value)}
+                          className="input text-sm w-24 text-right"
+                          aria-label={`Unit price for ${li.description || li.part_number}`}
+                        />
+                      ) : (
+                        fmtMoney(li.unit_price)
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-center">
+                      {editMode && ev ? (
+                        <input
+                          type="number"
+                          min="1"
+                          value={ev.quantity}
+                          onChange={e => updateEditValue(li.line_id, 'quantity', e.target.value)}
+                          className="input text-sm w-16 text-center"
+                          aria-label={`Quantity for ${li.description || li.part_number}`}
+                        />
+                      ) : (
+                        li.quantity
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right font-medium">
+                      {editMode && ev ? fmtMoney(editSubtotal(li.line_id)) : fmtMoney(li.subtotal)}
+                    </td>
+                    <td className="px-4 py-2 text-center">
+                      {receiveMode ? (
+                        <input type="number" min={0} max={li.quantity}
+                          value={recQtys[li.line_id] ?? (parseInt(li.received_qty) || 0)}
+                          onChange={e => setRecQtys(prev => ({ ...prev, [li.line_id]: parseInt(e.target.value) || 0 }))}
+                          className="input text-sm w-16 text-center"
+                          aria-label={`Received quantity for ${li.description || li.part_number}`} />
+                      ) : (
+                        <span>{li.received_qty || 0} / {li.quantity}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2"><StatusBadge status={li.status} /></td>
+                    {editMode && (
+                      <td className="px-4 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1">
+                          {lineHasChanges(li) && (
+                            <button
+                              onClick={() => handleSaveLineEdit(li.line_id)}
+                              disabled={isSaving}
+                              className="p-1 rounded text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                              aria-label={`Save changes for ${li.description || li.part_number}`}
+                              title="Save changes"
+                            >
+                              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteLine(li.line_id)}
+                            disabled={isSaving || lineItems.length <= 1}
+                            className="p-1 rounded text-red-500 hover:bg-red-50 transition-colors disabled:opacity-30"
+                            aria-label={`Remove ${li.description || li.part_number}`}
+                            title={lineItems.length <= 1 ? 'Cannot remove the last line item' : 'Remove line item'}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
                     )}
-                  </td>
-                  <td className="px-4 py-2"><StatusBadge status={li.status} /></td>
-                </tr>
-              ))}
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
+
+        {/* Add Line Item section */}
+        {isEditable && (
+          <div className="px-4 py-3 border-t border-surface-100">
+            {!showAddLine ? (
+              <button
+                onClick={() => setShowAddLine(true)}
+                className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1"
+              >
+                <Plus size={12} /> Add Line Item
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-surface-700">New Line Item</span>
+                  <button onClick={() => { setShowAddLine(false); setAddInvSearch(''); setAddInvResults([]) }}
+                    className="text-surface-400 hover:text-surface-600" aria-label="Cancel adding line item"><X size={14} /></button>
+                </div>
+
+                {/* Inventory search */}
+                <div className="relative">
+                  <label htmlFor="add-inv-search" className="text-[10px] text-surface-400 block mb-0.5">Search Inventory (optional)</label>
+                  <div className="relative">
+                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" />
+                    <input
+                      id="add-inv-search"
+                      type="text"
+                      value={addInvSearch}
+                      onChange={e => { setAddInvSearch(e.target.value); searchInventoryForAdd(e.target.value) }}
+                      placeholder="Search by name or part #..."
+                      className="input text-sm pl-8 w-full"
+                    />
+                  </div>
+                  {addInvResults.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                      {addInvResults.map(item => (
+                        <button key={item.part_id} onClick={() => selectInventoryItem(item)}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-surface-50 border-b border-surface-100 last:border-0">
+                          <span className="font-medium">{item.part_name}</span>
+                          <span className="text-surface-400 ml-2">{item.supplier_part_number || item.part_id}</span>
+                          <span className="text-surface-400 ml-2">({item.qty_in_stock} in stock)</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label htmlFor="add-part-num" className="text-[10px] text-surface-400">Part Number</label>
+                    <input id="add-part-num" value={newLine.partNumber} onChange={e => setNewLine(l => ({ ...l, partNumber: e.target.value }))} className="input text-sm" placeholder="Part #" />
+                  </div>
+                  <div>
+                    <label htmlFor="add-desc" className="text-[10px] text-surface-400">Description *</label>
+                    <input id="add-desc" value={newLine.description} onChange={e => setNewLine(l => ({ ...l, description: e.target.value }))} className="input text-sm" placeholder="Description" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label htmlFor="add-price" className="text-[10px] text-surface-400">Unit Price</label>
+                    <input id="add-price" type="number" step="0.01" min="0" value={newLine.unitPrice} onChange={e => setNewLine(l => ({ ...l, unitPrice: e.target.value }))} className="input text-sm" placeholder="0.00" />
+                  </div>
+                  <div>
+                    <label htmlFor="add-qty" className="text-[10px] text-surface-400">Quantity</label>
+                    <input id="add-qty" type="number" min={1} value={newLine.quantity} onChange={e => setNewLine(l => ({ ...l, quantity: parseInt(e.target.value) || 1 }))} className="input text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-surface-400">Subtotal</label>
+                    <div className="input text-sm bg-surface-50 text-surface-700 font-medium">{fmtMoney((parseFloat(newLine.unitPrice) || 0) * (parseInt(newLine.quantity) || 0))}</div>
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="add-link" className="text-[10px] text-surface-400">Link (optional)</label>
+                  <input id="add-link" value={newLine.link} onChange={e => setNewLine(l => ({ ...l, link: e.target.value }))} className="input text-sm" placeholder="https://..." />
+                </div>
+                <button onClick={handleAddLineSubmit} disabled={addSaving}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50 w-full">
+                  {addSaving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                  {addSaving ? 'Adding...' : 'Add to Order'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

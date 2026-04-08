@@ -293,6 +293,17 @@ export function usePOActions() {
     return `OLI${next}`
   }
 
+  // ─── Helper: recalculate order total from line items ───────────────────────
+  const recalcOrderTotal = async (orderId) => {
+    const { data: allLines } = await supabase
+      .from('order_line_items')
+      .select('subtotal')
+      .eq('order_id', orderId)
+    const newTotal = (allLines || []).reduce((sum, li) => sum + (parseFloat(li.subtotal) || 0), 0)
+    await supabase.from('orders').update({ total: newTotal.toFixed(2) }).eq('order_id', orderId)
+    return newTotal
+  }
+
   // Create PO
   const createOrder = async (orderData) => {
     setSaving(true)
@@ -720,7 +731,95 @@ export function usePOActions() {
     }
   }
 
-  return { saving, createOrder, approveOrder, rejectOrder, markOrdered, receiveItems, cancelOrder, deleteOrder, getNextOrderId, getNextLineId, userName, canApprove,
+  // ─── Update a single line item (price, qty) ────────────────────────────────
+  const updateLineItem = async (orderId, lineId, updates) => {
+    setSaving(true)
+    try {
+      const unitPrice = parseFloat(updates.unitPrice)
+      const quantity = parseInt(updates.quantity)
+      if (isNaN(unitPrice) || unitPrice < 0) throw new Error('Invalid price')
+      if (isNaN(quantity) || quantity < 1) throw new Error('Quantity must be at least 1')
+      const subtotal = unitPrice * quantity
+
+      const { data: rows, error } = await supabase.from('order_line_items').update({
+        unit_price: unitPrice.toFixed(2),
+        quantity,
+        subtotal: subtotal.toFixed(2)
+      }).eq('line_id', lineId).select()
+      if (error) throw error
+      if (!rows || rows.length === 0) {
+        toast.error('Update failed — you may not have permission.')
+        return false
+      }
+
+      // Recalculate order total from all line items
+      await recalcOrderTotal(orderId)
+
+      toast.success('Line item updated')
+      window.dispatchEvent(new CustomEvent('po-updated', { detail: { orderId } }))
+      return true
+    } catch (err) {
+      toast.error(err.message || 'Update failed')
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ─── Delete a single line item ─────────────────────────────────────────────
+  const deleteLineItem = async (orderId, lineId) => {
+    setSaving(true)
+    try {
+      // Get the line item first to check for inventory link
+      const { data: lineData } = await supabase
+        .from('order_line_items')
+        .select('inventory_part_id')
+        .eq('line_id', lineId)
+        .single()
+
+      // Clear inventory order_date if this was the only active PO line for that part
+      if (lineData?.inventory_part_id) {
+        const { data: otherLines } = await supabase
+          .from('order_line_items')
+          .select('line_id, order_id')
+          .eq('inventory_part_id', lineData.inventory_part_id)
+          .neq('line_id', lineId)
+          .not('status', 'in', '("Received","Cancelled")')
+          .limit(1)
+        // Check if those other lines are on active orders
+        let hasOtherActive = false
+        if (otherLines && otherLines.length > 0) {
+          const { data: otherOrder } = await supabase
+            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single()
+          hasOtherActive = otherOrder && !['Received', 'Cancelled', 'Rejected'].includes(otherOrder.status)
+        }
+        if (!hasOtherActive) {
+          await supabase.from('inventory').update({
+            order_date: null,
+            updated_at: new Date().toISOString(),
+            updated_by: userName
+          }).eq('part_id', lineData.inventory_part_id)
+        }
+      }
+
+      const { error } = await supabase.from('order_line_items').delete().eq('line_id', lineId)
+      if (error) throw error
+
+      // Recalculate order total
+      await recalcOrderTotal(orderId)
+
+      toast.success('Line item removed')
+      window.dispatchEvent(new CustomEvent('po-updated', { detail: { orderId } }))
+      return true
+    } catch (err) {
+      toast.error(err.message || 'Delete failed')
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return { saving, createOrder, approveOrder, rejectOrder, markOrdered, receiveItems, cancelOrder, deleteOrder, updateLineItem, deleteLineItem, getNextOrderId, getNextLineId, userName, canApprove,
 
     // Add line item(s) to an existing order
     addLineToOrder: async (orderId, lineItems) => {
