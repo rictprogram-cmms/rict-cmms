@@ -452,7 +452,6 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
     spring_break_end: syllabusData.spring_break_end || '',
     finals_start: syllabusData.finals_start || '',
     finals_end: syllabusData.finals_end || '',
-    requires_approval: 'false',
   })
 
   const upd = (k, v) => setClassData(p => ({ ...p, [k]: v }))
@@ -483,7 +482,6 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
       spring_break_end:   classData.spring_break_end || null,
       finals_start:       classData.finals_start || null,
       finals_end:         classData.finals_end || null,
-      requires_approval:  classData.requires_approval,
       created_at:         new Date().toISOString(),
     })
     setCreating(false)

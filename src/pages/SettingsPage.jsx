@@ -1702,7 +1702,7 @@ function ClassesSection() {
   const startAdd = () => {
     setForm({
       course_id: '', course_name: '', required_hours: 0, instructor: '',
-      semester: '', status: 'Active', tracking_type: 'Weekly', requires_approval: 'false',
+      semester: '', status: 'Active', tracking_type: 'Weekly',
       start_date: '', end_date: '',
       spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: ''
     })
@@ -1719,7 +1719,6 @@ function ClassesSection() {
       semester: cls.semester || '',
       status: cls.status || 'Active',
       tracking_type: cls.tracking_type || 'Weekly',
-      requires_approval: cls.requires_approval || 'false',
       start_date: cls.start_date ? String(cls.start_date).substring(0, 10) : '',
       end_date: cls.end_date ? String(cls.end_date).substring(0, 10) : '',
       spring_break_start: cls.spring_break_start ? String(cls.spring_break_start).substring(0, 10) : '',
@@ -1888,13 +1887,6 @@ function ClassesSection() {
                   <option value="Weekly">Weekly</option>
                   <option value="Daily">Daily</option>
                   <option value="None">None</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-[10px] text-surface-500 font-medium">Requires Approval</label>
-                <select value={form.requires_approval} onChange={e => setForm(f => ({ ...f, requires_approval: e.target.value }))} className="input text-sm">
-                  <option value="false">No</option>
-                  <option value="true">Yes</option>
                 </select>
               </div>
             </div>
@@ -2147,7 +2139,6 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         required_hours: cls.required_hours,
         instructor: cls.instructor,
         tracking_type: cls.tracking_type || 'Weekly',
-        requires_approval: cls.requires_approval || 'false',
         status: 'Active',
         semester: form.semester,
         start_date: form.start_date,
