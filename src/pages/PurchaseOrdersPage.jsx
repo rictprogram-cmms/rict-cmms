@@ -436,6 +436,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   // editValues: { [line_id]: { unitPrice: string, quantity: string } }
   const [editValues, setEditValues] = useState({})
   const [editSavingId, setEditSavingId] = useState(null) // line_id currently saving
+  const [editSaving, setEditSaving] = useState(false) // saving all on exit
 
   // ── Add line item state ──────────────────────────────────────────
   const [showAddLine, setShowAddLine] = useState(false)
@@ -484,7 +485,30 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
     setEditMode(true)
     setReceiveMode(false)
   }
-  const exitEditMode = () => {
+  const exitEditMode = async () => {
+    // Save all changed rows before exiting
+    const changedLines = lineItems.filter(li => {
+      const ev = editValues[li.line_id]
+      if (!ev) return false
+      return ev.unitPrice !== (parseFloat(li.unit_price) || 0).toString() ||
+             ev.quantity !== (parseInt(li.quantity) || 1).toString()
+    })
+    if (changedLines.length > 0) {
+      setEditSaving(true)
+      let anyFailed = false
+      for (const li of changedLines) {
+        const vals = editValues[li.line_id]
+        const ok = await actions.updateLineItem(orderId, li.line_id, {
+          unitPrice: vals.unitPrice,
+          quantity: vals.quantity
+        })
+        if (!ok) anyFailed = true
+      }
+      setEditSaving(false)
+      if (!anyFailed) {
+        refresh()
+      }
+    }
     setEditMode(false)
     setEditValues({})
     setEditSavingId(null)
@@ -944,8 +968,9 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             )}
             {editMode && (
               <button onClick={exitEditMode}
-                className="px-2.5 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 transition-colors">
-                Done Editing
+                disabled={editSaving}
+                className="px-2.5 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 transition-colors disabled:opacity-50 flex items-center gap-1">
+                {editSaving ? <><Loader2 size={12} className="animate-spin" /> Saving...</> : <><Check size={12} /> Save &amp; Close</>}
               </button>
             )}
             {/* Receive mode controls */}
