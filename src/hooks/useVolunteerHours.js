@@ -134,11 +134,13 @@ function getStudentRequirements(studentCourseIds, qualifyingClasses, hoursPerHal
  * and annotate each with its period ('first', 'second', 'full').
  */
 async function fetchQualifyingClasses(semesterStart, midpointWeek) {
+  const todayStr = new Date().toISOString().substring(0, 10)
   const { data, error } = await supabase
     .from('classes')
     .select('class_id, course_id, course_name, start_date, end_date, requires_volunteer_hours')
     .eq('status', 'Active')
     .eq('requires_volunteer_hours', true)
+    .or(`start_date.is.null,start_date.lte.${todayStr}`)
 
   if (error) {
     console.warn('Failed to fetch qualifying classes:', error)

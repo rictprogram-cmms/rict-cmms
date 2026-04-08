@@ -414,6 +414,42 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
   const [expandedPages, setExpandedPages] = useState({})
   const [permSearch, setPermSearch] = useState('')
 
+  // Semester end date — for "Rest of Semester" duration option
+  const [semesterEndDate, setSemesterEndDate] = useState(null)
+  const [semesterDaysLeft, setSemesterDaysLeft] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadSemesterEnd() {
+      try {
+        const todayStr = new Date().toISOString().substring(0, 10)
+        const { data } = await supabase
+          .from('classes')
+          .select('end_date')
+          .eq('status', 'Active')
+          .lte('start_date', todayStr)
+          .gte('end_date', todayStr)
+          .order('end_date', { ascending: false })
+          .limit(1)
+        if (cancelled || !data?.length || !data[0].end_date) return
+        const endStr = data[0].end_date
+        // Parse as local date (append T00:00:00 to avoid UTC shift)
+        const end = new Date(endStr + 'T00:00:00')
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        const diffDays = Math.round((end - today) / (1000 * 60 * 60 * 24))
+        if (diffDays > 0) {
+          setSemesterEndDate(end)
+          setSemesterDaysLeft(diffDays)
+        }
+      } catch (e) {
+        console.error('Failed to load semester end date:', e)
+      }
+    }
+    loadSemesterEnd()
+    return () => { cancelled = true }
+  }, [])
+
   const userName = profile ? `${profile.first_name} ${profile.last_name}` : ''
 
   // Load all permissions and filter to only those the user's role doesn't already have
@@ -680,13 +716,18 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                 <option value="Instructor">Instructor</option>
               </select>
 
-              <label style={s.label}>Duration (days)</label>
+              <label style={s.label}>Duration</label>
               <select value={roleForm.days_requested} onChange={e => setRoleForm(f => ({ ...f, days_requested: parseInt(e.target.value) }))} style={s.input}>
                 <option value={1}>1 day</option>
                 <option value={2}>2 days</option>
                 <option value={3}>3 days</option>
                 <option value={5}>5 days</option>
                 <option value={7}>1 week</option>
+                {semesterDaysLeft && (
+                  <option value={semesterDaysLeft}>
+                    Rest of Semester ({semesterEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})
+                  </option>
+                )}
               </select>
 
               <label style={s.label}>Reason <span style={{ color: '#fa5252' }}>*</span></label>
@@ -705,13 +746,18 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
           {/* ── Permissions Mode ── */}
           {mode === 'permissions' && (
             <>
-              <label style={s.label}>Duration (days)</label>
+              <label style={s.label}>Duration</label>
               <select value={permForm.days_requested} onChange={e => setPermForm(f => ({ ...f, days_requested: parseInt(e.target.value) }))} style={s.input}>
                 <option value={1}>1 day</option>
                 <option value={2}>2 days</option>
                 <option value={3}>3 days</option>
                 <option value={5}>5 days</option>
                 <option value={7}>1 week</option>
+                {semesterDaysLeft && (
+                  <option value={semesterDaysLeft}>
+                    Rest of Semester ({semesterEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})
+                  </option>
+                )}
               </select>
 
               <label style={s.label}>

@@ -1043,10 +1043,12 @@ export default function TimeClockPage() {
   async function fetchClassesData() {
     if (classesDataRef.current) return classesDataRef.current
     try {
+      const todayStr = new Date().toISOString().substring(0, 10)
       const { data } = await supabase
         .from('classes')
         .select('*')
         .eq('status', 'Active')
+        .or(`start_date.is.null,start_date.lte.${todayStr}`)
       classesDataRef.current = data || []
       console.log('[TimeClock] Cached classes data:', (classesDataRef.current).map(c =>
         `${c.course_id} -> "${c.course_name}" (class_id: ${c.class_id})`

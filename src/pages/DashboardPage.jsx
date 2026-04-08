@@ -190,7 +190,8 @@ function AccountabilityMetrics({ navigate }) {
       try {
         const userClasses = (profile.classes || '').split(',').map(c => c.trim()).filter(Boolean);
         if (userClasses.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
-        const { data: classesData } = await supabase.from('classes').select('start_date, end_date').in('course_id', userClasses).eq('status', 'Active');
+        const todayStr = new Date().toISOString().substring(0, 10);
+        const { data: classesData } = await supabase.from('classes').select('start_date, end_date').in('course_id', userClasses).eq('status', 'Active').or(`start_date.is.null,start_date.lte.${todayStr}`);
         if (!classesData || classesData.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
         let startDate = null, endDate = null;
         classesData.forEach(c => {
