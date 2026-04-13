@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive } from 'lucide-react'
+import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -933,7 +933,11 @@ const PROPOSAL_STATUS = {
 // ─── Course Proposal tile — special tile that lists existing proposals ─────────
 function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSettings }) {
   const Icon = tile.icon
-  const recent = proposals.filter(p => p.status !== 'approved').slice(0, 4)
+  const [expanded, setExpanded] = useState(false)
+  const allNonApproved = proposals.filter(p => p.status !== 'approved')
+  const COLLAPSED_LIMIT = 4
+  const hasOverflow = allNonApproved.length > COLLAPSED_LIMIT
+  const visible = expanded ? allNonApproved : allNonApproved.slice(0, COLLAPSED_LIMIT)
   return (
     <div
       className="bg-white border border-surface-200 rounded-2xl overflow-hidden shadow-sm flex flex-col hover:shadow-md hover:border-violet-200 transition-all duration-150"
@@ -972,9 +976,9 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
             <div className="h-7 bg-surface-100 rounded-lg animate-pulse w-4/5" />
           </div>
         )}
-        {!loading && recent.length > 0 && (
+        {!loading && visible.length > 0 && (
           <div className="space-y-1 mb-3">
-            {recent.map(prop => {
+            {visible.map(prop => {
               const cfg = PROPOSAL_STATUS[prop.status] || PROPOSAL_STATUS.draft
               const StatusIcon = cfg.Icon
               const label = [prop.course_subject, prop.course_number, prop.course_title]
@@ -991,8 +995,18 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
                 </button>
               )
             })}
-            {proposals.filter(p => p.status !== 'approved').length > 4 && (
-              <p className="text-[11px] text-surface-400 text-center pt-1">+{proposals.filter(p => p.status !== 'approved').length - 4} more — click to view all</p>
+            {hasOverflow && (
+              <button
+                onClick={() => setExpanded(prev => !prev)}
+                aria-expanded={expanded}
+                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-violet-600 hover:text-violet-800 transition-colors"
+              >
+                {expanded ? (
+                  <><ChevronUp size={12} /> Show less</>
+                ) : (
+                  <><ChevronDown size={12} /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
+                )}
+              </button>
             )}
           </div>
         )}
@@ -1250,9 +1264,12 @@ function ProgramRevisionSettingsModal({ onClose }) {
 // ─── Course End Date tile ─────────────────────────────────────────────────────
 function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
   const Icon = tile.icon
-  const recent = (endDates || []).filter(r => r.status !== 'approved').slice(0, 4)
-  const hasDrafts = recent.length > 0
-  const totalNonApproved = (endDates || []).filter(r => r.status !== 'approved').length
+  const [expanded, setExpanded] = useState(false)
+  const allNonApproved = (endDates || []).filter(r => r.status !== 'approved')
+  const COLLAPSED_LIMIT = 4
+  const hasOverflow = allNonApproved.length > COLLAPSED_LIMIT
+  const visible = expanded ? allNonApproved : allNonApproved.slice(0, COLLAPSED_LIMIT)
+  const hasDrafts = allNonApproved.length > 0
 
   return (
     <div className="bg-white border border-surface-200 rounded-2xl overflow-hidden shadow-sm flex flex-col hover:shadow-md hover:border-orange-200 transition-all duration-150">
@@ -1280,7 +1297,7 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
         )}
         {!loading && hasDrafts && (
           <div className="space-y-1 mb-3">
-            {recent.map(rec => {
+            {visible.map(rec => {
               const isDraft = rec.status === 'draft'
               const courses = rec.courses || []
               const label = courses.length > 0
@@ -1304,8 +1321,18 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
                 </button>
               )
             })}
-            {totalNonApproved > 4 && (
-              <p className="text-[11px] text-surface-400 text-center pt-1">+{totalNonApproved - 4} more drafts</p>
+            {hasOverflow && (
+              <button
+                onClick={() => setExpanded(prev => !prev)}
+                aria-expanded={expanded}
+                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-orange-600 hover:text-orange-800 transition-colors"
+              >
+                {expanded ? (
+                  <><ChevronUp size={12} /> Show less</>
+                ) : (
+                  <><ChevronDown size={12} /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
+                )}
+              </button>
             )}
           </div>
         )}
@@ -1334,10 +1361,12 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
 // ─── Course Revision tile — lists drafts like CourseProposalTile ──────────────
 function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCourseOutline, onSettings }) {
   const Icon = tile.icon
-  // Only show non-approved drafts on the tile
-  const recent = (revisions || []).filter(r => r.status !== 'approved').slice(0, 4)
-  const hasDrafts = recent.length > 0
-  const totalNonApproved = (revisions || []).filter(r => r.status !== 'approved').length
+  const [expanded, setExpanded] = useState(false)
+  const allNonApproved = (revisions || []).filter(r => r.status !== 'approved')
+  const COLLAPSED_LIMIT = 4
+  const hasOverflow = allNonApproved.length > COLLAPSED_LIMIT
+  const visible = expanded ? allNonApproved : allNonApproved.slice(0, COLLAPSED_LIMIT)
+  const hasDrafts = allNonApproved.length > 0
 
   return (
     <div className="bg-white border border-surface-200 rounded-2xl overflow-hidden shadow-sm flex flex-col hover:shadow-md hover:border-rose-200 transition-all duration-150">
@@ -1376,7 +1405,7 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
         )}
         {!loading && hasDrafts && (
           <div className="space-y-1 mb-3">
-            {recent.map(rev => {
+            {visible.map(rev => {
               const isDraft = rev.status === 'draft'
               const isCourse = rev._type === 'course'
               return (
@@ -1403,8 +1432,18 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
                 </button>
               )
             })}
-            {totalNonApproved > 4 && (
-              <p className="text-[11px] text-surface-400 text-center pt-1">+{totalNonApproved - 4} more drafts</p>
+            {hasOverflow && (
+              <button
+                onClick={() => setExpanded(prev => !prev)}
+                aria-expanded={expanded}
+                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-rose-600 hover:text-rose-800 transition-colors"
+              >
+                {expanded ? (
+                  <><ChevronUp size={12} /> Show less</>
+                ) : (
+                  <><ChevronDown size={12} /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
+                )}
+              </button>
             )}
           </div>
         )}
