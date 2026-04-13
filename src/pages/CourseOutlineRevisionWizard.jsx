@@ -82,6 +82,7 @@ const EMPTY = {
   current_course_title: '',
   effective_date: '',
   program: [],
+  no_changes: false,
   // Step 2 — name/number change
   new_course_name: '',
   new_course_number: '',
@@ -570,6 +571,28 @@ function Step1({ data, update, catalog }) {
           <span className="font-semibold">Catalog data loaded — </span>
           Course info, credits, description & outcomes pre-filled into the outline form. Edit only what's changing.
         </div>
+      )}
+
+      {/* No Changes shortcut — skip to Review/Download */}
+      {data.current_course_num && catalog.find(c=>c.course_id===data.current_course_num) && (
+        <label className={`flex items-center gap-3 px-4 py-3.5 rounded-xl border cursor-pointer transition-colors ${
+          data.no_changes
+            ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+            : 'bg-white border-surface-200 text-surface-700 hover:bg-surface-50'
+        }`}>
+          <input
+            type="checkbox"
+            checked={!!data.no_changes}
+            onChange={e => update('no_changes', e.target.checked)}
+            className="accent-emerald-600 w-4 h-4"
+          />
+          <div>
+            <span className="text-sm font-semibold">No Changes — generate outline only</span>
+            <p className="text-xs text-surface-500 mt-0.5">
+              Skip the revision form and go straight to the review page to download the course outline document.
+            </p>
+          </div>
+        </label>
       )}
     </div>
   )
@@ -1068,7 +1091,14 @@ function Step5({ data, update }) {
 
       <div className="flex items-center gap-3 bg-surface-50 px-4 py-3 rounded-xl border border-surface-200">
         <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={!!data.outline_major_restricted} onChange={e=>update('outline_major_restricted',e.target.checked)} className="accent-blue-600"/>
+          <input type="checkbox" checked={!!data.outline_major_restricted} onChange={e=>{
+            const checked = e.target.checked
+            update('outline_major_restricted', checked)
+            // Auto-fill from programs selected on Step 1
+            if (checked && !data.outline_majors?.trim() && Array.isArray(data.program) && data.program.length > 0) {
+              update('outline_majors', data.program.join(', '))
+            }
+          }} className="accent-blue-600"/>
           <span className="text-sm font-semibold text-surface-700">Major Restricted</span>
         </label>
         {data.outline_major_restricted && (
@@ -1436,7 +1466,10 @@ export default function CourseOutlineRevisionWizard({ onClose, initialData=null 
   const [maxStep, setMaxStep] = useState(() => initialData?.revision_id ? STEPS.length : 1)
 
   const goNext = () => {
-    const next = Math.min(step + 1, STEPS.length)
+    // "No Changes" on step 1 → skip directly to Review (step 6)
+    const next = (step === 1 && data.no_changes)
+      ? STEPS.length
+      : Math.min(step + 1, STEPS.length)
     setStep(next)
     setMaxStep(m => Math.max(m, next))
   }
@@ -1482,7 +1515,8 @@ export default function CourseOutlineRevisionWizard({ onClose, initialData=null 
       updated_at: new Date().toISOString(), updated_by: user?.email||'',
       created_by: merged.created_by||user?.email||'' }
     // Strip _orig_* tracking fields — they live in state only, not in the DB table
-    Object.keys(payload).forEach(k => { if (k.startsWith('_orig_')) delete payload[k] })
+    Object.keys(payload).forEach(k => { if (k.startsWith('_orig_') || k.startsWith('_catalog_')) delete payload[k] })
+    delete payload.no_changes
     NUMERIC_FIELDS.forEach(f => {
       if (payload[f]===''||payload[f]===undefined) payload[f]=null
       else if (payload[f]!==null) payload[f]=parseFloat(payload[f])||null
@@ -1622,7 +1656,7 @@ export default function CourseOutlineRevisionWizard({ onClose, initialData=null 
             {step < STEPS.length && (
               <button onClick={goNext}
                 className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-                Next <ChevronRight size={15}/>
+                {step === 1 && data.no_changes ? 'Skip to Review' : 'Next'} <ChevronRight size={15}/>
               </button>
             )}
           </div>
