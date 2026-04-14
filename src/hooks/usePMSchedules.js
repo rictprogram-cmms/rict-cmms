@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
+import { generateSafeWoId } from '@/utils/generateSafeWoId'
 
 // ─── Calculate Next Due Date ─────────────────────────────────────────────────
 // Daily = next day, Weekly = 1 week, everything else = 3 weeks (21 days)
@@ -491,25 +492,8 @@ export function usePMActions() {
         .single()
       if (pmError) throw pmError
 
-      // Generate WO ID
-      // Primary: try get_next_id RPC (p_type must match counter_name exactly)
-      // Fallback: derive from actual max across both WO tables — no dash, no padding
-      let woId
-      try {
-        const { data: counter } = await supabase.rpc('get_next_id', { p_type: 'work_order' })
-        if (counter) woId = counter
-      } catch {}
-      if (!woId) {
-        // Query both open and closed WOs to find the true max
-        const [{ data: openMax }, { data: closedMax }] = await Promise.all([
-          supabase.from('work_orders').select('wo_id').order('wo_id', { ascending: false }).limit(1).maybeSingle(),
-          supabase.from('work_orders_closed').select('wo_id').order('wo_id', { ascending: false }).limit(1).maybeSingle()
-        ])
-        const openNum   = openMax?.wo_id   ? parseInt(openMax.wo_id.replace(/\D/g, ''))   : 0
-        const closedNum = closedMax?.wo_id  ? parseInt(closedMax.wo_id.replace(/\D/g, '')) : 0
-        const n = Math.max(openNum, closedNum, 1100) + 1
-        woId = `WO${n}` // No dash, no padding — matches WO1118 format
-      }
+      // Generate collision-safe WO ID (shared utility — same as manual WO creation)
+      const woId = await generateSafeWoId()
 
       // Calculate due date for the WO itself
       // Daily PM → due tomorrow, Weekly → due in 7 days, else 21 days

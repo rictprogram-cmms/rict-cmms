@@ -2,84 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
-
-/**
- * Generate a collision-safe work order ID.
- *
- * 1. Try the database counter via get_next_id (p_type).
- * 2. Fallback: find the true max across both work_orders AND work_orders_closed.
- * 3. After obtaining an ID, verify it doesn't already exist in either table.
- *    If a collision is found, increment and retry (up to 5 attempts).
- */
-async function generateSafeWoId() {
-  let woId = null
-  let numericId = null
-
-  // ── Primary: database counter ──────────────────────────────────────────────
-  try {
-    const { data: counter } = await supabase.rpc('get_next_id', { p_type: 'work_order' })
-    if (counter) {
-      woId = counter
-      numericId = parseInt(counter.replace(/\D/g, ''), 10)
-    }
-  } catch (e) {
-    console.log('get_next_id not available, using fallback ID generation')
-  }
-
-  // ── Fallback: derive from max across both tables ───────────────────────────
-  if (!woId) {
-    try {
-      const [{ data: openMax }, { data: closedMax }] = await Promise.all([
-        supabase.from('work_orders').select('wo_id').order('wo_id', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('work_orders_closed').select('wo_id').order('wo_id', { ascending: false }).limit(1).maybeSingle(),
-      ])
-      const openNum   = openMax?.wo_id  ? parseInt(openMax.wo_id.replace(/\D/g, ''), 10)  : 0
-      const closedNum = closedMax?.wo_id ? parseInt(closedMax.wo_id.replace(/\D/g, ''), 10) : 0
-      numericId = Math.max(openNum, closedNum, 1100) + 1
-      woId = `WO${numericId}`
-    } catch (e) {
-      // Last resort — timestamp-based (no dash, matches WO#### format)
-      numericId = parseInt(Date.now().toString().slice(-6), 10)
-      woId = `WO${numericId}`
-    }
-  }
-
-  // ── Collision check: verify ID doesn't exist in either table ───────────────
-  const MAX_RETRIES = 5
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const [{ data: existsOpen }, { data: existsClosed }] = await Promise.all([
-      supabase.from('work_orders').select('wo_id').eq('wo_id', woId).maybeSingle(),
-      supabase.from('work_orders_closed').select('wo_id').eq('wo_id', woId).maybeSingle(),
-    ])
-
-    if (!existsOpen && !existsClosed) {
-      return woId // Safe — no collision
-    }
-
-    // Collision detected — increment and retry
-    console.warn(`WO ID collision detected for ${woId}, retrying...`)
-    numericId += 1
-    woId = `WO${numericId}`
-  }
-
-  // If all retries fail, add timestamp suffix to guarantee uniqueness
-  console.error('WO ID collision persisted after retries, using timestamp suffix')
-  return `WO${numericId}-${Date.now().toString().slice(-4)}`
-}
-
-/**
- * Generate a collision-safe work log ID.
- * Uses p_type: 'work_log' for the database counter.
- */
-async function generateSafeLogId() {
-  try {
-    const { data: counter } = await supabase.rpc('get_next_id', { p_type: 'work_log' })
-    if (counter) return counter
-  } catch (e) {
-    // Fallback below
-  }
-  return `LOG${Date.now().toString().slice(-8)}`
-}
+import { generateSafeWoId, generateSafeLogId } from '@/utils/generateSafeWoId'
 
 /**
  * Hook for fetching work orders list (open or closed)
@@ -230,7 +153,7 @@ export function useWorkOrderActions() {
   const createWorkOrder = async (woData) => {
     setSaving(true)
     try {
-      // Generate collision-safe WO ID
+      // Generate collision-safe WO ID (shared utility — same as PM generation)
       const woId = await generateSafeWoId()
 
       // Calculate due date from priority if not provided
