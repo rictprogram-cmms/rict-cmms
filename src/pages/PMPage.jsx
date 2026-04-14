@@ -388,9 +388,9 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
         </div>
         <div className="text-right mr-2 flex-shrink-0">
           {pm.isOverdue ? (
-            <span className="text-xs font-semibold text-red-600 flex items-center gap-1"><AlertTriangle size={12} /> Overdue</span>
+            <span className="text-xs font-semibold text-red-600 flex items-center gap-1"><AlertTriangle size={12} /> Overdue — {fmtDate(pm.next_due_date)}</span>
           ) : pm.isDueSoon ? (
-            <span className="text-xs font-semibold text-yellow-600 flex items-center gap-1"><Clock size={12} /> Due Soon</span>
+            <span className="text-xs font-semibold text-yellow-600 flex items-center gap-1"><Clock size={12} /> Generates: {fmtDate(pm.next_due_date)}</span>
           ) : pm.status === 'Active' ? (
             <span className="text-xs text-surface-400">Next: {fmtDate(pm.next_due_date)}</span>
           ) : null}
