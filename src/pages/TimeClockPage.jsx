@@ -1153,15 +1153,19 @@ export default function TimeClockPage() {
               courseName: detail.course_name || COURSE_MAP[name.toUpperCase()] || '',
               requiredHours: detail.required_hours || 0,
             })
-          } else {
+          } else if ((classesData || []).length === 0) {
+            // DB returned nothing — likely RLS blocking anon reads. Use hardcoded map as fallback.
             const fallbackName = COURSE_MAP[name.toUpperCase()] || ''
-            console.warn('[TimeClock] NO DB MATCH for "' + name + '" -> fallback:', fallbackName || '(none)')
+            console.warn('[TimeClock] NO DB MATCH for "' + name + '" (DB empty, using COURSE_MAP fallback):', fallbackName || '(none)')
             classDetails.push({
               classId: `CLASS_${classDetails.length + 1}`,
               courseId: name,
               courseName: fallbackName,
               requiredHours: 0,
             })
+          } else {
+            // DB returned results but this class wasn't among them — it's inactive. Skip it.
+            console.warn('[TimeClock] Skipping "' + name + '" — not found in active classes (likely inactive or future-dated)')
           }
         }
       } catch (e) {
