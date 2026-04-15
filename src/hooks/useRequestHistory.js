@@ -439,6 +439,11 @@ export function useRequestHistory({ dateFrom = null, dateTo = null } = {}) {
 
 // ─── Stats helper ─────────────────────────────────────────────────────────────
 
+// Status buckets — different request types use different status names
+const APPROVED_STATUSES = new Set(['Approved', 'Active', 'Processed', 'Expired'])
+const REJECTED_STATUSES = new Set(['Rejected', 'Revoked'])
+const PENDING_STATUSES = new Set(['Pending'])
+
 export function useRequestStats(requests) {
   return useMemo(() => {
     const stats = {
@@ -456,14 +461,14 @@ export function useRequestStats(requests) {
       const typeStats = stats.byType[r.type]
       if (typeStats) {
         typeStats.total++
-        if (r.status === 'Approved') typeStats.approved++
-        else if (r.status === 'Rejected') typeStats.rejected++
-        else if (r.status === 'Pending') typeStats.pending++
+        if (APPROVED_STATUSES.has(r.status)) typeStats.approved++
+        else if (REJECTED_STATUSES.has(r.status)) typeStats.rejected++
+        else if (PENDING_STATUSES.has(r.status)) typeStats.pending++
       }
 
-      if (r.status === 'Approved') stats.byStatus.Approved++
-      else if (r.status === 'Rejected') stats.byStatus.Rejected++
-      else if (r.status === 'Pending') stats.byStatus.Pending++
+      if (APPROVED_STATUSES.has(r.status)) stats.byStatus.Approved++
+      else if (REJECTED_STATUSES.has(r.status)) stats.byStatus.Rejected++
+      else if (PENDING_STATUSES.has(r.status)) stats.byStatus.Pending++
       else stats.byStatus.Other++
     })
 
