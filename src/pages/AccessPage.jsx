@@ -39,6 +39,7 @@ const PAGE_ICONS = {
   'Program Budget': 'account_balance',
   'Weekly Labs': 'grading',
   'Volunteer Hours': 'volunteer_activism',
+  'Request History': 'manage_search',
   'Users': 'people',
   'Settings': 'settings',
 }
@@ -162,6 +163,11 @@ const DEFAULT_PERMISSIONS = [
   ['P0E0', 'Volunteer Hours', 'view_page', true, true, true, 'Can access Volunteer Hours page'],
   ['P0E1', 'Volunteer Hours', 'view_all_students', false, false, true, 'Can view all students volunteer progress'],
   ['P0E2', 'Volunteer Hours', 'approve_entries', false, false, true, 'Can approve or reject volunteer submissions'],
+
+  // Request History
+  ['P0F0', 'Request History', 'view_page', true, true, true, 'Can access Request History page'],
+  ['P0F1', 'Request History', 'view_all_students', false, false, true, 'Can view all students request history'],
+  ['P0F2', 'Request History', 'export_data', false, false, true, 'Can export request history to Excel'],
 
   // Users
   ['P090', 'Users', 'view_page', false, false, true, 'Can access Users page'],

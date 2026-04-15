@@ -42,6 +42,7 @@ import {
   XCircle,
   MoonStar,
   GraduationCap,
+  FileSearch,
 } from 'lucide-react'
 
 const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
@@ -78,6 +79,7 @@ const navSections = [
       { name: 'WOC Ratio', href: '/woc-ratio', icon: PieChart, permPage: 'WOC Ratio', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Program Budget', href: '/program-budget', icon: Landmark, permPage: 'Program Budget', roles: ['Instructor'] },
       { name: 'Bug Tracker', href: '/bug-tracker', icon: Bug, permPage: 'Bug Tracker', roles: ['Student', 'Work Study', 'Instructor'] },
+      { name: 'Request History', href: '/request-history', icon: FileSearch, permPage: 'Request History', roles: ['Student', 'Work Study', 'Instructor'] },
     ],
   },
   {

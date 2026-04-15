@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
@@ -8,7 +9,7 @@ import {
   XCircle, Shield, ChevronDown, UserPlus, Send, X, Loader2,
   AlertCircle, Clock, UserCheck, UserX, Eye, EyeOff, Save, Archive,
   Trash2, AlertTriangle, UserMinus, Wifi, KeyRound, Copy, Check,
-  RefreshCcw
+  RefreshCcw, FileSearch
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
@@ -71,6 +72,7 @@ export default function UsersPage() {
   const { hasPerm, permsLoading } = usePermissions('Users')
   const { users, loading, refresh } = useAllUsers()
   const actions = useUserActions()
+  const navigate = useNavigate()
   const { requests, loading: reqLoading, refresh: refreshReqs } = useAccessRequests()
   const { templates, refresh: refreshTemplates } = useMessageTemplates()
 
@@ -386,6 +388,13 @@ export default function UsersPage() {
                                   aria-label={`Edit ${u.first_name} ${u.last_name}`}
                                   className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600">
                                   <Edit3 size={14} />
+                                </button>
+                                {/* View Request History */}
+                                <button onClick={(e) => { e.stopPropagation(); navigate(`/request-history?student=${encodeURIComponent(u.email)}`) }}
+                                  title="View Request History"
+                                  aria-label={`View request history for ${u.first_name} ${u.last_name}`}
+                                  className="p-1.5 rounded-lg hover:bg-purple-50 text-surface-400 hover:text-purple-600">
+                                  <FileSearch size={14} />
                                 </button>
                                 {/* Reset Password — only for non-Instructor accounts */}
                                 {u.role !== 'Instructor' && (

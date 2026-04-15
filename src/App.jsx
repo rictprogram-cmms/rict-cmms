@@ -28,6 +28,7 @@ import ProgramPlannerPage from '@/pages/ProgramPlannerPage'
 import ProgramCostPage from '@/pages/ProgramCostPage'
 import CourseOutlineExportPage from '@/pages/CourseOutlineExportPage'
 import AttendanceReportsPage from '@/pages/AttendanceReportsPage'
+import RequestHistoryPage from '@/pages/RequestHistoryPage'
 import EmulationBar from '@/components/EmulationBar'
 import { PageLoading } from '@/components/ui'
 
@@ -350,6 +351,7 @@ function AppRoutes() {
             <Route path="/weekly-labs" element={<WeeklyLabsTrackerPage />} />
             <Route path="/volunteer-hours" element={<VolunteerHoursPage />} />
             <Route path="/attendance-reports" element={<AttendanceReportsPage />} />
+            <Route path="/request-history" element={<RequestHistoryPage />} />
 
             {/* Administration */}
             <Route path="/users" element={<UsersPage />} />
