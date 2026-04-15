@@ -148,12 +148,28 @@ function normalizeTempAccessRequest(r) {
   const approvedPerms = parsePerms(r.approved_permissions)
 
   let summary = ''
+  const daysReq = r.days_requested || 0
+  const daysAppr = r.approved_days || 0
+  const daysSuffix = daysAppr > 0 && daysAppr !== daysReq
+    ? `${daysAppr}d approved (${daysReq}d requested)`
+    : `${daysReq}d`
+
   if (isPermType) {
     const permCount = requestedPerms.length
+    const approvedCount = approvedPerms.length
     const pages = [...new Set(requestedPerms.map(p => p.page))].join(', ')
-    summary = `${permCount} permission${permCount !== 1 ? 's' : ''} (${pages || 'N/A'}) for ${r.days_requested || '?'}d`
+    if (approvedCount > 0 && approvedCount < permCount) {
+      summary = `${approvedCount} of ${permCount} permissions approved (${pages || 'N/A'}) for ${daysSuffix}`
+    } else if (approvedCount > 0 && approvedCount === permCount) {
+      summary = `${permCount} permission${permCount !== 1 ? 's' : ''} approved (${pages || 'N/A'}) for ${daysSuffix}`
+    } else {
+      summary = `${permCount} permission${permCount !== 1 ? 's' : ''} (${pages || 'N/A'}) for ${daysSuffix}`
+    }
   } else {
-    summary = `${r.requested_role || '?'} access for ${r.days_requested || '?'} day${(r.days_requested || 0) !== 1 ? 's' : ''}`
+    const roleLabel = r.approved_role && r.approved_role !== r.requested_role
+      ? `${r.approved_role} (requested ${r.requested_role})`
+      : (r.requested_role || '?')
+    summary = `${roleLabel} access for ${daysSuffix}`
   }
 
   return {

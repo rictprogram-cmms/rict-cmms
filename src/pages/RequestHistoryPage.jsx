@@ -263,7 +263,15 @@ function DetailPanel({ request, emailSent }) {
               )}
               <div>
                 <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Duration</span>
-                <p className="text-surface-700 mt-0.5">{details.daysRequested} day{details.daysRequested !== 1 ? 's' : ''} requested</p>
+                {details.approvedDays > 0 && details.approvedDays !== details.daysRequested ? (
+                  <p className="text-surface-700 mt-0.5">
+                    <span style={{ color: '#2b8a3e', fontWeight: 600 }}>{details.approvedDays} day{details.approvedDays !== 1 ? 's' : ''} approved</span>
+                    <span className="text-surface-400 mx-1">·</span>
+                    <span style={{ color: '#868e96', textDecoration: 'line-through' }}>{details.daysRequested}d requested</span>
+                  </p>
+                ) : (
+                  <p className="text-surface-700 mt-0.5">{details.daysRequested} day{details.daysRequested !== 1 ? 's' : ''} requested</p>
+                )}
               </div>
               {details.expiryDate && (
                 <div>
@@ -271,21 +279,69 @@ function DetailPanel({ request, emailSent }) {
                   <p className="text-surface-700 mt-0.5">{formatDate(details.expiryDate)}</p>
                 </div>
               )}
-              {details.requestType === 'permissions' && details.requestedPermissions?.length > 0 && (
-                <div className="w-full">
-                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Permissions Requested</span>
-                  <div className="flex flex-wrap gap-1.5 mt-1">
-                    {details.requestedPermissions.map((p, i) => (
-                      <span key={i} style={{
-                        padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 500,
-                        background: '#f3f0ff', color: '#7048e8',
-                      }}>
-                        {p.page}: {p.feature}
-                      </span>
-                    ))}
+              {details.requestType === 'permissions' && details.requestedPermissions?.length > 0 && (() => {
+                const approvedIds = new Set((details.approvedPermissions || []).map(p => p.permission_id))
+                const approved = details.requestedPermissions.filter(p => approvedIds.has(p.permission_id))
+                const denied = details.requestedPermissions.filter(p => !approvedIds.has(p.permission_id))
+
+                return (
+                  <div className="w-full space-y-3">
+                    {/* Approved permissions */}
+                    {approved.length > 0 && (
+                      <div>
+                        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#2b8a3e' }}>
+                          Approved ({approved.length} of {details.requestedPermissions.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {approved.map((p, i) => (
+                            <span key={i} style={{
+                              padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 500,
+                              background: '#d3f9d8', color: '#2b8a3e',
+                            }}>
+                              {p.page}: {p.feature}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* Denied permissions */}
+                    {denied.length > 0 && (
+                      <div>
+                        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#c92a2a' }}>
+                          Not Approved ({denied.length} of {details.requestedPermissions.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {denied.map((p, i) => (
+                            <span key={i} style={{
+                              padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 500,
+                              background: '#ffe3e3', color: '#c92a2a',
+                              textDecoration: 'line-through',
+                            }}>
+                              {p.page}: {p.feature}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {/* Edge case: all approved, no denied — just show the green list */}
+                    {approved.length === 0 && denied.length === 0 && (
+                      <div>
+                        <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Permissions Requested</span>
+                        <div className="flex flex-wrap gap-1.5 mt-1">
+                          {details.requestedPermissions.map((p, i) => (
+                            <span key={i} style={{
+                              padding: '2px 8px', borderRadius: 6, fontSize: '0.72rem', fontWeight: 500,
+                              background: '#f3f0ff', color: '#7048e8',
+                            }}>
+                              {p.page}: {p.feature}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
+                )
+              })()}
             </div>
           )}
 
