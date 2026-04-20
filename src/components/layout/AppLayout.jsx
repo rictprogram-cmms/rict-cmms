@@ -4,6 +4,9 @@ import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import NotificationBell from '@/components/NotificationBell'
+import HoldLockoutModal from '@/components/holds/HoldLockoutModal'
+import HoldReminderModal from '@/components/holds/HoldReminderModal'
+import HoldNudgeBanner from '@/components/holds/HoldNudgeBanner'
 import {
   Wrench,
   Package,
@@ -2013,6 +2016,8 @@ export default function AppLayout() {
               </div>
             </div>
           )}
+          {/* Student Hold — Nudge-tier banners (non-blocking, dismissible) */}
+          <HoldNudgeBanner />
           <Outlet />
         </main>
       </div>
@@ -2049,6 +2054,14 @@ export default function AppLayout() {
           }}
         />
       )}
+
+      {/* ── Student Hold Overlays ─────────────────────────────────────────── */}
+      {/* Always mounted. Each self-renders null when no holds of its tier apply. */}
+      {/* Reminder defers internally when a lockout is active, so both can safely */}
+      {/* live in the tree simultaneously without visual conflict. z-index order: */}
+      {/* Lockout 9000 > Reminder 8500 > temp toast 5000 > ChangePassword 2000.  */}
+      <HoldReminderModal />
+      <HoldLockoutModal />
 
       <style>{`
         @keyframes tempToastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
