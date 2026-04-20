@@ -6,8 +6,10 @@ import toast from 'react-hot-toast'
 import {
   Megaphone, Search, Send, Trash2, RotateCcw, X, Loader2,
   CheckCircle2, Mail, MailOpen, Clock, Users, ChevronDown, ChevronUp,
-  Bell, RefreshCw, Plus, FileText, Save, Edit3, Eye, Archive, Undo2, Pin, Inbox
+  Bell, RefreshCw, Plus, FileText, Save, Edit3, Eye, Archive, Undo2, Pin, Inbox,
+  ShieldAlert
 } from 'lucide-react'
+import StudentHoldsTab from '@/components/holds/StudentHoldsTab'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIRM MODAL (replaces native confirm())
@@ -59,6 +61,7 @@ export default function AnnouncementsPage() {
   const canCompose = hasPerm('compose_message')
   const canViewSent = hasPerm('view_sent')
   const canManageTemplates = hasPerm('manage_templates')
+  const canManageHolds = hasPerm('manage_holds')
   const showAdminTabs = canViewSent || canManageTemplates
   const [tab, setTab] = useState('inbox')
   const [showCompose, setShowCompose] = useState(false)
@@ -81,6 +84,9 @@ export default function AnnouncementsPage() {
     ] : []),
     ...(canManageTemplates ? [
       { id: 'templates', label: 'Templates', icon: FileText },
+    ] : []),
+    ...(canManageHolds ? [
+      { id: 'holds', label: 'Student Holds', icon: ShieldAlert },
     ] : []),
   ]
 
@@ -115,6 +121,7 @@ export default function AnnouncementsPage() {
       {tab === 'inbox' && <InboxTab refreshKey={refreshKey} />}
       {tab === 'sent' && canViewSent && <SentHistoryTab refreshKey={refreshKey} />}
       {tab === 'templates' && canManageTemplates && <TemplatesTab />}
+      {tab === 'holds' && canManageHolds && <StudentHoldsTab />}
 
       {/* Compose Modal */}
       {showCompose && (
