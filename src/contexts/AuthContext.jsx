@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react'
+import { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 
 const AuthContext = createContext(null)
@@ -69,11 +69,21 @@ export function AuthProvider({ children }) {
   const profile = isEmulating ? emulatedProfile : realProfile
 
   // ── Lab Access Mode ────────────────────────────────────────────────
-  // labLocked = true when lab_access_mode = 'summer_break' AND the
-  // real user's role is Student or Work Study.
-  // Always based on realProfile — emulating a student as super admin
-  // does NOT trigger the lockout.
-  const [labLocked, setLabLocked] = useState(false)
+  // We track two pieces of independent source-of-truth state:
+  //   1. labAccessMode — the current value of the `lab_access_mode`
+  //      setting in the DB (updated via initial fetch + realtime)
+  //   2. profile?.role — the EFFECTIVE role (the emulated profile when
+  //      Super Admin is emulating someone, real profile otherwise)
+  //
+  // `labLocked` is then DERIVED from those via useMemo, so it
+  // automatically re-evaluates whenever emulation starts/stops or the
+  // setting changes. No imperative setLabLocked calls scattered around.
+  //
+  // True-emulation convention: Super Admin emulating a Student during
+  // summer break WILL be locked out — matching exactly what the student
+  // sees. Escape hatch is the EmulationBar "Stop" button (z-index 9999,
+  // above the LabLockedScreen).
+  const [labAccessMode, setLabAccessMode] = useState(null)
   // Set of lowercase emails currently online (via Supabase Presence)
   const [onlineUsers, setOnlineUsers] = useState(new Set())
   // Map of email → { joined_at: ISO string } for presence tooltip durations
@@ -88,11 +98,10 @@ export function AuthProvider({ children }) {
   const sessionTimeoutHoursRef = useRef(0)
 
   // ── Lab Mode Fetch ─────────────────────────────────────────────────
-  const fetchLabMode = useCallback(async (role) => {
-    if (!LOCKABLE_ROLES.includes(role)) {
-      setLabLocked(false)
-      return
-    }
+  // Fetches the current lab_access_mode setting from the DB once. Called
+  // on mount (if authenticated) and on SIGNED_IN. The realtime watcher
+  // below keeps the value live after that.
+  const fetchLabMode = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('settings')
@@ -100,14 +109,23 @@ export function AuthProvider({ children }) {
         .eq('setting_key', 'lab_access_mode')
         .maybeSingle()
       if (!error && data) {
-        setLabLocked(data.setting_value === 'summer_break')
+        setLabAccessMode(data.setting_value || null)
       } else {
-        setLabLocked(false) // default to open on any error
+        setLabAccessMode(null)
       }
     } catch {
-      setLabLocked(false)
+      setLabAccessMode(null)
     }
   }, [])
+
+  // ── Lab Locked (derived) ───────────────────────────────────────────
+  // Re-evaluates automatically when emulation starts/stops (profile
+  // identity changes) or when the setting is updated via realtime.
+  const labLocked = useMemo(() => {
+    if (labAccessMode !== 'summer_break') return false
+    const role = profile?.role
+    return LOCKABLE_ROLES.includes(role)
+  }, [labAccessMode, profile?.role])
 
   // ── Session Timeout Fetch ──────────────────────────────────────────
   // Reads session_timeout_hours from DB. 0 = disabled (never auto-logout).
@@ -193,7 +211,7 @@ export function AuthProvider({ children }) {
           console.log('Profile loaded by email:', profileByEmail.email, profileByEmail.role)
           setRealProfile(profileByEmail)
           setCachedProfile(profileByEmail)
-          fetchLabMode(profileByEmail.role)
+          fetchLabMode()
           return profileByEmail
         }
 
@@ -214,7 +232,7 @@ export function AuthProvider({ children }) {
             console.log('Profile loaded by ID:', profileById.email, profileById.role)
             setRealProfile(profileById)
             setCachedProfile(profileById)
-            fetchLabMode(profileById.role)
+            fetchLabMode()
             return profileById
           }
 
@@ -241,7 +259,7 @@ export function AuthProvider({ children }) {
         console.log('Profile loaded by ID:', data.email, data.role)
         setRealProfile(data)
         setCachedProfile(data)
-        fetchLabMode(data.role)
+        fetchLabMode()
         return data
       }
 
@@ -264,12 +282,10 @@ export function AuthProvider({ children }) {
 
     const hasCache = !!getCachedProfile()
 
-    // Also check lab mode from cached profile immediately on mount
-    // so lockable users don't briefly see the app before the fetch resolves
-    const cachedRole = getCachedProfile()?.role
-    if (cachedRole && LOCKABLE_ROLES.includes(cachedRole)) {
-      fetchLabMode(cachedRole)
-    }
+    // Fetch lab mode immediately on mount so the derived labLocked
+    // memo has a value right away. The memo gates by effective role,
+    // so we don't need to pre-check role here.
+    fetchLabMode()
 
     const timeout = setTimeout(() => {
       if (mounted && loading) {
@@ -332,7 +348,6 @@ export function AuthProvider({ children }) {
           setCachedProfile(null)
           setEmulatedProfile(null)
           setCachedEmulation(null)
-          setLabLocked(false)
         }
       } catch (err) {
         console.error('Auth init error:', err)
@@ -345,7 +360,6 @@ export function AuthProvider({ children }) {
         if (!getCachedProfile()) {
           setSession(null)
           setRealProfile(null)
-          setLabLocked(false)
         }
       } finally {
         if (mounted) {
@@ -398,7 +412,6 @@ export function AuthProvider({ children }) {
           setCachedProfile(null)
           setEmulatedProfile(null)
           setCachedEmulation(null)
-          setLabLocked(false)
           setMustChangePassword(false)
           setLoading(false)
           localStorage.removeItem(SESSION_LOGIN_KEY)
@@ -500,8 +513,10 @@ export function AuthProvider({ children }) {
           console.log('Real profile updated via realtime:', payload.new?.role)
           setRealProfile(payload.new)
           setCachedProfile(payload.new)
-          // Re-evaluate lock if role changed
-          fetchLabMode(payload.new?.role)
+          // Re-evaluate lock if role changed — memo will pick up the new role
+          // automatically; we only need to re-fetch the setting in case it
+          // changed while we were disconnected.
+          fetchLabMode()
         }
       )
       .subscribe()
@@ -527,10 +542,10 @@ export function AuthProvider({ children }) {
   }, [emulatedProfile?.email])
 
   // ── Realtime: watch lab_access_mode setting changes ─────────────────
-  // When an instructor flips the toggle, all logged-in students/work study
-  // are immediately locked out (or unlocked) without needing to refresh.
-  // Always checks realProfile role — super admin emulating a student
-  // is never subject to the lockout.
+  // When an instructor flips the toggle, all affected users (Students /
+  // Work Study, including any Super Admin emulating one) are immediately
+  // locked out or unlocked — the `labLocked` memo re-evaluates when
+  // labAccessMode changes.
   useEffect(() => {
     const channel = supabase
       .channel('lab-access-mode-watch')
@@ -545,14 +560,12 @@ export function AuthProvider({ children }) {
         (payload) => {
           const newMode = payload.new?.setting_value
           console.log('[LabAccessMode] Setting changed to:', newMode)
-          if (realProfile?.role && LOCKABLE_ROLES.includes(realProfile.role)) {
-            setLabLocked(newMode === 'summer_break')
-          }
+          setLabAccessMode(newMode || null)
         }
       )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [realProfile?.role])
+  }, [])
 
   // ── Realtime: Presence – track self & watch all online users ────────
   // Each authenticated user joins 'online-users-presence' and tracks
@@ -687,7 +700,6 @@ export function AuthProvider({ children }) {
     setSession(null)
     currentUserIdRef.current = null
     setCachedProfile(null)
-    setLabLocked(false)
   }
 
   async function resetPassword(email) {
