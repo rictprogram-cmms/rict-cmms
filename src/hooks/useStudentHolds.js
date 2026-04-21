@@ -46,22 +46,25 @@ function cleanId(id) {
 // hold record, filtered to ACTIVE + unexpired holds, sorted by severity
 // (hold → reminder → nudge).
 //
-// IMPORTANT: reads `realProfile.email`, NOT `profile.email`. This matches the
-// existing `labLocked` convention in AuthContext — Super Admin emulating a
-// student does NOT trigger the student's holds. It also prevents an
-// instructor who happens to be emulating a held student from being locked
-// out of their own session.
+// IMPORTANT: reads the EFFECTIVE `profile.email` — so when Super Admin
+// emulates a student, the Super Admin's session DOES see that student's
+// holds. This is deliberate: emulation is meant to show exactly what the
+// student sees, including any lockouts / reminders / nudges.
+//
+// Escape hatch: the EmulationBar renders at z-index 9999 which is above
+// the lockout modal (z-index 9000), so the "Stop Emulating" button stays
+// reachable even during an emulated lockout.
 // ════════════════════════════════════════════════════════════════════════════
 
 export function useMyActiveHolds() {
-  const { realProfile } = useAuth()
+  const { profile } = useAuth()
   const [holds, setHolds] = useState([])
   const [loading, setLoading] = useState(true)
   const hasLoadedRef = useRef(false)
   const instanceId = cleanId(useId())
 
   const load = useCallback(async (silent = false) => {
-    if (!realProfile?.email) {
+    if (!profile?.email) {
       setHolds([])
       setLoading(false)
       return
@@ -69,7 +72,7 @@ export function useMyActiveHolds() {
     if (!silent && !hasLoadedRef.current) setLoading(true)
 
     try {
-      const email = realProfile.email.toLowerCase()
+      const email = profile.email.toLowerCase()
 
       // Pull uncleared target rows with their master hold via FK join.
       // RLS ensures the user can only see their own rows anyway; the
@@ -118,15 +121,15 @@ export function useMyActiveHolds() {
     } finally {
       setLoading(false)
     }
-  }, [realProfile?.email])
+  }, [profile?.email])
 
   useEffect(() => { load() }, [load])
 
   // Realtime: react to target changes (new holds pushed to us, clears from
   // instructors) AND to master-hold status changes (expires, cleared sweep).
   useEffect(() => {
-    if (!realProfile?.email) return
-    const email = realProfile.email.toLowerCase()
+    if (!profile?.email) return
+    const email = profile.email.toLowerCase()
 
     const channel = supabase
       .channel(`my-active-holds-${email}-${instanceId}`)
@@ -148,7 +151,7 @@ export function useMyActiveHolds() {
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [realProfile?.email, load, instanceId])
+  }, [profile?.email, load, instanceId])
 
   return { holds, loading, refresh: () => load(true) }
 }
@@ -476,15 +479,37 @@ export function useHoldActions() {
   // Student-side ack. Only writes if acknowledged_at is still NULL, so
   // the very first ack timestamp is preserved (for telemetry — how long
   // did Steve stare at the modal before ticking the box?).
+  //
+  // Writes to audit_log with the authenticated user's email. If a Super
+  // Admin is emulating and ticks the box, the audit log shows the super
+  // admin's email — so the provenance is traceable even though the
+  // target row's acknowledged_at is Steve's.
   // ──────────────────────────────────────────────────────────────────────
   const acknowledgeTarget = async (targetId) => {
     try {
-      const { error } = await supabase
+      const { data: updated, error } = await supabase
         .from('student_hold_targets')
         .update({ acknowledged_at: new Date().toISOString() })
         .eq('target_id', targetId)
         .is('acknowledged_at', null)
-      if (error) console.warn('[acknowledgeTarget]', error.message)
+        .select()
+      if (error) {
+        console.warn('[acknowledgeTarget]', error.message)
+        return
+      }
+      // Only log if we actually flipped a row from unacked → acked
+      if (updated && updated.length > 0 && profile?.email) {
+        try {
+          await supabase.from('audit_log').insert({
+            user_email: profile.email,
+            user_name: userDisplayName,
+            action: 'Acknowledge Hold',
+            entity_type: 'Student Hold',
+            entity_id: updated[0].hold_id || targetId,
+            details: `Acknowledged target for ${updated[0].user_email}`,
+          })
+        } catch {}
+      }
     } catch (err) {
       console.warn('[acknowledgeTarget]', err)
     }
