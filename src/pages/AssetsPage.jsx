@@ -89,6 +89,9 @@ export default function AssetsPage() {
   // Linked SOPs for the view modal
   const [viewModalSOPs, setViewModalSOPs] = useState([])
   const [viewModalSOPsLoading, setViewModalSOPsLoading] = useState(false)
+  // Linked network device for the view modal
+  const [viewModalNetDevice, setViewModalNetDevice] = useState(null)
+  const [viewModalNetLoading, setViewModalNetLoading] = useState(false)
   // Realtime channel ref
   const sopChannelRef = useRef(null)
 
@@ -384,6 +387,25 @@ export default function AssetsPage() {
     setViewAsset(asset)
     setShowViewModal(true)
     fetchSOPsForAsset(asset.asset_id)
+    fetchNetworkDeviceForAsset(asset.asset_id)
+  }
+
+  /* ── Linked Network Device (from network_devices) ─────────────── */
+  async function fetchNetworkDeviceForAsset(assetId) {
+    setViewModalNetDevice(null)
+    setViewModalNetLoading(true)
+    try {
+      const { data, error: err } = await supabase
+        .from('network_devices')
+        .select('device_id, ip_address, subnet, mac_address, profinet_name, location, notes')
+        .eq('asset_id', assetId)
+        .maybeSingle()
+      if (!err) setViewModalNetDevice(data || null)
+    } catch (e) {
+      // Non-critical — network_devices table may not exist in older envs
+      console.log('Network device fetch skipped:', e.message)
+    }
+    setViewModalNetLoading(false)
   }
 
   /* ── Work Orders for Asset ─────────────────────────────────────── */
@@ -919,6 +941,76 @@ export default function AssetsPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Linked Network Device ─────────────────────── */}
+              <div className="linked-sops-section">
+                <div className="linked-sops-header">
+                  <span className="material-icons" style={{ color: '#7c3aed', fontSize: '1.1rem' }}>lan</span>
+                  <strong>Network Device {viewModalNetLoading ? '' : (viewModalNetDevice ? '(1)' : '(0)')}</strong>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => {
+                      if (viewModalNetDevice) {
+                        navigate(`/network-map?focus=${encodeURIComponent(viewModalNetDevice.ip_address)}`)
+                      } else {
+                        navigate('/network-map')
+                      }
+                    }}
+                    title={viewModalNetDevice ? 'Open on Network Map' : 'Go to Network Map'}
+                  >
+                    <span className="material-icons" style={{ fontSize: '0.9rem' }}>open_in_new</span>
+                    {viewModalNetDevice ? 'View on Network Map' : 'Open Network Map'}
+                  </button>
+                </div>
+                {viewModalNetLoading ? (
+                  <div style={{ color: '#868e96', fontSize: '0.85rem', padding: '8px 0' }}>Loading…</div>
+                ) : !viewModalNetDevice ? (
+                  <div style={{ color: '#adb5bd', fontSize: '0.85rem', padding: '8px 0' }}>
+                    Not assigned a network device. Link this asset from the Network Map.
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                      gap: '10px 20px',
+                      padding: '10px 12px',
+                      background: '#faf5ff',
+                      border: '1px solid #e9d5ff',
+                      borderRadius: 8,
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>IP Address</div>
+                      <div style={{ fontFamily: 'monospace', fontWeight: 600, color: '#0f172a', marginTop: 2 }}>{viewModalNetDevice.ip_address}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Subnet</div>
+                      <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{viewModalNetDevice.subnet}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>MAC Address</div>
+                      <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>
+                        {viewModalNetDevice.mac_address || <span style={{ color: '#adb5bd' }}>—</span>}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Profinet Name</div>
+                      <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>
+                        {viewModalNetDevice.profinet_name || <span style={{ color: '#adb5bd' }}>—</span>}
+                      </div>
+                    </div>
+                    {viewModalNetDevice.location && (
+                      <div>
+                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Location</div>
+                        <div style={{ color: '#0f172a', marginTop: 2 }}>{viewModalNetDevice.location}</div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -38,6 +38,7 @@ const ROWS_PER_PAGE = Math.ceil(254 / PAGES_PER_SUBNET) // 64
 export default function NetworkPrintPage() {
   const navigate = useNavigate()
   const [devices, setDevices] = useState([])
+  const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [printedAt] = useState(() => new Date())
@@ -46,13 +47,15 @@ export default function NetworkPrintPage() {
     let cancelled = false
     async function load() {
       try {
-        const { data, error } = await supabase
-          .from('network_devices')
-          .select('*')
-          .order('ip_address', { ascending: true })
+        const [devRes, assetRes] = await Promise.all([
+          supabase.from('network_devices').select('*').order('ip_address', { ascending: true }),
+          supabase.from('assets').select('asset_id, name, status').eq('status', 'Active'),
+        ])
         if (cancelled) return
-        if (error) { setError(error.message); return }
-        setDevices(data || [])
+        if (devRes.error) { setError(devRes.error.message); return }
+        if (assetRes.error) { setError(assetRes.error.message); return }
+        setDevices(devRes.data || [])
+        setAssets(assetRes.data || [])
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -60,6 +63,23 @@ export default function NetworkPrintPage() {
     load()
     return () => { cancelled = true }
   }, [])
+
+  // Effective name resolver — if a device is linked to an active asset,
+  // use the asset's current name; otherwise use the device_name snapshot.
+  const assetById = useMemo(() => {
+    const m = new Map()
+    assets.forEach(a => m.set(a.asset_id, a))
+    return m
+  }, [assets])
+
+  const effectiveDeviceName = (d) => {
+    if (!d) return ''
+    if (d.asset_id) {
+      const a = assetById.get(d.asset_id)
+      if (a?.name) return a.name
+    }
+    return d.device_name || ''
+  }
 
   // Build the flat page list: 3 subnets × 4 chunks = 12 pages
   const allPages = useMemo(() => {
@@ -165,7 +185,7 @@ export default function NetworkPrintPage() {
             </div>
           </header>
 
-          <PrintTable rows={page.rows} />
+          <PrintTable rows={page.rows} effectiveDeviceName={effectiveDeviceName} />
         </section>
       ))}
 
@@ -213,7 +233,7 @@ export default function NetworkPrintPage() {
 }
 
 // ── Single-column print table ─────────────────────────────────────────────
-function PrintTable({ rows }) {
+function PrintTable({ rows, effectiveDeviceName }) {
   return (
     <table
       role="table"
@@ -253,7 +273,7 @@ function PrintTable({ rows }) {
                 {r.ip}
               </td>
               <td style={tdStyle}>
-                {r.device?.device_name || (r.isGateway ? 'Gateway' : r.isReserved ? 'Do Not Use' : '')}
+                {effectiveDeviceName(r.device) || (r.isGateway ? 'Gateway' : r.isReserved ? 'Do Not Use' : '')}
               </td>
               <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 10 }}>
                 {r.device?.mac_address || ''}
