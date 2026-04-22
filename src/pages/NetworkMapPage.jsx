@@ -35,7 +35,7 @@ import {
   Network, Search, Printer, Download, Plus, Edit3, Trash2, Send, X,
   CheckCircle2, XCircle, AlertTriangle, Inbox, Info, Loader2, Lock,
   ChevronDown, ChevronRight, FileSpreadsheet, ClipboardList, Clock,
-  History, Filter,
+  History, Filter, Link2, ExternalLink,
 } from 'lucide-react'
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -83,6 +83,7 @@ export default function NetworkMapPage() {
   const { sendRejectionNotification } = useRejectionNotification()
   const {
     devices, changeRequests, loading, error,
+    activeAssets, assetById, linkedAssetIds, effectiveDeviceName,
     devicesBySubnet, deviceByIp, pendingByDevice, pendingCount,
     findDuplicateMac,
     addDevice, updateDevice, deleteDevice,
@@ -183,13 +184,16 @@ export default function NetworkMapPage() {
     const d = row.device
     const macRaw = (d?.mac_address || '').toLowerCase()
     const macStripped = macRaw.replace(/[-:]/g, '')
+    // Include the live asset-resolved name so searching finds freshly renamed assets
+    const liveName = effectiveDeviceName(d)
     const haystack = [
       row.ip,
-      d?.device_name, d?.profinet_name, d?.location, d?.notes,
+      d?.device_name, liveName, d?.profinet_name, d?.location, d?.notes,
+      d?.asset_id,
       macRaw, macStripped,
     ].filter(Boolean).join(' ').toLowerCase()
     return tokens.every(t => haystack.includes(t))
-  }, [tokens])
+  }, [tokens, effectiveDeviceName])
 
   // ── Apply search + filter ────────────────────────────────────────────
   // When searching, search ALL three subnets and hide empty/available rows
@@ -340,7 +344,7 @@ export default function NetworkMapPage() {
       const wb = XLSX.utils.book_new()
       NETWORK_CONFIG.subnets.forEach(subnet => {
         const rows = []
-        rows.push(['Device', 'MAC Address', 'Profinet Name', 'IP Address', 'Location', 'Notes', 'Status'])
+        rows.push(['Device', 'MAC Address', 'Profinet Name', 'IP Address', 'Location', 'Notes', 'Status', 'Linked Asset'])
         const list = devicesBySubnet[subnet.id] || []
         for (let octet = 1; octet <= 254; octet++) {
           const ip = `${subnet.prefix}${octet}`
@@ -348,18 +352,19 @@ export default function NetworkMapPage() {
           const status = (d?.is_reserved || isDoNotUseIp(ip)) ? 'Reserved'
                        : d ? 'Assigned' : 'Available'
           rows.push([
-            d?.device_name || (isDoNotUseIp(ip) ? 'Do Not Use' : ''),
+            effectiveDeviceName(d) || (isDoNotUseIp(ip) ? 'Do Not Use' : ''),
             d?.mac_address || '',
             d?.profinet_name || (ip === NETWORK_CONFIG.gateway ? 'DHCP' : ''),
             ip,
             d?.location || '',
             d?.notes || '',
             status,
+            d?.asset_id || '',
           ])
         }
         const ws = XLSX.utils.aoa_to_sheet(rows)
         ws['!cols'] = [
-          { wch: 40 }, { wch: 20 }, { wch: 24 }, { wch: 16 }, { wch: 20 }, { wch: 40 }, { wch: 12 },
+          { wch: 40 }, { wch: 20 }, { wch: 24 }, { wch: 16 }, { wch: 20 }, { wch: 40 }, { wch: 12 }, { wch: 12 },
         ]
         XLSX.utils.book_append_sheet(wb, ws, subnet.shortLabel.replace(/[^\w.]/g, '_'))
       })
@@ -602,6 +607,8 @@ export default function NetworkMapPage() {
                   row={r}
                   zebra={idx % 2 === 1}
                   showSubnetTag={isSearching}
+                  effectiveDeviceName={effectiveDeviceName}
+                  assetById={assetById}
                   canEdit={canEdit}
                   canDelete={canDelete}
                   canSuggest={canSuggest}
@@ -647,6 +654,7 @@ export default function NetworkMapPage() {
                 req={req}
                 canApprove={canApprove}
                 isOwn={req.submitted_by?.toLowerCase() === profile?.email?.toLowerCase()}
+                assetById={assetById}
                 onApprove={() => setApproveTarget(req)}
                 onReject={() => setRejectTarget(req)}
                 onCancel={() => handleCancelPending(req.request_id)}
@@ -664,6 +672,8 @@ export default function NetworkMapPage() {
           subnetId={editTarget.subnet}
           fixedIp={editTarget.ip_address}
           findDuplicateMac={findDuplicateMac}
+          activeAssets={activeAssets}
+          linkedAssetIds={linkedAssetIds}
           onCancel={() => setEditTarget(null)}
           onSubmit={handleEditSave}
         />
@@ -675,6 +685,8 @@ export default function NetworkMapPage() {
           initialOctet={addTarget.octet}
           takenOctets={new Set((devicesBySubnet[addTarget.subnet] || []).map(d => d.last_octet))}
           findDuplicateMac={findDuplicateMac}
+          activeAssets={activeAssets}
+          linkedAssetIds={linkedAssetIds}
           onCancel={() => setAddTarget(null)}
           onSubmit={handleAddSave}
         />
@@ -682,6 +694,10 @@ export default function NetworkMapPage() {
       {suggestTarget && (
         <SuggestChangeModal
           target={suggestTarget}
+          activeAssets={activeAssets}
+          linkedAssetIds={linkedAssetIds}
+          assetById={assetById}
+          effectiveDeviceName={effectiveDeviceName}
           onCancel={() => setSuggestTarget(null)}
           onSubmit={handleSuggestSubmit}
         />
@@ -697,6 +713,7 @@ export default function NetworkMapPage() {
         <ApproveChangeModal
           req={approveTarget}
           device={deviceByIp.get(approveTarget.ip_address) || null}
+          assetById={assetById}
           onCancel={() => setApproveTarget(null)}
           onConfirm={handleApprove}
         />
@@ -819,12 +836,18 @@ function PendingCard({ count, onClick }) {
 }
 
 // ── Table row ──────────────────────────────────────────────────────────────
-function NetworkRow({ row, zebra, showSubnetTag, canEdit, canDelete, canSuggest, onEdit, onDelete, onSuggest, onAdd, onHistory }) {
+function NetworkRow({
+  row, zebra, showSubnetTag, effectiveDeviceName, assetById,
+  canEdit, canDelete, canSuggest, onEdit, onDelete, onSuggest, onAdd, onHistory,
+}) {
+  const navigate = useNavigate()
   const { ip, device, pending, isReserved, isGateway, subnetId } = row
   const badge = statusBadge(isReserved, isGateway, !!device)
   const BadgeIcon = badge.icon
   const hasDevice = !!device
   const hasPending = pending.length > 0
+  const liveName = device ? (effectiveDeviceName?.(device) || device.device_name || '') : ''
+  const linkedAsset = device?.asset_id ? assetById?.get(device.asset_id) : null
 
   // Short subnet label (e.g. ".193.0") when shown
   const subnetShort = useMemo(() => {
@@ -872,7 +895,32 @@ function NetworkRow({ row, zebra, showSubnetTag, canEdit, canDelete, canSuggest,
           </span>
         )}
       </td>
-      <td className="px-3 py-2 text-surface-700">{device?.device_name || (isReserved ? <span className="italic text-red-700">Do not use</span> : <span className="text-surface-300 italic">—</span>)}</td>
+      <td className="px-3 py-2 text-surface-700">
+        {liveName ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span>{liveName}</span>
+            {linkedAsset && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); navigate(`/assets?focus=${linkedAsset.asset_id}`) }}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold
+                  bg-purple-50 text-purple-700 border border-purple-200
+                  hover:bg-purple-100 hover:border-purple-300
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                title={`Linked to asset ${linkedAsset.asset_id} — click to open`}
+                aria-label={`Linked asset ${linkedAsset.asset_id}, open on Assets page`}
+              >
+                <Link2 size={9} aria-hidden="true" />
+                {linkedAsset.asset_id}
+              </button>
+            )}
+          </div>
+        ) : isReserved ? (
+          <span className="italic text-red-700">Do not use</span>
+        ) : (
+          <span className="text-surface-300 italic">—</span>
+        )}
+      </td>
       <td className="px-3 py-2 font-mono text-xs text-surface-600">{device?.mac_address || ''}</td>
       <td className="px-3 py-2 text-surface-600">{device?.profinet_name || (isGateway ? 'DHCP' : '')}</td>
       <td className="px-3 py-2 text-surface-600">{device?.location || ''}</td>
@@ -960,11 +1008,22 @@ function NetworkRow({ row, zebra, showSubnetTag, canEdit, canDelete, canSuggest,
 }
 
 // ── Pending request card (in panel) ────────────────────────────────────────
-function PendingRequestCard({ req, canApprove, isOwn, onApprove, onReject, onCancel }) {
+function PendingRequestCard({ req, canApprove, isOwn, assetById, onApprove, onReject, onCancel }) {
   const [expanded, setExpanded] = useState(false)
   const diff = req.proposed_values || {}
   const current = req.current_values || {}
   const diffKeys = Object.keys(diff)
+
+  // Render a value for display — if the field is asset_id, resolve to "name (id)"
+  const displayValue = (field, val) => {
+    const v = val ?? ''
+    if (field === 'asset_id') {
+      if (!v) return null
+      const asset = assetById?.get(v)
+      return asset ? `${asset.name} (${v})` : v
+    }
+    return v === '' ? null : String(v)
+  }
 
   return (
     <li className="px-4 py-3">
@@ -1010,13 +1069,17 @@ function PendingRequestCard({ req, canApprove, isOwn, onApprove, onReject, onCan
                     </tr>
                   </thead>
                   <tbody>
-                    {diffKeys.map(k => (
-                      <tr key={k} className="border-t border-surface-100">
-                        <td className="py-1 font-medium text-surface-600">{COLUMN_LABELS[k] || k}</td>
-                        <td className="py-1 text-surface-500 font-mono">{String(current[k] ?? '') || <em className="text-surface-300">(empty)</em>}</td>
-                        <td className="py-1 text-brand-700 font-mono font-semibold">{String(diff[k] ?? '') || <em className="text-surface-300">(empty)</em>}</td>
-                      </tr>
-                    ))}
+                    {diffKeys.map(k => {
+                      const curDisp = displayValue(k, current[k])
+                      const newDisp = displayValue(k, diff[k])
+                      return (
+                        <tr key={k} className="border-t border-surface-100">
+                          <td className="py-1 font-medium text-surface-600">{COLUMN_LABELS[k] || k}</td>
+                          <td className="py-1 text-surface-500 font-mono">{curDisp ?? <em className="text-surface-300 not-italic">(empty)</em>}</td>
+                          <td className="py-1 text-brand-700 font-mono font-semibold">{newDisp ?? <em className="text-surface-300 not-italic">(empty)</em>}</td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               )}
@@ -1141,7 +1204,204 @@ function ModalShell({ title, subtitle, onClose, children, icon: Icon, size = 'md
 }
 
 // ── Device form modal (Add + Edit for instructors) ────────────────────────
-function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, takenOctets, findDuplicateMac, onCancel, onSubmit }) {
+// ── Asset Picker (searchable combobox) ─────────────────────────────────────
+// Shows active assets. Excludes assets already linked to OTHER devices.
+// Fully keyboard-accessible: ArrowUp/Down + Enter to select, Escape to close.
+function AssetPicker({
+  value,              // currently selected asset_id (string or '')
+  onChange,           // (asset_id | '') => void
+  activeAssets,       // [{asset_id, name, status}]
+  linkedAssetIds,     // Set<asset_id> of assets linked to OTHER devices
+  currentDeviceId,    // device being edited (so its linked asset is still selectable)
+  currentAssetId,     // same as `value` but pre-edit (for exclude logic)
+  label = 'Linked Asset',
+  help = 'Optional. When linked, the device name is synced from the asset.',
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [activeIdx, setActiveIdx] = useState(0)
+  const inputRef = useRef(null)
+  const listRef = useRef(null)
+  const containerRef = useRef(null)
+
+  // Assets eligible for selection: active, minus those linked to other devices
+  const eligible = useMemo(() => {
+    return activeAssets.filter(a => {
+      if (!linkedAssetIds) return true
+      // Always include the asset currently linked to THIS device (editing it should still show)
+      if (currentAssetId && a.asset_id === currentAssetId) return true
+      return !linkedAssetIds.has(a.asset_id)
+    })
+  }, [activeAssets, linkedAssetIds, currentAssetId])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return eligible
+    return eligible.filter(a =>
+      (a.name || '').toLowerCase().includes(q) ||
+      (a.asset_id || '').toLowerCase().includes(q)
+    )
+  }, [eligible, query])
+
+  const selected = value ? activeAssets.find(a => a.asset_id === value) : null
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    const handleClick = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  // Reset activeIdx when filter changes
+  useEffect(() => { setActiveIdx(0) }, [query])
+
+  const handleSelect = (assetId) => {
+    onChange(assetId || '')
+    setOpen(false)
+    setQuery('')
+  }
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!open) { setOpen(true); return }
+      setActiveIdx(i => Math.min(i + 1, filtered.length))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIdx(i => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (!open) { setOpen(true); return }
+      // Index 0 = "None"; others are filtered[activeIdx - 1]
+      if (activeIdx === 0) handleSelect('')
+      else {
+        const picked = filtered[activeIdx - 1]
+        if (picked) handleSelect(picked.asset_id)
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setOpen(false)
+    }
+  }
+
+  const inputId = 'asset-picker-input'
+
+  return (
+    <div ref={containerRef}>
+      <label htmlFor={inputId} className="block text-xs font-semibold text-surface-600 mb-1">
+        {label}
+      </label>
+      <div className="relative">
+        <div
+          className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-white
+            focus-within:ring-2 focus-within:ring-brand-500 focus-within:border-transparent
+            flex items-center gap-2 min-h-[38px]"
+        >
+          <Link2 size={14} className="text-surface-400 flex-shrink-0" aria-hidden="true" />
+          {selected && !open ? (
+            <>
+              <span className="flex-1 truncate">
+                <span className="font-medium">{selected.name}</span>
+                <span className="ml-1.5 text-xs text-surface-400 font-mono">({selected.asset_id})</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => onChange('')}
+                className="p-0.5 rounded text-surface-400 hover:text-red-600 hover:bg-red-50
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                aria-label="Unlink asset"
+                title="Unlink asset"
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 10) }}
+                className="text-xs text-brand-600 hover:text-brand-700 hover:underline
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded px-1"
+              >
+                Change
+              </button>
+            </>
+          ) : (
+            <input
+              ref={inputRef}
+              id={inputId}
+              type="text"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={open}
+              aria-controls="asset-picker-listbox"
+              aria-activedescendant={open ? `asset-option-${activeIdx}` : undefined}
+              value={query}
+              onChange={(e) => { setQuery(e.target.value); if (!open) setOpen(true) }}
+              onFocus={() => setOpen(true)}
+              onKeyDown={handleKeyDown}
+              placeholder={selected ? selected.name : 'Type to search active assets…'}
+              className="flex-1 text-sm outline-none border-0 bg-transparent"
+            />
+          )}
+        </div>
+
+        {open && (
+          <ul
+            ref={listRef}
+            role="listbox"
+            id="asset-picker-listbox"
+            className="absolute z-20 mt-1 w-full max-h-64 overflow-auto bg-white border border-surface-200 rounded-lg shadow-lg"
+          >
+            <li
+              id="asset-option-0"
+              role="option"
+              aria-selected={!value && activeIdx === 0}
+              onClick={() => handleSelect('')}
+              onMouseEnter={() => setActiveIdx(0)}
+              className={`px-3 py-2 text-sm cursor-pointer border-b border-surface-100
+                ${activeIdx === 0 ? 'bg-brand-50' : 'hover:bg-surface-50'}`}
+            >
+              <span className="italic text-surface-500">(None — use free-text device name)</span>
+            </li>
+            {filtered.length === 0 ? (
+              <li className="px-3 py-2 text-sm text-surface-400 italic">
+                No matching active assets. Try a different search, or leave unlinked.
+              </li>
+            ) : (
+              filtered.map((a, idx) => {
+                const isActive = idx + 1 === activeIdx
+                const isSelected = a.asset_id === value
+                return (
+                  <li
+                    key={a.asset_id}
+                    id={`asset-option-${idx + 1}`}
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => handleSelect(a.asset_id)}
+                    onMouseEnter={() => setActiveIdx(idx + 1)}
+                    className={`px-3 py-2 text-sm cursor-pointer flex items-center gap-2
+                      ${isActive ? 'bg-brand-50' : 'hover:bg-surface-50'}
+                      ${isSelected ? 'font-semibold' : ''}`}
+                  >
+                    <span className="flex-1 truncate">{a.name}</span>
+                    <span className="text-xs text-surface-400 font-mono flex-shrink-0">{a.asset_id}</span>
+                    {isSelected && <CheckCircle2 size={12} className="text-brand-600 flex-shrink-0" aria-hidden="true" />}
+                  </li>
+                )
+              })
+            )}
+          </ul>
+        )}
+      </div>
+      {help && <p className="text-[11px] text-surface-400 mt-1">{help}</p>}
+    </div>
+  )
+}
+
+function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, takenOctets, findDuplicateMac, activeAssets, linkedAssetIds, onCancel, onSubmit }) {
   const subnet = NETWORK_CONFIG.subnets.find(s => s.id === subnetId)
   const [octet, setOctet] = useState(() => {
     if (fixedIp) return parseInt(fixedIp.split('.')[3], 10)
@@ -1155,6 +1415,7 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
     location: initial?.location || '',
     notes: initial?.notes || '',
     is_reserved: !!initial?.is_reserved,
+    asset_id: initial?.asset_id || '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -1233,7 +1494,36 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
           )}
         </div>
 
-        <FormField label="Device Name" value={form.device_name} onChange={handleChange('device_name')} placeholder="e.g. Bench #3 — 1500 PLC" />
+        <AssetPicker
+          value={form.asset_id}
+          onChange={(assetId) => {
+            // When linking, pre-fill device_name from the selected asset
+            if (assetId) {
+              const picked = activeAssets?.find(a => a.asset_id === assetId)
+              setForm(f => ({ ...f, asset_id: assetId, device_name: picked?.name || f.device_name }))
+            } else {
+              setForm(f => ({ ...f, asset_id: '' }))
+            }
+          }}
+          activeAssets={activeAssets || []}
+          linkedAssetIds={linkedAssetIds}
+          currentDeviceId={initial?.device_id}
+          currentAssetId={initial?.asset_id}
+        />
+
+        {form.asset_id ? (
+          <div>
+            <label className="block text-xs font-semibold text-surface-600 mb-1">Device Name</label>
+            <div className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-surface-50 text-surface-600 flex items-center gap-2">
+              <Link2 size={14} className="text-purple-500 flex-shrink-0" aria-hidden="true" />
+              <span className="flex-1">{form.device_name || '(asset has no name)'}</span>
+              <span className="text-[10px] uppercase tracking-wide font-semibold text-purple-600">Synced</span>
+            </div>
+            <p className="text-[11px] text-surface-400 mt-1">Name is synced from the linked asset. Unlink above to use a custom name.</p>
+          </div>
+        ) : (
+          <FormField label="Device Name" value={form.device_name} onChange={handleChange('device_name')} placeholder="e.g. Bench #3 — 1500 PLC" />
+        )}
         <FormField
           label="MAC Address"
           value={form.mac_address}
@@ -1326,7 +1616,7 @@ function FormField({ label, value, onChange, placeholder, multiline, monospace, 
 }
 
 // ── Suggest Change modal (students / work study) ───────────────────────────
-function SuggestChangeModal({ target, onCancel, onSubmit }) {
+function SuggestChangeModal({ target, activeAssets, linkedAssetIds, assetById, effectiveDeviceName, onCancel, onSubmit }) {
   const { device, ip, subnet, mode } = target
   const changeType = device ? 'edit' : 'add'
   const [form, setForm] = useState({
@@ -1335,6 +1625,7 @@ function SuggestChangeModal({ target, onCancel, onSubmit }) {
     profinet_name: device?.profinet_name || '',
     location: device?.location || '',
     notes: device?.notes || '',
+    asset_id: device?.asset_id || '',
   })
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
@@ -1355,6 +1646,7 @@ function SuggestChangeModal({ target, onCancel, onSubmit }) {
         profinet_name: device?.profinet_name || '',
         location: device?.location || '',
         notes: device?.notes || '',
+        asset_id: device?.asset_id || '',
       }
       const proposedValues = {
         device_name: form.device_name || '',
@@ -1362,6 +1654,7 @@ function SuggestChangeModal({ target, onCancel, onSubmit }) {
         profinet_name: form.profinet_name || '',
         location: form.location || '',
         notes: form.notes || '',
+        asset_id: form.asset_id || '',
       }
       await onSubmit({ changeType, currentValues, proposedValues, reason })
     } catch (e) {
@@ -1384,7 +1677,11 @@ function SuggestChangeModal({ target, onCancel, onSubmit }) {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-surface-500 mb-2">Current</p>
             <div className="space-y-2 text-sm">
-              <ReadOnlyRow label="Device" value={device?.device_name} />
+              <ReadOnlyRow label="Device" value={device ? (effectiveDeviceName?.(device) || device.device_name) : ''} />
+              <ReadOnlyRow
+                label="Linked Asset"
+                value={device?.asset_id ? `${assetById?.get(device.asset_id)?.name || '(unknown)'} (${device.asset_id})` : ''}
+              />
               <ReadOnlyRow label="MAC" value={device?.mac_address} mono />
               <ReadOnlyRow label="Profinet" value={device?.profinet_name} mono />
               <ReadOnlyRow label="Location" value={device?.location} />
@@ -1395,7 +1692,34 @@ function SuggestChangeModal({ target, onCancel, onSubmit }) {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-brand-700 mb-2">Proposed</p>
             <div className="space-y-2">
-              <FormField label="Device Name" value={form.device_name} onChange={handleChange('device_name')} placeholder="e.g. Bench #3 PLC" />
+              <AssetPicker
+                value={form.asset_id}
+                onChange={(assetId) => {
+                  if (assetId) {
+                    const picked = activeAssets?.find(a => a.asset_id === assetId)
+                    setForm(f => ({ ...f, asset_id: assetId, device_name: picked?.name || f.device_name }))
+                  } else {
+                    setForm(f => ({ ...f, asset_id: '' }))
+                  }
+                }}
+                activeAssets={activeAssets || []}
+                linkedAssetIds={linkedAssetIds}
+                currentDeviceId={device?.device_id}
+                currentAssetId={device?.asset_id}
+                help="Link to an active asset so the device name stays in sync."
+              />
+              {form.asset_id ? (
+                <div>
+                  <label className="block text-xs font-semibold text-surface-600 mb-1">Device Name</label>
+                  <div className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-surface-50 text-surface-600 flex items-center gap-2">
+                    <Link2 size={14} className="text-purple-500 flex-shrink-0" aria-hidden="true" />
+                    <span className="flex-1">{form.device_name || '(asset has no name)'}</span>
+                    <span className="text-[10px] uppercase tracking-wide font-semibold text-purple-600">Synced</span>
+                  </div>
+                </div>
+              ) : (
+                <FormField label="Device Name" value={form.device_name} onChange={handleChange('device_name')} placeholder="e.g. Bench #3 PLC" />
+              )}
               <FormField label="MAC Address" value={form.mac_address} onChange={handleChange('mac_address')} placeholder="XX-XX-XX-XX-XX-XX" monospace invalid={macInvalid} />
               <FormField label="Profinet Name" value={form.profinet_name} onChange={handleChange('profinet_name')} monospace />
               <FormField label="Location" value={form.location} onChange={handleChange('location')} />
@@ -1506,7 +1830,7 @@ function ConfirmDeleteModal({ device, onCancel, onConfirm }) {
 }
 
 // ── Approve change modal ───────────────────────────────────────────────────
-function ApproveChangeModal({ req, device, onCancel, onConfirm }) {
+function ApproveChangeModal({ req, device, assetById, onCancel, onConfirm }) {
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -1521,6 +1845,16 @@ function ApproveChangeModal({ req, device, onCancel, onConfirm }) {
   const diff = req.proposed_values || {}
   const current = req.current_values || {}
   const keys = Object.keys(diff)
+
+  const displayValue = (field, val) => {
+    const v = val ?? ''
+    if (field === 'asset_id') {
+      if (!v) return null
+      const asset = assetById?.get(v)
+      return asset ? `${asset.name} (${v})` : v
+    }
+    return v === '' ? null : String(v)
+  }
 
   return (
     <ModalShell
@@ -1553,13 +1887,17 @@ function ApproveChangeModal({ req, device, onCancel, onConfirm }) {
                 </tr>
               </thead>
               <tbody>
-                {keys.map(k => (
-                  <tr key={k} className="border-t border-surface-100">
-                    <td className="px-3 py-2 font-medium text-surface-700">{COLUMN_LABELS[k] || k}</td>
-                    <td className="px-3 py-2 text-surface-500 font-mono">{String(current[k] ?? '') || <em className="text-surface-300">(empty)</em>}</td>
-                    <td className="px-3 py-2 text-brand-700 font-mono font-semibold">{String(diff[k] ?? '') || <em className="text-surface-300">(empty)</em>}</td>
-                  </tr>
-                ))}
+                {keys.map(k => {
+                  const curDisp = displayValue(k, current[k])
+                  const newDisp = displayValue(k, diff[k])
+                  return (
+                    <tr key={k} className="border-t border-surface-100">
+                      <td className="px-3 py-2 font-medium text-surface-700">{COLUMN_LABELS[k] || k}</td>
+                      <td className="px-3 py-2 text-surface-500 font-mono">{curDisp ?? <em className="text-surface-300 not-italic">(empty)</em>}</td>
+                      <td className="px-3 py-2 text-brand-700 font-mono font-semibold">{newDisp ?? <em className="text-surface-300 not-italic">(empty)</em>}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

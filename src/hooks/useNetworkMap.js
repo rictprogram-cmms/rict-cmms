@@ -71,6 +71,7 @@ export function useNetworkMap() {
   const { profile } = useAuth()
   const [devices, setDevices] = useState([])
   const [changeRequests, setChangeRequests] = useState([])
+  const [activeAssets, setActiveAssets] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -88,15 +89,18 @@ export function useNetworkMap() {
     setLoading(true)
     setError(null)
     try {
-      const [devRes, ncrRes] = await Promise.all([
+      const [devRes, ncrRes, assetRes] = await Promise.all([
         supabase.from('network_devices').select('*').order('ip_address', { ascending: true }),
         supabase.from('network_change_requests').select('*').order('submitted_date', { ascending: false }),
+        supabase.from('assets').select('asset_id, name, status').eq('status', 'Active').order('name', { ascending: true }),
       ])
       if (devRes.error) throw devRes.error
       if (ncrRes.error) throw ncrRes.error
+      if (assetRes.error) throw assetRes.error
       if (!mountedRef.current) return
       setDevices(devRes.data || [])
       setChangeRequests(ncrRes.data || [])
+      setActiveAssets(assetRes.data || [])
     } catch (e) {
       console.error('[useNetworkMap] Fetch failed:', e)
       if (mountedRef.current) setError(e.message || 'Failed to load network map')
@@ -131,6 +135,23 @@ export function useNetworkMap() {
           const incoming = payload.new
           const next = prev.filter(r => r.request_id !== incoming.request_id)
           next.unshift(incoming)
+          return next
+        })
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, (payload) => {
+        // Asset rename / status change should reflect immediately on the network map
+        setActiveAssets(prev => {
+          if (payload.eventType === 'DELETE') {
+            return prev.filter(a => a.asset_id !== payload.old.asset_id)
+          }
+          const incoming = payload.new
+          // If asset was deactivated, remove it
+          if (incoming.status !== 'Active') {
+            return prev.filter(a => a.asset_id !== incoming.asset_id)
+          }
+          const next = prev.filter(a => a.asset_id !== incoming.asset_id)
+          next.push({ asset_id: incoming.asset_id, name: incoming.name, status: incoming.status })
+          next.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
           return next
         })
       })
@@ -185,6 +206,34 @@ export function useNetworkMap() {
     ) || null
   }, [devices])
 
+  // ── Asset linkage helpers ───────────────────────────────────────────────
+  const assetById = useMemo(() => {
+    const m = new Map()
+    activeAssets.forEach(a => m.set(a.asset_id, a))
+    return m
+  }, [activeAssets])
+
+  // Set of asset_ids already linked to a device (so picker can exclude them)
+  const linkedAssetIds = useMemo(() => {
+    const s = new Set()
+    devices.forEach(d => { if (d.asset_id) s.add(d.asset_id) })
+    return s
+  }, [devices])
+
+  /**
+   * Resolve the display name for a device.
+   * If linked to an asset, prefer the asset's live name.
+   * Otherwise fall back to the device's free-text device_name.
+   */
+  const effectiveDeviceName = useCallback((device) => {
+    if (!device) return ''
+    if (device.asset_id) {
+      const a = assetById.get(device.asset_id)
+      if (a?.name) return a.name
+    }
+    return device.device_name || ''
+  }, [assetById])
+
   // ═══════════════════════════════════════════════════════════════════════
   // Direct CRUD — instructor only (UI guards via hasPerm)
   // ═══════════════════════════════════════════════════════════════════════
@@ -208,12 +257,19 @@ export function useNetworkMap() {
     const now = new Date().toISOString()
     const actor = senderDisplayName(profile)
 
+    // If asset_id is provided, snapshot the asset name as device_name (fallback for deleted assets)
+    let resolvedDeviceName = input.device_name?.trim() || null
+    if (input.asset_id) {
+      const linked = assetById.get(input.asset_id)
+      if (linked?.name) resolvedDeviceName = linked.name
+    }
+
     const row = {
       device_id,
       subnet,
       ip_address: ip,
       last_octet: lastOctet,
-      device_name: input.device_name?.trim() || null,
+      device_name: resolvedDeviceName,
       mac_address: input.mac_address ? normaliseMac(input.mac_address) : null,
       profinet_name: input.profinet_name?.trim() || null,
       location: input.location?.trim() || null,
@@ -249,15 +305,29 @@ export function useNetworkMap() {
     const existing = devices.find(d => d.device_id === deviceId)
     if (!existing) throw new Error('Device not found.')
 
+    // Resolve asset linkage: if asset_id is changing or being set, snapshot asset name
+    const newAssetId = patch.asset_id === undefined ? existing.asset_id : (patch.asset_id || null)
+    let resolvedDeviceName
+    if (patch.device_name === undefined) {
+      resolvedDeviceName = existing.device_name
+    } else {
+      resolvedDeviceName = patch.device_name?.trim() || null
+    }
+    // If linking to an asset (or asset was already linked and still is), snapshot the asset name
+    if (newAssetId) {
+      const linked = assetById.get(newAssetId)
+      if (linked?.name) resolvedDeviceName = linked.name
+    }
+
     const updates = {
-      device_name: patch.device_name === undefined ? existing.device_name : (patch.device_name?.trim() || null),
+      device_name: resolvedDeviceName,
       mac_address: patch.mac_address === undefined
         ? existing.mac_address
         : (patch.mac_address ? normaliseMac(patch.mac_address) : null),
       profinet_name: patch.profinet_name === undefined ? existing.profinet_name : (patch.profinet_name?.trim() || null),
       location: patch.location === undefined ? existing.location : (patch.location?.trim() || null),
       notes: patch.notes === undefined ? existing.notes : (patch.notes?.trim() || null),
-      asset_id: patch.asset_id === undefined ? existing.asset_id : (patch.asset_id || null),
+      asset_id: newAssetId,
       is_reserved: patch.is_reserved === undefined ? existing.is_reserved : !!patch.is_reserved,
       updated_at: new Date().toISOString(),
       updated_by: senderDisplayName(profile),
@@ -281,7 +351,7 @@ export function useNetworkMap() {
     }
 
     return data
-  }, [devices, profile])
+  }, [devices, profile, assetById])
 
   /**
    * Delete a network_devices row (instructor).
@@ -465,6 +535,7 @@ export function useNetworkMap() {
     // state
     devices,
     changeRequests,
+    activeAssets,
     loading,
     error,
     // derived
@@ -473,6 +544,9 @@ export function useNetworkMap() {
     pendingByDevice,
     pendingCount,
     findDuplicateMac,
+    assetById,
+    linkedAssetIds,
+    effectiveDeviceName,
     // crud
     addDevice,
     updateDevice,
