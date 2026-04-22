@@ -32,6 +32,7 @@ const PAGE_ICONS = {
   'Purchase Orders': 'local_shipping',
   'PM': 'event_repeat',
   'Lab Signup': 'event_available',
+  'Equipment Scheduling': 'build',
   'Reports': 'assessment',
   'WOC Ratio': 'score',
   'Bug Tracker': 'bug_report',
@@ -120,6 +121,14 @@ const DEFAULT_PERMISSIONS = [
   ['P053', 'Lab Signup', 'manage_others', false, false, true, 'Can manage others signups'],
   ['P054', 'Lab Signup', 'view_calendar', true, true, true, 'Can view lab calendar'],
   ['P055', 'Lab Signup', 'manage_calendar', false, false, true, 'Can manage calendar settings'],
+
+  // Equipment Scheduling
+  ['P120', 'Equipment Scheduling', 'view_page',           true,  true,  true,  'Can access Equipment Scheduling page'],
+  ['P121', 'Equipment Scheduling', 'book_equipment',      true,  true,  true,  'Can book equipment time slots'],
+  ['P122', 'Equipment Scheduling', 'edit_own_booking',    true,  true,  true,  'Can edit own equipment bookings'],
+  ['P123', 'Equipment Scheduling', 'cancel_own_booking',  true,  true,  true,  'Can cancel own equipment bookings'],
+  ['P124', 'Equipment Scheduling', 'manage_all_bookings', false, false, true,  "Can manage any user's equipment bookings"],
+  ['P125', 'Equipment Scheduling', 'manage_equipment',    false, false, true,  'Can add, edit, and retire equipment entries'],
 
   // Reports (Time Cards)
   ['P060', 'Reports', 'view_page', true, true, true, 'Can access Reports/Time Cards'],
