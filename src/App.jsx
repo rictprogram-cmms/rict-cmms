@@ -9,6 +9,7 @@ import WorkOrdersPage from '@/pages/WorkOrdersPage'
 import AssetsPage from '@/pages/AssetsPage'
 import InventoryPage from '@/pages/InventoryPage'
 import LabSignupPage from '@/pages/LabSignupPage'
+import EquipmentSchedulingPage from '@/pages/EquipmentSchedulingPage'
 import WeeklyLabsTrackerPage from '@/pages/WeeklyLabsTrackerPage'
 import PurchaseOrdersPage from '@/pages/PurchaseOrdersPage'
 import PMPage from '@/pages/PMPage'
@@ -342,6 +343,7 @@ function AppRoutes() {
             {/* Scheduling */}
             <Route path="/pm-schedules" element={<PMPage />} />
             <Route path="/lab-signup" element={<LabSignupPage />} />
+            <Route path="/equipment-scheduling" element={<EquipmentSchedulingPage />} />
 
             {/* Reports */}
             <Route path="/time-cards" element={<TimeCardsPage />} />
