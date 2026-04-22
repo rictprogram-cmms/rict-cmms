@@ -47,6 +47,7 @@ import {
   GraduationCap,
   FileSearch,
   Printer,
+  Network,
 } from 'lucide-react'
 
 const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
@@ -64,6 +65,7 @@ const navSections = [
       { name: 'Assets', href: '/assets', icon: BoxIcon, permPage: 'Assets', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'SOPs', href: '/sops', icon: FileText, permPage: 'SOPs', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Purchase Orders', href: '/purchase-orders', icon: ShoppingCart, permPage: 'Purchase Orders', roles: ['Student', 'Work Study', 'Instructor'] },
+      { name: 'Network Map', href: '/network-map', icon: Network, permPage: 'Network Map', roles: ['Student', 'Work Study', 'Instructor'] },
     ],
   },
   {

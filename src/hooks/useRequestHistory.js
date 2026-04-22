@@ -202,6 +202,48 @@ function normalizeTempAccessRequest(r) {
   }
 }
 
+function normalizeNetworkChangeRequest(r) {
+  const changeTypeLabel = r.change_type === 'add' ? 'Add' : r.change_type === 'delete' ? 'Delete' : 'Edit'
+  const proposed = r.proposed_values || {}
+  const fieldCount = Object.keys(proposed).length
+  let summary = ''
+  if (r.change_type === 'delete') {
+    summary = `Delete ${r.ip_address || 'device'}`
+  } else if (r.change_type === 'add') {
+    summary = `Add device at ${r.ip_address || 'unknown IP'}`
+  } else {
+    summary = `Edit ${r.ip_address || 'device'} — ${fieldCount} field${fieldCount !== 1 ? 's' : ''} changed`
+  }
+
+  return {
+    id: r.request_id,
+    type: 'Network Change',
+    typeColor: '#1e40af',
+    typeBg: '#dbeafe',
+    studentName: r.submitted_by_name || '',
+    studentEmail: r.submitted_by || '',
+    reason: r.reason || '',
+    status: r.status || 'Pending',
+    reviewedBy: r.reviewed_by || '',
+    reviewDate: r.reviewed_date || '',
+    rejectionReason: r.rejection_reason || '',
+    submittedDate: r.submitted_date || '',
+    summary,
+    sourceLink: '/network-map',
+    sourceLinkLabel: 'Network Map',
+    details: {
+      changeType: r.change_type || '',
+      changeTypeLabel,
+      ipAddress: r.ip_address || '',
+      subnet: r.subnet || '',
+      deviceId: r.device_id || '',
+      currentValues: r.current_values || {},
+      proposedValues: r.proposed_values || {},
+      reviewNotes: r.review_notes || '',
+    },
+  }
+}
+
 function normalizeWorkOrderRequest(r) {
   const summary = `WO for ${r.asset_name || 'Unknown Asset'} — ${r.priority || 'Normal'} priority`
 
@@ -348,10 +390,11 @@ export function useRequestHistory({ dateFrom = null, dateTo = null } = {}) {
     try {
       // ── Build date bounds for Supabase queries ──
       // Each table uses a different timestamp column for "submitted date":
-      //   lab_signup_requests  → submitted_date
-      //   time_entry_requests  → created_at
-      //   temp_access_requests → submitted_date
-      //   work_order_requests  → request_date
+      //   lab_signup_requests      → submitted_date
+      //   time_entry_requests      → created_at
+      //   temp_access_requests     → submitted_date
+      //   work_order_requests      → request_date
+      //   network_change_requests  → submitted_date
       const fromIso = dateFrom ? `${dateFrom}T00:00:00` : null
       const toIso = dateTo ? `${dateTo}T23:59:59` : null
 
@@ -359,28 +402,32 @@ export function useRequestHistory({ dateFrom = null, dateTo = null } = {}) {
       let timeQ = supabase.from('time_entry_requests').select('*').order('created_at', { ascending: false })
       let tempQ = supabase.from('temp_access_requests').select('*').order('submitted_date', { ascending: false })
       let woQ = supabase.from('work_order_requests').select('*').order('request_date', { ascending: false })
+      let netQ = supabase.from('network_change_requests').select('*').order('submitted_date', { ascending: false })
 
       if (fromIso) {
         labQ = labQ.gte('submitted_date', fromIso)
         timeQ = timeQ.gte('created_at', fromIso)
         tempQ = tempQ.gte('submitted_date', fromIso)
         woQ = woQ.gte('request_date', fromIso)
+        netQ = netQ.gte('submitted_date', fromIso)
       }
       if (toIso) {
         labQ = labQ.lte('submitted_date', toIso)
         timeQ = timeQ.lte('created_at', toIso)
         tempQ = tempQ.lte('submitted_date', toIso)
         woQ = woQ.lte('request_date', toIso)
+        netQ = netQ.lte('submitted_date', toIso)
       }
 
-      const [labRes, timeRes, tempRes, woRes] = await Promise.all([labQ, timeQ, tempQ, woQ])
+      const [labRes, timeRes, tempRes, woRes, netRes] = await Promise.all([labQ, timeQ, tempQ, woQ, netQ])
 
       const labData = (labRes.data || []).map(normalizeLabRequest)
       const timeData = (timeRes.data || []).map(normalizeTimeRequest)
       const tempData = (tempRes.data || []).map(normalizeTempAccessRequest)
       const woData = (woRes.data || []).map(normalizeWorkOrderRequest)
+      const netData = (netRes.data || []).map(normalizeNetworkChangeRequest)
 
-      let merged = [...labData, ...timeData, ...tempData, ...woData]
+      let merged = [...labData, ...timeData, ...tempData, ...woData, ...netData]
 
       // Students: filter to own requests only
       if (!isInstructor) {
@@ -443,6 +490,7 @@ export function useRequestHistory({ dateFrom = null, dateTo = null } = {}) {
 const APPROVED_STATUSES = new Set(['Approved', 'Active', 'Processed', 'Expired'])
 const REJECTED_STATUSES = new Set(['Rejected', 'Revoked'])
 const PENDING_STATUSES = new Set(['Pending'])
+const OTHER_STATUSES = new Set(['Cancelled'])
 
 export function useRequestStats(requests) {
   return useMemo(() => {
@@ -452,7 +500,7 @@ export function useRequestStats(requests) {
       byStatus: { Approved: 0, Rejected: 0, Pending: 0, Other: 0 },
     }
 
-    const types = ['Lab Change', 'Time Entry', 'Temp Access', 'Work Order']
+    const types = ['Lab Change', 'Time Entry', 'Temp Access', 'Work Order', 'Network Change']
     types.forEach(t => {
       stats.byType[t] = { total: 0, approved: 0, rejected: 0, pending: 0 }
     })
