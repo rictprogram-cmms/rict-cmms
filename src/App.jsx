@@ -30,6 +30,8 @@ import ProgramCostPage from '@/pages/ProgramCostPage'
 import CourseOutlineExportPage from '@/pages/CourseOutlineExportPage'
 import AttendanceReportsPage from '@/pages/AttendanceReportsPage'
 import RequestHistoryPage from '@/pages/RequestHistoryPage'
+import NetworkMapPage from '@/pages/NetworkMapPage'
+import NetworkPrintPage from '@/pages/NetworkPrintPage'
 import EmulationBar from '@/components/EmulationBar'
 import { PageLoading } from '@/components/ui'
 
@@ -339,6 +341,8 @@ function AppRoutes() {
             <Route path="/assets" element={<AssetsPage />} />
             <Route path="/sops" element={<SOPsPage />} />
             <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
+            <Route path="/network-map" element={<NetworkMapPage />} />
+            <Route path="/network-map/print" element={<NetworkPrintPage />} />
 
             {/* Scheduling */}
             <Route path="/pm-schedules" element={<PMPage />} />

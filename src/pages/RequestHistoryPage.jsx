@@ -32,7 +32,7 @@ import {
   Search, Filter, ChevronDown, ChevronUp, ChevronRight,
   Download, RefreshCcw, Loader2, Mail, MailX,
   FlaskConical, Clock, KeyRound, ClipboardList,
-  ExternalLink, X, Inbox, Calendar,
+  ExternalLink, X, Inbox, Calendar, Network,
 } from 'lucide-react'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -75,6 +75,7 @@ const TYPE_ICONS = {
   'Time Entry': Clock,
   'Temp Access': KeyRound,
   'Work Order': ClipboardList,
+  'Network Change': Network,
 }
 
 const STATUS_STYLES = {
@@ -84,6 +85,7 @@ const STATUS_STYLES = {
   Active:   { bg: '#d3f9d8', color: '#2b8a3e', label: 'Active' },
   Revoked:  { bg: '#e9ecef', color: '#495057', label: 'Revoked' },
   Expired:  { bg: '#e9ecef', color: '#868e96', label: 'Expired' },
+  Cancelled:{ bg: '#e9ecef', color: '#495057', label: 'Cancelled' },
 }
 
 function StatusBadge({ status }) {
@@ -360,6 +362,53 @@ function DetailPanel({ request, emailSent }) {
                   <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Created WO</span>
                   <p className="text-surface-700 mt-0.5 font-medium" style={{ color: '#228be6' }}>{details.linkedWoId}</p>
                 </div>
+              )}
+            </div>
+          )}
+
+          {type === 'Network Change' && details && (
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <div>
+                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Change Type</span>
+                  <p className="text-surface-700 mt-0.5">{details.changeTypeLabel || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">IP Address</span>
+                  <p className="text-surface-700 mt-0.5 font-mono">{details.ipAddress || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Subnet</span>
+                  <p className="text-surface-700 mt-0.5 font-mono">{details.subnet || '—'}</p>
+                </div>
+              </div>
+              {details.proposedValues && Object.keys(details.proposedValues).length > 0 && details.changeType !== 'delete' && (
+                <div className="mt-2">
+                  <span className="text-xs font-semibold text-surface-400 uppercase tracking-wide">Proposed Changes</span>
+                  <div className="mt-1 border border-surface-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-xs" aria-label="Proposed network changes">
+                      <thead className="bg-surface-50">
+                        <tr>
+                          <th scope="col" className="text-left px-2 py-1 font-semibold text-surface-600">Field</th>
+                          <th scope="col" className="text-left px-2 py-1 font-semibold text-surface-600">Current</th>
+                          <th scope="col" className="text-left px-2 py-1 font-semibold text-surface-600">Proposed</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.keys(details.proposedValues).map(k => (
+                          <tr key={k} className="border-t border-surface-100">
+                            <td className="px-2 py-1 font-medium text-surface-600">{k}</td>
+                            <td className="px-2 py-1 text-surface-500 font-mono">{String(details.currentValues?.[k] ?? '') || <em className="text-surface-300">(empty)</em>}</td>
+                            <td className="px-2 py-1 text-brand-700 font-mono font-semibold">{String(details.proposedValues[k] ?? '') || <em className="text-surface-300">(empty)</em>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              {details.changeType === 'delete' && (
+                <p className="text-xs text-red-700 italic">Request to remove this device entry.</p>
               )}
             </div>
           )}
@@ -720,6 +769,11 @@ export default function RequestHistoryPage() {
           color="#2f9e44" bg="#ebfbee"
           {...stats.byType['Work Order']}
         />
+        <SummaryCard
+          label="Network Changes" icon={Network}
+          color="#1e40af" bg="#dbeafe"
+          {...stats.byType['Network Change']}
+        />
       </div>
 
       {/* ── Filter Bar ── */}
@@ -769,6 +823,7 @@ export default function RequestHistoryPage() {
               <option value="Time Entry">Time Entries</option>
               <option value="Temp Access">Temp Access</option>
               <option value="Work Order">Work Orders</option>
+              <option value="Network Change">Network Changes</option>
             </select>
           </div>
 
