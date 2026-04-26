@@ -18,6 +18,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { generateSafeAssetId } from '@/lib/generateSafeAssetId'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 
@@ -89,8 +90,8 @@ export default function AssetsPage() {
   // Linked SOPs for the view modal
   const [viewModalSOPs, setViewModalSOPs] = useState([])
   const [viewModalSOPsLoading, setViewModalSOPsLoading] = useState(false)
-  // Linked network device for the view modal
-  const [viewModalNetDevice, setViewModalNetDevice] = useState(null)
+  // Linked network devices for the view modal (one asset can have many)
+  const [viewModalNetDevices, setViewModalNetDevices] = useState([])
   const [viewModalNetLoading, setViewModalNetLoading] = useState(false)
   // Realtime channel ref
   const sopChannelRef = useRef(null)
@@ -304,8 +305,7 @@ export default function AssetsPage() {
           return
         }
       } else {
-        const { data: id } = await supabase.rpc('get_next_id', { p_type: 'asset' })
-        row.asset_id = id || `AST-${Date.now()}`
+        row.asset_id = await generateSafeAssetId()
         row.created_at = new Date().toISOString()
         row.created_by = `${profile.first_name} ${profile.last_name?.charAt(0)}.`
         const { data: rows, error } = await supabase.from('assets').insert(row).select()
@@ -354,9 +354,9 @@ export default function AssetsPage() {
     setDuplicateSaving(true)
     try {
       const fullName = `${profile.first_name} ${profile.last_name?.charAt(0)}.`
-      const { data: id } = await supabase.rpc('get_next_id', { p_type: 'asset' })
+      const newAssetId = await generateSafeAssetId()
       const row = {
-        asset_id: id || `AST-${Date.now()}`,
+        asset_id: newAssetId,
         name: duplicateSource.name,
         description: duplicateSource.description || '',
         category: duplicateSource.category || '',
@@ -390,17 +390,17 @@ export default function AssetsPage() {
     fetchNetworkDeviceForAsset(asset.asset_id)
   }
 
-  /* ── Linked Network Device (from network_devices) ─────────────── */
+  /* ── Linked Network Devices (from network_devices) ─────────────── */
   async function fetchNetworkDeviceForAsset(assetId) {
-    setViewModalNetDevice(null)
+    setViewModalNetDevices([])
     setViewModalNetLoading(true)
     try {
       const { data, error: err } = await supabase
         .from('network_devices')
-        .select('device_id, ip_address, subnet, mac_address, profinet_name, location, notes')
+        .select('device_id, ip_address, subnet, mac_address, profinet_name, location, notes, device_name')
         .eq('asset_id', assetId)
-        .maybeSingle()
-      if (!err) setViewModalNetDevice(data || null)
+        .order('ip_address', { ascending: true })
+      if (!err) setViewModalNetDevices(data || [])
     } catch (e) {
       // Non-critical — network_devices table may not exist in older envs
       console.log('Network device fetch skipped:', e.message)
@@ -945,73 +945,126 @@ export default function AssetsPage() {
                 )}
               </div>
 
-              {/* ── Linked Network Device ─────────────────────── */}
+              {/* ── Linked Network Devices ─────────────────────── */}
               <div className="linked-sops-section">
                 <div className="linked-sops-header">
-                  <span className="material-icons" style={{ color: '#7c3aed', fontSize: '1.1rem' }}>lan</span>
-                  <strong>Network Device {viewModalNetLoading ? '' : (viewModalNetDevice ? '(1)' : '(0)')}</strong>
+                  <span className="material-icons" style={{ color: '#7c3aed', fontSize: '1.1rem' }} aria-hidden="true">lan</span>
+                  <strong>
+                    Network Devices {viewModalNetLoading ? '' : `(${viewModalNetDevices.length})`}
+                  </strong>
                   <button
                     className="btn btn-secondary btn-sm"
                     style={{ marginLeft: 'auto' }}
                     onClick={() => {
-                      if (viewModalNetDevice) {
-                        navigate(`/network-map?focus=${encodeURIComponent(viewModalNetDevice.ip_address)}`)
+                      // If exactly one device, deep-link to that IP. Otherwise open the map list.
+                      if (viewModalNetDevices.length === 1) {
+                        navigate(`/network-map?focus=${encodeURIComponent(viewModalNetDevices[0].ip_address)}`)
                       } else {
                         navigate('/network-map')
                       }
                     }}
-                    title={viewModalNetDevice ? 'Open on Network Map' : 'Go to Network Map'}
+                    title={
+                      viewModalNetDevices.length === 1
+                        ? 'Open this device on Network Map'
+                        : 'Go to Network Map'
+                    }
+                    aria-label={
+                      viewModalNetDevices.length === 1
+                        ? `Open ${viewModalNetDevices[0].ip_address} on Network Map`
+                        : 'Open Network Map'
+                    }
                   >
-                    <span className="material-icons" style={{ fontSize: '0.9rem' }}>open_in_new</span>
-                    {viewModalNetDevice ? 'View on Network Map' : 'Open Network Map'}
+                    <span className="material-icons" style={{ fontSize: '0.9rem' }} aria-hidden="true">open_in_new</span>
+                    {viewModalNetDevices.length > 0 ? 'View on Network Map' : 'Open Network Map'}
                   </button>
                 </div>
                 {viewModalNetLoading ? (
                   <div style={{ color: '#868e96', fontSize: '0.85rem', padding: '8px 0' }}>Loading…</div>
-                ) : !viewModalNetDevice ? (
+                ) : viewModalNetDevices.length === 0 ? (
                   <div style={{ color: '#adb5bd', fontSize: '0.85rem', padding: '8px 0' }}>
-                    Not assigned a network device. Link this asset from the Network Map.
+                    No network devices linked to this asset. Link them from the Network Map.
                   </div>
                 ) : (
-                  <div
+                  <ul
                     style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-                      gap: '10px 20px',
-                      padding: '10px 12px',
-                      background: '#faf5ff',
-                      border: '1px solid #e9d5ff',
-                      borderRadius: 8,
-                      fontSize: '0.85rem',
+                      listStyle: 'none',
+                      padding: 0,
+                      margin: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
                     }}
+                    aria-label={`${viewModalNetDevices.length} network device${viewModalNetDevices.length !== 1 ? 's' : ''} linked to this asset`}
                   >
-                    <div>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>IP Address</div>
-                      <div style={{ fontFamily: 'monospace', fontWeight: 600, color: '#0f172a', marginTop: 2 }}>{viewModalNetDevice.ip_address}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Subnet</div>
-                      <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{viewModalNetDevice.subnet}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>MAC Address</div>
-                      <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>
-                        {viewModalNetDevice.mac_address || <span style={{ color: '#adb5bd' }}>—</span>}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Profinet Name</div>
-                      <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>
-                        {viewModalNetDevice.profinet_name || <span style={{ color: '#adb5bd' }}>—</span>}
-                      </div>
-                    </div>
-                    {viewModalNetDevice.location && (
-                      <div>
-                        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Location</div>
-                        <div style={{ color: '#0f172a', marginTop: 2 }}>{viewModalNetDevice.location}</div>
-                      </div>
-                    )}
-                  </div>
+                    {viewModalNetDevices.map((nd) => {
+                      const subLabel = (nd.device_name || '').trim()
+                      const displayName = subLabel && subLabel !== viewAsset?.name
+                        ? `${viewAsset?.name || ''} — ${subLabel}`
+                        : (viewAsset?.name || subLabel || '')
+                      return (
+                        <li
+                          key={nd.device_id || nd.ip_address}
+                          style={{
+                            padding: '10px 12px',
+                            background: '#faf5ff',
+                            border: '1px solid #e9d5ff',
+                            borderRadius: 8,
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                            <div style={{ fontWeight: 600, color: '#0f172a' }}>
+                              {displayName || <span style={{ color: '#adb5bd', fontStyle: 'italic' }}>(no name)</span>}
+                            </div>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => navigate(`/network-map?focus=${encodeURIComponent(nd.ip_address)}`)}
+                              title={`Open ${nd.ip_address} on Network Map`}
+                              aria-label={`Open ${nd.ip_address} on Network Map`}
+                              style={{ fontSize: '0.75rem', padding: '4px 8px' }}
+                            >
+                              <span className="material-icons" style={{ fontSize: '0.8rem' }} aria-hidden="true">open_in_new</span>
+                              Open
+                            </button>
+                          </div>
+                          <div
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                              gap: '10px 20px',
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>IP Address</div>
+                              <div style={{ fontFamily: 'monospace', fontWeight: 600, color: '#0f172a', marginTop: 2 }}>{nd.ip_address}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Subnet</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{nd.subnet}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>MAC Address</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>
+                                {nd.mac_address || <span style={{ color: '#adb5bd' }}>—</span>}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Profinet Name</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>
+                                {nd.profinet_name || <span style={{ color: '#adb5bd' }}>—</span>}
+                              </div>
+                            </div>
+                            {nd.location && (
+                              <div>
+                                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Location</div>
+                                <div style={{ color: '#0f172a', marginTop: 2 }}>{nd.location}</div>
+                              </div>
+                            )}
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ul>
                 )}
               </div>
             </div>

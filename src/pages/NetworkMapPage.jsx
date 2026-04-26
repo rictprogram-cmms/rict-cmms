@@ -83,7 +83,7 @@ export default function NetworkMapPage() {
   const { sendRejectionNotification } = useRejectionNotification()
   const {
     devices, changeRequests, loading, error,
-    activeAssets, assetById, linkedAssetIds, effectiveDeviceName,
+    activeAssets, assetById, linkedAssetIds, assetDeviceCounts, effectiveDeviceName,
     devicesBySubnet, deviceByIp, pendingByDevice, pendingCount,
     findDuplicateMac,
     addDevice, updateDevice, deleteDevice,
@@ -674,6 +674,7 @@ export default function NetworkMapPage() {
           findDuplicateMac={findDuplicateMac}
           activeAssets={activeAssets}
           linkedAssetIds={linkedAssetIds}
+          assetDeviceCounts={assetDeviceCounts}
           onCancel={() => setEditTarget(null)}
           onSubmit={handleEditSave}
         />
@@ -687,6 +688,7 @@ export default function NetworkMapPage() {
           findDuplicateMac={findDuplicateMac}
           activeAssets={activeAssets}
           linkedAssetIds={linkedAssetIds}
+          assetDeviceCounts={assetDeviceCounts}
           onCancel={() => setAddTarget(null)}
           onSubmit={handleAddSave}
         />
@@ -696,6 +698,7 @@ export default function NetworkMapPage() {
           target={suggestTarget}
           activeAssets={activeAssets}
           linkedAssetIds={linkedAssetIds}
+          assetDeviceCounts={assetDeviceCounts}
           assetById={assetById}
           effectiveDeviceName={effectiveDeviceName}
           onCancel={() => setSuggestTarget(null)}
@@ -1211,11 +1214,12 @@ function AssetPicker({
   value,              // currently selected asset_id (string or '')
   onChange,           // (asset_id | '') => void
   activeAssets,       // [{asset_id, name, status}]
-  linkedAssetIds,     // Set<asset_id> of assets linked to OTHER devices
+  linkedAssetIds,     // (legacy) Set<asset_id> — kept for back-compat, no longer filters
+  assetDeviceCounts,  // Map<asset_id, number> — drives "(N linked)" hint
   currentDeviceId,    // device being edited (so its linked asset is still selectable)
-  currentAssetId,     // same as `value` but pre-edit (for exclude logic)
+  currentAssetId,     // same as `value` but pre-edit (for indicator logic)
   label = 'Linked Asset',
-  help = 'Optional. When linked, the device name is synced from the asset.',
+  help = 'Optional. Multiple devices can share an asset (e.g. a bench with several PLCs).',
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -1224,15 +1228,10 @@ function AssetPicker({
   const listRef = useRef(null)
   const containerRef = useRef(null)
 
-  // Assets eligible for selection: active, minus those linked to other devices
-  const eligible = useMemo(() => {
-    return activeAssets.filter(a => {
-      if (!linkedAssetIds) return true
-      // Always include the asset currently linked to THIS device (editing it should still show)
-      if (currentAssetId && a.asset_id === currentAssetId) return true
-      return !linkedAssetIds.has(a.asset_id)
-    })
-  }, [activeAssets, linkedAssetIds, currentAssetId])
+  // Multiple devices may be linked to the same asset, so we no longer EXCLUDE
+  // anything — we just sort and let the user see how many devices each asset
+  // already has. `linkedAssetIds` kept as a prop for back-compat but unused.
+  const eligible = useMemo(() => activeAssets, [activeAssets])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -1374,6 +1373,11 @@ function AssetPicker({
               filtered.map((a, idx) => {
                 const isActive = idx + 1 === activeIdx
                 const isSelected = a.asset_id === value
+                const linkCount = assetDeviceCounts?.get(a.asset_id) || 0
+                // Don't count THIS device against its own asset's linked count
+                const otherDeviceCount = (currentAssetId && a.asset_id === currentAssetId)
+                  ? Math.max(0, linkCount - 1)
+                  : linkCount
                 return (
                   <li
                     key={a.asset_id}
@@ -1387,6 +1391,15 @@ function AssetPicker({
                       ${isSelected ? 'font-semibold' : ''}`}
                   >
                     <span className="flex-1 truncate">{a.name}</span>
+                    {otherDeviceCount > 0 && (
+                      <span
+                        className="text-[10px] text-surface-500 italic flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-100"
+                        aria-label={`${otherDeviceCount} other device${otherDeviceCount !== 1 ? 's' : ''} already linked to this asset`}
+                        title={`${otherDeviceCount} other device${otherDeviceCount !== 1 ? 's' : ''} already linked`}
+                      >
+                        {otherDeviceCount} linked
+                      </span>
+                    )}
                     <span className="text-xs text-surface-400 font-mono flex-shrink-0">{a.asset_id}</span>
                     {isSelected && <CheckCircle2 size={12} className="text-brand-600 flex-shrink-0" aria-hidden="true" />}
                   </li>
@@ -1401,7 +1414,7 @@ function AssetPicker({
   )
 }
 
-function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, takenOctets, findDuplicateMac, activeAssets, linkedAssetIds, onCancel, onSubmit }) {
+function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, takenOctets, findDuplicateMac, activeAssets, linkedAssetIds, assetDeviceCounts, onCancel, onSubmit }) {
   const subnet = NETWORK_CONFIG.subnets.find(s => s.id === subnetId)
   const [octet, setOctet] = useState(() => {
     if (fixedIp) return parseInt(fixedIp.split('.')[3], 10)
@@ -1497,33 +1510,54 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
         <AssetPicker
           value={form.asset_id}
           onChange={(assetId) => {
-            // When linking, pre-fill device_name from the selected asset
-            if (assetId) {
-              const picked = activeAssets?.find(a => a.asset_id === assetId)
-              setForm(f => ({ ...f, asset_id: assetId, device_name: picked?.name || f.device_name }))
-            } else {
-              setForm(f => ({ ...f, asset_id: '' }))
-            }
+            // Linking/unlinking no longer overwrites device_name. The user's
+            // sub-label (e.g. "1500 PLC") composes with the asset at display
+            // time as "Bench #1 — 1500 PLC". This lets one asset own many devices.
+            setForm(f => ({ ...f, asset_id: assetId || '' }))
           }}
           activeAssets={activeAssets || []}
           linkedAssetIds={linkedAssetIds}
+          assetDeviceCounts={assetDeviceCounts}
           currentDeviceId={initial?.device_id}
           currentAssetId={initial?.asset_id}
         />
 
-        {form.asset_id ? (
-          <div>
-            <label className="block text-xs font-semibold text-surface-600 mb-1">Device Name</label>
-            <div className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-surface-50 text-surface-600 flex items-center gap-2">
-              <Link2 size={14} className="text-purple-500 flex-shrink-0" aria-hidden="true" />
-              <span className="flex-1">{form.device_name || '(asset has no name)'}</span>
-              <span className="text-[10px] uppercase tracking-wide font-semibold text-purple-600">Synced</span>
+        {(() => {
+          const linkedAsset = form.asset_id
+            ? (activeAssets?.find(a => a.asset_id === form.asset_id) || null)
+            : null
+          const dn = (form.device_name || '').trim()
+          const preview = linkedAsset
+            ? (!dn || dn === linkedAsset.name ? linkedAsset.name : `${linkedAsset.name} — ${dn}`)
+            : (dn || '')
+          return (
+            <div>
+              <FormField
+                label={linkedAsset ? 'Device Sub-Name (within this asset)' : 'Device Name'}
+                value={form.device_name}
+                onChange={handleChange('device_name')}
+                placeholder={linkedAsset ? 'e.g. 1500 PLC, HMI Comfort, Cognex Camera' : 'e.g. Bench #3 — 1500 PLC'}
+                help={linkedAsset
+                  ? 'Short label for this specific device. Combined with the asset name on display.'
+                  : 'Free-text name shown when no asset is linked.'}
+              />
+              {linkedAsset && (
+                <div
+                  className="mt-2 px-3 py-2 rounded-lg bg-purple-50 border border-purple-200 flex items-center gap-2 text-sm"
+                  aria-live="polite"
+                >
+                  <Link2 size={14} className="text-purple-500 flex-shrink-0" aria-hidden="true" />
+                  <span className="text-[11px] uppercase tracking-wider font-semibold text-purple-700 flex-shrink-0">
+                    Will display as
+                  </span>
+                  <span className="font-medium text-purple-900 truncate" title={preview}>
+                    {preview}
+                  </span>
+                </div>
+              )}
             </div>
-            <p className="text-[11px] text-surface-400 mt-1">Name is synced from the linked asset. Unlink above to use a custom name.</p>
-          </div>
-        ) : (
-          <FormField label="Device Name" value={form.device_name} onChange={handleChange('device_name')} placeholder="e.g. Bench #3 — 1500 PLC" />
-        )}
+          )
+        })()}
         <FormField
           label="MAC Address"
           value={form.mac_address}
@@ -1616,7 +1650,7 @@ function FormField({ label, value, onChange, placeholder, multiline, monospace, 
 }
 
 // ── Suggest Change modal (students / work study) ───────────────────────────
-function SuggestChangeModal({ target, activeAssets, linkedAssetIds, assetById, effectiveDeviceName, onCancel, onSubmit }) {
+function SuggestChangeModal({ target, activeAssets, linkedAssetIds, assetDeviceCounts, assetById, effectiveDeviceName, onCancel, onSubmit }) {
   const { device, ip, subnet, mode } = target
   const changeType = device ? 'edit' : 'add'
   const [form, setForm] = useState({
@@ -1695,31 +1729,49 @@ function SuggestChangeModal({ target, activeAssets, linkedAssetIds, assetById, e
               <AssetPicker
                 value={form.asset_id}
                 onChange={(assetId) => {
-                  if (assetId) {
-                    const picked = activeAssets?.find(a => a.asset_id === assetId)
-                    setForm(f => ({ ...f, asset_id: assetId, device_name: picked?.name || f.device_name }))
-                  } else {
-                    setForm(f => ({ ...f, asset_id: '' }))
-                  }
+                  // No auto-overwrite — device_name is independent of asset_id.
+                  setForm(f => ({ ...f, asset_id: assetId || '' }))
                 }}
                 activeAssets={activeAssets || []}
                 linkedAssetIds={linkedAssetIds}
+                assetDeviceCounts={assetDeviceCounts}
                 currentDeviceId={device?.device_id}
                 currentAssetId={device?.asset_id}
-                help="Link to an active asset so the device name stays in sync."
+                help="Optional. Multiple devices can share an asset (e.g. a bench with several PLCs)."
               />
-              {form.asset_id ? (
-                <div>
-                  <label className="block text-xs font-semibold text-surface-600 mb-1">Device Name</label>
-                  <div className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg bg-surface-50 text-surface-600 flex items-center gap-2">
-                    <Link2 size={14} className="text-purple-500 flex-shrink-0" aria-hidden="true" />
-                    <span className="flex-1">{form.device_name || '(asset has no name)'}</span>
-                    <span className="text-[10px] uppercase tracking-wide font-semibold text-purple-600">Synced</span>
+              {(() => {
+                const linkedAsset = form.asset_id
+                  ? (activeAssets?.find(a => a.asset_id === form.asset_id) || null)
+                  : null
+                const dn = (form.device_name || '').trim()
+                const preview = linkedAsset
+                  ? (!dn || dn === linkedAsset.name ? linkedAsset.name : `${linkedAsset.name} — ${dn}`)
+                  : (dn || '')
+                return (
+                  <div>
+                    <FormField
+                      label={linkedAsset ? 'Device Sub-Name (within this asset)' : 'Device Name'}
+                      value={form.device_name}
+                      onChange={handleChange('device_name')}
+                      placeholder={linkedAsset ? 'e.g. 1500 PLC, HMI Comfort' : 'e.g. Bench #3 PLC'}
+                    />
+                    {linkedAsset && (
+                      <div
+                        className="mt-2 px-3 py-2 rounded-lg bg-purple-50 border border-purple-200 flex items-center gap-2 text-sm"
+                        aria-live="polite"
+                      >
+                        <Link2 size={14} className="text-purple-500 flex-shrink-0" aria-hidden="true" />
+                        <span className="text-[11px] uppercase tracking-wider font-semibold text-purple-700 flex-shrink-0">
+                          Will display as
+                        </span>
+                        <span className="font-medium text-purple-900 truncate" title={preview}>
+                          {preview}
+                        </span>
+                      </div>
+                    )}
                   </div>
-                </div>
-              ) : (
-                <FormField label="Device Name" value={form.device_name} onChange={handleChange('device_name')} placeholder="e.g. Bench #3 PLC" />
-              )}
+                )
+              })()}
               <FormField label="MAC Address" value={form.mac_address} onChange={handleChange('mac_address')} placeholder="XX-XX-XX-XX-XX-XX" monospace invalid={macInvalid} />
               <FormField label="Profinet Name" value={form.profinet_name} onChange={handleChange('profinet_name')} monospace />
               <FormField label="Location" value={form.location} onChange={handleChange('location')} />
