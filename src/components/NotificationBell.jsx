@@ -25,7 +25,11 @@ export default function NotificationBell() {
   const [actionLoading, setActionLoading] = useState(null);
   const [toast, setToast] = useState(null);
   const panelRef = useRef(null);
-  const prevCountRef = useRef(-1);
+  // Track the SET OF IDs from the previous fetch — not just the count.
+  // Using count alone misses the case where one item is approved and a different
+  // item arrives in the same poll interval (count stays the same → no sound played).
+  // null = first run (don't play sound on initial load).
+  const prevIdsRef = useRef(null);
   const navigate = useNavigate();
 
   // ── Push Notifications ──
@@ -467,12 +471,20 @@ export default function NotificationBell() {
       });
     } catch {}
 
-    // Play sound if new items appeared
-    if (allItems.length > 0 && prevCountRef.current >= 0 && allItems.length > prevCountRef.current) {
-      setHasNew(true);
-      playNotificationSound();
+    // Play sound if a NEW notification ID appeared (not just if count went up).
+    // Comparing IDs catches the case where one item is approved and a different
+    // one arrives in the same poll cycle — count stays the same but a fresh ID
+    // is present, so it should still ring.
+    // First run (prevIdsRef.current === null): never ring on initial load.
+    const newIds = new Set(allItems.map(i => i.id));
+    if (prevIdsRef.current !== null) {
+      const hasNewItem = [...newIds].some(id => !prevIdsRef.current.has(id));
+      if (hasNewItem) {
+        setHasNew(true);
+        playNotificationSound();
+      }
     }
-    prevCountRef.current = allItems.length;
+    prevIdsRef.current = newIds;
     setItems(allItems);
   }, [isInstructor, profile?.email, playNotificationSound]);
 

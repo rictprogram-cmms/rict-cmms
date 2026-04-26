@@ -88,11 +88,12 @@ export function usePushNotifications() {
         // Check if there's already an active subscription
         const existingSub = await registration.pushManager.getSubscription();
         if (existingSub) {
-          // Verify it's still saved in Supabase (could have been deleted there)
+          // Verify it's still saved in Supabase (could have been deleted there).
+          // Always lowercase email for lookup — see saveSubscriptionToSupabase below for rationale.
           const { data } = await supabase
             .from('push_subscriptions')
             .select('id')
-            .eq('user_email', profile.email)
+            .eq('user_email', (profile.email || '').toLowerCase())
             .eq('endpoint', existingSub.endpoint)
             .maybeSingle();
 
@@ -191,11 +192,12 @@ export function usePushNotifications() {
       const reg = swRegistration || (await navigator.serviceWorker.ready);
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
-        // Remove from Supabase first
+        // Remove from Supabase first.
+        // Lowercase email so this matches the stored row (see saveSubscriptionToSupabase).
         await supabase
           .from('push_subscriptions')
           .delete()
-          .eq('user_email', profile.email)
+          .eq('user_email', (profile.email || '').toLowerCase())
           .eq('endpoint', sub.endpoint);
 
         // Unsubscribe from the browser push service
@@ -225,8 +227,16 @@ async function saveSubscriptionToSupabase(subscription, profile) {
   const subJSON = subscription.toJSON();
   const deviceInfo = getDeviceInfo();
 
+  // CRITICAL: lowercase the email before saving.
+  // The announcements table stores recipient_email lowercased (see AnnouncementsPage.jsx),
+  // and the send-push edge function compares push_subscriptions.user_email against
+  // record.recipient_email. If we save mixed-case here, mixed-case email users will
+  // silently miss every push notification because the lookup in the edge function
+  // would not find their subscription. Always normalize to lowercase.
+  const emailLower = (profile.email || '').toLowerCase();
+
   const record = {
-    user_email: profile.email,
+    user_email: emailLower,
     user_name: `${profile.first_name || ''} ${profile.last_name || ''}`.trim(),
     role: profile.role,
     endpoint: subJSON.endpoint,
@@ -247,7 +257,7 @@ async function saveSubscriptionToSupabase(subscription, profile) {
     throw error;
   }
 
-  console.log('[Push] Subscription saved to Supabase for:', profile.email);
+  console.log('[Push] Subscription saved to Supabase for:', emailLower);
 }
 
 /**

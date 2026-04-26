@@ -177,7 +177,8 @@ function AccountabilityMetrics({ navigate }) {
       if (!cancelled) setWoLoading(false);
     };
     fetchWOs();
-    const channel = supabase.channel('dash-wo-count')
+    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
+    const channel = supabase.channel(`dash-wo-count-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, fetchWOs)
       .subscribe();
     return () => { cancelled = true; supabase.removeChannel(channel); };
@@ -190,7 +191,9 @@ function AccountabilityMetrics({ navigate }) {
       try {
         const userClasses = (profile.classes || '').split(',').map(c => c.trim()).filter(Boolean);
         if (userClasses.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
-        const todayStr = new Date().toISOString().substring(0, 10);
+        // Use local date — toISOString() returns UTC and would shift to tomorrow after ~6 PM CST,
+        // causing classes that haven't started yet to be incorrectly included in the filter.
+        const todayStr = toLocalDateStr(new Date());
         const { data: classesData } = await supabase.from('classes').select('start_date, end_date').in('course_id', userClasses).eq('status', 'Active').or(`start_date.is.null,start_date.lte.${todayStr}`);
         if (!classesData || classesData.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
         let startDate = null, endDate = null;
@@ -201,7 +204,8 @@ function AccountabilityMetrics({ navigate }) {
           if (ed && (!endDate || ed > endDate)) endDate = ed;
         });
         if (!startDate) startDate = `${new Date().getFullYear()}-01-01`;
-        if (!endDate) endDate = new Date().toISOString().split('T')[0];
+        // Same TZ fix as todayStr above — local date, not UTC
+        if (!endDate) endDate = toLocalDateStr(new Date());
         let gracePeriod = 10;
         try {
           const { data: gs } = await supabase.from('settings').select('setting_value').eq('setting_key', 'grace_period_minutes').maybeSingle();
@@ -240,7 +244,8 @@ function AccountabilityMetrics({ navigate }) {
       if (!cancelled) setAttLoading(false);
     };
     fetchAttendance();
-    const channel = supabase.channel('dash-attendance')
+    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
+    const channel = supabase.channel(`dash-attendance-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchAttendance)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchAttendance)
       .subscribe();
@@ -439,7 +444,8 @@ function InstructorOverview({ navigate }) {
 
   useEffect(() => {
     fetchLateWOs();
-    const ch = supabase.channel('dash-inst-late')
+    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
+    const ch = supabase.channel(`dash-inst-late-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, fetchLateWOs)
       .subscribe();
     return () => supabase.removeChannel(ch);
@@ -475,7 +481,8 @@ function InstructorOverview({ navigate }) {
   useEffect(() => { fetchDayData(); }, [fetchDayData]);
 
   useEffect(() => {
-    const ch = supabase.channel('dash-inst-day')
+    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
+    const ch = supabase.channel(`dash-inst-day-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchDayData)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchDayData)
       .subscribe();
@@ -500,7 +507,8 @@ function InstructorOverview({ navigate }) {
   useEffect(() => { loadActiveTempAccess(); }, [loadActiveTempAccess]);
 
   useEffect(() => {
-    const ch = supabase.channel('dash-inst-temp')
+    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
+    const ch = supabase.channel(`dash-inst-temp-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'temp_access_requests' }, loadActiveTempAccess)
       .subscribe();
     return () => supabase.removeChannel(ch);
