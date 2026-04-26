@@ -59,6 +59,21 @@ export function AuthProvider({ children }) {
   // ProtectedRoute reads this to redirect to /change-password.
   const [mustChangePassword, setMustChangePassword] = useState(false)
 
+  // ── Account Issue (Phase 2) ────────────────────────────────────────
+  // Distinguishes WHY a user has a session but no usable profile, so
+  // LoginPage can show the right message:
+  //   null               — normal / active, or unknown (default)
+  //   'pending_approval' — auth user exists but no profile row yet
+  //                        (the standard "Awaiting Approval" case)
+  //   'deactivated'      — profile row exists but status !== 'Active'
+  //                        (instructor archived or suspended the account)
+  // Set inside loadProfile and reset on SIGNED_OUT. NOT applied via the
+  // realtime profile listener — a user whose status flips while they're
+  // already signed in keeps their cached profile until they reload, which
+  // matches existing behavior. A future change can route the realtime
+  // path through here too if needed.
+  const [accountIssue, setAccountIssue] = useState(null)
+
   // ── Emulation State ────────────────────────────────────────────────
   const [emulatedProfile, setEmulatedProfile] = useState(() => getCachedEmulation())
 
@@ -187,6 +202,16 @@ export function AuthProvider({ children }) {
   // from auto-creating a profile row that grants access before instructor
   // approval. Unapproved / trigger-created profiles are treated as if
   // they don't exist — the user sees "Awaiting Approval" instead.
+  //
+  // RESILIENCE (Phase 1 fix): "no data, no error" can mean the profile
+  // genuinely doesn't exist OR a transient hiccup (RLS race during
+  // token refresh, brief network blip, etc.). When it's transient and
+  // we still hold a cached profile for the same email, we KEEP the
+  // cache instead of wiping it — wiping was the secondary cause of
+  // random "logged out for no reason" reports. We still wipe on:
+  //   • confirmed status ≠ Active (the row exists but they're not approved)
+  //   • SIGNED_OUT events (handled in the auth listener)
+  //   • user-id mismatch (different user signs in; handled in initAuth)
 
   function isApprovedProfile(p) {
     return p && p.status === 'Active'
@@ -203,14 +228,16 @@ export function AuthProvider({ children }) {
 
         if (profileByEmail && !emailError) {
           if (!isApprovedProfile(profileByEmail)) {
-            console.warn('Profile found for', userEmail, 'but status is not Active (status:', profileByEmail.status, ') — treating as pending approval')
+            console.warn('Profile found for', userEmail, 'but status is not Active (status:', profileByEmail.status, ') — treating as deactivated')
             setRealProfile(null)
             setCachedProfile(null)
+            setAccountIssue('deactivated')
             return null
           }
           console.log('Profile loaded by email:', profileByEmail.email, profileByEmail.role)
           setRealProfile(profileByEmail)
           setCachedProfile(profileByEmail)
+          setAccountIssue(null)
           fetchLabMode()
           return profileByEmail
         }
@@ -224,21 +251,33 @@ export function AuthProvider({ children }) {
 
           if (profileById && !idError) {
             if (!isApprovedProfile(profileById)) {
-              console.warn('Profile found by ID for', userEmail, 'but status is not Active (status:', profileById.status, ') — treating as pending approval')
+              console.warn('Profile found by ID for', userEmail, 'but status is not Active (status:', profileById.status, ') — treating as deactivated')
               setRealProfile(null)
               setCachedProfile(null)
+              setAccountIssue('deactivated')
               return null
             }
             console.log('Profile loaded by ID:', profileById.email, profileById.role)
             setRealProfile(profileById)
             setCachedProfile(profileById)
+            setAccountIssue(null)
             fetchLabMode()
             return profileById
           }
 
-          console.warn('No profile found for:', userId, userEmail, '— clearing cache')
+          // Both lookups returned empty with no error.
+          // RESILIENT BEHAVIOR: if we still hold a cached profile for the same
+          // email, this is almost certainly transient (RLS race, network blip).
+          // Keep the cache instead of nuking it.
+          const cached = getCachedProfile()
+          if (cached && cached.email === userEmail) {
+            console.warn('Profile lookup returned empty for', userEmail, '— keeping cached profile (likely transient or RLS race)')
+            return null
+          }
+          console.warn('No profile found for:', userId, userEmail, '— treating as pending approval')
           setRealProfile(null)
           setCachedProfile(null)
+          setAccountIssue('pending_approval')
           return null
         }
       }
@@ -251,22 +290,31 @@ export function AuthProvider({ children }) {
 
       if (data && !error) {
         if (!isApprovedProfile(data)) {
-          console.warn('Profile found by ID but status is not Active (status:', data.status, ') — treating as pending approval')
+          console.warn('Profile found by ID but status is not Active (status:', data.status, ') — treating as deactivated')
           setRealProfile(null)
           setCachedProfile(null)
+          setAccountIssue('deactivated')
           return null
         }
         console.log('Profile loaded by ID:', data.email, data.role)
         setRealProfile(data)
         setCachedProfile(data)
+        setAccountIssue(null)
         fetchLabMode()
         return data
       }
 
       if (!error) {
-        console.warn('No profile found for:', userId, userEmail, '— clearing cache')
+        // Same resilience as above for the ID-only fallback path.
+        const cached = getCachedProfile()
+        if (cached && (cached.id === userId || (userEmail && cached.email === userEmail))) {
+          console.warn('Profile lookup by ID returned empty — keeping cached profile (likely transient or RLS race)')
+          return null
+        }
+        console.warn('No profile found for:', userId, userEmail, '— treating as pending approval')
         setRealProfile(null)
         setCachedProfile(null)
+        setAccountIssue('pending_approval')
       }
       return null
     } catch (err) {
@@ -327,11 +375,13 @@ export function AuthProvider({ children }) {
               .eq('email', user.email)
               .then(() => {}).catch(() => {})
 
-            // If no login timestamp exists (e.g. existing session before this
-            // feature was deployed), seed it now so timeout tracking starts.
-            if (!localStorage.getItem(SESSION_LOGIN_KEY)) {
-              localStorage.setItem(SESSION_LOGIN_KEY, String(Date.now()))
-            }
+            // ── Always stamp the session-timeout clock on a successful init
+            // (Phase 1 fix). Previously this only seeded the stamp if it was
+            // missing, which meant an open-and-close-browser cycle inherited
+            // a multi-day-old stamp and the very next 60-second interval tick
+            // signed the user out. Now: every fresh app open with a valid
+            // session resets the 6-hour clock — matching what users expect.
+            localStorage.setItem(SESSION_LOGIN_KEY, String(Date.now()))
 
             // Fetch the timeout setting so the interval check has a value
             fetchTimeoutSetting()
@@ -372,8 +422,16 @@ export function AuthProvider({ children }) {
     initAuth()
 
     // ── Auth State Change Listener ───────────────────────────────────
+    //
+    // PHASE 1 FIX: This listener is intentionally NOT async, and any
+    // Supabase calls (loadProfile, profile UPDATE, fetchTimeoutSetting)
+    // are deferred via `setTimeout(fn, 0)`. Awaiting Supabase calls
+    // inside the listener can deadlock the auth client during token
+    // refresh — Supabase explicitly warns about this in their docs.
+    // The deadlock was a likely cause of "logged out for no reason"
+    // reports; deferring breaks the lock cycle.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, s) => {
+      (event, s) => {
         console.log('Auth event:', event)
         if (!mounted) return
 
@@ -381,28 +439,37 @@ export function AuthProvider({ children }) {
           const newUserId = s.user.id
           const oldUserId = currentUserIdRef.current
 
-          // ── Check must_reset_password flag ──────────────────────────────
+          // ── Check must_reset_password flag ──────────────────────────
           // Stamped by the set-temp-password Edge Function.
           // Forces a /change-password redirect until the user saves a new password.
           const mustReset = s.user.user_metadata?.must_reset_password === true
           setMustChangePassword(mustReset)
 
-          if (newUserId !== oldUserId) {
-            // ── Stamp the real sign-in time for session-timeout tracking ──
-            localStorage.setItem(SESSION_LOGIN_KEY, String(Date.now()))
-            currentUserIdRef.current = newUserId
-            setSession(s)
-            if (initDoneRef.current) {
-              const loaded = await loadProfile(s.user.id, s.user.email)
-              if (loaded) {
-                const now = new Date().toISOString()
-                supabase.from('profiles')
-                  .update({ last_login: now, last_seen: now })
-                  .eq('email', s.user.email)
-                  .then(() => {}).catch(() => {})
-                fetchTimeoutSetting()
-              }
-            }
+          // ── Stamp the session-timeout clock on EVERY sign-in event ──
+          // (Phase 1 fix). Previously this was gated by
+          // "newUserId !== oldUserId", which failed to cover scenarios
+          // where SIGNED_IN re-fires for the same user (e.g. some
+          // Supabase versions emit SIGNED_IN on session restore).
+          localStorage.setItem(SESSION_LOGIN_KEY, String(Date.now()))
+
+          // Always update session + ref so the access token stays fresh
+          setSession(s)
+          currentUserIdRef.current = newUserId
+
+          if (newUserId !== oldUserId && initDoneRef.current) {
+            // ── Defer Supabase calls so the auth client doesn't deadlock
+            setTimeout(() => {
+              loadProfile(s.user.id, s.user.email).then((loaded) => {
+                if (loaded) {
+                  const now = new Date().toISOString()
+                  supabase.from('profiles')
+                    .update({ last_login: now, last_seen: now })
+                    .eq('email', s.user.email)
+                    .then(() => {}).catch(() => {})
+                  fetchTimeoutSetting()
+                }
+              })
+            }, 0)
           }
           setLoading(false)
         } else if (event === 'SIGNED_OUT') {
@@ -413,6 +480,7 @@ export function AuthProvider({ children }) {
           setEmulatedProfile(null)
           setCachedEmulation(null)
           setMustChangePassword(false)
+          setAccountIssue(null)
           setLoading(false)
           localStorage.removeItem(SESSION_LOGIN_KEY)
         } else if (event === 'USER_UPDATED' && s?.user) {
@@ -426,11 +494,16 @@ export function AuthProvider({ children }) {
             setSession(s)
           }
         } else if (event === 'TOKEN_REFRESHED' && s?.user) {
+          // ── Token refresh: keep the session fresh.
+          // INTENTIONALLY does NOT stamp SESSION_LOGIN_KEY — Supabase
+          // auto-refresh fires on a timer regardless of whether the
+          // user is doing anything, so stamping here would defeat
+          // the purpose of the timeout (you'd never log anyone out).
           const newUserId = s.user.id
           if (newUserId !== currentUserIdRef.current) {
             currentUserIdRef.current = newUserId
-            setSession(s)
           }
+          setSession(s)
         }
       }
     )
@@ -475,6 +548,11 @@ export function AuthProvider({ children }) {
         }
 
         // ── Check session timeout on tab return ───────────────────────
+        // Note: we INTENTIONALLY do not stamp SESSION_LOGIN_KEY here.
+        // The timeout means "force re-login after X hours since the
+        // last fresh sign-in / app open." Stamping here would let
+        // someone keep a tab alive indefinitely by switching to it once
+        // every few hours.
         const timeoutHours = sessionTimeoutHoursRef.current
         if (timeoutHours > 0) {
           const loginAt = parseInt(localStorage.getItem(SESSION_LOGIN_KEY) || '0', 10)
@@ -714,7 +792,13 @@ export function AuthProvider({ children }) {
   const isFullyAuthenticated = !!session && !!realProfile
   const userEmailConfirmed = session?.user?.email_confirmed_at != null
   const isPendingEmailVerification = !!session && !userEmailConfirmed && !realProfile && !loading
-  const isPendingApproval = !!session && userEmailConfirmed && !realProfile && !loading
+  // Distinguish pending-approval from deactivated. Both look the same in
+  // raw state (session present, no realProfile, not loading) — accountIssue
+  // is the differentiator. Default of `null` keeps backward compatibility
+  // for users who load before loadProfile has had a chance to set it
+  // (they look like pending_approval, which matches the old behavior).
+  const isPendingApproval = !!session && userEmailConfirmed && !realProfile && !loading && accountIssue !== 'deactivated'
+  const isDeactivated = !!session && !realProfile && !loading && accountIssue === 'deactivated'
 
   useEffect(() => {
     if (!isPendingApproval) return
@@ -777,6 +861,8 @@ export function AuthProvider({ children }) {
     isAuthenticated: isFullyAuthenticated,
     isPendingApproval,
     isPendingEmailVerification,
+    isDeactivated,
+    accountIssue,
     isInstructor: profile?.role === 'Instructor',
     isWorkStudy: profile?.role === 'Work Study',
     isStudent: profile?.role === 'Student',

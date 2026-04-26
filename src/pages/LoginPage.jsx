@@ -71,10 +71,14 @@ function StepIndicator({ currentStep, totalSteps, labels }) {
               aria-label={`Step ${step}: ${labels[i]}${isComplete ? ' (complete)' : isActive ? ' (current)' : ''}`}
               aria-current={isActive ? 'step' : undefined}
             >
-              {isComplete ? '✓' : step}
+              {/* aria-hidden because the parent's aria-label already announces
+                  the step number AND its completion state to screen readers.
+                  Without this, the visible '✓' or step number is read as
+                  redundant noise (e.g. "Step 2: Verify (complete) check mark"). */}
+              <span aria-hidden="true">{isComplete ? '✓' : step}</span>
             </div>
             {step < totalSteps && (
-              <div className={`w-6 h-0.5 ${isComplete ? 'bg-emerald-400' : 'bg-surface-200'}`} />
+              <div className={`w-6 h-0.5 ${isComplete ? 'bg-emerald-400' : 'bg-surface-200'}`} aria-hidden="true" />
             )}
           </div>
         )
@@ -88,7 +92,7 @@ function StepIndicator({ currentStep, totalSteps, labels }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function LoginPage() {
-  const { signIn, user, isPendingApproval, signOut, setIsRegistering } = useAuth()
+  const { signIn, user, isPendingApproval, isDeactivated, signOut, setIsRegistering } = useAuth()
 
   // ── Shared State ─────────────────────────────────────────────────────────
   const [mode, setMode] = useState('login') // login | register | forgot
@@ -112,6 +116,11 @@ export default function LoginPage() {
   const [regPassword, setRegPassword] = useState('')
   const [regPasswordConfirm, setRegPasswordConfirm] = useState('')
   const [showRegPassword, setShowRegPassword] = useState(false)
+  // True if the access_request submission failed during step 3, so step 4
+  // can show a softer success-with-warning message. (AuthContext has an
+  // auto-submit safety net that re-tries on the user's next sign-in
+  // attempt, so this is informational rather than a hard block.)
+  const [regSubmitWarning, setRegSubmitWarning] = useState(false)
 
   // ── Forgot Password State ────────────────────────────────────────────────
   // Steps: 1=email, 2=verify OTP + new password, 3=success
@@ -139,6 +148,8 @@ export default function LoginPage() {
   // If user has auth session but no profile, show pending approval screen
   // Exclude register and forgot modes so the user can finish their flow
   const showPendingScreen = isPendingApproval && mode !== 'register' && mode !== 'forgot'
+  // Same gating, but for the deactivated case (status !== 'Active' on file)
+  const showDeactivatedScreen = isDeactivated && mode !== 'register' && mode !== 'forgot'
 
   // ── Real-time: auto-detect when instructor approves the user ─────────────
   // When the user is logged in but awaiting approval, subscribe to the
@@ -326,43 +337,77 @@ export default function LoginPage() {
 
       if (updateError) throw updateError
 
-      // Submit the access request for instructor approval
+      // ── Submit the access request for instructor approval ─────────────────
+      // Strategy:
+      //   1. Try the canonical RPC `submit_access_request` (SECURITY DEFINER
+      //      on the server side, so it bypasses any RLS quirks).
+      //   2. If that errors, fall back to a direct INSERT with a `.select()`
+      //      to surface silent RLS failures (per project convention).
+      //   3. If BOTH fail, we don't fail the registration outright — the
+      //      AuthContext auto-submit safety net will retry on the user's
+      //      next sign-in attempt. We DO flip a flag so step 4 can warn.
+      let submitOk = false
       try {
         const { error: rpcError } = await supabase.rpc('submit_access_request', {
           p_email: cleanEmail,
           p_first_name: cleanFirst,
           p_last_name: cleanLast,
         })
-        if (rpcError) {
+        if (!rpcError) {
+          submitOk = true
+        } else {
           console.error('Access request RPC failed, trying direct insert:', rpcError)
-          // Fallback: insert directly into access_requests table
+
+          // Get a request_id from the canonical counter. Note: parameter is
+          // `p_type`, not `id_type` (recurring project gotcha).
           let requestId
           try {
-            const { data: idData } = await supabase.rpc('get_next_id', { p_type: 'access_request' })
-            requestId = idData
-          } catch {}
-          if (!requestId) requestId = `AR${Date.now()}`
+            const { data: idData, error: idErr } = await supabase.rpc('get_next_id', { p_type: 'access_request' })
+            if (!idErr && idData) requestId = idData
+          } catch (idCatch) {
+            console.warn('get_next_id RPC threw, will use timestamp fallback:', idCatch)
+          }
+          if (!requestId) {
+            requestId = `AR${Date.now()}`
+            console.warn('Using timestamp-based access request ID:', requestId)
+          }
 
-          await supabase.from('access_requests').insert([{
-            request_id: requestId,
-            email: cleanEmail,
-            first_name: cleanFirst,
-            last_name: cleanLast,
-            request_date: new Date().toISOString(),
-            status: 'Pending',
-            requested_role: 'Student',
-          }])
+          // .select() so silent RLS failures show up as empty `data`
+          // rather than a fake-success no-op (per project standard).
+          const { data: insertData, error: insertErr } = await supabase
+            .from('access_requests')
+            .insert([{
+              request_id: requestId,
+              email: cleanEmail,
+              first_name: cleanFirst,
+              last_name: cleanLast,
+              request_date: new Date().toISOString(),
+              status: 'Pending',
+              requested_role: 'Student',
+            }])
+            .select()
+
+          if (insertErr) {
+            console.error('Direct insert into access_requests also failed:', insertErr)
+          } else if (!insertData || insertData.length === 0) {
+            console.error('Direct insert into access_requests returned no rows — likely an RLS denial.')
+          } else {
+            submitOk = true
+          }
         }
       } catch (accessErr) {
-        console.error('Access request submission error:', accessErr)
-        // Don't fail registration — instructor can still manually approve
+        console.error('Access request submission threw:', accessErr)
+        // Fall through — submitOk stays false, registration still succeeds,
+        // safety net auto-submit will retry on next sign-in.
       }
 
       // Sign out — user must wait for instructor approval
       try { await supabase.auth.signOut() } catch {}
 
-      // Clear registering flag and show success
+      // Clear registering flag, set the warning flag for step 4 if needed,
+      // then advance to the success screen.
       setIsRegistering(false)
+      setRegSubmitWarning(!submitOk)
       setRegStep(4)
     } catch (err) {
       setError(err.message)
@@ -523,6 +568,7 @@ export default function LoginPage() {
     setRegStep(1)
     setForgotStep(1)
     setResendCooldown(0)
+    setRegSubmitWarning(false)
   }
 
   function resetRegistration() {
@@ -534,6 +580,7 @@ export default function LoginPage() {
     setRegPassword('')
     setRegPasswordConfirm('')
     setShowRegPassword(false)
+    setRegSubmitWarning(false)
     setError('')
     setIsRegistering(false)
     // Sign out in case OTP already created a session
@@ -591,7 +638,7 @@ export default function LoginPage() {
           {/* ════════ PENDING APPROVAL SCREEN ════════ */}
           {showPendingScreen ? (
             <div className="p-6 text-center py-10" role="status">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-100 mb-4">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-100 mb-4" aria-hidden="true">
                 <Clock size={32} className="text-amber-600" />
               </div>
               <h2 className="text-lg font-semibold text-surface-900 mb-2">Awaiting Approval</h2>
@@ -603,14 +650,44 @@ export default function LoginPage() {
               </p>
 
               {/* Live listening indicator */}
-              <div className="flex items-center justify-center gap-2 text-xs text-surface-400 mb-6">
-                <span className="relative flex h-2 w-2">
+              <div className="flex items-center justify-center gap-2 text-xs text-surface-400 mb-6" aria-live="polite">
+                <span className="relative flex h-2 w-2" aria-hidden="true">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                 </span>
                 Listening for approval…
               </div>
 
+              <button
+                onClick={async () => { await signOut() }}
+                className="btn-secondary text-sm px-4 py-2"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : showDeactivatedScreen ? (
+            /* ════════ DEACTIVATED ACCOUNT SCREEN ════════
+               Phase 2: Distinct from "Awaiting Approval." Triggered when a
+               profile row exists for this user but status !== 'Active'. The
+               instructor has either archived/suspended the account or it's
+               held in a non-active state for some other reason. Differs
+               from pending approval in two ways: (1) there's no realtime
+               listener for status flips here — if/when an instructor
+               re-activates them, they'll need to sign in again, and (2)
+               the call to action is "contact your instructor" rather than
+               "wait."  No specific reason is shown to the user; that
+               conversation belongs offline. */
+            <div className="p-6 text-center py-10" role="status">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-100 mb-4" aria-hidden="true">
+                <Lock size={32} className="text-red-600" />
+              </div>
+              <h2 className="text-lg font-semibold text-surface-900 mb-2">Account Inactive</h2>
+              <p className="text-sm text-surface-500 mb-2">
+                Your account is currently inactive and cannot access the system.
+              </p>
+              <p className="text-sm text-surface-500 mb-6">
+                Please contact your instructor for assistance.
+              </p>
               <button
                 onClick={async () => { await signOut() }}
                 className="btn-secondary text-sm px-4 py-2"
@@ -802,7 +879,10 @@ export default function LoginPage() {
                           maxLength={6}
                           value={regOtp}
                           onChange={(e) => setRegOtp(e.target.value.replace(/\D/g, ''))}
-                          className="input text-center text-xl tracking-[0.3em] font-mono"
+                          /* tracking-[0.15em] (was 0.3em) so the field stays
+                             readable at 200% browser zoom — wider tracking
+                             pushed digits past the right edge of the input. */
+                          className="input text-center text-xl tracking-[0.15em] font-mono"
                           placeholder="000000"
                           required
                           autoFocus
@@ -903,17 +983,24 @@ export default function LoginPage() {
                             required
                             minLength={8}
                             autoComplete="new-password"
-                            aria-describedby="reg-pw-strength"
+                            /* Two ids: the static requirements hint + the
+                               dynamic strength meter. Screen readers
+                               concatenate both, so users hear the rule and
+                               the current strength. */
+                            aria-describedby="reg-pw-requirements reg-pw-strength"
                           />
                           <button
                             type="button"
                             onClick={() => setShowRegPassword(!showRegPassword)}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-surface-400 hover:text-surface-600"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                             aria-label={showRegPassword ? 'Hide password' : 'Show password'}
                           >
-                            {showRegPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            {showRegPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                           </button>
                         </div>
+                        <p id="reg-pw-requirements" className="text-xs text-surface-400 mt-1">
+                          Must be at least 8 characters.
+                        </p>
                         <div id="reg-pw-strength">
                           <PasswordStrengthBar password={regPassword} />
                         </div>
@@ -952,32 +1039,69 @@ export default function LoginPage() {
                 {/* ── Step 4: Success — Awaiting Approval ────────────────── */}
                 {regStep === 4 && (
                   <div className="text-center py-6" role="status" aria-live="polite">
-                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 mb-4">
-                      <CheckCircle size={32} className="text-emerald-600" />
-                    </div>
-                    <h3 className="text-lg font-semibold text-surface-900 mb-2">Request Submitted!</h3>
-                    <p className="text-sm text-surface-500 mb-3">
-                      Your access request has been sent for:
-                    </p>
-                    <p className="text-sm font-semibold text-surface-800 mb-4">{regEmail}</p>
+                    {regSubmitWarning ? (
+                      /* Warning variant: account was created in auth, but
+                         the access_request submission didn't go through
+                         cleanly. AuthContext has an auto-submit safety
+                         net that retries on the user's next sign-in
+                         attempt, so the recovery path is "try logging
+                         in shortly." We don't expose the internal flow
+                         to the user. */
+                      <>
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-amber-100 mb-4" aria-hidden="true">
+                          <Clock size={32} className="text-amber-600" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-surface-900 mb-2">Account Created</h3>
+                        <p className="text-sm text-surface-500 mb-3">
+                          Your account was created for:
+                        </p>
+                        <p className="text-sm font-semibold text-surface-800 mb-4">{regEmail}</p>
+                        <div className="px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 mb-4 text-left" role="alert">
+                          <p className="text-sm text-amber-800 font-medium">One more step</p>
+                          <p className="text-xs text-amber-700 mt-1">
+                            We had trouble notifying your instructor. Please try
+                            signing in shortly — the system will retry
+                            automatically. If you still can't get in after a
+                            day, contact your instructor directly.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => switchToMode('login')}
+                          className="btn-primary"
+                        >
+                          Back to Login
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-100 mb-4" aria-hidden="true">
+                          <CheckCircle size={32} className="text-emerald-600" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-surface-900 mb-2">Request Submitted!</h3>
+                        <p className="text-sm text-surface-500 mb-3">
+                          Your access request has been sent for:
+                        </p>
+                        <p className="text-sm font-semibold text-surface-800 mb-4">{regEmail}</p>
 
-                    <div className="px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 mb-4">
-                      <p className="text-sm text-amber-800 font-medium">What happens next:</p>
-                      <ol className="text-xs text-amber-700 mt-2 text-left space-y-1 pl-4 list-decimal">
-                        <li>An instructor will review your request</li>
-                        <li>Once approved, you can log in with your email and password</li>
-                      </ol>
-                    </div>
+                        <div className="px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 mb-4">
+                          <p className="text-sm text-amber-800 font-medium">What happens next:</p>
+                          <ol className="text-xs text-amber-700 mt-2 text-left space-y-1 pl-4 list-decimal">
+                            <li>An instructor will review your request</li>
+                            <li>Once approved, you can log in with your email and password</li>
+                          </ol>
+                        </div>
 
-                    <p className="text-xs text-surface-400 mb-4">
-                      This usually takes less than a day during the school week.
-                    </p>
-                    <button
-                      onClick={() => switchToMode('login')}
-                      className="btn-primary"
-                    >
-                      Back to Login
-                    </button>
+                        <p className="text-xs text-surface-400 mb-4">
+                          This usually takes less than a day during the school week.
+                        </p>
+                        <button
+                          onClick={() => switchToMode('login')}
+                          className="btn-primary"
+                        >
+                          Back to Login
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -1065,7 +1189,10 @@ export default function LoginPage() {
                           maxLength={6}
                           value={forgotOtp}
                           onChange={(e) => setForgotOtp(e.target.value.replace(/\D/g, ''))}
-                          className="input text-center text-xl tracking-[0.3em] font-mono"
+                          /* tracking-[0.15em] (was 0.3em) so the field stays
+                             readable at 200% browser zoom — wider tracking
+                             pushed digits past the right edge of the input. */
+                          className="input text-center text-xl tracking-[0.15em] font-mono"
                           placeholder="000000"
                           required
                           autoFocus
@@ -1091,17 +1218,20 @@ export default function LoginPage() {
                             required
                             minLength={8}
                             autoComplete="new-password"
-                            aria-describedby="forgot-pw-strength"
+                            aria-describedby="forgot-pw-requirements forgot-pw-strength"
                           />
                           <button
                             type="button"
                             onClick={() => setShowForgotPassword(!showForgotPassword)}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-surface-400 hover:text-surface-600"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                             aria-label={showForgotPassword ? 'Hide password' : 'Show password'}
                           >
-                            {showForgotPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            {showForgotPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                           </button>
                         </div>
+                        <p id="forgot-pw-requirements" className="text-xs text-surface-400 mt-1">
+                          Must be at least 8 characters.
+                        </p>
                         <div id="forgot-pw-strength">
                           <PasswordStrengthBar password={forgotPassword} />
                         </div>
