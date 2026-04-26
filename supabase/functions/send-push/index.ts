@@ -259,7 +259,10 @@ serve(async (req: Request) => {
     let subsQuery = supabase.from('push_subscriptions').select('*');
 
     if (notifType === 'announcement' && record.recipient_email) {
-      subsQuery = subsQuery.eq('user_email', String(record.recipient_email));
+      // Lowercase both sides defensively. The frontend (usePushNotifications.js
+      // saveSubscriptionToSupabase) and AnnouncementsPage already normalize, but if
+      // any row was inserted before the normalization fix, this prevents a silent miss.
+      subsQuery = subsQuery.eq('user_email', String(record.recipient_email).toLowerCase());
     } else {
       subsQuery = subsQuery.in('role', ['Instructor', 'Super Admin']);
     }
