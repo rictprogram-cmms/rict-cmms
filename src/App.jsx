@@ -103,6 +103,26 @@ function KioskWall() {
   const [codeError, setCodeError] = useState('')
   const [logoClickCount, setLogoClickCount] = useState(0)
 
+  // ── Keyboard escape hatch (WCAG 2.1.1, Phase 2 a11y) ──────────────────────
+  // The 5-click logo gesture is mouse/touch only — the logo button has
+  // tabIndex={-1} so it's intentionally hidden from tab order. That meant
+  // keyboard-only users had no way to reach the instructor access form,
+  // failing WCAG 2.1.1 Keyboard. Ctrl+Alt+K (and Cmd+Alt+K on Mac, since
+  // the event uses .ctrlKey, .altKey, and .metaKey) reveals the same form.
+  // Intentionally undocumented in the visible UI so it functions like the
+  // 5-click pattern: present, but not advertised to students.
+  useEffect(() => {
+    const handler = (e) => {
+      const key = e.key?.toLowerCase()
+      if ((e.ctrlKey || e.metaKey) && e.altKey && key === 'k') {
+        e.preventDefault()
+        setShowCodeEntry(true)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
   function handleLogoClick() {
     const next = logoClickCount + 1
     setLogoClickCount(next)
@@ -144,6 +164,7 @@ function KioskWall() {
               marginBottom: '1rem', boxShadow: '0 4px 20px rgba(37,99,235,0.4)',
             }}
             tabIndex={-1}
+            aria-hidden="true"
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
