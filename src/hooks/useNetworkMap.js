@@ -213,25 +213,63 @@ export function useNetworkMap() {
     return m
   }, [activeAssets])
 
-  // Set of asset_ids already linked to a device (so picker can exclude them)
+  // Set of asset_ids already linked to at least one device.
+  // Kept for backward compatibility — no longer used to EXCLUDE assets in the
+  // picker (multiple devices per asset are now allowed). Useful as a quick
+  // "has any devices?" check.
   const linkedAssetIds = useMemo(() => {
     const s = new Set()
     devices.forEach(d => { if (d.asset_id) s.add(d.asset_id) })
     return s
   }, [devices])
 
+  // Per-asset device count: Map<asset_id, number>. Drives the "(N linked)"
+  // hint in the AssetPicker so users can see which assets already have
+  // devices without being blocked from adding more.
+  const assetDeviceCounts = useMemo(() => {
+    const m = new Map()
+    devices.forEach(d => {
+      if (!d.asset_id) return
+      m.set(d.asset_id, (m.get(d.asset_id) || 0) + 1)
+    })
+    return m
+  }, [devices])
+
+  // Devices grouped by asset_id, used by Assets page to list every device
+  // linked to a given asset. Devices are sorted by IP for a stable display.
+  const devicesByAsset = useMemo(() => {
+    const m = new Map()
+    devices.forEach(d => {
+      if (!d.asset_id) return
+      if (!m.has(d.asset_id)) m.set(d.asset_id, [])
+      m.get(d.asset_id).push(d)
+    })
+    m.forEach(arr => {
+      arr.sort((a, b) =>
+        (a.ip_address || '').localeCompare(b.ip_address || '', undefined, { numeric: true })
+      )
+    })
+    return m
+  }, [devices])
+
   /**
    * Resolve the display name for a device.
-   * If linked to an asset, prefer the asset's live name.
-   * Otherwise fall back to the device's free-text device_name.
+   *
+   * Composition rules (supports many devices per asset):
+   *   No asset linked         → device_name verbatim (or '')
+   *   Asset linked, no name   → asset.name
+   *   Asset linked + name     → "Asset Name — device_name"
+   *   Legacy 1:1 (name == asset.name) → just asset.name (no doubling)
    */
   const effectiveDeviceName = useCallback((device) => {
     if (!device) return ''
-    if (device.asset_id) {
-      const a = assetById.get(device.asset_id)
-      if (a?.name) return a.name
+    const asset = device.asset_id ? assetById.get(device.asset_id) : null
+    const dn = (device.device_name || '').trim()
+    if (asset?.name) {
+      if (!dn || dn === asset.name) return asset.name
+      return `${asset.name} — ${dn}`
     }
-    return device.device_name || ''
+    return dn
   }, [assetById])
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -257,12 +295,10 @@ export function useNetworkMap() {
     const now = new Date().toISOString()
     const actor = senderDisplayName(profile)
 
-    // If asset_id is provided, snapshot the asset name as device_name (fallback for deleted assets)
-    let resolvedDeviceName = input.device_name?.trim() || null
-    if (input.asset_id) {
-      const linked = assetById.get(input.asset_id)
-      if (linked?.name) resolvedDeviceName = linked.name
-    }
+    // device_name and asset_id are now independent. The user types whatever
+    // sub-label they want (e.g. "1500 PLC"); the asset linkage is the parent.
+    // effectiveDeviceName() composes them at display time as "Asset — device_name".
+    const resolvedDeviceName = input.device_name?.trim() || null
 
     const row = {
       device_id,
@@ -305,19 +341,13 @@ export function useNetworkMap() {
     const existing = devices.find(d => d.device_id === deviceId)
     if (!existing) throw new Error('Device not found.')
 
-    // Resolve asset linkage: if asset_id is changing or being set, snapshot asset name
+    // device_name and asset_id are now independent. The user types whatever
+    // sub-label they want (e.g. "1500 PLC"); the asset linkage is the parent.
+    // No more asset-name snapshot — keeps multiple devices per asset distinct.
     const newAssetId = patch.asset_id === undefined ? existing.asset_id : (patch.asset_id || null)
-    let resolvedDeviceName
-    if (patch.device_name === undefined) {
-      resolvedDeviceName = existing.device_name
-    } else {
-      resolvedDeviceName = patch.device_name?.trim() || null
-    }
-    // If linking to an asset (or asset was already linked and still is), snapshot the asset name
-    if (newAssetId) {
-      const linked = assetById.get(newAssetId)
-      if (linked?.name) resolvedDeviceName = linked.name
-    }
+    const resolvedDeviceName = patch.device_name === undefined
+      ? existing.device_name
+      : (patch.device_name?.trim() || null)
 
     const updates = {
       device_name: resolvedDeviceName,
@@ -546,6 +576,8 @@ export function useNetworkMap() {
     findDuplicateMac,
     assetById,
     linkedAssetIds,
+    assetDeviceCounts,
+    devicesByAsset,
     effectiveDeviceName,
     // crud
     addDevice,
