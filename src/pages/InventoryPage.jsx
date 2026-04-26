@@ -54,6 +54,7 @@ export default function InventoryPage() {
   const [formData, setFormData] = useState({});
   const [adjustData, setAdjustData] = useState({ partId: '', partName: '', currentQty: 0, newQty: 0, clearOrder: false });
   const [selectedImage, setSelectedImage] = useState(null); // { file, preview } or { existingUrl }
+  const [isDragging, setIsDragging] = useState(false); // visual feedback for image drop zone
   const [labelsData, setLabelsData] = useState([]);
 
   // Toast
@@ -398,15 +399,88 @@ export default function InventoryPage() {
   };
 
   // ---------- IMAGE HANDLING ----------
-  const handleImageSelect = (e) => {
-    const file = e.target.files?.[0];
+  // Shared validation + preview logic — used by click-upload, drag-and-drop,
+  // AND clipboard paste so all three paths can never drift apart.
+  const processImageFile = useCallback((file) => {
     if (!file) return;
     if (!file.type.startsWith('image/')) { showToast('Please select an image', 'error'); return; }
     if (file.size > 5 * 1024 * 1024) { showToast('Image too large (max 5MB)', 'error'); return; }
     const reader = new FileReader();
     reader.onload = (ev) => setSelectedImage({ file, preview: ev.target.result });
     reader.readAsDataURL(file);
+  }, [showToast]);
+
+  const handleImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    processImageFile(file);
+    // Reset the input so selecting the same file twice in a row still fires onChange
+    e.target.value = '';
   };
+
+  // Drag-and-drop handlers for the image upload area.
+  // preventDefault on dragOver/dragEnter is REQUIRED — without it, the browser
+  // opens the dropped file in a new tab instead of firing onDrop.
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only clear dragging state when leaving the drop zone itself, not its children
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setIsDragging(false);
+  };
+
+  const handleImageDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const file = e.dataTransfer?.files?.[0];
+    processImageFile(file);
+  };
+
+  // Paste-from-clipboard support — while the part modal is open, listen for Ctrl+V
+  // pastes containing an image and process them through the same pipeline.
+  // Skipped when the user is focused on a text field so we don't hijack regular
+  // text pastes into Part Name, Description, etc.
+  useEffect(() => {
+    if (!showPartModal) return;
+
+    const handlePaste = (e) => {
+      const target = e.target;
+      const tag = target?.tagName;
+      // Don't intercept pastes into text inputs, textareas, selects, or contenteditable elements
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
+
+      const items = e.clipboardData?.items;
+      if (!items || items.length === 0) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type && item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            processImageFile(file);
+            showToast('Image pasted from clipboard', 'success');
+          }
+          return;
+        }
+      }
+    };
+
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [showPartModal, processImageFile, showToast]);
 
   const removeImage = () => {
     setSelectedImage(null);
@@ -711,20 +785,41 @@ export default function InventoryPage() {
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">Image</label>
-                <div className="image-upload-area" onClick={() => document.getElementById('inv-image-input').click()}>
+                <label className="form-label" htmlFor="inv-image-input">Image</label>
+                <div
+                  className={`image-upload-area${isDragging ? ' dragging' : ''}`}
+                  onClick={() => document.getElementById('inv-image-input').click()}
+                  onDragEnter={handleDragEnter}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleImageDrop}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      document.getElementById('inv-image-input').click();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={selectedImage ? 'Image selected. Click or press Enter to replace, paste with Ctrl+V, or use the remove button.' : 'Upload image. Click, press Enter, drag and drop, or paste with Ctrl+V. Maximum 5 megabytes.'}
+                >
                   <input type="file" id="inv-image-input" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
                   {selectedImage ? (
                     <div className="image-preview">
-                      <img src={selectedImage.preview || selectedImage.existingUrl} alt="Preview" referrerPolicy="no-referrer" />
-                      <button type="button" className="remove-image-btn" onClick={(e) => { e.stopPropagation(); removeImage(); }}>
-                        <span className="material-icons">close</span>
+                      <img src={selectedImage.preview || selectedImage.existingUrl} alt="Selected part image preview" referrerPolicy="no-referrer" />
+                      <button
+                        type="button"
+                        className="remove-image-btn"
+                        onClick={(e) => { e.stopPropagation(); removeImage(); }}
+                        aria-label="Remove image"
+                      >
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     </div>
                   ) : (
-                    <div className="upload-placeholder">
-                      <span className="material-icons">cloud_upload</span>
-                      <p>Click or drag image</p>
+                    <div className="upload-placeholder" aria-live="polite">
+                      <span className="material-icons" aria-hidden="true">cloud_upload</span>
+                      <p>{isDragging ? 'Drop image to upload' : 'Click, drag, or paste image'}</p>
                     </div>
                   )}
                 </div>
@@ -970,8 +1065,12 @@ export default function InventoryPage() {
         .form-input { width: 100%; padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
         .form-input:focus { outline: none; border-color: #228be6; }
 
-        .image-upload-area { border: 2px dashed #dee2e6; border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+        .image-upload-area { border: 2px dashed #dee2e6; border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; transition: border-color 0.2s, background-color 0.2s; }
         .image-upload-area:hover { border-color: #228be6; }
+        .image-upload-area:focus-visible { outline: none; border-color: #228be6; box-shadow: 0 0 0 3px rgba(34, 139, 230, 0.35); }
+        .image-upload-area.dragging { border-color: #228be6; border-style: solid; background-color: #e7f5ff; }
+        .image-upload-area.dragging .upload-placeholder p { color: #1971c2; font-weight: 600; }
+        .image-upload-area.dragging .upload-placeholder .material-icons { color: #228be6; }
         .upload-placeholder .material-icons { font-size: 2rem; color: #dee2e6; }
         .upload-placeholder p { margin: 8px 0 0; color: #868e96; font-size: 0.9rem; }
         .image-preview { position: relative; display: inline-block; }
