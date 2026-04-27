@@ -240,13 +240,17 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
   // 5. Pre-compute daily attendance spans (across all class entries on same day)
   const daySpans = {}
   records.forEach(r => {
-    if (r.status === 'No Show' || r.entry_type === 'Volunteer' || r.entry_type === 'All Done') return
+    if (r.status === 'No Show' || r.entry_type === 'Volunteer') return
     const d = extractDateFromTimestamp(r.punch_in)
     if (!d) return
+    if (!daySpans[d]) daySpans[d] = { firstPunchIn: Infinity, lastPunchOut: 0, hasStillIn: false, firstRecordId: null, lastRecordId: null, hasAllDone: false }
+    if (r.entry_type === 'All Done') {
+      daySpans[d].hasAllDone = true
+      return
+    }
     const piMin = extractTimeMinutes(r.punch_in)
     const poMin = extractTimeMinutes(r.punch_out)
     const isStillIn = r.status === 'Punched In'
-    if (!daySpans[d]) daySpans[d] = { firstPunchIn: Infinity, lastPunchOut: 0, hasStillIn: false, firstRecordId: null, lastRecordId: null }
     if (piMin !== null && piMin < daySpans[d].firstPunchIn) {
       daySpans[d].firstPunchIn = piMin
       daySpans[d].firstRecordId = r.record_id
@@ -259,6 +263,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
   })
 
   // Pre-compute which record_ids get late/early flags
+  // Skip Left Early flagging on days with an All Done swipe.
   const lateFlagRecords = new Set()
   const earlyFlagRecords = new Set()
   const dayLateInfo = {}
@@ -274,7 +279,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       if (lateBy > gracePeriod) lateFlagRecords.add(span.firstRecordId)
     }
 
-    if (!span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
+    if (!span.hasAllDone && !span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
       const earlyBy = daySignup.endMin - span.lastPunchOut
       dayEarlyInfo[date] = { isEarly: earlyBy > gracePeriod, earlyMinutes: earlyBy > gracePeriod ? earlyBy : 0 }
       if (earlyBy > gracePeriod) earlyFlagRecords.add(span.lastRecordId)
@@ -292,6 +297,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       isLate: false, lateMinutes: 0,
       isEarlyDeparture: false, earlyMinutes: 0,
       isWalkIn: false, isNoShow: false, isOnTime: false,
+      isWrongClass: false, wrongClassExpected: null,
       scheduledStart: null, scheduledEnd: null,
     }
 
@@ -307,6 +313,25 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
 
     flags.scheduledStart = daySignup.startMin
     flags.scheduledEnd = daySignup.endMin
+
+    // Wrong-class detection: an overlapping signup slot exists but for a different course.
+    // Treat as neutral (excluded from on-time score) — informational only.
+    const entryStartMin = extractTimeMinutes(r.punch_in)
+    const entryEndMin = extractTimeMinutes(r.punch_out)
+    const entryCourse = r.course_id || r.class_id || ''
+    if (entryStartMin !== null && entryEndMin !== null && entryCourse && Array.isArray(daySignup.slots)) {
+      const overlapping = daySignup.slots.filter(s => {
+        const sStart = timeToMinutes(s.startTime)
+        const sEnd = timeToMinutes(s.endTime)
+        if (sStart === null || sEnd === null) return false
+        return entryStartMin < sEnd && entryEndMin > sStart
+      })
+      if (overlapping.length > 0 && !overlapping.some(s => s.classId === entryCourse)) {
+        flags.isWrongClass = true
+        flags.wrongClassExpected = [...new Set(overlapping.map(s => s.classId))].join(', ')
+        return { ...r, flags }
+      }
+    }
 
     // Late: only on the entry with the day's earliest punch_in
     if (lateFlagRecords.has(r.record_id)) {
@@ -379,7 +404,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       })
 
       let weekHours = 0
-      let lateCount = 0, earlyCount = 0, walkInCount = 0, noShowCount = 0, onTimeCount = 0
+      let lateCount = 0, earlyCount = 0, walkInCount = 0, wrongClassCount = 0, noShowCount = 0, onTimeCount = 0
       let totalLateMins = 0, totalEarlyMins = 0
 
       const nonVolunteer = weekEntries.filter(e => e.entry_type !== 'Volunteer')
@@ -389,12 +414,27 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         else if (f.isLate) { lateCount++; totalLateMins += f.lateMinutes }
         if (f.isEarlyDeparture) { earlyCount++; totalEarlyMins += f.earlyMinutes }
         if (f.isWalkIn) walkInCount++
+        if (f.isWrongClass) wrongClassCount++
         if (f.isOnTime) onTimeCount++
       })
 
       weekEntries.forEach(e => { weekHours += parseFloat(e.total_hours) || 0 })
 
       const labStatus = labByWeek[wk.weekNumber] || { labComplete: false, allDone: false, requiredHoursMet: false }
+
+      // Per-week score:
+      //   Base = 100% if hours met OR All Done given (lab_complete / required_hours_met
+      //          from weekly_lab_tracker also count as a closure signal).
+      //   Base = (hours / required) × 100 otherwise — so 0 hours = 0%, partial proportional.
+      //   Then apply −10/Late, −10/Early, −20/NoShow. Floor at 0.
+      const wkClosed = labStatus.allDone || labStatus.requiredHoursMet ||
+        weekEntries.some(e => e.entry_type === 'All Done')
+      const wkRequired = data.requiredHoursPerWeek || 0
+      let wkBase = 100
+      if (!wkClosed && wkRequired > 0 && weekHours < wkRequired) {
+        wkBase = Math.min(100, Math.round((weekHours / wkRequired) * 100))
+      }
+      const weekScore = Math.max(0, wkBase - (lateCount * 10) - (earlyCount * 10) - (noShowCount * 20))
 
       return {
         weekNumber: wk.weekNumber,
@@ -408,9 +448,11 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         requiredHoursMet: labStatus.requiredHoursMet,
         attendance: {
           lateArrivals: lateCount, earlyDepartures: earlyCount,
-          noShows: noShowCount, walkIns: walkInCount, onTimeCount,
+          noShows: noShowCount, walkIns: walkInCount, wrongClass: wrongClassCount,
+          onTimeCount,
           totalLateMinutes: totalLateMins, totalEarlyMinutes: totalEarlyMins,
           totalEntries: nonVolunteer.length,
+          attendanceScore: weekScore,
         }
       }
     })
@@ -419,7 +461,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       wk.endDate >= reportStart && wk.startDate <= reportEnd
     )
 
-    let lateCount = 0, earlyCount = 0, walkInCount = 0, noShowCount = 0,
+    let lateCount = 0, earlyCount = 0, walkInCount = 0, wrongClassCount = 0, noShowCount = 0,
       onTimeCount = 0, totalLateMins = 0, totalEarlyMins = 0
     const nonVolunteer = data.entries.filter(e => e.entry_type !== 'Volunteer' && e.entry_type !== 'Work Study')
     nonVolunteer.forEach(e => {
@@ -428,11 +470,15 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       else if (f.isLate) { lateCount++; totalLateMins += f.lateMinutes }
       if (f.isEarlyDeparture) { earlyCount++; totalEarlyMins += f.earlyMinutes }
       if (f.isWalkIn) walkInCount++
+      if (f.isWrongClass) wrongClassCount++
       if (f.isOnTime) onTimeCount++
     })
 
-    const scoreDenom = nonVolunteer.length - noShowCount
-    const attendanceScore = scoreDenom > 0 ? Math.round((onTimeCount / scoreDenom) * 100) : 100
+    // Per-class on-time score = average of per-week scores within the report range.
+    // Each week's score already factors in the hours-met / All Done base.
+    const attendanceScore = filteredWeeks.length > 0
+      ? Math.round(filteredWeeks.reduce((sum, w) => sum + (w.attendance.attendanceScore || 0), 0) / filteredWeeks.length)
+      : 100
     const totalWeeks = classWeeks.length
     const weeksWithLab = filteredWeeks.filter(w => w.labComplete).length
     const weeksWithHours = filteredWeeks.filter(w => w.metHours || w.requiredHoursMet).length
@@ -449,7 +495,8 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       weeksWithLab, weeksWithHours, weeksDone,
       attendance: {
         lateArrivals: lateCount, earlyDepartures: earlyCount,
-        noShows: noShowCount, walkIns: walkInCount, onTimeCount,
+        noShows: noShowCount, walkIns: walkInCount, wrongClass: wrongClassCount,
+        onTimeCount,
         totalLateMinutes: totalLateMins, totalEarlyMinutes: totalEarlyMins,
         totalEntries: nonVolunteer.length, attendanceScore,
       }
@@ -1130,7 +1177,7 @@ function BatchReportView({ reportData, onClose }) {
   const classSummary = useMemo(() => {
     const reports = r.studentReports || []
     let totalHours = 0, labsComplete = 0, labsTotal = 0, hoursMet = 0, hoursTotal = 0
-    let allLate = 0, allEarly = 0, allWalkIns = 0, allNoShows = 0
+    let allLate = 0, allEarly = 0, allWalkIns = 0, allWrongClass = 0, allNoShows = 0
 
     reports.forEach(sr => {
       totalHours += sr.grandTotalHours
@@ -1144,11 +1191,12 @@ function BatchReportView({ reportData, onClose }) {
         allLate += cr.attendance.lateArrivals
         allEarly += cr.attendance.earlyDepartures
         allWalkIns += cr.attendance.walkIns
+        allWrongClass += (cr.attendance.wrongClass || 0)
         allNoShows += cr.attendance.noShows
       })
     })
 
-    return { totalStudents: reports.length, totalHours, labsComplete, labsTotal, hoursMet, hoursTotal, allLate, allEarly, allWalkIns, allNoShows }
+    return { totalStudents: reports.length, totalHours, labsComplete, labsTotal, hoursMet, hoursTotal, allLate, allEarly, allWalkIns, allWrongClass, allNoShows }
   }, [r.studentReports])
 
   return (
@@ -1206,13 +1254,16 @@ function BatchReportView({ reportData, onClose }) {
           </div>
 
           {/* Class-Wide Summary Grid */}
-          <div className="mt-4 grid grid-cols-3 sm:grid-cols-6 gap-2">
+          <div className={`mt-4 grid grid-cols-3 ${classSummary.allWrongClass > 0 ? 'sm:grid-cols-7' : 'sm:grid-cols-6'} gap-2`}>
             <ReportStatBox value={classSummary.totalStudents} label="Students" color="green" />
             <ReportStatBox value={formatHours(classSummary.totalHours)} label="Total Hours" color="green" />
             <ReportStatBox value={`${classSummary.labsComplete}/${classSummary.labsTotal}`} label="Labs Done" color="green" />
             <ReportStatBox value={classSummary.allLate} label="Late" color="red" />
             <ReportStatBox value={classSummary.allEarly} label="Left Early" color="amber" />
             <ReportStatBox value={classSummary.allWalkIns} label="Walk-ins" color="purple" />
+            {classSummary.allWrongClass > 0 && (
+              <ReportStatBox value={classSummary.allWrongClass} label="Wrong Class" color="orange" />
+            )}
           </div>
         </div>
 
@@ -1260,9 +1311,12 @@ function BatchReportView({ reportData, onClose }) {
                                 <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-amber-100 text-amber-700 text-[9px] font-bold" title="Early">{att.earlyDepartures}E</span>
                               )}
                               {att.walkIns > 0 && (
-                                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[9px] font-bold" title="Walk-in">{att.walkIns}W</span>
+                                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[9px] font-bold" title="Walk-in (neutral)">{att.walkIns}W</span>
                               )}
-                              {att.lateArrivals === 0 && att.earlyDepartures === 0 && att.walkIns === 0 && att.totalEntries > 0 && (
+                              {att.wrongClass > 0 && (
+                                <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-orange-100 text-orange-700 text-[9px] font-bold" title="Wrong class (neutral)">{att.wrongClass}X</span>
+                              )}
+                              {att.lateArrivals === 0 && att.earlyDepartures === 0 && att.walkIns === 0 && (att.wrongClass || 0) === 0 && att.totalEntries > 0 && (
                                 <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-green-600"><CheckCircle2 size={10} /></span>
                               )}
                             </div>
@@ -1414,7 +1468,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                 <h4 className="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                   <Shield size={12} /> Attendance Accountability
                 </h4>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                <div className={`grid grid-cols-3 ${cr.attendance.wrongClass > 0 ? 'sm:grid-cols-7' : 'sm:grid-cols-6'} gap-2`}>
                   <ReportStatBox
                     value={`${cr.attendance.attendanceScore}%`} label="On-Time Score"
                     color={cr.attendance.attendanceScore >= 90 ? 'green' : cr.attendance.attendanceScore >= 70 ? 'amber' : 'red'}
@@ -1425,6 +1479,9 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                   <ReportStatBox value={cr.attendance.earlyDepartures} label="Left Early" color="amber"
                     sub={cr.attendance.totalEarlyMinutes > 0 ? formatMinutes(cr.attendance.totalEarlyMinutes) : null} />
                   <ReportStatBox value={cr.attendance.walkIns} label="Walk-ins" color="purple" />
+                  {cr.attendance.wrongClass > 0 && (
+                    <ReportStatBox value={cr.attendance.wrongClass} label="Wrong Class" color="orange" />
+                  )}
                   <ReportStatBox value={cr.attendance.noShows} label="No Shows" color="red" />
                 </div>
               </div>
@@ -1452,6 +1509,10 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                         <th className="px-2 py-2 font-semibold text-surface-500 text-center">Late</th>
                         <th className="px-2 py-2 font-semibold text-surface-500 text-center">Early</th>
                         <th className="px-2 py-2 font-semibold text-surface-500 text-center">Walk-in</th>
+                        <th className="px-2 py-2 font-semibold text-surface-500 text-center"
+                          title="Per-week on-time score: starts at 100% if hours met or All Done given, otherwise scales by hours achieved; deducts 10% per Late/Early and 20% per No Show.">
+                          Score
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-surface-100">
@@ -1532,12 +1593,27 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                   <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold">{wk.attendance.walkIns}</span>
                                 ) : <span className="text-surface-300">—</span>}
                               </td>
+                              <td className="px-2 py-2 text-center">
+                                {(() => {
+                                  const sc = wk.attendance.attendanceScore
+                                  if (sc === null || sc === undefined) return <span className="text-surface-300">—</span>
+                                  const cls = sc >= 90 ? 'bg-green-100 text-green-700'
+                                    : sc >= 70 ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-red-100 text-red-700'
+                                  return (
+                                    <span className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${cls}`}
+                                      aria-label={`Week score ${sc} percent`}>
+                                      {sc}%
+                                    </span>
+                                  )
+                                })()}
+                              </td>
                             </tr>
 
                             {/* Expanded entries */}
                             {isExpanded && wk.entries.length > 0 && (
                               <tr>
-                                <td colSpan={cr.requiredHoursPerWeek > 0 ? 10 : 9} className="p-0">
+                                <td colSpan={cr.requiredHoursPerWeek > 0 ? 11 : 10} className="p-0">
                                   <div className="bg-surface-50/50 px-4 py-2">
                                     <table className="w-full text-[11px]">
                                       <thead>
@@ -1558,7 +1634,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                           const isVolunteer = e.entry_type === 'Volunteer'
                                           return (
                                             <tr key={e.record_id || `we-${eIdx}`} className={
-                                              f.isNoShow ? 'bg-red-50' : f.isLate ? 'bg-red-50/40' : isAllDone ? 'bg-emerald-50/30' : ''
+                                              f.isNoShow ? 'bg-red-50' : f.isLate ? 'bg-red-50/40' : f.isWrongClass ? 'bg-orange-50/40' : isAllDone ? 'bg-emerald-50/30' : ''
                                             }>
                                               <td className="px-2 py-1 text-surface-700">
                                                 {formatDate(e.punch_in)}
@@ -1590,6 +1666,13 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                                       {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={9} />} label="On Time" />}
                                                       {f.isLate && <AttBadge color="red" icon={<LogIn size={9} />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
                                                       {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={9} />} label={`Early ${formatMinutes(f.earlyMinutes)}`} />}
+                                                      {f.isWrongClass && (
+                                                        <span title={f.wrongClassExpected ? `Should have been ${f.wrongClassExpected}` : 'Wrong class punch'}
+                                                          aria-label={f.wrongClassExpected ? `Wrong class — should have been ${f.wrongClassExpected}` : 'Wrong class punch'}>
+                                                          <AttBadge color="orange" icon={<AlertTriangle size={9} />}
+                                                            label={f.wrongClassExpected ? `Wrong Class (→ ${f.wrongClassExpected})` : 'Wrong Class'} />
+                                                        </span>
+                                                      )}
                                                       {f.isWalkIn && <AttBadge color="purple" icon={<Footprints size={9} />} label="Walk-in" />}
                                                       {f.isNoShow && <AttBadge color="red" icon={<X size={9} />} label="No Show" />}
                                                     </>
@@ -1607,7 +1690,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                             )}
                             {isExpanded && wk.entries.length === 0 && (
                               <tr>
-                                <td colSpan={cr.requiredHoursPerWeek > 0 ? 10 : 9} className="p-0">
+                                <td colSpan={cr.requiredHoursPerWeek > 0 ? 11 : 10} className="p-0">
                                   <div className="bg-surface-50/50 px-6 py-3 text-center text-[11px] text-surface-400">
                                     No time entries this week
                                   </div>
@@ -1629,6 +1712,22 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                         <td className="px-2 py-2 text-center text-[10px] text-surface-500">{cr.weeksWithLab}/{cr.weeklyBreakdown.length}</td>
                         <td className="px-2 py-2 text-center text-[10px] text-surface-500">{cr.weeksDone}/{cr.weeklyBreakdown.length}</td>
                         <td colSpan={4}></td>
+                        <td className="px-2 py-2 text-center">
+                          {(() => {
+                            const sc = cr.attendance.attendanceScore
+                            if (sc === null || sc === undefined) return <span className="text-surface-300">—</span>
+                            const cls = sc >= 90 ? 'bg-green-100 text-green-700'
+                              : sc >= 70 ? 'bg-amber-100 text-amber-700'
+                              : 'bg-red-100 text-red-700'
+                            return (
+                              <span className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${cls}`}
+                                title="Average of weekly scores in this period"
+                                aria-label={`Period average score ${sc} percent`}>
+                                {sc}%
+                              </span>
+                            )
+                          })()}
+                        </td>
                       </tr>
                     </tfoot>
                   </table>
@@ -1666,10 +1765,12 @@ function ReportStatBox({ value, label, color, sub }) {
     red: 'bg-red-50 border-red-200 print:border-red-300',
     amber: 'bg-amber-50 border-amber-200 print:border-amber-300',
     purple: 'bg-purple-50 border-purple-200 print:border-purple-300',
+    orange: 'bg-orange-50 border-orange-200 print:border-orange-300',
   }
   const textColors = {
     green: 'text-green-600', red: 'text-red-600',
     amber: 'text-amber-600', purple: 'text-purple-600',
+    orange: 'text-orange-600',
   }
   const isZero = value === 0 || value === '0'
   return (
@@ -1706,7 +1807,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
               </span>
             )}
           </h4>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className={`grid grid-cols-2 sm:grid-cols-3 ${as.wrongClass > 0 ? 'lg:grid-cols-7' : 'lg:grid-cols-6'} gap-3`}>
             <div className={`text-center p-3 rounded-xl border ${
               as.attendanceScore >= 90 ? 'bg-green-50 border-green-200' :
               as.attendanceScore >= 70 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
@@ -1731,10 +1832,20 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
               <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Left Early</div>
               {as.totalEarlyMinutes > 0 && <div className="text-[10px] text-amber-500 mt-0.5">{formatMinutes(as.totalEarlyMinutes)} total</div>}
             </div>
-            <div className={`text-center p-3 rounded-xl border ${as.walkIns > 0 ? 'bg-purple-50 border-purple-200' : 'bg-surface-50 border-surface-200'}`}>
+            <div className={`text-center p-3 rounded-xl border ${as.walkIns > 0 ? 'bg-purple-50 border-purple-200' : 'bg-surface-50 border-surface-200'}`}
+              title="Walk-ins (no signup that day) are neutral — they don't affect the on-time score">
               <div className={`text-2xl font-bold ${as.walkIns > 0 ? 'text-purple-600' : 'text-surface-400'}`}>{as.walkIns}</div>
               <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Walk-ins</div>
+              <div className="text-[9px] text-surface-400 mt-0.5">Neutral</div>
             </div>
+            {as.wrongClass > 0 && (
+              <div className="text-center p-3 rounded-xl border bg-orange-50 border-orange-200"
+                title="Punched into a different class than their signup at that time — flagged but not penalized">
+                <div className="text-2xl font-bold text-orange-600">{as.wrongClass}</div>
+                <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Wrong Class</div>
+                <div className="text-[9px] text-surface-400 mt-0.5">Neutral</div>
+              </div>
+            )}
             <div className={`text-center p-3 rounded-xl border ${as.noShows > 0 ? 'bg-red-50 border-red-200' : 'bg-surface-50 border-surface-200'}`}>
               <div className={`text-2xl font-bold ${as.noShows > 0 ? 'text-red-600' : 'text-surface-400'}`}>{as.noShows}</div>
               <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">No Shows</div>
@@ -1750,13 +1861,16 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Object.entries(classSummary).map(([name, data]) => {
               const pct = data.requiredHours > 0 ? (data.hours / data.requiredHours) * 100 : 100
-              const isBehind = data.requiredHours > 0 && data.hours < data.requiredHours
+              // Week closed by instructor (All Done swipe or required_hours_met flag) overrides
+              // the "behind" state — student is signed off for the week regardless of hours.
+              const weekClosed = !!(data.allDone || data.requiredHoursMet)
               const isComplete = data.requiredHours > 0 && data.hours >= data.requiredHours
+              const isBehind = data.requiredHours > 0 && data.hours < data.requiredHours && !weekClosed
               const isWorkStudyTile = name === 'Work Study'
+              const tileGreen = isWorkStudyTile || isComplete || weekClosed
               return (
                 <div key={name} className={`p-4 rounded-xl border-l-4 ${
-                  isWorkStudyTile ? 'bg-green-50 border-green-500' :
-                  isComplete ? 'bg-green-50 border-green-500' :
+                  tileGreen ? 'bg-green-50 border-green-500' :
                   isBehind ? 'bg-amber-50 border-amber-400' : 'bg-surface-50 border-brand-400'
                 }`}>
                   <div className="text-sm font-semibold text-surface-800">{name}</div>
@@ -1767,13 +1881,21 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                     {data.requiredHours > 0 && <span className="text-xs font-normal text-surface-500 ml-1">/ {formatHours(data.requiredHours)} hrs</span>}
                   </div>
                   {data.requiredHours > 0 && (
-                    <div className="mt-2 h-1.5 bg-surface-200 rounded-full overflow-hidden">
+                    <div className="mt-2 h-1.5 bg-surface-200 rounded-full overflow-hidden" role="progressbar"
+                      aria-valuenow={Math.min(Math.round(pct), 100)} aria-valuemin={0} aria-valuemax={100}
+                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours`}>
                       <div className={`h-full rounded-full transition-all ${
-                        isComplete ? 'bg-green-500' : isBehind ? 'bg-amber-400' : 'bg-brand-500'
-                      }`} style={{ width: `${Math.min(pct, 100)}%` }} />
+                        tileGreen ? 'bg-green-500' : isBehind ? 'bg-amber-400' : 'bg-brand-500'
+                      }`} style={{ width: `${weekClosed ? 100 : Math.min(pct, 100)}%` }} />
                     </div>
                   )}
-                  {isComplete && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} /> Complete</div>}
+                  {weekClosed && !isComplete && (
+                    <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium" title="Instructor swiped All Done — week closed regardless of hours">
+                      <BadgeCheck size={12} /> Week Closed by Instructor
+                    </div>
+                  )}
+                  {isComplete && !weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} /> Complete</div>}
+                  {isComplete && weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} /> Complete</div>}
                   {isBehind && <div className="flex items-center gap-1 mt-2 text-amber-600 text-xs font-medium"><AlertTriangle size={12} /> {formatHours(data.requiredHours - data.hours)} hrs behind</div>}
                 </div>
               )
@@ -1821,6 +1943,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   const rowBg = f.isNoShow ? 'bg-red-50' :
                     f.isLate ? 'bg-red-50/40' :
                     f.isEarlyDeparture ? 'bg-amber-50/40' :
+                    f.isWrongClass ? 'bg-orange-50/40' :
                     f.isWalkIn ? 'bg-purple-50/30' :
                     isAllDone ? 'bg-emerald-50/30' :
                     isWorkStudy ? '' : ''
@@ -1865,6 +1988,13 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                               {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={10} />} label="On Time" />}
                               {f.isLate && <AttBadge color="red" icon={<LogIn size={10} />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
                               {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={10} />} label={`Left Early ${formatMinutes(f.earlyMinutes)}`} />}
+                              {f.isWrongClass && (
+                                <span title={f.wrongClassExpected ? `Signed up for ${f.wrongClassExpected} at this time — not penalized` : 'Punched into a different class than the signup — not penalized'}
+                                  aria-label={f.wrongClassExpected ? `Wrong class — should have been ${f.wrongClassExpected}` : 'Wrong class punch'}>
+                                  <AttBadge color="orange" icon={<AlertTriangle size={10} />}
+                                    label={f.wrongClassExpected ? `Wrong Class (→ ${f.wrongClassExpected})` : 'Wrong Class'} />
+                                </span>
+                              )}
                               {f.isWalkIn && <AttBadge color="purple" icon={<Footprints size={10} />} label="Walk-in" />}
                               {f.isNoShow && <AttBadge color="red" icon={<X size={10} />} label="No Show" />}
                             </>
@@ -2281,6 +2411,6 @@ function PunchStatusBadge({ status }) {
 }
 
 function AttBadge({ color, icon, label }) {
-  const styles = { green: 'bg-green-100 text-green-700', red: 'bg-red-100 text-red-700', amber: 'bg-amber-100 text-amber-700', purple: 'bg-purple-100 text-purple-700', emerald: 'bg-emerald-100 text-emerald-700' }
+  const styles = { green: 'bg-green-100 text-green-700', red: 'bg-red-100 text-red-700', amber: 'bg-amber-100 text-amber-700', purple: 'bg-purple-100 text-purple-700', emerald: 'bg-emerald-100 text-emerald-700', orange: 'bg-orange-100 text-orange-700' }
   return <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${styles[color]}`}>{icon} {label}</span>
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -155,6 +156,7 @@ export function useTimeCardData() {
     earlyDepartures: 0,
     noShows: 0,
     walkIns: 0,
+    wrongClass: 0,
     totalLateMinutes: 0,
     totalEarlyMinutes: 0,
     onTimeCount: 0,
@@ -243,6 +245,25 @@ export function useTimeCardData() {
         }
       }
 
+      // 4b. Fetch weekly_lab_tracker rows for this user.
+      // NOTE: We deliberately do NOT filter by week_start_date/week_end_date here —
+      // most tracker rows have empty/NULL date columns (only week_number is reliably stored).
+      // We match rows to the viewing period below using week_number + the class's calendar.
+      let labTrackerRows = []
+      if (userEmail) {
+        try {
+          const orFilter = [`user_email.eq.${userEmail}`]
+          if (userId) orFilter.push(`user_id.eq.${userId}`)
+          const { data: ltData } = await supabase
+            .from('weekly_lab_tracker')
+            .select('course_id, class_id, week_number, week_start_date, week_end_date, all_done, lab_complete, required_hours_met')
+            .or(orFilter.join(','))
+          labTrackerRows = ltData || []
+        } catch (err) {
+          console.warn('Weekly lab tracker fetch:', err)
+        }
+      }
+
       // 5. Group signups by date → earliest start, latest end
       const signupsByDate = {}
       signups.forEach(s => {
@@ -265,13 +286,19 @@ export function useTimeCardData() {
       // This prevents flagging class-switches as late/early
       const daySpans = {}
       records.forEach(r => {
-        if (r.status === 'No Show' || r.entry_type === 'Volunteer' || r.entry_type === 'Work Study' || r.entry_type === 'All Done') return
+        if (r.status === 'No Show' || r.entry_type === 'Volunteer' || r.entry_type === 'Work Study') return
         const d = extractDateFromTimestamp(r.punch_in)
         if (!d) return
+        if (!daySpans[d]) daySpans[d] = { firstPunchIn: Infinity, lastPunchOut: 0, hasStillIn: false, firstRecordId: null, lastRecordId: null, hasAllDone: false }
+        if (r.entry_type === 'All Done') {
+          // Track that this day has an All Done swipe (used to suppress Left Early flags)
+          // but exclude from firstPunchIn/lastPunchOut computation
+          daySpans[d].hasAllDone = true
+          return
+        }
         const piMin = extractTimeMinutes(r.punch_in)
         const poMin = extractTimeMinutes(r.punch_out)
         const isStillIn = r.status === 'Punched In'
-        if (!daySpans[d]) daySpans[d] = { firstPunchIn: Infinity, lastPunchOut: 0, hasStillIn: false, firstRecordId: null, lastRecordId: null }
         if (piMin !== null && piMin < daySpans[d].firstPunchIn) {
           daySpans[d].firstPunchIn = piMin
           daySpans[d].firstRecordId = r.record_id
@@ -300,8 +327,10 @@ export function useTimeCardData() {
           if (lateBy > gracePeriod) lateFlagRecords.add(span.firstRecordId)
         }
 
-        // Early check: use day's latest departure (only if no one still in)
-        if (!span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
+        // Early check: use day's latest departure (only if no one still in).
+        // SKIP if the day has an All Done swipe — instructor closed out the day,
+        // so the student leaving before signup end is sanctioned, not a left-early.
+        if (!span.hasAllDone && !span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
           const earlyBy = daySignup.endMin - span.lastPunchOut
           dayEarlyInfo[date] = { isEarly: earlyBy > gracePeriod, earlyMinutes: earlyBy > gracePeriod ? earlyBy : 0 }
           if (earlyBy > gracePeriod) earlyFlagRecords.add(span.lastRecordId)
@@ -309,7 +338,7 @@ export function useTimeCardData() {
       })
 
       // 7. Analyze each entry for attendance flags using pre-computed day-span data
-      let lateCount = 0, earlyCount = 0, noShowCount = 0, walkInCount = 0
+      let lateCount = 0, earlyCount = 0, noShowCount = 0, walkInCount = 0, wrongClassCount = 0
       let totalLateMins = 0, totalEarlyMins = 0, onTimeCount = 0
 
       const enrichedRecords = records.map(r => {
@@ -328,6 +357,8 @@ export function useTimeCardData() {
           isWalkIn: false,
           isNoShow: false,
           isOnTime: false,
+          isWrongClass: false,
+          wrongClassExpected: null, // course_id(s) the student should have punched into
           scheduledStart: null,
           scheduledEnd: null,
           scheduledSlots: 0,
@@ -361,6 +392,31 @@ export function useTimeCardData() {
         flags.scheduledStart = daySignup.startMin
         flags.scheduledEnd = daySignup.endMin
         flags.scheduledSlots = daySignup.slots.length
+
+        // Wrong-class detection: student has signups that overlap this entry's time,
+        // but none of those overlapping signup slots are for this entry's course.
+        // Treat as neutral (excluded from on-time score) — informational only.
+        const entryStartMin = extractTimeMinutes(r.punch_in)
+        const entryEndMin = extractTimeMinutes(r.punch_out)
+        const entryCourse = r.course_id || r.class_id || ''
+        if (entryStartMin !== null && entryEndMin !== null && entryCourse) {
+          const overlappingSlots = daySignup.slots.filter(s => {
+            const sStart = timeToMinutes(s.startTime)
+            const sEnd = timeToMinutes(s.endTime)
+            if (sStart === null || sEnd === null) return false
+            // overlap if entry start < slot end AND entry end > slot start
+            return entryStartMin < sEnd && entryEndMin > sStart
+          })
+          if (overlappingSlots.length > 0) {
+            const matchedSlot = overlappingSlots.some(s => s.classId === entryCourse)
+            if (!matchedSlot) {
+              flags.isWrongClass = true
+              flags.wrongClassExpected = [...new Set(overlappingSlots.map(s => s.classId))].join(', ')
+              wrongClassCount++
+              return { ...r, flags }
+            }
+          }
+        }
 
         // Late: only on the entry with the day's earliest punch_in
         if (lateFlagRecords.has(r.record_id)) {
@@ -415,7 +471,7 @@ export function useTimeCardData() {
       if (allRelevantCourseIds.length > 0) {
         const { data } = await supabase
           .from('classes')
-          .select('class_id, course_id, course_name, required_hours, status, start_date, end_date')
+          .select('class_id, course_id, course_name, required_hours, status, start_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end')
           .in('course_id', allRelevantCourseIds)
         classesData = data || []
       }
@@ -428,12 +484,121 @@ export function useTimeCardData() {
       //   - Inactive class with no entries in range: hidden
       const classHrs = {}
 
+      // Build "week-closed" map: per course_id, was there any all_done=Yes row
+      // (or required_hours_met=Yes) for a week_number that overlaps the viewing period?
+      //
+      // Two independent signals are merged here:
+      //   (a) weekly_lab_tracker rows with all_done=true — covers tracked classes
+      //   (b) time_clock entries with entry_type='All Done' — covers ALL classes
+      //       (including tracking_type='None' classes like ones tracked in D2L,
+      //       which never get tracker rows created for them)
+      //
+      // Background: weekly_lab_tracker rows historically have empty week_start_date /
+      // week_end_date columns — only week_number is reliably populated. So we match
+      // tracker rows to the visible period by computing each class's week calendar
+      // (via buildClassWeeks) and checking which week_numbers overlap the view.
+      const isYes = (v) => v === 'Yes' || v === true
+
+      // Per course_id, collect the set of week_numbers that fall in the viewing period
+      // using each class's own calendar (handles spring break / finals correctly).
+      const overlappingWeekNumsByCourse = {}
+      classesData.forEach(c => {
+        const key = c.course_id || c.class_id
+        if (!key) return
+        if (!c.start_date || !c.end_date) return
+        const weeks = buildClassWeeks({
+          startDate: c.start_date, endDate: c.end_date,
+          springBreakStart: c.spring_break_start, springBreakEnd: c.spring_break_end,
+          finalsStart: c.finals_start, finalsEnd: c.finals_end,
+        })
+        const overlapNums = weeks.filter(wk => {
+          const wkStart = (wk.startDate || '').substring(0, 10)
+          const wkEnd = (wk.endDate || '').substring(0, 10)
+          if (!wkStart || !wkEnd) return false
+          // overlap if wkEnd >= startDate AND wkStart <= endDate
+          return wkEnd >= startDate && wkStart <= endDate
+        }).map(w => w.weekNumber)
+        if (overlapNums.length > 0) {
+          overlappingWeekNumsByCourse[key] = new Set(overlapNums)
+        }
+      })
+
+      const weekClosedByCourse = {}
+
+      // Signal (a): weekly_lab_tracker rows
+      labTrackerRows.forEach(lt => {
+        const key = lt.course_id || lt.class_id
+        if (!key) return
+        const wkNum = parseInt(lt.week_number)
+        if (isNaN(wkNum)) return
+
+        // Match strategy: prefer week_number against the class calendar.
+        // Fallback: if the tracker row has populated dates AND they overlap the view,
+        // accept it (covers the rare row that does have dates, or off-calendar weeks).
+        const overlapSet = overlappingWeekNumsByCourse[key]
+        const matchedByWeekNum = overlapSet && overlapSet.has(wkNum)
+
+        let matchedByDate = false
+        if (lt.week_start_date && lt.week_end_date) {
+          const ws = String(lt.week_start_date).substring(0, 10)
+          const we = String(lt.week_end_date).substring(0, 10)
+          matchedByDate = we >= startDate && ws <= endDate
+        }
+
+        if (!matchedByWeekNum && !matchedByDate) return
+
+        if (!weekClosedByCourse[key]) {
+          weekClosedByCourse[key] = { allDone: false, requiredHoursMet: false }
+        }
+        if (isYes(lt.all_done)) weekClosedByCourse[key].allDone = true
+        if (isYes(lt.required_hours_met)) weekClosedByCourse[key].requiredHoursMet = true
+      })
+
+      // Signal (b): time_clock entries with entry_type='All Done'
+      // Group All Done entries by Monday-of-week; any course that has ANY entry
+      // (or is enrolled) in that same week gets the week-closed flag too.
+      // This is what makes the tile turn green for D2L-tracked classes (RICT1610
+      // and similar tracking_type='None' courses) which never get tracker rows.
+      const allDoneWeeks = new Set()
+      records.forEach(r => {
+        if (r.entry_type !== 'All Done') return
+        const d = extractDateFromTimestamp(r.punch_in)
+        if (!d) return
+        // Compute Monday of that week as a YYYY-MM-DD key
+        const parts = d.split('-')
+        const dt = new Date(+parts[0], +parts[1] - 1, +parts[2])
+        const day = dt.getDay()
+        const offsetToMon = day === 0 ? -6 : 1 - day
+        dt.setDate(dt.getDate() + offsetToMon)
+        const mondayKey = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`
+        allDoneWeeks.add(mondayKey)
+      })
+
+      if (allDoneWeeks.size > 0) {
+        // Determine which courses had entries (or are enrolled) during any all-done week.
+        // For simplicity in the typical 1-week view, if there's any All Done in the period,
+        // every visible class gets the closed flag.
+        const allCourseKeysInView = new Set([
+          ...Object.keys(classHrsFromEntries),
+          ...classesData.map(c => c.course_id || c.class_id),
+        ])
+        allCourseKeysInView.forEach(key => {
+          if (!key) return
+          if (!weekClosedByCourse[key]) {
+            weekClosedByCourse[key] = { allDone: false, requiredHoursMet: false }
+          }
+          weekClosedByCourse[key].allDone = true
+          weekClosedByCourse[key].requiredHoursMet = true
+        })
+      }
+
       classesData.forEach(c => {
         const key = c.course_id || c.class_id
         const hasEntries = !!classHrsFromEntries[key]
         const isEnrolled = enrolledClasses.includes(c.class_id) ||
           enrolledClasses.includes(c.course_id)
         const isInRange = classActiveInRange(c, startDate, endDate)
+        const closure = weekClosedByCourse[key] || { allDone: false, requiredHoursMet: false }
 
         if (isEnrolled && isInRange) {
           // Class was running during this period — always show tile
@@ -441,6 +606,8 @@ export function useTimeCardData() {
             hours: classHrsFromEntries[key]?.hours || 0,
             requiredHours: parseFloat(c.required_hours) || 0,
             courseName: c.course_name || '',
+            allDone: closure.allDone,
+            requiredHoursMet: closure.requiredHoursMet,
           }
         } else if (hasEntries) {
           // Class is outside range or student no longer enrolled but has actual entries —
@@ -449,6 +616,8 @@ export function useTimeCardData() {
             hours: classHrsFromEntries[key].hours,
             requiredHours: parseFloat(c.required_hours) || 0,
             courseName: c.course_name || '',
+            allDone: closure.allDone,
+            requiredHoursMet: closure.requiredHoursMet,
           }
         }
         // Otherwise: class not in range and no entries → hidden (e.g. future class on a past week)
@@ -457,10 +626,13 @@ export function useTimeCardData() {
       // Safety net: if an entry's course_id didn't match any class record, still show it
       coursesWithEntries.forEach(key => {
         if (!classHrs[key]) {
+          const closure = weekClosedByCourse[key] || { allDone: false, requiredHoursMet: false }
           classHrs[key] = {
             hours: classHrsFromEntries[key].hours,
             requiredHours: 0,
             courseName: '',
+            allDone: closure.allDone,
+            requiredHoursMet: closure.requiredHoursMet,
           }
         }
       })
@@ -469,11 +641,151 @@ export function useTimeCardData() {
       setTotalHours(total)
 
       // 8. Attendance summary
+      //
+      // Per-week scoring (averaged across weeks for the displayed period):
+      //   Each week starts at 100% if the student met their required hours OR got
+      //   an All Done swipe. Otherwise, the week starts at (hours / required) × 100,
+      //   so a student who didn't show up at all for a week's lab gets 0% for that week.
+      //
+      //   Then per-week deductions apply:
+      //     − 10% per Late
+      //     − 10% per Left Early (already suppressed at flag time on All Done days)
+      //     − 20% per No Show
+      //
+      //   Walk-ins and Wrong Class are neutral (don't deduct).
+      //   Each week is floored at 0%, and the period score is the average across weeks.
+
+      // Build the list of (Monday-anchored) weeks in the visible period that
+      // had at least one enrolled class running.
+      const requiredHoursByMonday = {}
+      classesData.forEach(c => {
+        if (!c.start_date || !c.end_date) return
+        const isEnrolled = enrolledClasses.includes(c.class_id) ||
+          enrolledClasses.includes(c.course_id)
+        if (!isEnrolled) return
+        const weeks = buildClassWeeks({
+          startDate: c.start_date, endDate: c.end_date,
+          springBreakStart: c.spring_break_start, springBreakEnd: c.spring_break_end,
+          finalsStart: c.finals_start, finalsEnd: c.finals_end,
+        })
+        weeks.forEach(wk => {
+          const wkStart = (wk.startDate || '').substring(0, 10)
+          const wkEnd = (wk.endDate || '').substring(0, 10)
+          if (!wkStart || !wkEnd) return
+          // Only count weeks that overlap the viewing period
+          if (!(wkEnd >= startDate && wkStart <= endDate)) return
+          requiredHoursByMonday[wkStart] = (requiredHoursByMonday[wkStart] || 0) + (parseFloat(c.required_hours) || 0)
+        })
+      })
+
+      // Helper: compute the Monday-of-week (YYYY-MM-DD) for any date string
+      const mondayOf = (yyyymmdd) => {
+        const parts = (yyyymmdd || '').split('-')
+        if (parts.length !== 3) return null
+        const dt = new Date(+parts[0], +parts[1] - 1, +parts[2])
+        const day = dt.getDay()
+        const offsetToMon = day === 0 ? -6 : 1 - day
+        dt.setDate(dt.getDate() + offsetToMon)
+        return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`
+      }
+
+      // Build a Set of Monday keys for weeks where the user has any tracker row
+      // marked all_done=true (the week is closed even without a time_clock All Done).
+      const allDoneTrackerMondays = new Set()
+      labTrackerRows.forEach(lt => {
+        if (!isYes(lt.all_done)) return
+        // Prefer the row's own week_start_date if populated; else derive from class calendar
+        if (lt.week_start_date) {
+          const m = mondayOf(String(lt.week_start_date).substring(0, 10))
+          if (m) allDoneTrackerMondays.add(m)
+          return
+        }
+        const wkNum = parseInt(lt.week_number)
+        if (isNaN(wkNum)) return
+        const courseKey = lt.course_id || lt.class_id
+        const cls = classesData.find(c => (c.course_id === courseKey) || (c.class_id === courseKey))
+        if (!cls || !cls.start_date || !cls.end_date) return
+        const cwks = buildClassWeeks({
+          startDate: cls.start_date, endDate: cls.end_date,
+          springBreakStart: cls.spring_break_start, springBreakEnd: cls.spring_break_end,
+          finalsStart: cls.finals_start, finalsEnd: cls.finals_end,
+        })
+        const match = cwks.find(w => w.weekNumber === wkNum)
+        if (match) {
+          const m = mondayOf((match.startDate || '').substring(0, 10))
+          if (m) allDoneTrackerMondays.add(m)
+        }
+      })
+
+      // Group all enriched records by their Monday-of-week
+      const recordsByMonday = {}
+      enrichedRecords.forEach(r => {
+        const d = extractDateFromTimestamp(r.punch_in)
+        if (!d) return
+        const m = mondayOf(d)
+        if (!m) return
+        if (!recordsByMonday[m]) recordsByMonday[m] = []
+        recordsByMonday[m].push(r)
+      })
+
+      // Safety net: if the user has ANY All Done in the period (time_clock or tracker),
+      // every week in the period is treated as closed. This prevents per-week-keying bugs
+      // from producing a wrong score when an All Done is clearly present.
+      const periodHasAllDone =
+        records.some(r => r.entry_type === 'All Done') ||
+        labTrackerRows.some(lt => isYes(lt.all_done))
+
+      // For every week the period covers (and at least one class was running),
+      // compute that week's score.
+      const weekScores = []
+      Object.entries(requiredHoursByMonday).forEach(([monday, weekRequired]) => {
+        const wkRecs = recordsByMonday[monday] || []
+        const nonVolunteerWk = wkRecs.filter(r => r.entry_type !== 'Volunteer' && r.entry_type !== 'Work Study')
+        let wkLate = 0, wkEarly = 0, wkNoShow = 0
+        let wkHours = 0
+        let wkHasAllDone = allDoneTrackerMondays.has(monday) || periodHasAllDone
+        wkRecs.forEach(r => {
+          if (r.entry_type === 'All Done') wkHasAllDone = true
+          if (r.entry_type !== 'Volunteer') wkHours += parseFloat(r.total_hours) || 0
+        })
+        nonVolunteerWk.forEach(r => {
+          if (r.flags?.isLate) wkLate++
+          if (r.flags?.isEarlyDeparture) wkEarly++
+          if (r.flags?.isNoShow) wkNoShow++
+        })
+
+        // Base score: 100 if the week was completed (hours met OR All Done swiped),
+        // else proportional to the hours achieved.
+        let base = 100
+        if (!wkHasAllDone && weekRequired > 0 && wkHours < weekRequired) {
+          base = Math.min(100, Math.round((wkHours / weekRequired) * 100))
+        }
+        const score = Math.max(0, base - (wkLate * 10) - (wkEarly * 10) - (wkNoShow * 20))
+        weekScores.push(score)
+      })
+
+      // Diagnostic: if the user has fetchTimeCard debug enabled, log breakdown.
+      // Toggle with localStorage.setItem('rict.debugScore', '1') in the browser console.
+      try {
+        if (typeof window !== 'undefined' && window.localStorage?.getItem('rict.debugScore') === '1') {
+          // eslint-disable-next-line no-console
+          console.log('[score-debug]', {
+            userId, startDate, endDate,
+            enrolledClasses,
+            periodHasAllDone,
+            requiredHoursByMonday,
+            allDoneTrackerMondays: [...allDoneTrackerMondays],
+            recordsByMondayCounts: Object.fromEntries(Object.entries(recordsByMonday).map(([k, v]) => [k, v.length])),
+            recordEntryTypes: records.map(r => ({ date: extractDateFromTimestamp(r.punch_in), type: r.entry_type, hours: r.total_hours })),
+            weekScores,
+          })
+        }
+      } catch {}
+
       const nonVolunteerEntries = enrichedRecords.filter(r => r.entry_type !== 'Volunteer' && r.entry_type !== 'Work Study')
       const totalEntries = nonVolunteerEntries.length
-      const scoreDenom = totalEntries - nonVolunteerEntries.filter(r => r.flags.isNoShow).length
-      const attendanceScore = scoreDenom > 0
-        ? Math.round((onTimeCount / scoreDenom) * 100)
+      const attendanceScore = weekScores.length > 0
+        ? Math.round(weekScores.reduce((a, b) => a + b, 0) / weekScores.length)
         : 100
 
       setAttendanceSummary({
@@ -481,11 +793,13 @@ export function useTimeCardData() {
         earlyDepartures: earlyCount,
         noShows: noShowCount,
         walkIns: walkInCount,
+        wrongClass: wrongClassCount,
         totalLateMinutes: totalLateMins,
         totalEarlyMinutes: totalEarlyMins,
         onTimeCount,
         totalEntries,
         attendanceScore,
+        weeksEvaluated: weekScores.length,
         gracePeriod,
       })
     } catch (err) {
@@ -507,6 +821,12 @@ export function useTimeCardData() {
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => {
+        if (lastFetchParamsRef.current) {
+          const { userId, startDate, endDate } = lastFetchParamsRef.current
+          fetchTimeCard(userId, startDate, endDate)
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => {
         if (lastFetchParamsRef.current) {
           const { userId, startDate, endDate } = lastFetchParamsRef.current
           fetchTimeCard(userId, startDate, endDate)
@@ -581,7 +901,7 @@ export function useClassWeeklyReport() {
         try {
           const { data: suData } = await supabase
             .from('lab_signup')
-            .select('user_email, date, start_time, end_time, status')
+            .select('user_email, date, start_time, end_time, class_id, status')
             .in('user_email', emails)
             .eq('status', 'Confirmed')
             .gte('date', startDate)
@@ -619,23 +939,29 @@ export function useClassWeeklyReport() {
         userSignups.forEach(s => {
           const d = (s.date || '').split('T')[0]
           if (!d) return
-          if (!signupsByDate[d]) signupsByDate[d] = { startMin: Infinity, endMin: 0 }
+          if (!signupsByDate[d]) signupsByDate[d] = { startMin: Infinity, endMin: 0, slots: [] }
           const sMin = timeToMinutes(s.start_time)
           const eMin = timeToMinutes(s.end_time)
           if (sMin !== null && sMin < signupsByDate[d].startMin) signupsByDate[d].startMin = sMin
           if (eMin !== null && eMin > signupsByDate[d].endMin) signupsByDate[d].endMin = eMin
+          signupsByDate[d].slots.push({
+            startTime: s.start_time, endTime: s.end_time, classId: s.class_id
+          })
         })
 
         // Build day spans from ALL records (cross-class) for accurate attendance
         const daySpans = {}
         allUserRecords.forEach(r => {
-          if (r.entry_type === 'All Done') return
           const d = extractDateFromTimestamp(r.punch_in)
           if (!d) return
+          if (!daySpans[d]) daySpans[d] = { firstPunchIn: Infinity, lastPunchOut: 0, hasStillIn: false, firstRecordId: null, lastRecordId: null, hasAllDone: false }
+          if (r.entry_type === 'All Done') {
+            daySpans[d].hasAllDone = true
+            return
+          }
           const piMin = extractTimeMinutes(r.punch_in)
           const poMin = extractTimeMinutes(r.punch_out)
           const isStillIn = r.status === 'Punched In'
-          if (!daySpans[d]) daySpans[d] = { firstPunchIn: Infinity, lastPunchOut: 0, hasStillIn: false, firstRecordId: null, lastRecordId: null }
           if (piMin !== null && piMin < daySpans[d].firstPunchIn) {
             daySpans[d].firstPunchIn = piMin
             daySpans[d].firstRecordId = r.record_id
@@ -648,6 +974,7 @@ export function useClassWeeklyReport() {
         })
 
         // Pre-compute late/early flag record IDs
+        // Skip early-departure flagging on days with an All Done swipe.
         const lateFlagRecords = new Set()
         const earlyFlagRecords = new Set()
         Object.entries(daySpans).forEach(([date, span]) => {
@@ -658,7 +985,7 @@ export function useClassWeeklyReport() {
               lateFlagRecords.add(span.firstRecordId)
             }
           }
-          if (!span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
+          if (!span.hasAllDone && !span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
             if ((daySignup.endMin - span.lastPunchOut) > gracePeriod) {
               earlyFlagRecords.add(span.lastRecordId)
             }
@@ -666,12 +993,32 @@ export function useClassWeeklyReport() {
         })
 
         // Count attendance flags — only for THIS class's records, using day-span data
-        let lateCount = 0, earlyCount = 0, walkInCount = 0
+        // Walk-ins (no signup that day) and wrong-class (signed up for a different course
+        // at that time) are both treated as neutral — informational only.
+        let lateCount = 0, earlyCount = 0, walkInCount = 0, wrongClassCount = 0
         userRecords.forEach(r => {
           if (r.entry_type === 'All Done') return
           const entryDate = extractDateFromTimestamp(r.punch_in)
           const daySignup = entryDate ? signupsByDate[entryDate] : null
           if (!daySignup || daySignup.startMin === Infinity) { walkInCount++; return }
+
+          // Wrong-class check: is there an overlapping signup slot, and does its class match?
+          const entryStartMin = extractTimeMinutes(r.punch_in)
+          const entryEndMin = extractTimeMinutes(r.punch_out)
+          const entryCourse = r.course_id || r.class_id || ''
+          if (entryStartMin !== null && entryEndMin !== null && entryCourse) {
+            const overlapping = daySignup.slots.filter(s => {
+              const sStart = timeToMinutes(s.startTime)
+              const sEnd = timeToMinutes(s.endTime)
+              if (sStart === null || sEnd === null) return false
+              return entryStartMin < sEnd && entryEndMin > sStart
+            })
+            if (overlapping.length > 0 && !overlapping.some(s => s.classId === entryCourse)) {
+              wrongClassCount++
+              return
+            }
+          }
+
           if (lateFlagRecords.has(r.record_id)) lateCount++
           if (earlyFlagRecords.has(r.record_id) && r.entry_type === 'Left Early') earlyCount++
         })
@@ -688,6 +1035,7 @@ export function useClassWeeklyReport() {
           lateCount,
           earlyCount,
           walkInCount,
+          wrongClassCount,
         }
       }).sort((a, b) => a.fullName.localeCompare(b.fullName))
 
