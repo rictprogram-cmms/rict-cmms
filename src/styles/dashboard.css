@@ -1,0 +1,276 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   RICT CMMS — Dashboard styles
+   Extracted from inline <style> block in DashboardPage.jsx (Pass 3).
+   File: src/styles/dashboard.css
+   ────────────────────────────────────────────────────────────────────────── */
+
+.dash-root { max-width: 800px; margin: 0 auto; }
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+.dash-toast {
+  position: fixed; top: 20px; right: 20px;
+  padding: 12px 20px; border-radius: 8px;
+  color: white; z-index: 5000; font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: dashIn 0.3s ease;
+}
+.dash-toast-success { background: #40c057; }
+.dash-toast-error   { background: #fa5252; }
+.dash-toast-info    { background: #228be6; }
+@keyframes dashIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ── Welcome card + fun fact ─────────────────────────────────────────────── */
+.dash-welcome {
+  text-align: center; padding: 24px 24px 20px;
+  background: linear-gradient(180deg, #f0f7ff 0%, #ffffff 100%);
+  border-radius: 16px;
+}
+.dash-welcome-title { font-size: 1.4rem; font-weight: 700; color: #1a1a2e; margin: 0 0 4px; }
+.dash-welcome-text  { font-size: 0.95rem; color: #868e96; margin: 0 0 16px; }
+
+.dash-funfact {
+  display: flex; align-items: flex-start; gap: 14px; text-align: left;
+  background: white; border-left: 4px solid #228be6;
+  border-radius: 0 12px 12px 0; padding: 14px 18px;
+  max-width: 480px; margin: 0 auto;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.dash-funfact-label {
+  font-size: 0.7rem; font-weight: 700; color: #fab005;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.dash-funfact-text { font-size: 0.88rem; color: #495057; line-height: 1.5; }
+
+/* ── Metric tile grids ───────────────────────────────────────────────────── */
+.dash-metrics-grid {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  gap: 12px; max-width: 800px;
+}
+@media (max-width: 600px) {
+  .dash-metrics-grid { grid-template-columns: repeat(2, 1fr); }
+}
+.dash-inst-tiles {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+
+/* ── Metric tile (now a <button> after Pass 2) ───────────────────────────── */
+.dash-metric-tile {
+  /* Native button reset — these tiles are <button> elements */
+  font: inherit; color: inherit;
+  -webkit-appearance: none; appearance: none; width: 100%;
+  background: white; border: 1px solid #e9ecef; border-radius: 12px;
+  padding: 16px; text-align: center;
+  cursor: pointer; transition: all 0.2s;
+}
+.dash-metric-tile:hover {
+  border-color: #228be6;
+  box-shadow: 0 2px 8px rgba(34, 139, 230, 0.12);
+  transform: translateY(-1px);
+}
+.dash-metric-tile:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
+
+/* Card header is a <div role="button"> — match the visible focus styling */
+.dash-card-header[role="button"]:focus-visible {
+  outline: 2px solid #228be6; outline-offset: -2px;
+  border-radius: 12px 12px 0 0;
+}
+
+.dash-metric-icon {
+  font-size: 1.3rem; border-radius: 8px;
+  padding: 6px; display: inline-block; margin-bottom: 8px;
+}
+.dash-metric-value { font-size: 1.6rem; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
+.dash-metric-label { font-size: 0.78rem; font-weight: 600; color: #495057; margin-top: 2px; }
+.dash-metric-sub   { font-size: 0.68rem; color: #868e96; margin-top: 2px; }
+
+/* ── Card / collapsible sections ─────────────────────────────────────────── */
+.dash-card {
+  background: white; border-radius: 12px;
+  border: 1px solid #e9ecef; overflow: hidden;
+}
+.dash-card-header {
+  padding: 16px 20px; border-bottom: 1px solid #f1f3f5;
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.9rem;
+}
+.dash-card-body { padding: 0; }
+
+/* ── Day View navigation buttons ─────────────────────────────────────────── */
+.dash-btn-sm {
+  background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px;
+  padding: 4px 12px; font-size: 0.75rem; cursor: pointer; color: #495057;
+  display: inline-flex; align-items: center;
+}
+.dash-btn-sm:hover { background: #e9ecef; }
+
+.dash-day-nav-btn {
+  /* WCAG 2.5.8 (AA) — minimum 24x24 effective touch target */
+  background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px;
+  min-width: 28px; min-height: 28px; padding: 2px 4px;
+  cursor: pointer; display: inline-flex; align-items: center;
+  justify-content: center; color: #495057; transition: all 0.15s;
+}
+.dash-day-nav-btn:hover { background: #e9ecef; color: #228be6; }
+
+/* ── Day View person rows ────────────────────────────────────────────────── */
+.dash-day-person {
+  padding: 10px 20px; border-bottom: 1px solid #f1f3f5;
+  border-left: 3px solid #e9ecef;
+}
+.dash-day-person:last-child { border-bottom: none; }
+
+/* ── Status badges ───────────────────────────────────────────────────────── */
+.dash-badge-in         { font-size: 0.68rem; font-weight: 600; background: #d3f9d8; color: #2b8a3e; padding: 2px 8px; border-radius: 4px; }
+.dash-badge-left       { font-size: 0.68rem; font-weight: 600; background: #f1f3f5; color: #868e96; padding: 2px 8px; border-radius: 4px; }
+.dash-badge-expected   { font-size: 0.68rem; font-weight: 600; background: #fff9db; color: #664d03; padding: 2px 8px; border-radius: 4px; }
+.dash-badge-walk-in    { font-size: 0.65rem; font-weight: 600; background: #fff4e6; color: #d9480f; padding: 1px 6px; border-radius: 4px; }
+.dash-badge-work-study { font-size: 0.65rem; font-weight: 600; background: #dbeafe; color: #1d4ed8; padding: 1px 6px; border-radius: 4px; }
+
+/* ── Late WO row (now a <button> after Pass 2) ───────────────────────────── */
+.dash-late-wo-item {
+  /* Native button reset — late WO rows are <button> elements */
+  font: inherit; color: inherit;
+  -webkit-appearance: none; appearance: none; width: 100%;
+  background: white; border: none;
+  border-bottom: 1px solid #f1f3f5; border-left: 3px solid #fa5252;
+  text-align: left;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 20px; cursor: pointer; transition: background 0.15s;
+}
+.dash-late-wo-item:last-child { border-bottom: none; }
+.dash-late-wo-item:hover { background: #fff5f5; }
+.dash-late-wo-item:focus-visible { outline: 2px solid #228be6; outline-offset: -2px; }
+
+/* ── Active Temp Access rows ─────────────────────────────────────────────── */
+.dash-temp-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 20px; border-bottom: 1px solid #f1f3f5;
+  border-left: 3px solid #40c057;
+}
+.dash-temp-item:last-child { border-bottom: none; }
+
+.dash-role-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 0.7rem; font-weight: 600;
+}
+.dash-role-badge.role-ws   { background: #e7f5ff; color: #1971c2; }
+.dash-role-badge.role-inst { background: #f3e8ff; color: #7c3aed; }
+
+.dash-status-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 0.7rem; font-weight: 600;
+}
+.dash-status-badge.status-pending  { background: #fff3cd; color: #856404; }
+.dash-status-badge.status-active   { background: #d3f9d8; color: #2b8a3e; }
+.dash-status-badge.status-approved { background: #d3f9d8; color: #2b8a3e; }
+.dash-status-badge.status-revoked  { background: #ffe3e3; color: #c92a2a; }
+.dash-status-badge.status-rejected { background: #ffe3e3; color: #c92a2a; }
+.dash-status-badge.status-expired  { background: #f1f3f5; color: #868e96; }
+
+.dash-btn-reject {
+  background: #fa5252; color: white; border: none; border-radius: 6px;
+  padding: 6px 14px; font-size: 0.78rem; font-weight: 500;
+  cursor: pointer; transition: opacity 0.2s;
+}
+.dash-btn-reject:hover { opacity: 0.85; }
+
+/* ── Modal dialogs ───────────────────────────────────────────────────────── */
+.dash-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2000; padding: 20px;
+}
+.dash-modal {
+  background: white; border-radius: 12px;
+  width: 100%; max-width: 440px; overflow: hidden;
+}
+.dash-modal-header {
+  padding: 20px; border-bottom: 1px solid #e9ecef;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.dash-modal-header h4 {
+  margin: 0; font-size: 1rem;
+  display: flex; align-items: center; gap: 8px;
+}
+.dash-modal-close {
+  background: none; border: none;
+  font-size: 1.5rem; cursor: pointer; color: #868e96;
+  min-width: 32px; min-height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+}
+.dash-modal-close:hover { background: #f1f3f5; color: #495057; }
+.dash-modal-body   { padding: 20px; }
+.dash-modal-footer {
+  padding: 16px 20px; border-top: 1px solid #e9ecef;
+  display: flex; justify-content: flex-end; gap: 12px;
+}
+
+/* ── Form controls inside modals ─────────────────────────────────────────── */
+.dash-label {
+  display: block; font-size: 0.85rem; font-weight: 500;
+  margin: 12px 0 6px; color: #495057;
+}
+.dash-input {
+  width: 100%; padding: 10px 12px;
+  border: 1px solid #dee2e6; border-radius: 8px;
+  font-size: 0.9rem; box-sizing: border-box;
+}
+.dash-input:focus {
+  border-color: #228be6; outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 139, 230, 0.1);
+}
+textarea.dash-input { resize: vertical; font-family: inherit; }
+
+.dash-btn-primary {
+  background: #228be6; color: white; border: none; border-radius: 8px;
+  padding: 10px 20px; font-size: 0.88rem; font-weight: 500;
+  cursor: pointer; transition: background 0.2s;
+}
+.dash-btn-primary:hover { background: #1c7ed6; }
+.dash-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.dash-btn-cancel {
+  background: #f1f3f5; color: #495057; border: none; border-radius: 8px;
+  padding: 10px 20px; font-size: 0.88rem; cursor: pointer;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+.dash-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.dash-table th {
+  text-align: left; padding: 10px 12px;
+  background: #f8f9fa; font-weight: 600; color: #495057;
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.3px;
+  border-bottom: 2px solid #e9ecef;
+}
+.dash-table td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; }
+.dash-table tr:hover { background: #f8f9fa; }
+
+/* ── Visually-hidden helper for screen reader text ───────────────────────── */
+.dash-sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* ── Visible keyboard focus on auxiliary control buttons (WCAG 2.4.7) ────── */
+.dash-btn-sm:focus-visible,
+.dash-day-nav-btn:focus-visible,
+.dash-btn-primary:focus-visible,
+.dash-btn-cancel:focus-visible,
+.dash-btn-reject:focus-visible,
+.dash-modal-close:focus-visible {
+  outline: 2px solid #228be6; outline-offset: 2px;
+}
+
+/* ── Respect prefers-reduced-motion (WCAG 2.3.3) ─────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .dash-toast { animation: none; }
+  .dash-metric-tile { transition: none; }
+  .dash-metric-tile:hover { transform: none; }
+  .dash-card-header .material-icons { transition: none !important; }
+}

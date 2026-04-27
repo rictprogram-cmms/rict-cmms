@@ -1,0 +1,206 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   RICT CMMS — NotificationBell styles
+   Extracted from inline <style> block in NotificationBell.jsx (Pass 3).
+   File: src/styles/notification-bell.css
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+.nbell-toast {
+  position: fixed; top: 20px; right: 20px;
+  padding: 12px 20px; border-radius: 8px;
+  color: #fff; z-index: 6000; font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: nbIn 0.3s ease;
+}
+.nbell-toast-success { background: #40c057; }
+.nbell-toast-error   { background: #fa5252; }
+.nbell-toast-info    { background: #228be6; }
+@keyframes nbIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ── Bell button ─────────────────────────────────────────────────────────── */
+.nbell-btn {
+  background: none; border: none; color: inherit; cursor: pointer;
+  padding: 8px; border-radius: 50%; position: relative;
+  transition: background 0.2s;
+  display: flex; align-items: center; justify-content: center;
+}
+.nbell-btn:hover { background: rgba(0, 0, 0, 0.05); }
+.nbell-btn.has-new .material-icons { animation: nbShake 0.5s ease-in-out; }
+@keyframes nbShake {
+  0%, 100% { transform: rotate(0); }
+  15%      { transform: rotate(12deg); }
+  30%      { transform: rotate(-10deg); }
+  45%      { transform: rotate(8deg); }
+  60%      { transform: rotate(-6deg); }
+  75%      { transform: rotate(3deg); }
+}
+.nbell-count {
+  position: absolute; top: 2px; right: 2px;
+  background: #fa5252; color: #fff;
+  font-size: 0.6rem; font-weight: 700;
+  min-width: 16px; height: 16px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 4px; line-height: 1;
+}
+
+/* ── Panel (dropdown) ────────────────────────────────────────────────────── */
+.nbell-panel {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  width: 420px; max-height: 560px; background: #fff;
+  border-radius: 12px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  z-index: 1100;
+}
+.nbell-panel-header {
+  padding: 16px 20px; border-bottom: 1px solid #e9ecef;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nbell-panel-header h4 {
+  margin: 0; font-size: 0.95rem; font-weight: 600; color: #1a1a2e;
+}
+.nbell-badge {
+  background: #fa5252; color: #fff;
+  padding: 2px 10px; border-radius: 12px;
+  font-size: 0.7rem; font-weight: 600;
+}
+.nbell-panel-body { overflow-y: auto; flex: 1; max-height: 480px; }
+.nbell-empty { padding: 40px 20px; text-align: center; color: #868e96; }
+.nbell-empty .material-icons { font-size: 2.5rem; margin-bottom: 8px; display: block; }
+.nbell-empty p { margin: 0; font-size: 0.9rem; }
+
+/* ── Item rows ───────────────────────────────────────────────────────────── */
+.nbell-item { padding: 16px 20px; border-bottom: 1px solid #f1f3f5; }
+.nbell-item-top { display: flex; align-items: flex-start; gap: 12px; }
+.nbell-item-icon { font-size: 1.3rem; flex-shrink: 0; margin-top: 2px; }
+.nbell-item-content { flex: 1; min-width: 0; }
+.nbell-item-type {
+  font-size: 0.65rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+.nbell-item-title {
+  font-size: 0.88rem; font-weight: 600; color: #1a1a2e;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nbell-item-sub {
+  font-size: 0.78rem; color: #868e96; margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nbell-item-time { font-size: 0.7rem; color: #adb5bd; white-space: nowrap; flex-shrink: 0; }
+.nbell-item-actions { display: flex; gap: 8px; margin-top: 12px; padding-left: 36px; }
+
+/* ── PO detail (parts orders) ────────────────────────────────────────────── */
+.nbell-po-detail {
+  margin: 8px 0 0 36px; padding: 8px 10px;
+  background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef;
+}
+.nbell-po-wos {
+  margin-bottom: 6px; padding-bottom: 6px;
+  border-bottom: 1px solid #e9ecef;
+}
+.nbell-po-wo-line { display: flex; gap: 6px; align-items: baseline; margin-bottom: 2px; }
+.nbell-po-wo-id { font-size: 0.72rem; font-weight: 600; color: #228be6; flex-shrink: 0; }
+.nbell-po-wo-desc {
+  font-size: 0.72rem; color: #495057;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nbell-po-items { display: flex; flex-direction: column; gap: 3px; }
+.nbell-po-line { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; }
+.nbell-po-qty { font-weight: 600; color: #495057; min-width: 24px; }
+.nbell-po-desc {
+  flex: 1; color: #495057;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nbell-po-price { font-weight: 600; color: #1a1a2e; flex-shrink: 0; }
+
+/* ── Action buttons (Approve / Reject / View) ────────────────────────────── */
+.nbtn {
+  padding: 6px 14px; border-radius: 6px;
+  font-size: 0.78rem; font-weight: 500;
+  cursor: pointer; border: none;
+  display: inline-flex; align-items: center; gap: 4px;
+  transition: opacity 0.2s;
+}
+.nbtn:hover { opacity: 0.85; }
+.nbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.nbtn .material-icons { font-size: 0.9rem; }
+.nbtn-approve   { background: #40c057; color: #fff; }
+.nbtn-reject    { background: #fa5252; color: #fff; }
+.nbtn-secondary { background: #f1f3f5; color: #495057; }
+.nbtn-view      { background: #0ea5e9; color: #fff; }
+
+/* ── Modal dialogs ───────────────────────────────────────────────────────── */
+.nbell-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 3000; padding: 20px;
+}
+.nbell-modal {
+  background: #fff; border-radius: 12px;
+  width: 100%; max-width: 420px; overflow: hidden;
+}
+.nbell-modal-header {
+  padding: 20px; border-bottom: 1px solid #e9ecef;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.nbell-modal-header h4 {
+  margin: 0; font-size: 1rem;
+  display: flex; align-items: center; gap: 8px;
+}
+.nbell-modal-close {
+  background: none; border: none;
+  font-size: 1.5rem; cursor: pointer; color: #868e96;
+  min-width: 32px; min-height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+}
+.nbell-modal-close:hover { background: #f1f3f5; color: #495057; }
+.nbell-modal-close:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 4px; }
+.nbell-modal-body { padding: 20px; }
+.nbell-modal-body p { margin: 0 0 8px; font-size: 0.9rem; color: #495057; }
+.nbell-modal-footer {
+  padding: 16px 20px; border-top: 1px solid #e9ecef;
+  display: flex; justify-content: flex-end; gap: 12px;
+}
+
+/* ── Form controls inside modals ─────────────────────────────────────────── */
+.nbell-label {
+  display: block; font-size: 0.85rem; font-weight: 500;
+  margin: 12px 0 6px; color: #495057;
+}
+.nbell-select {
+  width: 100%; padding: 10px 12px;
+  border: 1px solid #dee2e6; border-radius: 8px;
+  font-size: 0.9rem; box-sizing: border-box;
+}
+.nbell-select:focus {
+  border-color: #228be6; outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 139, 230, 0.1);
+}
+
+/* ── Keyboard focus rings (WCAG 2.4.7 visible focus) ─────────────────────── */
+.nbell-btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
+.nbtn:focus-visible      { outline: 2px solid #1a1a2e; outline-offset: 2px; }
+
+/* ── Visually-hidden helper for screen reader text ───────────────────────── */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* ── Respect prefers-reduced-motion (WCAG 2.3.3) ─────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .nbell-toast { animation: none; }
+  .nbell-btn.has-new .material-icons { animation: none; }
+}
+
+/* ── Responsive panel width on narrow screens ────────────────────────────── */
+@media (max-width: 480px) {
+  .nbell-panel { width: calc(100vw - 32px); right: -60px; }
+}
