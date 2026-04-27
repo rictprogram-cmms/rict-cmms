@@ -1859,7 +1859,7 @@ export default function AppLayout() {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-sm font-bold text-surface-900 tracking-tight">RICT CMMS</h1>
+              <div className="text-sm font-bold text-surface-900 tracking-tight">RICT CMMS</div>
               {appVersion && (
                 <span className="text-[10px] font-medium text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded-full leading-none">
                   v{appVersion}
@@ -1974,9 +1974,9 @@ export default function AppLayout() {
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-2 text-sm">
-            <span className="text-surface-400 hidden sm:inline">RICT CMMS</span>
-            <ChevronRight size={14} className="text-surface-300 hidden sm:inline" />
-            <span className="font-semibold text-surface-900">{currentPage}</span>
+            <span className="text-surface-400 hidden sm:inline" aria-hidden="true">RICT CMMS</span>
+            <ChevronRight size={14} className="text-surface-300 hidden sm:inline" aria-hidden="true" />
+            <h1 className="font-semibold text-surface-900 text-sm m-0">{currentPage}</h1>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <HelpButton profile={profile} />

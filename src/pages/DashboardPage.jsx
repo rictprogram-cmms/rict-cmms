@@ -27,6 +27,8 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { useVolunteerData } from '@/hooks/useVolunteerHours';
 import { useStudentLabReport } from '@/hooks/useWeeklyLabs';
 import { useWOCRatio } from '@/hooks/useWOCRatio';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
+import '@/styles/dashboard.css';
 
 // ─── Fun Facts ──────────────────────────────────────────────────────────
 const funFacts = [
@@ -277,45 +279,53 @@ function AccountabilityMetrics({ navigate }) {
   return (
     <div style={{ marginTop: 16 }}>
       <div className="dash-metrics-grid">
-        <div className="dash-metric-tile" onClick={() => navigate('/work-orders')} role="button" tabIndex={0}>
-          <span className="material-icons dash-metric-icon" style={{ color: '#228be6', background: '#e7f5ff' }}>assignment</span>
+        <button type="button" className="dash-metric-tile" onClick={() => navigate('/work-orders')}
+          aria-label={`Work Orders: ${woCount}, ${woCount === 0 ? 'none assigned' : 'assigned to me'}`}>
+          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#228be6', background: '#e7f5ff' }}>assignment</span>
           <div className="dash-metric-value">{woCount}</div>
           <div className="dash-metric-label">Work Orders</div>
           <div className="dash-metric-sub">{woCount === 0 ? 'None assigned' : 'assigned to me'}</div>
-        </div>
-        <div className="dash-metric-tile" onClick={() => navigate('/weekly-labs-tracker')} role="button" tabIndex={0}>
-          <span className="material-icons dash-metric-icon" style={{ color: '#20c997', background: '#e6fcf5' }}>fact_check</span>
+        </button>
+        <button type="button" className="dash-metric-tile" onClick={() => navigate('/weekly-labs-tracker')}
+          aria-label={`Weekly Labs: ${labsThisWeek.total > 0 ? `${labsThisWeek.done} of ${labsThisWeek.total}` : 'none'} ${labsThisWeek.total === 0 ? 'this week' : labsThisWeek.done === labsThisWeek.total ? 'all complete' : 'complete this week'}`}>
+          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#20c997', background: '#e6fcf5' }}>fact_check</span>
           <div className="dash-metric-value">{labsThisWeek.total > 0 ? `${labsThisWeek.done}/${labsThisWeek.total}` : '—'}</div>
           <div className="dash-metric-label">Weekly Labs</div>
           <div className="dash-metric-sub">{labsThisWeek.total === 0 ? 'No labs this week' : labsThisWeek.done === labsThisWeek.total ? 'All complete ✓' : 'complete this week'}</div>
-        </div>
-        <div className="dash-metric-tile" onClick={() => navigate('/time-cards')} role="button" tabIndex={0}>
-          <span className="material-icons dash-metric-icon" style={{ color: scoreColor(score), background: scoreBg(score) }}>shield</span>
+        </button>
+        <button type="button" className="dash-metric-tile" onClick={() => navigate('/time-cards')}
+          aria-label={`Attendance: ${score} percent, ${score >= 90 ? 'on track' : score >= 70 ? 'needs improvement' : 'at risk'}`}>
+          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: scoreColor(score), background: scoreBg(score) }}>shield</span>
           <div className="dash-metric-value" style={{ color: scoreColor(score) }}>{score}%</div>
           <div className="dash-metric-label">Attendance</div>
           <div className="dash-metric-sub">{score >= 90 ? 'On-time score' : score >= 70 ? 'Needs improvement' : 'At risk'}</div>
-        </div>
-        <div className="dash-metric-tile" onClick={() => navigate('/volunteer-hours')} role="button" tabIndex={0}>
-          <span className="material-icons dash-metric-icon" style={{ color: '#9333ea', background: '#f3e8ff' }}>volunteer_activism</span>
+        </button>
+        <button type="button" className="dash-metric-tile" onClick={() => navigate('/volunteer-hours')}
+          aria-label={`Volunteer Hours: ${formatHoursMin(volStats.approvedHours)} of ${formatHoursMin(volStats.totalRequired)} required`}>
+          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#9333ea', background: '#f3e8ff' }}>volunteer_activism</span>
           <div className="dash-metric-value">{formatHoursMin(volStats.approvedHours)}</div>
           <div className="dash-metric-label">Volunteer Hours</div>
           <div className="dash-metric-sub">of {formatHoursMin(volStats.totalRequired)} required</div>
-        </div>
+        </button>
         {(() => {
           const woc = wocScore?.score ?? null;
           const rank = wocScore?.rank ?? null;
           const total = wocScore?.totalRanked ?? null;
           const wocColor = woc === null ? '#868e96' : woc >= 90 ? '#40c057' : woc >= 70 ? '#fab005' : '#fa5252';
           const wocBg   = woc === null ? '#f1f3f5' : woc >= 90 ? '#d3f9d8' : woc >= 70 ? '#fff9db' : '#ffe3e3';
+          const wocLabel = woc === null
+            ? 'WOC Score: not yet calculated'
+            : `WOC Score: ${woc}, ${rank !== null && total !== null ? `rank ${rank} of ${total}` : 'out of 100'}`;
           return (
-            <div className="dash-metric-tile" onClick={() => navigate('/woc-ratio')} role="button" tabIndex={0}>
-              <span className="material-icons dash-metric-icon" style={{ color: wocColor, background: wocBg }}>gpp_good</span>
+            <button type="button" className="dash-metric-tile" onClick={() => navigate('/woc-ratio')}
+              aria-label={wocLabel}>
+              <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: wocColor, background: wocBg }}>gpp_good</span>
               <div className="dash-metric-value" style={{ color: wocColor }}>{woc !== null ? woc : '—'}</div>
               <div className="dash-metric-label">WOC Score</div>
               <div className="dash-metric-sub">
                 {rank !== null && total !== null ? `Rank ${rank} of ${total}` : 'out of 100'}
               </div>
-            </div>
+            </button>
           );
         })()}
       </div>
@@ -411,6 +421,14 @@ function InstructorOverview({ navigate }) {
   const [tempHistoryLoading, setTempHistoryLoading] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(null);
   const [toast, setToast] = useState(null);
+
+  // ── A11y: Escape closes + focus trap + focus return for each modal (WCAG 2.1.1, 2.4.3) ──
+  const closeLateModal     = useCallback(() => setLateModalOpen(false),  []);
+  const closeTempHistory   = useCallback(() => setTempHistoryOpen(false), []);
+  const closeConfirmRevoke = useCallback(() => setConfirmRevoke(null),    []);
+  const lateModalRef       = useDialogA11y(lateModalOpen,    closeLateModal);
+  const tempHistoryRef     = useDialogA11y(tempHistoryOpen,  closeTempHistory);
+  const confirmRevokeRef   = useDialogA11y(!!confirmRevoke,  closeConfirmRevoke);
 
   const showToast = (msg, type = 'info') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); };
   const userName = () => profile ? `${profile.first_name} ${profile.last_name}` : '';
@@ -655,20 +673,27 @@ function InstructorOverview({ navigate }) {
 
   return (
     <>
-      {toast && <div className={`dash-toast dash-toast-${toast.type}`}>{toast.msg}</div>}
+      {toast && <div className={`dash-toast dash-toast-${toast.type}`} role="status" aria-live="polite">{toast.msg}</div>}
 
       {/* ── 1×3 Summary Tiles ── */}
       <div style={{ marginTop: 24 }}>
         <div className="dash-inst-tiles">
 
           {/* Late WOs tile — clickable */}
-          <div
+          <button
+            type="button"
             className="dash-metric-tile"
             onClick={() => { if (lateWOs.length > 0) setLateModalOpen(true); else navigate('/work-orders'); }}
-            role="button" tabIndex={0}
+            aria-label={
+              woLoading ? 'Late Work Orders, loading'
+              : lateWOs.length === 0
+                ? 'Late Work Orders: 0, all on track'
+                : `Late Work Orders: ${lateWOs.length}, open list`
+            }
+            aria-haspopup={lateWOs.length > 0 ? 'dialog' : undefined}
             style={lateWOs.length > 0 ? { borderColor: '#ffe3e3' } : {}}
           >
-            <span className="material-icons dash-metric-icon" style={{
+            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{
               color: lateWOs.length > 0 ? '#fa5252' : '#40c057',
               background: lateWOs.length > 0 ? '#ffe3e3' : '#d3f9d8',
             }}>
@@ -679,23 +704,25 @@ function InstructorOverview({ navigate }) {
             </div>
             <div className="dash-metric-label">Late Work Orders</div>
             <div className="dash-metric-sub">{lateWOs.length === 0 ? 'All on track' : 'tap to view'}</div>
-          </div>
+          </button>
 
           {/* Expected tile */}
-          <div className="dash-metric-tile" onClick={expandAndScrollDayView} role="button" tabIndex={0} style={{ cursor: 'pointer' }}>
-            <span className="material-icons dash-metric-icon" style={{ color: '#228be6', background: '#e7f5ff' }}>group</span>
+          <button type="button" className="dash-metric-tile" onClick={expandAndScrollDayView}
+            aria-label={`Expected Today: ${dayLoading ? 'loading' : expectedCount}${expectedCount === 0 ? ', no signups' : ', open day view'}`}>
+            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#228be6', background: '#e7f5ff' }}>group</span>
             <div className="dash-metric-value">{dayLoading ? '—' : expectedCount}</div>
             <div className="dash-metric-label">Expected Today</div>
             <div className="dash-metric-sub">{expectedCount === 0 ? 'No signups' : 'tap to view'}</div>
-          </div>
+          </button>
 
           {/* Punched In tile */}
-          <div className="dash-metric-tile" onClick={expandAndScrollDayView} role="button" tabIndex={0} style={{ cursor: 'pointer' }}>
-            <span className="material-icons dash-metric-icon" style={{ color: '#40c057', background: '#d3f9d8' }}>login</span>
+          <button type="button" className="dash-metric-tile" onClick={expandAndScrollDayView}
+            aria-label={`Punched In: ${dayLoading ? 'loading' : punchedInCount}${punchedInCount === 0 ? ', no one currently' : ', open day view'}`}>
+            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#40c057', background: '#d3f9d8' }}>login</span>
             <div className="dash-metric-value">{dayLoading ? '—' : punchedInCount}</div>
             <div className="dash-metric-label">Punched In</div>
             <div className="dash-metric-sub">{punchedInCount === 0 ? 'No one currently' : 'tap to view'}</div>
-          </div>
+          </button>
 
         </div>
       </div>
@@ -707,9 +734,15 @@ function InstructorOverview({ navigate }) {
             className="dash-card-header"
             style={{ cursor: 'pointer', userSelect: 'none' }}
             onClick={toggleDayView}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleDayView(); } }}
+            role="button"
+            tabIndex={0}
+            aria-expanded={dayViewExpanded}
+            aria-controls="dash-day-view-body"
+            aria-label={`Day View, ${dayViewExpanded ? 'expanded' : 'collapsed'}`}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="material-icons" style={{ color: '#228be6' }}>calendar_today</span>
+              <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>calendar_today</span>
               <strong>Day View</strong>
               {!dayViewExpanded && !dayLoading && (
                 <span style={{ fontSize: '0.78rem', color: '#868e96', fontWeight: 400 }}>
@@ -726,26 +759,26 @@ function InstructorOverview({ navigate }) {
               )}
               {dayViewExpanded && (
                 <>
-                  <button className="dash-day-nav-btn" onClick={(e) => { e.stopPropagation(); goBack(); }}><span className="material-icons" style={{ fontSize: '1.2rem' }}>chevron_left</span></button>
+                  <button className="dash-day-nav-btn" aria-label="Previous day" onClick={(e) => { e.stopPropagation(); goBack(); }}><span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>chevron_left</span></button>
                   <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#1a1a2e', minWidth: 200, textAlign: 'center' }}>
                     {formatDateLabel(selectedDate)}
                   </span>
-                  <button className="dash-day-nav-btn" onClick={(e) => { e.stopPropagation(); goForward(); }}><span className="material-icons" style={{ fontSize: '1.2rem' }}>chevron_right</span></button>
+                  <button className="dash-day-nav-btn" aria-label="Next day" onClick={(e) => { e.stopPropagation(); goForward(); }}><span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>chevron_right</span></button>
                 </>
               )}
-              <span className="material-icons" style={{ fontSize: '1.3rem', color: '#868e96', marginLeft: 4, transition: 'transform 0.2s', transform: dayViewExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#868e96', marginLeft: 4, transition: 'transform 0.2s', transform: dayViewExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
                 expand_more
               </span>
             </div>
           </div>
 
           {dayViewExpanded && (
-            <div className="dash-card-body">
+            <div id="dash-day-view-body" className="dash-card-body">
               {dayLoading ? (
                 <p style={{ color: '#868e96', textAlign: 'center', padding: 20 }}>Loading...</p>
               ) : peopleList.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '24px 20px' }}>
-                  <span className="material-icons" style={{ fontSize: '2rem', color: '#868e96', display: 'block', marginBottom: 8 }}>event_busy</span>
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '2rem', color: '#868e96', display: 'block', marginBottom: 8 }}>event_busy</span>
                   <p style={{ color: '#868e96', margin: 0, fontSize: '0.9rem' }}>No one expected or checked in</p>
                 </div>
               ) : (
@@ -806,9 +839,15 @@ function InstructorOverview({ navigate }) {
             className="dash-card-header"
             style={{ cursor: 'pointer', userSelect: 'none' }}
             onClick={() => toggleTempAccess()}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTempAccess(); } }}
+            role="button"
+            tabIndex={0}
+            aria-expanded={tempAccessExpanded}
+            aria-controls="dash-temp-access-body"
+            aria-label={`Active Temp Access${activeTempAccess.length > 0 ? `, ${activeTempAccess.length} active` : ', none active'}, ${tempAccessExpanded ? 'expanded' : 'collapsed'}`}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="material-icons" style={{ color: '#228be6' }}>verified_user</span>
+              <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>verified_user</span>
               <strong>Active Temp Access</strong>
               {!tempAccessLoading && activeTempAccess.length > 0 && (
                 <span style={{ background: '#d3f9d8', color: '#2b8a3e', padding: '2px 10px', borderRadius: 12, fontSize: '0.78rem', fontWeight: 700 }}>
@@ -822,16 +861,16 @@ function InstructorOverview({ navigate }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {tempAccessExpanded && (
                 <button className="dash-btn-sm" onClick={(e) => { e.stopPropagation(); setTempHistoryOpen(true); loadTempHistory(); }}>
-                  <span className="material-icons" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>history</span>History
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>history</span>History
                 </button>
               )}
-              <span className="material-icons" style={{ fontSize: '1.3rem', color: '#868e96', transition: 'transform 0.2s', transform: tempAccessExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#868e96', transition: 'transform 0.2s', transform: tempAccessExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
                 expand_more
               </span>
             </div>
           </div>
           {tempAccessExpanded && (
-          <div className="dash-card-body">
+          <div id="dash-temp-access-body" className="dash-card-body">
             {tempAccessLoading ? (
               <p style={{ color: '#868e96', textAlign: 'center', padding: 20 }}>Loading...</p>
             ) : activeTempAccess.length === 0 ? (
@@ -882,21 +921,27 @@ function InstructorOverview({ navigate }) {
       {/* ── Late WOs Detail Modal ── */}
       {lateModalOpen && (
         <div className="dash-modal-overlay" onClick={e => e.target === e.currentTarget && setLateModalOpen(false)}>
-          <div className="dash-modal" style={{ maxWidth: 560 }}>
+          <div className="dash-modal" ref={lateModalRef} role="dialog" aria-modal="true" aria-labelledby="late-modal-title" style={{ maxWidth: 560 }}>
             <div className="dash-modal-header">
-              <h4>
-                <span className="material-icons" style={{ color: '#fa5252', fontSize: '1.1rem' }}>warning</span>
+              <h4 id="late-modal-title">
+                <span className="material-icons" aria-hidden="true" style={{ color: '#fa5252', fontSize: '1.1rem' }}>warning</span>
                 Late Work Orders ({lateWOs.length})
               </h4>
-              <button className="dash-modal-close" onClick={() => setLateModalOpen(false)}>&times;</button>
+              <button className="dash-modal-close" aria-label="Close" onClick={() => setLateModalOpen(false)}>&times;</button>
             </div>
             <div className="dash-modal-body" style={{ maxHeight: 420, overflowY: 'auto', padding: 0 }}>
               {lateWOs.map(wo => (
-                <div key={wo.wo_id} className="dash-late-wo-item" onClick={() => { setLateModalOpen(false); navigate('/work-orders'); }}>
+                <button
+                  type="button"
+                  key={wo.wo_id}
+                  className="dash-late-wo-item"
+                  onClick={() => { setLateModalOpen(false); navigate('/work-orders'); }}
+                  aria-label={`${wo.wo_id}, ${wo.description}, ${wo.priority || 'no priority'} priority, ${daysLate(wo.due_date)} days late, assigned to ${wo.assigned_to || 'no one'}${wo.asset_name ? `, asset ${wo.asset_name}` : ''}`}
+                >
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
                       <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#495057' }}>{wo.wo_id}</span>
-                      <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: priorityColor(wo.priority), flexShrink: 0 }} title={wo.priority} />
+                      <span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: priorityColor(wo.priority), flexShrink: 0 }} title={wo.priority} />
                       <span style={{ fontSize: '0.72rem', color: '#868e96' }}>{wo.status}</span>
                     </div>
                     <div style={{ fontSize: '0.85rem', color: '#1a1a2e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -910,7 +955,7 @@ function InstructorOverview({ navigate }) {
                     <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fa5252' }}>{daysLate(wo.due_date)}d</div>
                     <div style={{ fontSize: '0.68rem', color: '#868e96' }}>late</div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -920,10 +965,10 @@ function InstructorOverview({ navigate }) {
       {/* ── Temp Access History Modal ── */}
       {tempHistoryOpen && (
         <div className="dash-modal-overlay" onClick={e => e.target === e.currentTarget && setTempHistoryOpen(false)}>
-          <div className="dash-modal" style={{ maxWidth: 600 }}>
+          <div className="dash-modal" ref={tempHistoryRef} role="dialog" aria-modal="true" aria-labelledby="temp-history-title" style={{ maxWidth: 600 }}>
             <div className="dash-modal-header">
-              <h4><span className="material-icons" style={{ color: '#228be6' }}>history</span> Temp Access History</h4>
-              <button className="dash-modal-close" onClick={() => setTempHistoryOpen(false)}>&times;</button>
+              <h4 id="temp-history-title"><span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>history</span> Temp Access History</h4>
+              <button className="dash-modal-close" aria-label="Close" onClick={() => setTempHistoryOpen(false)}>&times;</button>
             </div>
             <div className="dash-modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
               {tempHistoryLoading ? (
@@ -933,7 +978,7 @@ function InstructorOverview({ navigate }) {
               ) : (
                 <table className="dash-table">
                   <thead>
-                    <tr><th>User</th><th>Type</th><th>Access</th><th>Status</th><th>Date</th></tr>
+                    <tr><th scope="col">User</th><th scope="col">Type</th><th scope="col">Access</th><th scope="col">Status</th><th scope="col">Date</th></tr>
                   </thead>
                   <tbody>
                     {tempHistory.map(h => {
@@ -970,10 +1015,10 @@ function InstructorOverview({ navigate }) {
       {/* ── Revoke Confirm Modal ── */}
       {confirmRevoke && (
         <div className="dash-modal-overlay" onClick={e => e.target === e.currentTarget && setConfirmRevoke(null)}>
-          <div className="dash-modal" style={{ maxWidth: 400 }}>
+          <div className="dash-modal" ref={confirmRevokeRef} role="dialog" aria-modal="true" aria-labelledby="revoke-modal-title" style={{ maxWidth: 400 }}>
             <div className="dash-modal-header">
-              <h4><span className="material-icons" style={{ color: '#fa5252', fontSize: '1.2rem' }}>gpp_bad</span> Revoke Access</h4>
-              <button className="dash-modal-close" onClick={() => setConfirmRevoke(null)}>&times;</button>
+              <h4 id="revoke-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#fa5252', fontSize: '1.2rem' }}>gpp_bad</span> Revoke Access</h4>
+              <button className="dash-modal-close" aria-label="Close" onClick={() => setConfirmRevoke(null)}>&times;</button>
             </div>
             <div className="dash-modal-body">
               <p style={{ margin: 0, fontSize: '0.9rem', color: '#495057' }}>
@@ -992,7 +1037,7 @@ function InstructorOverview({ navigate }) {
             <div className="dash-modal-footer">
               <button className="dash-btn-cancel" onClick={() => setConfirmRevoke(null)}>Cancel</button>
               <button className="dash-btn-reject" onClick={confirmRevokeAction} style={{ padding: '10px 20px', fontSize: '0.88rem' }}>
-                <span className="material-icons" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>close</span>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>close</span>
                 Revoke
               </button>
             </div>
@@ -1034,7 +1079,7 @@ export default function DashboardPage() {
         <p className="dash-welcome-text">RICT CMMS — Manage work orders, inventory, assets, and more.</p>
 
         <div className="dash-funfact">
-          <span className="material-icons" style={{ color: '#fab005', fontSize: '1.5rem', flexShrink: 0 }}>tips_and_updates</span>
+          <span className="material-icons" aria-hidden="true" style={{ color: '#fab005', fontSize: '1.5rem', flexShrink: 0 }}>tips_and_updates</span>
           <div>
             <div className="dash-funfact-label">DID YOU KNOW?</div>
             <div className="dash-funfact-text">{funFact}</div>
@@ -1047,112 +1092,6 @@ export default function DashboardPage() {
 
       {/* ── Instructor: Overview ── */}
       {isInstructor && <InstructorOverview navigate={navigate} />}
-
-      <style>{`
-        .dash-root { max-width: 800px; margin: 0 auto; }
-
-        .dash-toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: white; z-index: 5000; font-size: 0.9rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: dashIn 0.3s ease; }
-        .dash-toast-success { background: #40c057; }
-        .dash-toast-error { background: #fa5252; }
-        .dash-toast-info { background: #228be6; }
-        @keyframes dashIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-
-        .dash-welcome { text-align: center; padding: 24px 24px 20px; background: linear-gradient(180deg, #f0f7ff 0%, #ffffff 100%); border-radius: 16px; }
-        .dash-welcome-title { font-size: 1.4rem; font-weight: 700; color: #1a1a2e; margin: 0 0 4px; }
-        .dash-welcome-text { font-size: 0.95rem; color: #868e96; margin: 0 0 16px; }
-
-        .dash-funfact { display: flex; align-items: flex-start; gap: 14px; text-align: left; background: white; border-left: 4px solid #228be6; border-radius: 0 12px 12px 0; padding: 14px 18px; max-width: 480px; margin: 0 auto; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
-        .dash-funfact-label { font-size: 0.7rem; font-weight: 700; color: #fab005; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-        .dash-funfact-text { font-size: 0.88rem; color: #495057; line-height: 1.5; }
-
-        .dash-metrics-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; max-width: 800px; }
-        @media (max-width: 600px) { .dash-metrics-grid { grid-template-columns: repeat(3, 1fr); } }
-        .dash-inst-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-
-        .dash-metric-tile {
-          background: white; border: 1px solid #e9ecef; border-radius: 12px;
-          padding: 16px; text-align: center; cursor: pointer; transition: all 0.2s;
-        }
-        .dash-metric-tile:hover { border-color: #228be6; box-shadow: 0 2px 8px rgba(34,139,230,0.12); transform: translateY(-1px); }
-        .dash-metric-tile:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
-        .dash-metric-icon { font-size: 1.3rem; border-radius: 8px; padding: 6px; display: inline-block; margin-bottom: 8px; }
-        .dash-metric-value { font-size: 1.6rem; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
-        .dash-metric-label { font-size: 0.78rem; font-weight: 600; color: #495057; margin-top: 2px; }
-        .dash-metric-sub { font-size: 0.68rem; color: #868e96; margin-top: 2px; }
-
-        .dash-card { background: white; border-radius: 12px; border: 1px solid #e9ecef; overflow: hidden; }
-        .dash-card-header { padding: 16px 20px; border-bottom: 1px solid #f1f3f5; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; }
-        .dash-card-body { padding: 0; }
-        .dash-btn-sm { background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px; padding: 4px 12px; font-size: 0.75rem; cursor: pointer; color: #495057; display: inline-flex; align-items: center; }
-        .dash-btn-sm:hover { background: #e9ecef; }
-
-        .dash-day-nav-btn {
-          background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px;
-          padding: 2px 4px; cursor: pointer; display: inline-flex; align-items: center;
-          justify-content: center; color: #495057; transition: all 0.15s;
-        }
-        .dash-day-nav-btn:hover { background: #e9ecef; color: #228be6; }
-
-        .dash-day-person {
-          padding: 10px 20px; border-bottom: 1px solid #f1f3f5; border-left: 3px solid #e9ecef;
-        }
-        .dash-day-person:last-child { border-bottom: none; }
-
-        .dash-badge-in { font-size: 0.68rem; font-weight: 600; background: #d3f9d8; color: #2b8a3e; padding: 2px 8px; border-radius: 4px; }
-        .dash-badge-left { font-size: 0.68rem; font-weight: 600; background: #f1f3f5; color: #868e96; padding: 2px 8px; border-radius: 4px; }
-        .dash-badge-expected { font-size: 0.68rem; font-weight: 600; background: #fff9db; color: #664d03; padding: 2px 8px; border-radius: 4px; }
-        .dash-badge-walk-in { font-size: 0.65rem; font-weight: 600; background: #fff4e6; color: #d9480f; padding: 1px 6px; border-radius: 4px; }
-        .dash-badge-work-study { font-size: 0.65rem; font-weight: 600; background: #dbeafe; color: #1d4ed8; padding: 1px 6px; border-radius: 4px; }
-
-        .dash-late-wo-item {
-          display: flex; align-items: center; gap: 12px;
-          padding: 12px 20px; border-bottom: 1px solid #f1f3f5;
-          border-left: 3px solid #fa5252; cursor: pointer; transition: background 0.15s;
-        }
-        .dash-late-wo-item:last-child { border-bottom: none; }
-        .dash-late-wo-item:hover { background: #fff5f5; }
-
-        .dash-temp-item { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #f1f3f5; border-left: 3px solid #40c057; }
-        .dash-temp-item:last-child { border-bottom: none; }
-
-        .dash-role-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
-        .dash-role-badge.role-ws { background: #e7f5ff; color: #1971c2; }
-        .dash-role-badge.role-inst { background: #f3e8ff; color: #7c3aed; }
-
-        .dash-status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
-        .dash-status-badge.status-pending { background: #fff3cd; color: #856404; }
-        .dash-status-badge.status-active { background: #d3f9d8; color: #2b8a3e; }
-        .dash-status-badge.status-approved { background: #d3f9d8; color: #2b8a3e; }
-        .dash-status-badge.status-revoked { background: #ffe3e3; color: #c92a2a; }
-        .dash-status-badge.status-rejected { background: #ffe3e3; color: #c92a2a; }
-        .dash-status-badge.status-expired { background: #f1f3f5; color: #868e96; }
-
-        .dash-btn-reject { background: #fa5252; color: white; border: none; border-radius: 6px; padding: 6px 14px; font-size: 0.78rem; font-weight: 500; cursor: pointer; transition: opacity 0.2s; }
-        .dash-btn-reject:hover { opacity: 0.85; }
-
-        .dash-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 20px; }
-        .dash-modal { background: white; border-radius: 12px; width: 100%; max-width: 440px; overflow: hidden; }
-        .dash-modal-header { padding: 20px; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
-        .dash-modal-header h4 { margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
-        .dash-modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; }
-        .dash-modal-body { padding: 20px; }
-        .dash-modal-footer { padding: 16px 20px; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 12px; }
-
-        .dash-label { display: block; font-size: 0.85rem; font-weight: 500; margin: 12px 0 6px; color: #495057; }
-        .dash-input { width: 100%; padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; box-sizing: border-box; }
-        .dash-input:focus { border-color: #228be6; outline: none; box-shadow: 0 0 0 3px rgba(34,139,230,0.1); }
-        textarea.dash-input { resize: vertical; font-family: inherit; }
-
-        .dash-btn-primary { background: #228be6; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; font-weight: 500; cursor: pointer; transition: background 0.2s; }
-        .dash-btn-primary:hover { background: #1c7ed6; }
-        .dash-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-        .dash-btn-cancel { background: #f1f3f5; color: #495057; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; cursor: pointer; }
-
-        .dash-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        .dash-table th { text-align: left; padding: 10px 12px; background: #f8f9fa; font-weight: 600; color: #495057; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.3px; border-bottom: 2px solid #e9ecef; }
-        .dash-table td { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; }
-        .dash-table tr:hover { background: #f8f9fa; }
-      `}</style>
     </div>
   );
 }

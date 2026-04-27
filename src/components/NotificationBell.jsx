@@ -8,24 +8,41 @@
  *        volunteer punch approvals
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
+import '@/styles/notification-bell.css';
 
 const REMINDER_INTERVAL = 60000; // Ding every 60 seconds while notifications are pending
 
 export default function NotificationBell() {
   const { user, profile } = useAuth();
   const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
-  const [items, setItems] = useState([]);
+  // Items are kept per-table so realtime events on a single table only re-fetch
+  // and update that one slice — instead of re-running 8+ queries on every event.
+  // The derived `items` array preserves the original render order.
+  const [itemsByTable, setItemsByTable] = useState({
+    access: [], wo: [], parts: [], time: [], lab: [], temp: [], help: [], announcement: [],
+  });
+  const items = useMemo(() => [
+    ...(itemsByTable.access || []),
+    ...(itemsByTable.wo || []),
+    ...(itemsByTable.parts || []),
+    ...(itemsByTable.time || []),
+    ...(itemsByTable.lab || []),
+    ...(itemsByTable.temp || []),
+    ...(itemsByTable.help || []),
+    ...(itemsByTable.announcement || []),
+  ], [itemsByTable]);
   const [open, setOpen] = useState(false);
   const [hasNew, setHasNew] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
   const [toast, setToast] = useState(null);
   const panelRef = useRef(null);
-  // Track the SET OF IDs from the previous fetch — not just the count.
+  // Track the SET OF IDs from the previous render — not just the count.
   // Using count alone misses the case where one item is approved and a different
   // item arrives in the same poll interval (count stays the same → no sound played).
   // null = first run (don't play sound on initial load).
@@ -117,6 +134,27 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // ── A11y: Escape closes the bell panel (non-modal popover, no focus trap) ──
+  // Modal dialogs below get their own Escape + focus-trap via useDialogA11y.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  // ── A11y: per-modal Escape + focus trap + focus return (WCAG 2.1.1, 2.4.3) ──
+  // Each useDialogA11y call returns a ref that gets attached to the modal root.
+  // Closing handlers wrap setX(null) so the hook's keydown listener can fire them.
+  const closeRoleModal   = useCallback(() => setRoleModal(null),   []);
+  const closeTempModal   = useCallback(() => setTempModal(null),   []);
+  const closeLabModal    = useCallback(() => setLabModal(null),    []);
+  const closeRejectModal = useCallback(() => setRejectModal(null), []);
+  const roleDialogRef    = useDialogA11y(!!roleModal,   closeRoleModal);
+  const tempDialogRef    = useDialogA11y(!!tempModal,   closeTempModal);
+  const labDialogRef     = useDialogA11y(!!labModal,    closeLabModal);
+  const rejectDialogRef  = useDialogA11y(!!rejectModal, closeRejectModal);
+
   // Material Icons
   useEffect(() => {
     if (!document.querySelector('link[href*="Material+Icons"]')) {
@@ -127,356 +165,434 @@ export default function NotificationBell() {
     }
   }, []);
 
-  // ── POLL NOTIFICATIONS ──
-  const fetchNotifications = useCallback(async () => {
-    if (!profile?.email) return;
-    const allItems = [];
+  // ── POLL NOTIFICATIONS — per-table fetchers ──
+  // Each table has its own fetcher that updates only its slice of `itemsByTable`.
+  // This way, a realtime event on one table only re-runs that one query — instead
+  // of the original monolithic fetchNotifications which re-ran 8+ queries on every
+  // change to any of the 9 watched tables (including time_clock punch in/out events).
 
-    // ── INSTRUCTOR-ONLY notifications ──
-    if (isInstructor) {
-      // 1. Access requests
-      try {
-        const { data, error } = await supabase.from('access_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false });
-        if (error) console.warn('NotifBell: access_requests error:', error.message);
-        (data || []).forEach(r => allItems.push({ id: `access-${r.request_id}`, type: 'access', icon: 'person_add', color: '#fab005', title: `${r.first_name || ''} ${r.last_name || ''}`.trim() || r.email, subtitle: r.email, date: r.request_date, raw: r }));
-      } catch (e) { console.warn('NotifBell: access_requests exception:', e.message); }
+  const fetchAccessRequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, access: [] }));
+      return;
+    }
+    const _items = [];
+    // 1. Access requests
+    try {
+      const { data, error } = await supabase.from('access_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false });
+      if (error) console.warn('NotifBell: access_requests error:', error.message);
+      (data || []).forEach(r => _items.push({ id: `access-${r.request_id}`, type: 'access', icon: 'person_add', color: '#fab005', title: `${r.first_name || ''} ${r.last_name || ''}`.trim() || r.email, subtitle: r.email, date: r.request_date, raw: r }));
+    } catch (e) { console.warn('NotifBell: access_requests exception:', e.message); }
+    setItemsByTable(prev => ({ ...prev, access: _items }));
+  }, [profile?.email, isInstructor]);
 
-      // 2. WO requests
-      try {
-        const { data, error } = await supabase.from('work_order_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false });
-        if (error) console.warn('NotifBell: work_order_requests error:', error.message);
-        (data || []).forEach(r => allItems.push({ id: `wo-${r.request_id}`, type: 'wo', icon: 'assignment', color: '#228be6', title: r.description || 'Work Order Request', subtitle: `${r.created_by || 'Unknown'} — ${r.priority || 'Medium'}`, date: r.request_date, raw: r }));
-      } catch (e) { console.warn('NotifBell: work_order_requests exception:', e.message); }
+  const fetchWORequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, wo: [] }));
+      return;
+    }
+    const _items = [];
+    // 2. WO requests
+    try {
+      const { data, error } = await supabase.from('work_order_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false });
+      if (error) console.warn('NotifBell: work_order_requests error:', error.message);
+      (data || []).forEach(r => _items.push({ id: `wo-${r.request_id}`, type: 'wo', icon: 'assignment', color: '#228be6', title: r.description || 'Work Order Request', subtitle: `${r.created_by || 'Unknown'} — ${r.priority || 'Medium'}`, date: r.request_date, raw: r }));
+    } catch (e) { console.warn('NotifBell: work_order_requests exception:', e.message); }
+    setItemsByTable(prev => ({ ...prev, wo: _items }));
+  }, [profile?.email, isInstructor]);
 
-      // 3. Parts orders — fetch with line items and WO description
-      try {
-        const { data, error } = await supabase.from('orders').select('*').eq('status', 'Pending').order('order_date', { ascending: false });
-        if (error) console.warn('NotifBell: orders error:', error.message);
-        for (const o of (data || [])) {
-          // Fetch line items for this order
-          let lineItems = [];
+  const fetchOrders = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, parts: [] }));
+      return;
+    }
+    const _items = [];
+    // 3. Parts orders
+    try {
+      const { data, error } = await supabase.from('orders').select('*').eq('status', 'Pending').order('order_date', { ascending: false });
+      if (error) console.warn('NotifBell: orders error:', error.message);
+      for (const o of (data || [])) {
+        // Fetch line items for this order
+        let lineItems = [];
+        try {
+          const { data: li } = await supabase.from('order_line_items').select('description, part_number, quantity, unit_price, subtotal, wo_id').eq('order_id', o.order_id);
+          lineItems = li || [];
+        } catch {}
+        // Fetch WO descriptions for linked work orders
+        const woIds = [...new Set([o.work_order_id, ...lineItems.map(l => l.wo_id)].filter(Boolean))];
+        let woDescs = {};
+        if (woIds.length > 0) {
           try {
-            const { data: li } = await supabase.from('order_line_items').select('description, part_number, quantity, unit_price, subtotal, wo_id').eq('order_id', o.order_id);
-            lineItems = li || [];
+            const { data: wos } = await supabase.from('work_orders').select('wo_id, description').in('wo_id', woIds);
+            (wos || []).forEach(w => { woDescs[w.wo_id] = w.description; });
           } catch {}
-          // Fetch WO descriptions for linked work orders
-          const woIds = [...new Set([o.work_order_id, ...lineItems.map(l => l.wo_id)].filter(Boolean))];
-          let woDescs = {};
-          if (woIds.length > 0) {
+        }
+        _items.push({
+          id: `order-${o.order_id}`, type: 'parts', icon: 'local_shipping', color: '#40c057',
+          title: o.vendor_name || o.other_vendor || 'Parts Order',
+          subtitle: `${o.ordered_by || 'Unknown'} — $${parseFloat(o.total || 0).toFixed(2)}${woIds.length > 0 ? ` — ${woIds.join(', ')}` : ''}`,
+          date: o.order_date,
+          raw: o,
+          lineItems,
+          woDescs,
+          woIds
+        });
+      }
+    } catch (e) { console.warn('NotifBell: orders exception:', e.message); }
+    setItemsByTable(prev => ({ ...prev, parts: _items }));
+  }, [profile?.email, isInstructor]);
+
+  const fetchTimeRequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, time: [] }));
+      return;
+    }
+    const _items = [];
+    // 4. Time entry requests
+    try {
+      const { data, error } = await supabase.from('time_entry_requests').select('*').eq('status', 'Pending');
+      if (!error && data) {
+        // Format time helper
+        const fmtTime = (t) => {
+          if (!t) return '';
+          const [h, m] = t.split(':');
+          const hr = parseInt(h);
+          const ampm = hr >= 12 ? 'PM' : 'AM';
+          const h12 = hr % 12 || 12;
+          return `${h12}:${m || '00'} ${ampm}`;
+        };
+        // Format time from ISO datetime
+        // NOTE: time_clock uses "fake UTC" storage (local hours stored with +00 offset).
+        // We must read with getUTCHours/getUTCMinutes to get the correct local display time.
+        const fmtTimeFromISO = (iso) => {
+          if (!iso) return '';
+          const d = new Date(iso);
+          if (isNaN(d.getTime())) return '';
+          const hr = d.getUTCHours();
+          const mn = String(d.getUTCMinutes()).padStart(2, '0');
+          const ampm = hr >= 12 ? 'PM' : 'AM';
+          const h12 = hr % 12 || 12;
+          return `${h12}:${mn} ${ampm}`;
+        };
+
+        // Collect edit requests that need original time_clock data
+        const editRequests = data.filter(r => r.entry_type === 'Edit' && r.time_clock_record_id);
+        const newRequests = data.filter(r => r.entry_type !== 'Edit' || !r.time_clock_record_id);
+
+        // Batch-fetch original time_clock records for edit requests
+        let originalRecords = {};
+        if (editRequests.length > 0) {
+          const tcIds = editRequests.map(r => r.time_clock_record_id).filter(Boolean);
+          if (tcIds.length > 0) {
             try {
-              const { data: wos } = await supabase.from('work_orders').select('wo_id, description').in('wo_id', woIds);
-              (wos || []).forEach(w => { woDescs[w.wo_id] = w.description; });
+              const { data: tcData } = await supabase
+                .from('time_clock')
+                .select('record_id, punch_in, punch_out, total_hours, course_id, class_id')
+                .in('record_id', tcIds);
+              (tcData || []).forEach(tc => { originalRecords[tc.record_id] = tc; });
             } catch {}
           }
-          allItems.push({
-            id: `order-${o.order_id}`, type: 'parts', icon: 'local_shipping', color: '#40c057',
-            title: o.vendor_name || o.other_vendor || 'Parts Order',
-            subtitle: `${o.ordered_by || 'Unknown'} — $${parseFloat(o.total || 0).toFixed(2)}${woIds.length > 0 ? ` — ${woIds.join(', ')}` : ''}`,
-            date: o.order_date,
-            raw: o,
-            lineItems,
-            woDescs,
-            woIds
-          });
         }
-      } catch (e) { console.warn('NotifBell: orders exception:', e.message); }
 
-      // 4. Time entry requests (New and Edit types)
-      try {
-        const { data, error } = await supabase.from('time_entry_requests').select('*').eq('status', 'Pending');
-        if (!error && data) {
-          // Format time helper
-          const fmtTime = (t) => {
-            if (!t) return '';
-            const [h, m] = t.split(':');
-            const hr = parseInt(h);
-            const ampm = hr >= 12 ? 'PM' : 'AM';
-            const h12 = hr % 12 || 12;
-            return `${h12}:${m || '00'} ${ampm}`;
-          };
-          // Format time from ISO datetime
-          // NOTE: time_clock uses "fake UTC" storage (local hours stored with +00 offset).
-          // We must read with getUTCHours/getUTCMinutes to get the correct local display time.
-          const fmtTimeFromISO = (iso) => {
-            if (!iso) return '';
-            const d = new Date(iso);
-            if (isNaN(d.getTime())) return '';
-            const hr = d.getUTCHours();
-            const mn = String(d.getUTCMinutes()).padStart(2, '0');
-            const ampm = hr >= 12 ? 'PM' : 'AM';
-            const h12 = hr % 12 || 12;
-            return `${h12}:${mn} ${ampm}`;
-          };
-
-          // Collect edit requests that need original time_clock data
-          const editRequests = data.filter(r => r.entry_type === 'Edit' && r.time_clock_record_id);
-          const newRequests = data.filter(r => r.entry_type !== 'Edit' || !r.time_clock_record_id);
-
-          // Batch-fetch original time_clock records for edit requests
-          let originalRecords = {};
-          if (editRequests.length > 0) {
-            const tcIds = editRequests.map(r => r.time_clock_record_id).filter(Boolean);
-            if (tcIds.length > 0) {
-              try {
-                const { data: tcData } = await supabase
-                  .from('time_clock')
-                  .select('record_id, punch_in, punch_out, total_hours, course_id, class_id')
-                  .in('record_id', tcIds);
-                (tcData || []).forEach(tc => { originalRecords[tc.record_id] = tc; });
-              } catch {}
-            }
-          }
-
-          // Process NEW time entry requests
-          newRequests.forEach(r => {
-            const timeRange = r.start_time && r.end_time ? `${fmtTime(r.start_time)}–${fmtTime(r.end_time)}` : '';
-            allItems.push({
-              id: `time-${r.request_id}`,
-              type: 'time',
-              icon: 'event_busy',
-              color: '#7c3aed',
-              title: `${r.user_name || 'Unknown'} — ${r.course_id || r.class_id || ''}`,
-              subtitle: `${r.requested_date || ''} ${timeRange} — ${r.total_hours || 0}h`,
-              date: r.created_at,
-              raw: r,
-              timeDetail: {
-                reason: r.reason || '',
-                date: r.requested_date || '',
-                startTime: fmtTime(r.start_time),
-                endTime: fmtTime(r.end_time),
-                totalHours: r.total_hours || 0,
-                courseId: r.course_id || r.class_id || '',
-              }
-            });
-          });
-
-          // Process EDIT time entry requests with before/after comparison
-          editRequests.forEach(r => {
-            const original = originalRecords[r.time_clock_record_id] || {};
-            const origStartTime = fmtTimeFromISO(original.punch_in);
-            const origEndTime = fmtTimeFromISO(original.punch_out);
-            const origHours = original.total_hours || 0;
-            const newStartTime = fmtTime(r.start_time);
-            const newEndTime = fmtTime(r.end_time);
-            const newHours = r.total_hours || 0;
-            const hoursDelta = Math.round((newHours - origHours) * 100) / 100;
-
-            allItems.push({
-              id: `time-${r.request_id}`,
-              type: 'time_edit',
-              icon: 'edit_note',
-              color: '#e8590c',
-              title: `${r.user_name || 'Unknown'} — ${r.course_id || r.class_id || ''}`,
-              subtitle: `Edit: ${r.requested_date || ''} — ${origHours}h → ${newHours}h`,
-              date: r.created_at,
-              raw: r,
-              editDetail: {
-                reason: r.reason || '',
-                date: r.requested_date || '',
-                recordId: r.time_clock_record_id || '',
-                origStartTime,
-                origEndTime,
-                origHours,
-                newStartTime,
-                newEndTime,
-                newHours,
-                hoursDelta,
-                courseId: r.course_id || r.class_id || '',
-              }
-            });
-          });
-        }
-      } catch {}
-
-      // 5. Lab change requests
-      try {
-        const { data, error } = await supabase.from('lab_signup_requests').select('*').eq('status', 'Pending').order('submitted_date', { ascending: false });
-        if (error) console.warn('NotifBell: lab_signup_requests error:', error.message);
-        // for...of so we can await inside (conflict check + week progress)
-        for (const r of (data || [])) {
-          // ── Parse slot keys into { key, label } objects ──
-          const parseSlotObjs = (raw) => {
-            try {
-              const arr = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
-              return arr.map(s => {
-                const [dateStr, hourStr] = (s || '').split('_');
-                if (!dateStr || !hourStr) return { key: s, label: s };
-                const dt = new Date(dateStr + 'T12:00:00');
-                const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-                const h = parseInt(hourStr);
-                const ampm = h >= 12 ? 'PM' : 'AM';
-                const h12 = h % 12 || 12;
-                return { key: s, label: `${dayNames[dt.getDay()]} ${dt.getMonth()+1}/${dt.getDate()} ${h12}:00 ${ampm}` };
-              });
-            } catch { return []; }
-          };
-          const currentParsed  = parseSlotObjs(r.current_slots);
-          const requestedParsed = parseSlotObjs(r.requested_slots);
-          const currentKeys  = new Set(currentParsed.map(x => x.key));
-          const requestedKeys = new Set(requestedParsed.map(x => x.key));
-
-          // ── Diff ──
-          const cancelledObjs = currentParsed.filter(x => !requestedKeys.has(x.key));
-          const keptSlots     = currentParsed.filter(x =>  requestedKeys.has(x.key)).map(x => x.label);
-          const addedObjs     = requestedParsed.filter(x => !currentKeys.has(x.key));
-
-          // ── Conflict check: are any new slots already full? ──
-          const addedWithConflict = [];
-          for (const slotObj of addedObjs) {
-            const [dateStr, hourStr] = slotObj.key.split('_');
-            let conflict = false;
-            if (dateStr && hourStr) {
-              try {
-                const targetDate = new Date(dateStr + 'T12:00:00');
-                const hour = parseInt(hourStr);
-                const { data: calRow } = await supabase
-                  .from('lab_calendar').select('max_students')
-                  .eq('date', targetDate.toISOString()).maybeSingle();
-                const maxStudents = calRow?.max_students ?? 24;
-                const startTime = `${String(hour).padStart(2, '0')}:00:00`;
-                const { count } = await supabase
-                  .from('lab_signup').select('signup_id', { count: 'exact', head: true })
-                  .eq('date', targetDate.toISOString())
-                  .eq('start_time', startTime)
-                  .neq('status', 'Cancelled');
-                conflict = (count || 0) >= maxStudents;
-              } catch {}
-            }
-            addedWithConflict.push({ ...slotObj, conflict });
-          }
-
-          // ── Week progress: student's confirmed signups this week for this class ──
-          let weekSignupCount = 0;
-          let requiredHours = 0;
-          try {
-            const courseId = r.course_id || r.class_id || '';
-            const weekStartStr = (r.week_start || '').substring(0, 10);
-            if (weekStartStr && courseId) {
-              const wStart = new Date(weekStartStr + 'T00:00:00');
-              const wEnd   = new Date(weekStartStr + 'T00:00:00');
-              wEnd.setDate(wEnd.getDate() + 6);
-              wEnd.setHours(23, 59, 59, 999);
-              const { data: signupRows } = await supabase
-                .from('lab_signup').select('signup_id')
-                .eq('user_email', r.user_email)
-                .eq('class_id', courseId)
-                .neq('status', 'Cancelled')
-                .gte('date', wStart.toISOString())
-                .lte('date', wEnd.toISOString());
-              weekSignupCount = (signupRows || []).length;
-              const { data: classRow } = await supabase
-                .from('classes').select('required_hours')
-                .eq('course_id', courseId).eq('status', 'Active').maybeSingle();
-              requiredHours = classRow?.required_hours || 0;
-            }
-          } catch {}
-
-          allItems.push({
-            id: `lab-${r.request_id}`, type: 'lab', icon: 'science', color: '#e64980',
-            title: `${r.user_name || 'Unknown'} — ${r.course_id || ''}`,
-            subtitle: `Week of ${r.week_start || ''}`,
-            date: r.submitted_date, raw: r,
-            labDetail: {
+        // Process NEW time entry requests
+        newRequests.forEach(r => {
+          const timeRange = r.start_time && r.end_time ? `${fmtTime(r.start_time)}–${fmtTime(r.end_time)}` : '';
+          _items.push({
+            id: `time-${r.request_id}`,
+            type: 'time',
+            icon: 'event_busy',
+            color: '#7c3aed',
+            title: `${r.user_name || 'Unknown'} — ${r.course_id || r.class_id || ''}`,
+            subtitle: `${r.requested_date || ''} ${timeRange} — ${r.total_hours || 0}h`,
+            date: r.created_at,
+            raw: r,
+            timeDetail: {
               reason: r.reason || '',
-              // cancelled
-              cancelledSlots: cancelledObjs.map(x => x.label),
-              cancelledKeys:  cancelledObjs.map(x => x.key),
-              // kept (no change needed, display only)
-              keptSlots,
-              // added — includes conflict flag per slot
-              addedSlots:     addedWithConflict.map(x => x.label),
-              addedKeys:      addedWithConflict.map(x => x.key),
-              addedConflicts: addedWithConflict.map(x => x.conflict),
-              // week progress
-              weekSignupCount,
-              requiredHours,
+              date: r.requested_date || '',
+              startTime: fmtTime(r.start_time),
+              endTime: fmtTime(r.end_time),
+              totalHours: r.total_hours || 0,
+              courseId: r.course_id || r.class_id || '',
             }
           });
-        }
-      } catch (e) { console.warn('NotifBell: lab_signup_requests exception:', e.message); }
+        });
 
-      // 6. Temp access requests
-      try {
-        const { data, error } = await supabase.from('temp_access_requests').select('*').eq('status', 'Pending').order('submitted_date', { ascending: false });
-        if (error) console.warn('NotifBell: temp_access_requests error:', error.message);
-        (data || []).forEach(r => {
-          const isPermType = r.request_type === 'permissions';
-          const permCount = (r.requested_permissions || []).length;
-          allItems.push({
-            id: `temp-${r.request_id}`,
-            type: isPermType ? 'temp_perm' : 'temp',
-            icon: isPermType ? 'tune' : 'vpn_key',
-            color: isPermType ? '#7c3aed' : '#f59f00',
-            title: r.user_name || r.user_email,
-            subtitle: isPermType
-              ? `${permCount} permission${permCount !== 1 ? 's' : ''} for ${r.days_requested}d`
-              : `${r.user_current_role || r.current_role || ''} → ${r.requested_role} (${r.days_requested}d)`,
-            date: r.submitted_date,
+        // Process EDIT time entry requests with before/after comparison
+        editRequests.forEach(r => {
+          const original = originalRecords[r.time_clock_record_id] || {};
+          const origStartTime = fmtTimeFromISO(original.punch_in);
+          const origEndTime = fmtTimeFromISO(original.punch_out);
+          const origHours = original.total_hours || 0;
+          const newStartTime = fmtTime(r.start_time);
+          const newEndTime = fmtTime(r.end_time);
+          const newHours = r.total_hours || 0;
+          const hoursDelta = Math.round((newHours - origHours) * 100) / 100;
+
+          _items.push({
+            id: `time-${r.request_id}`,
+            type: 'time_edit',
+            icon: 'edit_note',
+            color: '#e8590c',
+            title: `${r.user_name || 'Unknown'} — ${r.course_id || r.class_id || ''}`,
+            subtitle: `Edit: ${r.requested_date || ''} — ${origHours}h → ${newHours}h`,
+            date: r.created_at,
+            raw: r,
+            editDetail: {
+              reason: r.reason || '',
+              date: r.requested_date || '',
+              recordId: r.time_clock_record_id || '',
+              origStartTime,
+              origEndTime,
+              origHours,
+              newStartTime,
+              newEndTime,
+              newHours,
+              hoursDelta,
+              courseId: r.course_id || r.class_id || '',
+            }
+          });
+        });
+      }
+    } catch {}
+    setItemsByTable(prev => ({ ...prev, time: _items }));
+  }, [profile?.email, isInstructor]);
+
+  const fetchLabRequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, lab: [] }));
+      return;
+    }
+    const _items = [];
+    // 5. Lab change requests
+    try {
+      const { data, error } = await supabase.from('lab_signup_requests').select('*').eq('status', 'Pending').order('submitted_date', { ascending: false });
+      if (error) console.warn('NotifBell: lab_signup_requests error:', error.message);
+      // for...of so we can await inside (conflict check + week progress)
+      for (const r of (data || [])) {
+        // ── Parse slot keys into { key, label } objects ──
+        const parseSlotObjs = (raw) => {
+          try {
+            const arr = typeof raw === 'string' ? JSON.parse(raw) : (raw || []);
+            return arr.map(s => {
+              const [dateStr, hourStr] = (s || '').split('_');
+              if (!dateStr || !hourStr) return { key: s, label: s };
+              const dt = new Date(dateStr + 'T12:00:00');
+              const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              const h = parseInt(hourStr);
+              const ampm = h >= 12 ? 'PM' : 'AM';
+              const h12 = h % 12 || 12;
+              return { key: s, label: `${dayNames[dt.getDay()]} ${dt.getMonth()+1}/${dt.getDate()} ${h12}:00 ${ampm}` };
+            });
+          } catch { return []; }
+        };
+        const currentParsed  = parseSlotObjs(r.current_slots);
+        const requestedParsed = parseSlotObjs(r.requested_slots);
+        const currentKeys  = new Set(currentParsed.map(x => x.key));
+        const requestedKeys = new Set(requestedParsed.map(x => x.key));
+
+        // ── Diff ──
+        const cancelledObjs = currentParsed.filter(x => !requestedKeys.has(x.key));
+        const keptSlots     = currentParsed.filter(x =>  requestedKeys.has(x.key)).map(x => x.label);
+        const addedObjs     = requestedParsed.filter(x => !currentKeys.has(x.key));
+
+        // ── Conflict check: are any new slots already full? ──
+        const addedWithConflict = [];
+        for (const slotObj of addedObjs) {
+          const [dateStr, hourStr] = slotObj.key.split('_');
+          let conflict = false;
+          if (dateStr && hourStr) {
+            try {
+              const targetDate = new Date(dateStr + 'T12:00:00');
+              const hour = parseInt(hourStr);
+              const { data: calRow } = await supabase
+                .from('lab_calendar').select('max_students')
+                .eq('date', targetDate.toISOString()).maybeSingle();
+              const maxStudents = calRow?.max_students ?? 24;
+              const startTime = `${String(hour).padStart(2, '0')}:00:00`;
+              const { count } = await supabase
+                .from('lab_signup').select('signup_id', { count: 'exact', head: true })
+                .eq('date', targetDate.toISOString())
+                .eq('start_time', startTime)
+                .neq('status', 'Cancelled');
+              conflict = (count || 0) >= maxStudents;
+            } catch {}
+          }
+          addedWithConflict.push({ ...slotObj, conflict });
+        }
+
+        // ── Week progress: student's confirmed signups this week for this class ──
+        let weekSignupCount = 0;
+        let requiredHours = 0;
+        try {
+          const courseId = r.course_id || r.class_id || '';
+          const weekStartStr = (r.week_start || '').substring(0, 10);
+          if (weekStartStr && courseId) {
+            const wStart = new Date(weekStartStr + 'T00:00:00');
+            const wEnd   = new Date(weekStartStr + 'T00:00:00');
+            wEnd.setDate(wEnd.getDate() + 6);
+            wEnd.setHours(23, 59, 59, 999);
+            const { data: signupRows } = await supabase
+              .from('lab_signup').select('signup_id')
+              .eq('user_email', r.user_email)
+              .eq('class_id', courseId)
+              .neq('status', 'Cancelled')
+              .gte('date', wStart.toISOString())
+              .lte('date', wEnd.toISOString());
+            weekSignupCount = (signupRows || []).length;
+            const { data: classRow } = await supabase
+              .from('classes').select('required_hours')
+              .eq('course_id', courseId).eq('status', 'Active').maybeSingle();
+            requiredHours = classRow?.required_hours || 0;
+          }
+        } catch {}
+
+        _items.push({
+          id: `lab-${r.request_id}`, type: 'lab', icon: 'science', color: '#e64980',
+          title: `${r.user_name || 'Unknown'} — ${r.course_id || ''}`,
+          subtitle: `Week of ${r.week_start || ''}`,
+          date: r.submitted_date, raw: r,
+          labDetail: {
+            reason: r.reason || '',
+            // cancelled
+            cancelledSlots: cancelledObjs.map(x => x.label),
+            cancelledKeys:  cancelledObjs.map(x => x.key),
+            // kept (no change needed, display only)
+            keptSlots,
+            // added — includes conflict flag per slot
+            addedSlots:     addedWithConflict.map(x => x.label),
+            addedKeys:      addedWithConflict.map(x => x.key),
+            addedConflicts: addedWithConflict.map(x => x.conflict),
+            // week progress
+            weekSignupCount,
+            requiredHours,
+          }
+        });
+      }
+    } catch (e) { console.warn('NotifBell: lab_signup_requests exception:', e.message); }
+    setItemsByTable(prev => ({ ...prev, lab: _items }));
+  }, [profile?.email, isInstructor]);
+
+  const fetchTempRequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, temp: [] }));
+      return;
+    }
+    const _items = [];
+    // 6. Temp access requests
+    try {
+      const { data, error } = await supabase.from('temp_access_requests').select('*').eq('status', 'Pending').order('submitted_date', { ascending: false });
+      if (error) console.warn('NotifBell: temp_access_requests error:', error.message);
+      (data || []).forEach(r => {
+        const isPermType = r.request_type === 'permissions';
+        const permCount = (r.requested_permissions || []).length;
+        _items.push({
+          id: `temp-${r.request_id}`,
+          type: isPermType ? 'temp_perm' : 'temp',
+          icon: isPermType ? 'tune' : 'vpn_key',
+          color: isPermType ? '#7c3aed' : '#f59f00',
+          title: r.user_name || r.user_email,
+          subtitle: isPermType
+            ? `${permCount} permission${permCount !== 1 ? 's' : ''} for ${r.days_requested}d`
+            : `${r.user_current_role || r.current_role || ''} → ${r.requested_role} (${r.days_requested}d)`,
+          date: r.submitted_date,
+          raw: r,
+        });
+      });
+    } catch (e) { console.warn('NotifBell: temp_access_requests exception:', e.message); }
+
+    // NOTE: Volunteer time clock punches are auto-approved at punch time (no notification needed).
+    // Only manual "Log Volunteer Hours" requests (time_entry_requests) require instructor approval.
+    setItemsByTable(prev => ({ ...prev, temp: _items }));
+  }, [profile?.email, isInstructor]);
+
+  const fetchHelpRequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, help: [] }));
+      return;
+    }
+    const _items = [];
+    // 7. Help requests
+    try {
+      const { data, error } = await supabase
+        .from('help_requests')
+        .select('*')
+        .eq('status', 'pending')
+        .order('requested_at', { ascending: true });
+      if (!error && data) {
+        data.forEach(r => {
+          const locLabel = r.location ? ` — Room ${r.location}` : '';
+          _items.push({
+            id: `help-${r.request_id}`,
+            type: 'help',
+            icon: 'help_outline',
+            color: '#ef4444',
+            title: `${r.user_name || 'Unknown'} needs help`,
+            subtitle: `Room ${r.location || 'Unknown'}  •  ${new Date(r.requested_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`,
+            date: r.requested_at,
             raw: r,
           });
         });
-      } catch (e) { console.warn('NotifBell: temp_access_requests exception:', e.message); }
+      }
+    } catch (e) { console.warn('NotifBell: help_requests exception:', e.message); }
+    setItemsByTable(prev => ({ ...prev, help: _items }));
+  }, [profile?.email, isInstructor]);
 
-      // NOTE: Volunteer time clock punches are auto-approved at punch time (no notification needed).
-      // Only manual "Log Volunteer Hours" requests (time_entry_requests) require instructor approval.
-
-      // 7. Help requests (students needing help)
-      try {
-        const { data, error } = await supabase
-          .from('help_requests')
-          .select('*')
-          .eq('status', 'pending')
-          .order('requested_at', { ascending: true });
-        if (!error && data) {
-          data.forEach(r => {
-            const locLabel = r.location ? ` — Room ${r.location}` : '';
-            allItems.push({
-              id: `help-${r.request_id}`,
-              type: 'help',
-              icon: 'help_outline',
-              color: '#ef4444',
-              title: `${r.user_name || 'Unknown'} needs help`,
-              subtitle: `Room ${r.location || 'Unknown'}  •  ${new Date(r.requested_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`,
-              date: r.requested_at,
-              raw: r,
-            });
-          });
-        }
-      } catch (e) { console.warn('NotifBell: help_requests exception:', e.message); }
+  const fetchAnnouncements = useCallback(async () => {
+    if (!profile?.email) {
+      setItemsByTable(prev => ({ ...prev, announcement: [] }));
+      return;
     }
-
+    const _items = [];
     // ── ALL USERS: Unread announcements ──
     try {
-      const { data } = await supabase
-        .from('announcements')
-        .select('*')
-        .eq('recipient_email', profile.email.toLowerCase())
-        .eq('read', false)
-        .order('created_at', { ascending: false })
-        .limit(20);
-      (data || []).forEach(a => {
-        const isWOAssign = a.notification_type === 'wo_assignment';
-        allItems.push({
-          id: `ann-${a.id}`,
-          type: isWOAssign ? 'wo_assignment' : 'announcement',
-          icon: isWOAssign ? 'assignment_ind' : 'campaign',
-          color: isWOAssign ? '#f59f00' : '#0ea5e9',
-          title: a.subject || (isWOAssign ? 'Work Order Assigned' : 'New Announcement'),
-          subtitle: isWOAssign
-            ? a.body || `Assigned by ${a.sender_name || 'Instructor'}`
-            : `From ${a.sender_name || 'Instructor'}`,
-          date: a.created_at,
-          raw: a
-        });
+    const { data } = await supabase
+      .from('announcements')
+      .select('*')
+      .eq('recipient_email', profile.email.toLowerCase())
+      .eq('read', false)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    (data || []).forEach(a => {
+      const isWOAssign = a.notification_type === 'wo_assignment';
+      _items.push({
+        id: `ann-${a.id}`,
+        type: isWOAssign ? 'wo_assignment' : 'announcement',
+        icon: isWOAssign ? 'assignment_ind' : 'campaign',
+        color: isWOAssign ? '#f59f00' : '#0ea5e9',
+        title: a.subject || (isWOAssign ? 'Work Order Assigned' : 'New Announcement'),
+        subtitle: isWOAssign
+          ? a.body || `Assigned by ${a.sender_name || 'Instructor'}`
+          : `From ${a.sender_name || 'Instructor'}`,
+        date: a.created_at,
+        raw: a
       });
+    });
     } catch {}
+    setItemsByTable(prev => ({ ...prev, announcement: _items }));
+  }, [profile?.email]);
 
-    // Play sound if a NEW notification ID appeared (not just if count went up).
-    // Comparing IDs catches the case where one item is approved and a different
-    // one arrives in the same poll cycle — count stays the same but a fresh ID
-    // is present, so it should still ring.
-    // First run (prevIdsRef.current === null): never ring on initial load.
-    const newIds = new Set(allItems.map(i => i.id));
+  // Wrapper used by polling, opening the panel, and post-action refreshes.
+  // Each call_site that previously called fetchNotifications still does so —
+  // this just dispatches to all 8 per-table fetchers.
+  const fetchNotifications = useCallback(() => {
+    if (!profile?.email) return;
+    fetchAccessRequests();
+    fetchWORequests();
+    fetchOrders();
+    fetchTimeRequests();
+    fetchLabRequests();
+    fetchTempRequests();
+    fetchHelpRequests();
+    fetchAnnouncements();
+  }, [profile?.email, fetchAccessRequests, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements]);
+
+  // ── Play sound on new item arrival ──
+  // Compares the SET OF item IDs across renders. This catches the case where one
+  // item is approved and a different one arrives in the same poll cycle (count
+  // stays the same, but a fresh ID is present, so it should still ring).
+  // First render (prevIdsRef.current === null): never ring on initial load.
+  useEffect(() => {
+    const newIds = new Set(items.map(i => i.id));
     if (prevIdsRef.current !== null) {
       const hasNewItem = [...newIds].some(id => !prevIdsRef.current.has(id));
       if (hasNewItem) {
@@ -485,10 +601,9 @@ export default function NotificationBell() {
       }
     }
     prevIdsRef.current = newIds;
-    setItems(allItems);
-  }, [isInstructor, profile?.email, playNotificationSound]);
+  }, [items, playNotificationSound]);
 
-  // Poll interval from settings (default 60 seconds)
+  // Poll interval from settings (default 60 seconds, 0 = realtime-only)
   const [pollInterval, setPollInterval] = useState(60000);
   useEffect(() => {
     (async () => {
@@ -500,40 +615,52 @@ export default function NotificationBell() {
           .maybeSingle();
         if (data?.setting_value) {
           const val = parseInt(data.setting_value, 10);
-          if (val === 0) setPollInterval(0); // 0 = polling disabled
+          if (val === 0) setPollInterval(0);
           else if (val >= 10) setPollInterval(val * 1000);
         }
       } catch (e) { /* keep default */ }
     })();
   }, []);
 
+  // Initial fetch + polling at the configured interval
   useEffect(() => {
     if (!profile?.email) return;
     fetchNotifications();
-    // Poll at the configured interval (0 = disabled, realtime-only)
-    if (pollInterval === 0) return;
+    if (pollInterval === 0) return; // realtime-only mode
     const interval = setInterval(fetchNotifications, pollInterval);
     return () => clearInterval(interval);
   }, [profile?.email, fetchNotifications, pollInterval]);
 
-  // Realtime: subscribe to ALL notification-relevant tables for instant updates
+  // ── Realtime: dispatch to ONE fetcher per table change ──
+  // Previously, ANY event on any of the 9 watched tables re-ran ALL 8 queries.
+  // For example, a student punching the time clock would trigger fetches for
+  // access_requests, work_order_requests, orders (with N+1 line-item subqueries),
+  // lab_signup_requests (with conflict checks), temp_access_requests, etc. — easily
+  // 15+ HTTP requests per punch event. Now only the relevant fetcher fires.
   useEffect(() => {
     if (!profile?.email) return;
-    const tables = ['access_requests', 'work_order_requests', 'orders',
-      'lab_signup_requests', 'temp_access_requests', 'announcements', 'time_entry_requests', 'time_clock', 'help_requests'];
+    const tableToFetcher = {
+      access_requests:      fetchAccessRequests,
+      work_order_requests:  fetchWORequests,
+      orders:               fetchOrders,
+      time_entry_requests:  fetchTimeRequests,
+      time_clock:           fetchTimeRequests, // edits reference time_clock rows
+      lab_signup_requests:  fetchLabRequests,
+      temp_access_requests: fetchTempRequests,
+      help_requests:        fetchHelpRequests,
+      announcements:        fetchAnnouncements,
+    };
+    const tables = Object.keys(tableToFetcher);
+    console.log('[NotificationBell] Setting up per-table realtime subscriptions for:', tables);
 
-    console.log('[NotificationBell] Setting up realtime subscriptions for tables:', tables);
-
-    const channel = supabase
-      .channel('notif-realtime-' + Date.now());
-
+    const channel = supabase.channel('notif-realtime-' + Date.now());
     tables.forEach(table => {
       channel.on(
         'postgres_changes',
         { event: '*', schema: 'public', table },
         (payload) => {
-          console.log(`[NotificationBell] Realtime event on ${table}:`, payload.eventType, payload);
-          fetchNotifications();
+          console.log(`[NotificationBell] Realtime event on ${table}:`, payload.eventType);
+          tableToFetcher[table]();
         }
       );
     });
@@ -541,22 +668,16 @@ export default function NotificationBell() {
     channel.subscribe((status, err) => {
       console.log('[NotificationBell] Realtime subscription status:', status);
       if (err) console.error('[NotificationBell] Realtime subscription error:', err);
-      if (status === 'SUBSCRIBED') {
-        console.log('[NotificationBell] ✅ Realtime is ACTIVE - listening for changes');
-      }
-      if (status === 'CHANNEL_ERROR') {
-        console.error('[NotificationBell] ❌ Realtime channel error - will retry via polling');
-      }
-      if (status === 'TIMED_OUT') {
-        console.warn('[NotificationBell] ⚠️ Realtime timed out - falling back to polling');
-      }
+      if (status === 'SUBSCRIBED') console.log('[NotificationBell] ✅ Realtime is ACTIVE - listening for changes');
+      if (status === 'CHANNEL_ERROR') console.error('[NotificationBell] ❌ Realtime channel error - will retry via polling');
+      if (status === 'TIMED_OUT') console.warn('[NotificationBell] ⚠️ Realtime timed out - falling back to polling');
     });
 
     return () => {
       console.log('[NotificationBell] Cleaning up realtime channel');
       supabase.removeChannel(channel);
     };
-  }, [profile?.email, fetchNotifications]);
+  }, [profile?.email, fetchAccessRequests, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements]);
 
   // Persistent ding: play sound every 60 seconds while there are unresolved notifications
   useEffect(() => {
@@ -1203,37 +1324,47 @@ export default function NotificationBell() {
   const renderActions = (item) => {
     const disabled = actionLoading === item.id;
     switch (item.type) {
-      case 'access': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveAccess(item)}><span className="material-icons">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectAccess(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'wo': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveWO(item)}><span className="material-icons">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectWO(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'parts': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveOrder(item)}><span className="material-icons">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectOrder(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'time': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveTime(item)}><span className="material-icons">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'time_edit': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveTimeEdit(item)}><span className="material-icons">check</span>Approve Edit</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'lab': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openLabApproveModal(item)}><span className="material-icons">rule</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectLab(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'temp': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons">close</span>Reject</button></>);
-      case 'temp_perm': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons">check</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons">close</span>Reject</button></>);
+      case 'access': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'wo': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveWO(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectWO(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'parts': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveOrder(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectOrder(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'time': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveTime(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'time_edit': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveTimeEdit(item)}><span className="material-icons" aria-hidden="true">check</span>Approve Edit</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'lab': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openLabApproveModal(item)}><span className="material-icons" aria-hidden="true">rule</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectLab(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'temp': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'temp_perm': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
       // volunteer_punch removed — time clock punches are auto-approved at punch time
-      case 'announcement': return (<button className="nbtn nbtn-view" onClick={() => viewAnnouncement(item)}><span className="material-icons">visibility</span>View</button>);
-      case 'wo_assignment': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons">assignment_ind</span>View WO</button>);
-      case 'help': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons">check</span>On My Way</button><button className="nbtn nbtn-secondary" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons">close</span>Dismiss</button></>);
+      case 'announcement': return (<button className="nbtn nbtn-view" onClick={() => viewAnnouncement(item)}><span className="material-icons" aria-hidden="true">visibility</span>View</button>);
+      case 'wo_assignment': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
+      case 'help': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       default: return null;
     }
   };
 
   return (
     <div ref={panelRef} style={{ position: 'relative' }}>
-      {toast && <div className={`nbell-toast nbell-toast-${toast.type}`}>{toast.msg}</div>}
+      {/* role=status + aria-live makes toasts audible to screen readers */}
+      {toast && <div className={`nbell-toast nbell-toast-${toast.type}`} role="status" aria-live="polite">{toast.msg}</div>}
 
       {/* Bell Button */}
-      <button className={`nbell-btn ${hasNew ? 'has-new' : ''}`} onClick={() => { setOpen(!open); setHasNew(false); fetchNotifications(); }} title="Notifications">
-        <span className="material-icons" style={{ fontSize: '1.3rem' }}>notifications</span>
-        {count > 0 && <span className="nbell-count">{count > 99 ? '99+' : count}</span>}
+      <button
+        className={`nbell-btn ${hasNew ? 'has-new' : ''}`}
+        onClick={() => { setOpen(!open); setHasNew(false); fetchNotifications(); }}
+        aria-label={`Notifications${count > 0 ? `, ${count} pending` : ''}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="notification-panel"
+        title="Notifications"
+      >
+        <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem' }}>notifications</span>
+        {count > 0 && <span className="nbell-count" aria-hidden="true">{count > 99 ? '99+' : count}</span>}
       </button>
 
-      {/* Panel */}
+      {/* Panel — non-modal popover (aria-modal=false): user can still interact with rest of page.
+          The bell-button's aria-controls points here via id="notification-panel". */}
       {open && (
-        <div className="nbell-panel">
+        <div id="notification-panel" className="nbell-panel" role="dialog" aria-modal="false" aria-labelledby="notification-panel-title">
           <div className="nbell-panel-header">
-            <h4>Notifications</h4>
+            <h4 id="notification-panel-title">Notifications</h4>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {count > 0 && <span className="nbell-badge">{count} pending</span>}
               {/* Push notification subscribe/unsubscribe toggle */}
@@ -1241,6 +1372,13 @@ export default function NotificationBell() {
                 <button
                   onClick={pushStatus === 'subscribed' ? unsubscribeFromPush : subscribeToPush}
                   disabled={pushStatus === 'loading' || pushStatus === 'blocked'}
+                  aria-label={
+                    pushStatus === 'subscribed' ? 'Disable push notifications to your phone'
+                    : pushStatus === 'blocked' ? 'Push notifications blocked in browser settings'
+                    : pushStatus === 'loading' ? 'Subscribing to push notifications'
+                    : 'Enable push notifications to your phone'
+                  }
+                  aria-pressed={pushStatus === 'subscribed'}
                   title={
                     pushStatus === 'subscribed' ? 'Push notifications ON — tap to disable'
                     : pushStatus === 'blocked' ? 'Notifications blocked in browser settings'
@@ -1253,7 +1391,7 @@ export default function NotificationBell() {
                     transition: 'background 0.2s',
                   }}
                 >
-                  <span className="material-icons" style={{
+                  <span className="material-icons" aria-hidden="true" style={{
                     fontSize: '1.2rem',
                     color: pushStatus === 'subscribed' ? '#40c057'
                       : pushStatus === 'blocked' ? '#fa5252'
@@ -1268,11 +1406,11 @@ export default function NotificationBell() {
           </div>
           <div className="nbell-panel-body">
             {items.length === 0 ? (
-              <div className="nbell-empty"><span className="material-icons">notifications_none</span><p>No pending notifications</p></div>
+              <div className="nbell-empty"><span className="material-icons" aria-hidden="true">notifications_none</span><p>No pending notifications</p></div>
             ) : items.map(item => (
               <div key={item.id} className="nbell-item">
                 <div className="nbell-item-top">
-                  <span className="material-icons nbell-item-icon" style={{ color: item.color }}>{item.icon}</span>
+                  <span className="material-icons nbell-item-icon" aria-hidden="true" style={{ color: item.color }}>{item.icon}</span>
                   <div className="nbell-item-content">
                     <div className="nbell-item-type" style={{ color: item.color }}>{typeLabels[item.type]}</div>
                     <div className="nbell-item-title">{item.title}</div>
@@ -1497,18 +1635,18 @@ export default function NotificationBell() {
       {/* Approve Access Role Modal */}
       {roleModal && (
         <div className="nbell-modal-overlay" onClick={e => e.target === e.currentTarget && setRoleModal(null)}>
-          <div className="nbell-modal">
-            <div className="nbell-modal-header"><h4><span className="material-icons" style={{ color: '#40c057' }}>person_add</span> Approve Access</h4><button className="nbell-modal-close" onClick={() => setRoleModal(null)}>&times;</button></div>
+          <div className="nbell-modal" ref={roleDialogRef} role="dialog" aria-modal="true" aria-labelledby="role-modal-title">
+            <div className="nbell-modal-header"><h4 id="role-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#40c057' }}>person_add</span> Approve Access</h4><button className="nbell-modal-close" aria-label="Close" onClick={() => setRoleModal(null)}>&times;</button></div>
             <div className="nbell-modal-body">
               <p>Approve <strong>{roleModal.raw?.first_name} {roleModal.raw?.last_name}</strong> ({roleModal.raw?.email})?</p>
-              <label className="nbell-label">Assign Role</label>
-              <select className="nbell-select" value={selectedRole} onChange={e => setSelectedRole(e.target.value)}>
+              <label className="nbell-label" htmlFor="role-modal-select">Assign Role</label>
+              <select id="role-modal-select" className="nbell-select" value={selectedRole} onChange={e => setSelectedRole(e.target.value)}>
                 <option value="Student">Student</option><option value="Work Study">Work Study</option><option value="Instructor">Instructor</option>
               </select>
             </div>
             <div className="nbell-modal-footer">
               <button className="nbtn nbtn-secondary" onClick={() => setRoleModal(null)}>Cancel</button>
-              <button className="nbtn nbtn-approve" onClick={confirmApproveAccess}><span className="material-icons">check</span>Approve as {selectedRole}</button>
+              <button className="nbtn nbtn-approve" onClick={confirmApproveAccess}><span className="material-icons" aria-hidden="true">check</span>Approve as {selectedRole}</button>
             </div>
           </div>
         </div>
@@ -1517,15 +1655,15 @@ export default function NotificationBell() {
       {/* Approve Temp Access Modal */}
       {tempModal && (
         <div className="nbell-modal-overlay" onClick={e => e.target === e.currentTarget && setTempModal(null)}>
-          <div className="nbell-modal" style={{ maxWidth: tempModal.raw?.request_type === 'permissions' ? 520 : 420 }}>
+          <div className="nbell-modal" ref={tempDialogRef} role="dialog" aria-modal="true" aria-labelledby="temp-modal-title" style={{ maxWidth: tempModal.raw?.request_type === 'permissions' ? 520 : 420 }}>
             <div className="nbell-modal-header">
-              <h4>
-                <span className="material-icons" style={{ color: tempModal.raw?.request_type === 'permissions' ? '#7c3aed' : '#f59f00' }}>
+              <h4 id="temp-modal-title">
+                <span className="material-icons" aria-hidden="true" style={{ color: tempModal.raw?.request_type === 'permissions' ? '#7c3aed' : '#f59f00' }}>
                   {tempModal.raw?.request_type === 'permissions' ? 'tune' : 'vpn_key'}
                 </span>
                 {tempModal.raw?.request_type === 'permissions' ? ' Approve Permissions' : ' Approve Temp Access'}
               </h4>
-              <button className="nbell-modal-close" onClick={() => setTempModal(null)}>&times;</button>
+              <button className="nbell-modal-close" aria-label="Close" onClick={() => setTempModal(null)}>&times;</button>
             </div>
             <div className="nbell-modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
               {tempModal.raw?.request_type === 'permissions' ? (
@@ -1591,7 +1729,7 @@ export default function NotificationBell() {
                 onClick={confirmApproveTempAccess}
                 disabled={tempModal.raw?.request_type === 'permissions' && Object.keys(tempApprovePerms).length === 0}
               >
-                <span className="material-icons">check</span>
+                <span className="material-icons" aria-hidden="true">check</span>
                 {tempModal.raw?.request_type === 'permissions'
                   ? `Approve ${Object.keys(tempApprovePerms).length} Permission${Object.keys(tempApprovePerms).length !== 1 ? 's' : ''}`
                   : 'Approve'
@@ -1610,10 +1748,10 @@ export default function NotificationBell() {
         const totalApproved = approvedAddCount + approvedCancelCount;
         return (
           <div className="nbell-modal-overlay" onClick={e => e.target === e.currentTarget && setLabModal(null)}>
-            <div className="nbell-modal" style={{ maxWidth: 480 }}>
+            <div className="nbell-modal" ref={labDialogRef} role="dialog" aria-modal="true" aria-labelledby="lab-modal-title" style={{ maxWidth: 480 }}>
               <div className="nbell-modal-header">
-                <h4><span className="material-icons" style={{ color: '#e64980' }}>science</span> Review Lab Change</h4>
-                <button className="nbell-modal-close" onClick={() => setLabModal(null)}>&times;</button>
+                <h4 id="lab-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#e64980' }}>science</span> Review Lab Change</h4>
+                <button className="nbell-modal-close" aria-label="Close" onClick={() => setLabModal(null)}>&times;</button>
               </div>
 
               <div className="nbell-modal-body" style={{ maxHeight: 440, overflowY: 'auto', paddingBottom: 8 }}>
@@ -1709,11 +1847,11 @@ export default function NotificationBell() {
               <div className="nbell-modal-footer" style={{ flexWrap: 'wrap', gap: 8 }}>
                 <button className="nbtn nbtn-secondary" onClick={() => setLabModal(null)}>Cancel</button>
                 <button className="nbtn nbtn-reject" onClick={() => { setLabModal(null); openRejectLab(labModal); }}>
-                  <span className="material-icons">close</span>Reject All
+                  <span className="material-icons" aria-hidden="true">close</span>Reject All
                 </button>
                 <button className="nbtn nbtn-approve" disabled={totalApproved === 0 || actionLoading === labModal.id}
                   onClick={confirmApproveLab}>
-                  <span className="material-icons">check</span>
+                  <span className="material-icons" aria-hidden="true">check</span>
                   Approve {totalApproved > 0 ? `(${approvedCancelCount > 0 ? `−${approvedCancelCount}` : ''}${approvedCancelCount > 0 && approvedAddCount > 0 ? ' ' : ''}${approvedAddCount > 0 ? `+${approvedAddCount}` : ''})` : ''}
                 </button>
               </div>
@@ -1725,73 +1863,24 @@ export default function NotificationBell() {
       {/* Reject with Reason Modal */}
       {rejectModal && (
         <div className="nbell-modal-overlay" onClick={e => e.target === e.currentTarget && setRejectModal(null)}>
-          <div className="nbell-modal">
-            <div className="nbell-modal-header"><h4><span className="material-icons" style={{ color: '#fa5252' }}>close</span> {rejectModal.rejectType === 'lab' ? 'Reject Lab Change' : 'Reject'}</h4><button className="nbell-modal-close" onClick={() => setRejectModal(null)}>&times;</button></div>
+          <div className="nbell-modal" ref={rejectDialogRef} role="dialog" aria-modal="true" aria-labelledby="reject-modal-title">
+            <div className="nbell-modal-header"><h4 id="reject-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#fa5252' }}>close</span> {rejectModal.rejectType === 'lab' ? 'Reject Lab Change' : 'Reject'}</h4><button className="nbell-modal-close" aria-label="Close" onClick={() => setRejectModal(null)}>&times;</button></div>
             <div className="nbell-modal-body">
               {rejectModal.rejectType === 'lab' ? (
                 <p>Provide a reason for rejecting <strong>{rejectModal.raw?.user_name}</strong>'s lab schedule change. This reason will be sent to the student as a notification.</p>
               ) : (
                 <p>Provide a reason for rejecting this {rejectModal.rejectType === 'time' ? 'time entry' : 'request'}.</p>
               )}
-              <label className="nbell-label">Reason <span style={{ color: '#fa5252' }}>*</span></label>
-              <textarea className="nbell-select" rows={3} style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder={rejectModal.rejectType === 'lab' ? 'e.g., Slots are fully booked, please choose different times...' : 'Enter reason...'} value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+              <label className="nbell-label" htmlFor="reject-modal-reason">Reason <span style={{ color: '#fa5252' }} aria-hidden="true">*</span><span className="sr-only"> required</span></label>
+              <textarea id="reject-modal-reason" className="nbell-select" rows={3} required aria-required="true" style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder={rejectModal.rejectType === 'lab' ? 'e.g., Slots are fully booked, please choose different times...' : 'Enter reason...'} value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
             </div>
             <div className="nbell-modal-footer">
               <button className="nbtn nbtn-secondary" onClick={() => setRejectModal(null)}>Cancel</button>
-              <button className="nbtn nbtn-reject" onClick={confirmRejectWithReason}><span className="material-icons">close</span>Reject {rejectModal.rejectType === 'lab' ? '& Notify Student' : ''}</button>
+              <button className="nbtn nbtn-reject" onClick={confirmRejectWithReason}><span className="material-icons" aria-hidden="true">close</span>Reject {rejectModal.rejectType === 'lab' ? '& Notify Student' : ''}</button>
             </div>
           </div>
         </div>
       )}
-
-      <style>{`
-        .nbell-toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;z-index:6000;font-size:.9rem;box-shadow:0 4px 12px rgba(0,0,0,.15);animation:nbIn .3s ease}
-        .nbell-toast-success{background:#40c057}.nbell-toast-error{background:#fa5252}.nbell-toast-info{background:#228be6}
-        @keyframes nbIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
-        .nbell-btn{background:none;border:none;color:inherit;cursor:pointer;padding:8px;border-radius:50%;position:relative;transition:background .2s;display:flex;align-items:center;justify-content:center}
-        .nbell-btn:hover{background:rgba(0,0,0,.05)}.nbell-btn.has-new .material-icons{animation:nbShake .5s ease-in-out}
-        @keyframes nbShake{0%,100%{transform:rotate(0)}15%{transform:rotate(12deg)}30%{transform:rotate(-10deg)}45%{transform:rotate(8deg)}60%{transform:rotate(-6deg)}75%{transform:rotate(3deg)}}
-        .nbell-count{position:absolute;top:2px;right:2px;background:#fa5252;color:#fff;font-size:.6rem;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1}
-        .nbell-panel{position:absolute;top:calc(100% + 8px);right:0;width:420px;max-height:560px;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.18);overflow:hidden;display:flex;flex-direction:column;z-index:1100}
-        .nbell-panel-header{padding:16px 20px;border-bottom:1px solid #e9ecef;display:flex;justify-content:space-between;align-items:center}
-        .nbell-panel-header h4{margin:0;font-size:.95rem;font-weight:600;color:#1a1a2e}
-        .nbell-badge{background:#fa5252;color:#fff;padding:2px 10px;border-radius:12px;font-size:.7rem;font-weight:600}
-        .nbell-panel-body{overflow-y:auto;flex:1;max-height:480px}
-        .nbell-empty{padding:40px 20px;text-align:center;color:#868e96}.nbell-empty .material-icons{font-size:2.5rem;margin-bottom:8px;display:block}.nbell-empty p{margin:0;font-size:.9rem}
-        .nbell-item{padding:16px 20px;border-bottom:1px solid #f1f3f5}
-        .nbell-item-top{display:flex;align-items:flex-start;gap:12px}
-        .nbell-item-icon{font-size:1.3rem;flex-shrink:0;margin-top:2px}
-        .nbell-item-content{flex:1;min-width:0}
-        .nbell-item-type{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
-        .nbell-item-title{font-size:.88rem;font-weight:600;color:#1a1a2e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .nbell-item-sub{font-size:.78rem;color:#868e96;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .nbell-item-time{font-size:.7rem;color:#adb5bd;white-space:nowrap;flex-shrink:0}
-        .nbell-item-actions{display:flex;gap:8px;margin-top:12px;padding-left:36px}
-        .nbell-po-detail{margin:8px 0 0 36px;padding:8px 10px;background:#f8f9fa;border-radius:6px;border:1px solid #e9ecef}
-        .nbell-po-wos{margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #e9ecef}
-        .nbell-po-wo-line{display:flex;gap:6px;align-items:baseline;margin-bottom:2px}
-        .nbell-po-wo-id{font-size:.72rem;font-weight:600;color:#228be6;flex-shrink:0}
-        .nbell-po-wo-desc{font-size:.72rem;color:#495057;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .nbell-po-items{display:flex;flex-direction:column;gap:3px}
-        .nbell-po-line{display:flex;align-items:center;gap:6px;font-size:.72rem}
-        .nbell-po-qty{font-weight:600;color:#495057;min-width:24px}
-        .nbell-po-desc{flex:1;color:#495057;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .nbell-po-price{font-weight:600;color:#1a1a2e;flex-shrink:0}
-        .nbtn{padding:6px 14px;border-radius:6px;font-size:.78rem;font-weight:500;cursor:pointer;border:none;display:inline-flex;align-items:center;gap:4px;transition:opacity .2s}
-        .nbtn:hover{opacity:.85}.nbtn:disabled{opacity:.5;cursor:not-allowed}.nbtn .material-icons{font-size:.9rem}
-        .nbtn-approve{background:#40c057;color:#fff}.nbtn-reject{background:#fa5252;color:#fff}.nbtn-secondary{background:#f1f3f5;color:#495057}.nbtn-view{background:#0ea5e9;color:#fff}
-        .nbell-modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:3000;padding:20px}
-        .nbell-modal{background:#fff;border-radius:12px;width:100%;max-width:420px;overflow:hidden}
-        .nbell-modal-header{padding:20px;border-bottom:1px solid #e9ecef;display:flex;justify-content:space-between;align-items:center}
-        .nbell-modal-header h4{margin:0;font-size:1rem;display:flex;align-items:center;gap:8px}
-        .nbell-modal-close{background:none;border:none;font-size:1.5rem;cursor:pointer;color:#868e96}
-        .nbell-modal-body{padding:20px}.nbell-modal-body p{margin:0 0 8px;font-size:.9rem;color:#495057}
-        .nbell-modal-footer{padding:16px 20px;border-top:1px solid #e9ecef;display:flex;justify-content:flex-end;gap:12px}
-        .nbell-label{display:block;font-size:.85rem;font-weight:500;margin:12px 0 6px;color:#495057}
-        .nbell-select{width:100%;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:.9rem;box-sizing:border-box}
-        .nbell-select:focus{border-color:#228be6;outline:none;box-shadow:0 0 0 3px rgba(34,139,230,.1)}
-        @media(max-width:480px){.nbell-panel{width:calc(100vw - 32px);right:-60px}}
-      `}</style>
     </div>
   );
 }
