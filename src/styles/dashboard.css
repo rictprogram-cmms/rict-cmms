@@ -108,13 +108,64 @@
 .dash-btn-sm:hover { background: #e9ecef; }
 
 .dash-day-nav-btn {
-  /* WCAG 2.5.8 (AA) — minimum 24x24 effective touch target */
+  /* WCAG 2.5.5 (AAA) — 44x44 touch target for comfortable mobile tapping */
   background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px;
-  min-width: 28px; min-height: 28px; padding: 2px 4px;
+  min-width: 44px; min-height: 44px; padding: 4px 8px;
   cursor: pointer; display: inline-flex; align-items: center;
   justify-content: center; color: #495057; transition: all 0.15s;
+  flex-shrink: 0;
 }
 .dash-day-nav-btn:hover { background: #e9ecef; color: #228be6; }
+
+/* ── Day View navigation row (below header when expanded) ────────────────── */
+.dash-day-nav-row {
+  display: flex; align-items: stretch; justify-content: space-between;
+  gap: 8px; padding: 10px 20px;
+  border-bottom: 1px solid #f1f3f5;
+  background: #fafbfc;
+  /* Hint that the body supports horizontal swipe gestures */
+  touch-action: pan-y;
+}
+
+/* ── Day View tappable date label (replaces the old separate "Today" button) */
+.dash-day-nav-date {
+  /* Native button reset */
+  font: inherit; color: inherit;
+  -webkit-appearance: none; appearance: none;
+  background: transparent; border: 1px solid transparent;
+  border-radius: 6px;
+  flex: 1; min-width: 0;
+  display: inline-flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 2px; padding: 4px 8px;
+  cursor: pointer;
+  /* WCAG 2.5.5 (AAA) — comfortable tap target */
+  min-height: 44px;
+  text-align: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.dash-day-nav-date-text {
+  font-size: 0.9rem; font-weight: 600; color: #1a1a2e;
+  line-height: 1.2;
+}
+.dash-day-nav-date-hint {
+  font-size: 0.65rem; font-weight: 600; color: #228be6;
+  display: inline-flex; align-items: center; gap: 3px;
+  text-transform: uppercase; letter-spacing: 0.3px;
+  line-height: 1;
+}
+.dash-day-nav-date:not(:disabled):hover {
+  background: #e7f5ff; border-color: #a5d8ff;
+}
+.dash-day-nav-date:disabled {
+  cursor: default;
+}
+.dash-day-nav-date:disabled .dash-day-nav-date-text {
+  color: #1a1a2e; /* Stay readable; "disabled" here just means non-interactive */
+}
+.dash-day-nav-date:focus-visible {
+  outline: 2px solid #228be6; outline-offset: 2px;
+}
 
 /* ── Day View person rows ────────────────────────────────────────────────── */
 .dash-day-person {
@@ -267,10 +318,22 @@ textarea.dash-input { resize: vertical; font-family: inherit; }
   outline: 2px solid #228be6; outline-offset: 2px;
 }
 
+/* ── Mobile sizing tweaks (≤ 600px) ──────────────────────────────────────── */
+@media (max-width: 600px) {
+  /* Tighten card-header horizontal padding so the 380px-class viewports
+     don't lose the right edge of header content. */
+  .dash-card-header { padding: 14px 16px; }
+  /* Match for the new day nav row */
+  .dash-day-nav-row { padding: 10px 12px; }
+  /* Modal close — bump to 44x44 on mobile (WCAG 2.5.5 AAA) */
+  .dash-modal-close { min-width: 44px; min-height: 44px; }
+}
+
 /* ── Respect prefers-reduced-motion (WCAG 2.3.3) ─────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   .dash-toast { animation: none; }
   .dash-metric-tile { transition: none; }
   .dash-metric-tile:hover { transform: none; }
   .dash-card-header .material-icons { transition: none !important; }
+  .dash-day-nav-date { transition: none; }
 }

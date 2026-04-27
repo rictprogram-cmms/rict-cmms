@@ -441,6 +441,38 @@ function InstructorOverview({ navigate }) {
   const goForward = () => { const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(d); };
   const goToday = () => setSelectedDate(new Date());
 
+  // ── Swipe gesture support on Day View body (mobile UX) ──
+  // Refs (not state) — avoid re-renders during touch tracking.
+  // WCAG 2.5.1 (AA) — every swipe action also has an equivalent button (Previous/Next).
+  const touchStartX = React.useRef(null);
+  const touchStartY = React.useRef(null);
+  const touchEndX   = React.useRef(null);
+  const touchEndY   = React.useRef(null);
+  const SWIPE_THRESHOLD_PX = 50;
+
+  const onDayBodyTouchStart = (e) => {
+    if (!e.touches || e.touches.length === 0) return;
+    touchEndX.current = null;
+    touchEndY.current = null;
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+  const onDayBodyTouchMove = (e) => {
+    if (!e.touches || e.touches.length === 0) return;
+    touchEndX.current = e.touches[0].clientX;
+    touchEndY.current = e.touches[0].clientY;
+  };
+  const onDayBodyTouchEnd = () => {
+    if (touchStartX.current == null || touchEndX.current == null) return;
+    const dx = touchStartX.current - touchEndX.current;
+    const dy = touchStartY.current - touchEndY.current;
+    // Ignore short or mostly-vertical movement (let page scroll normally)
+    if (Math.abs(dx) < SWIPE_THRESHOLD_PX) return;
+    if (Math.abs(dy) > Math.abs(dx)) return;
+    if (dx > 0) goForward();   // swipe left → next day
+    else        goBack();      // swipe right → previous day
+  };
+
   // ── Fetch late WOs ──
   const fetchLateWOs = useCallback(async () => {
     try {
@@ -730,6 +762,11 @@ function InstructorOverview({ navigate }) {
       {/* ── Day View ── */}
       <div style={{ marginTop: 16 }} ref={dayViewRef}>
         <div className="dash-card">
+          {/*
+            Header now contains ONLY the title, summary (when collapsed), and expand chevron.
+            Date navigation has been moved to its own row below to fix mobile overflow
+            (the previous all-in-one header clipped the "next day" arrow on ~380px viewports).
+          */}
           <div
             className="dash-card-header"
             style={{ cursor: 'pointer', userSelect: 'none' }}
@@ -741,11 +778,11 @@ function InstructorOverview({ navigate }) {
             aria-controls="dash-day-view-body"
             aria-label={`Day View, ${dayViewExpanded ? 'expanded' : 'collapsed'}`}
           >
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>calendar_today</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+              <span className="material-icons" aria-hidden="true" style={{ color: '#228be6', flexShrink: 0 }}>calendar_today</span>
               <strong>Day View</strong>
               {!dayViewExpanded && !dayLoading && (
-                <span style={{ fontSize: '0.78rem', color: '#868e96', fontWeight: 400 }}>
+                <span style={{ fontSize: '0.78rem', color: '#868e96', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                   {!isToday && `— ${formatDateLabel(selectedDate)}, `}
                   {isToday && peopleList.length > 0 && '— '}
                   {peopleList.length} {peopleList.length === 1 ? 'person' : 'people'}
@@ -753,27 +790,61 @@ function InstructorOverview({ navigate }) {
                 </span>
               )}
             </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              {dayViewExpanded && !isToday && (
-                <button className="dash-btn-sm" onClick={(e) => { e.stopPropagation(); goToday(); }} style={{ marginRight: 4 }}>Today</button>
-              )}
-              {dayViewExpanded && (
-                <>
-                  <button className="dash-day-nav-btn" aria-label="Previous day" onClick={(e) => { e.stopPropagation(); goBack(); }}><span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>chevron_left</span></button>
-                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#1a1a2e', minWidth: 200, textAlign: 'center' }}>
-                    {formatDateLabel(selectedDate)}
-                  </span>
-                  <button className="dash-day-nav-btn" aria-label="Next day" onClick={(e) => { e.stopPropagation(); goForward(); }}><span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>chevron_right</span></button>
-                </>
-              )}
-              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#868e96', marginLeft: 4, transition: 'transform 0.2s', transform: dayViewExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-                expand_more
-              </span>
-            </div>
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#868e96', marginLeft: 4, flexShrink: 0, transition: 'transform 0.2s', transform: dayViewExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+              expand_more
+            </span>
           </div>
 
+          {/* Date navigation row — only when expanded. Replaces the inline cluster
+              that used to live in the header. The date label itself is a button:
+              when not on today, tapping it returns to today (replaces the old
+              separate "Today" button). On today, the button is disabled. */}
           {dayViewExpanded && (
-            <div id="dash-day-view-body" className="dash-card-body">
+            <div className="dash-day-nav-row">
+              <button
+                type="button"
+                className="dash-day-nav-btn"
+                aria-label="Previous day"
+                onClick={goBack}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.4rem' }}>chevron_left</span>
+              </button>
+              <button
+                type="button"
+                className="dash-day-nav-date"
+                onClick={isToday ? undefined : goToday}
+                disabled={isToday}
+                aria-disabled={isToday || undefined}
+              >
+                <span className="dash-day-nav-date-text" aria-live="polite" aria-atomic="true">
+                  {formatDateLabel(selectedDate)}
+                </span>
+                {!isToday && (
+                  <span className="dash-day-nav-date-hint">
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.85rem' }}>today</span>
+                    Tap to return to today
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="dash-day-nav-btn"
+                aria-label="Next day"
+                onClick={goForward}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.4rem' }}>chevron_right</span>
+              </button>
+            </div>
+          )}
+
+          {dayViewExpanded && (
+            <div
+              id="dash-day-view-body"
+              className="dash-card-body"
+              onTouchStart={onDayBodyTouchStart}
+              onTouchMove={onDayBodyTouchMove}
+              onTouchEnd={onDayBodyTouchEnd}
+            >
               {dayLoading ? (
                 <p style={{ color: '#868e96', textAlign: 'center', padding: 20 }}>Loading...</p>
               ) : peopleList.length === 0 ? (
