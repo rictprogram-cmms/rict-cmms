@@ -13,6 +13,13 @@
  *   confirmation dialog inside a parent dialog and pressing Escape will close
  *   ONLY the confirmation, not both.
  *
+ * Stable onClose NOT required:
+ *   The latest onClose is held in a ref, so the main effect does NOT re-run
+ *   when the parent passes a new function reference each render. This prevents
+ *   focus from being yanked out of inputs (e.g. typing in a Work Log textarea
+ *   while a parent detail dialog is also mounted) when the parent re-renders.
+ *   Escape will still call the freshest onClose at the moment it is pressed.
+ *
  * Usage:
  *   const dialogRef = useDialogA11y(isOpen, onClose);
  *   return isOpen && (
@@ -36,6 +43,12 @@ const dialogStack = [];
 export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
   const dialogRef = useRef(null);
   const priorFocusRef = useRef(null);
+
+  // Latest-ref pattern for onClose. Keeps the Escape handler calling the
+  // freshest function without making the main effect depend on onClose's
+  // identity — see the "Stable onClose NOT required" note in the JSDoc above.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -68,7 +81,7 @@ export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
 
       if (e.key === 'Escape') {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (!trapFocus || e.key !== 'Tab') return;
@@ -105,7 +118,7 @@ export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
         prior.focus();
       }
     };
-  }, [isOpen, onClose, trapFocus]);
+  }, [isOpen, trapFocus]);
 
   return dialogRef;
 }

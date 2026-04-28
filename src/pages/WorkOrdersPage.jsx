@@ -1905,12 +1905,17 @@ export default function WorkOrdersPage() {
 
   // Closes the WO detail modal and clears the ref so the realtime handler stops
   // firing loadWODetailSilent for a WO that's no longer being viewed.
-  const closeViewModal = () => {
+  // Wrapped in useCallback so the Detail Modal's useDialogA11y hook gets a
+  // stable onClose — previously, typing in a sibling modal (e.g. Work Log)
+  // re-rendered this component, which redefined closeViewModal, which yanked
+  // focus out of the input the user was typing in. The hook is now also
+  // hardened against this, but keeping the memoization for defense in depth.
+  const closeViewModal = useCallback(() => {
     showViewModalRef.current = false; // clear synchronously before state update
     currentWORef.current = null;
     setShowViewModal(false);
     setAddAssigneeEmail('');
-  };
+  }, []);
 
   const openApproveModalFn = (req) => {
     setCurrentRequest(req);
