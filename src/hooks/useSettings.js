@@ -47,7 +47,7 @@ export function useSettingsActions() {
   const [saving, setSaving] = useState(false)
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
 
-  const updateSetting = async (key, value) => {
+  const updateSetting = async (key, value, meta = {}) => {
     setSaving(true)
     try {
       const { data: existing } = await supabase
@@ -68,12 +68,20 @@ export function useSettingsActions() {
           return
         }
       } else {
-        const { data: rows, error } = await supabase.from('settings').insert({
+        // Brand-new setting: optionally tag it with category/description so it
+        // shows up in the right place in the UI. Backward compatible — old
+        // callers that didn't pass meta still get the original behavior.
+        const insertPayload = {
           setting_key: key,
           setting_value: value,
           updated_at: new Date().toISOString(),
           updated_by: userName
-        }).select()
+        }
+        if (meta.category)    insertPayload.category    = meta.category
+        if (meta.description) insertPayload.description = meta.description
+
+        const { data: rows, error } = await supabase.from('settings')
+          .insert(insertPayload).select()
         if (error) throw error
         if (!rows || rows.length === 0) {
           toast.error('Setting create failed — you may not have permission.')
