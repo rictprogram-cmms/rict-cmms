@@ -7,6 +7,12 @@
  *   • Focus returns to the previously focused element when the dialog closes
  *   • When trapFocus=true (default), Tab is constrained to within the dialog
  *
+ * Stacked / nested dialogs:
+ *   The hook maintains a module-level stack of open dialogs. Escape and the Tab
+ *   focus trap only fire for the dialog at the top of the stack — so opening a
+ *   confirmation dialog inside a parent dialog and pressing Escape will close
+ *   ONLY the confirmation, not both.
+ *
  * Usage:
  *   const dialogRef = useDialogA11y(isOpen, onClose);
  *   return isOpen && (
@@ -22,6 +28,11 @@
 
 import { useEffect, useRef } from 'react';
 
+// Module-level stack of currently-open dialogs. The element at the end of the
+// array is "on top" — only it should respond to Escape and trap Tab focus.
+// Each entry is a unique token object pushed by an open dialog and popped on close.
+const dialogStack = [];
+
 export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
   const dialogRef = useRef(null);
   const priorFocusRef = useRef(null);
@@ -31,6 +42,10 @@ export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
 
     // Save the element that had focus before the dialog opened, so we can restore it on close.
     priorFocusRef.current = document.activeElement;
+
+    // Push a stack token so this dialog can identify itself as "top of stack".
+    const token = {};
+    dialogStack.push(token);
 
     // After the dialog has rendered, move focus to the first focusable child.
     // setTimeout(0) lets React commit the DOM before we query for focusables.
@@ -44,7 +59,13 @@ export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
       else if (typeof root.focus === 'function') root.focus();
     }, 0);
 
+    const isTopOfStack = () => dialogStack[dialogStack.length - 1] === token;
+
     const onKey = (e) => {
+      // Only the top-most dialog handles keyboard events. This lets nested
+      // dialogs (e.g. a confirm dialog inside a detail dialog) behave correctly.
+      if (!isTopOfStack()) return;
+
       if (e.key === 'Escape') {
         e.stopPropagation();
         onClose();
@@ -72,6 +93,11 @@ export function useDialogA11y(isOpen, onClose, { trapFocus = true } = {}) {
     return () => {
       clearTimeout(focusTimer);
       document.removeEventListener('keydown', onKey);
+      // Pop this dialog off the stack. Use indexOf rather than pop() in case the
+      // close order isn't strictly LIFO (rare, but possible if state changes
+      // close a parent dialog before a child).
+      const idx = dialogStack.indexOf(token);
+      if (idx >= 0) dialogStack.splice(idx, 1);
       // Restore focus to whatever had it before the dialog opened — but only
       // if that element is still in the DOM and focusable.
       const prior = priorFocusRef.current;

@@ -23,91 +23,35 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
 import RejectionModal from '@/components/RejectionModal';
+import StatusSelect from '@/components/StatusSelect';
+import WorkOrderDetailModal from '@/components/WorkOrderDetailModal';
 import { useRejectionNotification } from '@/hooks/useRejectionNotification';
 
-// Custom status select dropdown with color swatches
-function StatusSelectComponent({ statuses: statusList, value, onChange, id, className, style, placeholder, allOption, colorMap }) {
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef(null);
-
-  // Close on outside click
-  React.useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    if (open) document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const selectedColor = value ? (colorMap[value] || '#adb5bd') : null;
-  const displayLabel = value || allOption || placeholder || 'Select status...';
-
+// Accessible sortable column header.
+// The <th> keeps aria-sort (the implicit columnheader role is correct), and the
+// interactive control is a real <button> inside it — so screen readers announce
+// "button" and keyboard users get native Enter/Space activation without the
+// fragile tabIndex/onKeyDown combo on a <th>.
+function SortableTh({ field, sortField, sortDir, onSort, children }) {
+  const isSorted = sortField === field;
+  const ariaSortValue = isSorted ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none';
+  const indicator = isSorted ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ' ⇅';
   return (
-    <div ref={ref} className="status-select-wrapper" style={{ position: 'relative', ...style }}>
+    <th scope="col" className="sortable-th" aria-sort={ariaSortValue}>
       <button
         type="button"
-        id={id}
-        className={className || 'form-input form-input-sm'}
-        onClick={() => setOpen(!open)}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', textAlign: 'left', width: '100%', background: '#fff' }}
+        className="sortable-th-btn"
+        onClick={() => onSort(field)}
       >
-        {selectedColor && (
-          <span className="status-dot" style={{ width: 10, height: 10, borderRadius: '50%', background: selectedColor, flexShrink: 0, border: '1px solid rgba(0,0,0,0.1)' }} />
-        )}
-        <span style={{ flex: 1, color: value ? '#1a1a2e' : '#868e96' }}>{displayLabel}</span>
-        <span className="material-icons" style={{ fontSize: 16, color: '#868e96' }}>{open ? 'expand_less' : 'expand_more'}</span>
+        {children}
+        <span aria-hidden="true">{indicator}</span>
       </button>
-      {open && (
-        <div className="status-dropdown" style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4,
-          background: '#fff', border: '1px solid #dee2e6', borderRadius: 8,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.12)', zIndex: 100, overflow: 'hidden',
-          minWidth: 180
-        }}>
-          {allOption && (
-            <div
-              onClick={() => { onChange(''); setOpen(false); }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                cursor: 'pointer', fontSize: '0.85rem',
-                background: !value ? '#f0f4ff' : 'transparent',
-                fontWeight: !value ? 600 : 400,
-                borderBottom: '1px solid #f1f3f5'
-              }}
-              onMouseEnter={e => { if (value) e.currentTarget.style.background = '#f8f9fa'; }}
-              onMouseLeave={e => { if (value) e.currentTarget.style.background = 'transparent'; }}
-            >
-              <span style={{ width: 12, height: 12, borderRadius: '50%', background: 'linear-gradient(135deg, #228be6, #40c057, #fab005)', flexShrink: 0, border: '1px solid rgba(0,0,0,0.1)' }} />
-              <span style={{ flex: 1, color: '#495057' }}>{allOption}</span>
-              {!value && <span className="material-icons" style={{ fontSize: 16, color: '#228be6' }}>check</span>}
-            </div>
-          )}
-          {statusList.map(s => {
-            const hex = colorMap[s.status_name] || '#adb5bd';
-            const isActive = s.status_name === value;
-            return (
-              <div
-                key={s.status_name}
-                onClick={() => { onChange(s.status_name); setOpen(false); }}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
-                  cursor: 'pointer', fontSize: '0.85rem',
-                  background: isActive ? '#f0f4ff' : 'transparent',
-                  fontWeight: isActive ? 600 : 400,
-                }}
-                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#f8f9fa'; }}
-                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
-              >
-                <span style={{ width: 12, height: 12, borderRadius: '50%', background: hex, flexShrink: 0, border: '1px solid rgba(0,0,0,0.1)' }} />
-                <span style={{ flex: 1, color: '#1a1a2e' }}>{s.status_name}</span>
-                {isActive && <span className="material-icons" style={{ fontSize: 16, color: '#228be6' }}>check</span>}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    </th>
   );
 }
+
 
 // Smart tooltip — flips below the badge if there isn't enough room above
 // Simple badge — hover handlers are passed in from the page level so the tooltip
@@ -230,6 +174,28 @@ export default function WorkOrdersPage() {
   // Track whether initial data load has completed — prevents loading spinner on tab switch
   const hasLoadedRef = useRef(false);
 
+  // ---------- DEBOUNCED LIST REFRESH ----------
+  // Realtime events can fire in bursts (multiple students adding work logs simultaneously,
+  // PM auto-generation creating many WOs at once, etc.). Debouncing the list refresh
+  // coalesces those bursts into a single refetch instead of N refetches.
+  // Targeted updates (e.g. paperclip icon surgical state) and modal-detail refreshes are
+  // already conditional on the open WO id, so they don't go through this path.
+  const listRefreshTimerRef = useRef(null);
+  const scheduleListRefresh = useCallback(() => {
+    if (listRefreshTimerRef.current) clearTimeout(listRefreshTimerRef.current);
+    listRefreshTimerRef.current = setTimeout(() => {
+      listRefreshTimerRef.current = null;
+      // Read the current view at fire time (not capture time) so a view change
+      // between event and refresh uses the latest view's table.
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      loadWorkOrders(currentViewRef.current, true);
+    }, 200);
+  }, []);
+  // Clean up any pending timer on unmount.
+  useEffect(() => () => {
+    if (listRefreshTimerRef.current) clearTimeout(listRefreshTimerRef.current);
+  }, []);
+
   // ---------- HELPERS ----------
   const showToast = useCallback((msg, type = 'info') => {
     setToast({ msg, type });
@@ -237,6 +203,31 @@ export default function WorkOrdersPage() {
   }, []);
 
   const { hasPerm } = usePermissions('Work Orders');
+
+  // ---------- DIALOG A11Y ----------
+  // useDialogA11y handles Escape-to-close, focus-into-dialog on open, focus-restore on close,
+  // and Tab focus trapping. Each modal needs a stable onClose so the hook's effect doesn't
+  // tear down and rebuild on every parent render (which would steal focus from inputs the user is typing in).
+  // Note: the View Detail modal owns its own useDialogA11y instance internally
+  // (see WorkOrderDetailModal.jsx), so it doesn't need a ref or hook call here.
+  const handleCreateClose      = useCallback(() => setShowCreateModal(false), []);
+  const handleWorkLogClose     = useCallback(() => setShowWorkLogModal(false), []);
+  const handlePartsClose       = useCallback(() => setShowPartsModal(false), []);
+  const handleCloseWOClose     = useCallback(() => setShowCloseModal(false), []);
+  const handleApproveClose     = useCallback(() => setShowApproveModal(false), []);
+  const handleConfirmClose     = useCallback(() => setConfirmModal(null), []);
+  const handleGenPOClose       = useCallback(() => setShowGeneratePO(false), []);
+
+  // One useDialogA11y call per inline modal in this file. The hook returns a ref to attach to the dialog root.
+  // The `isOpen` flags also include "&& !!data" guards for modals that require data
+  // (Approve, Generate PO) so focus management runs only when the modal actually renders.
+  const createDialogRef  = useDialogA11y(showCreateModal, handleCreateClose);
+  const workLogDialogRef = useDialogA11y(showWorkLogModal, handleWorkLogClose);
+  const partsDialogRef   = useDialogA11y(showPartsModal, handlePartsClose);
+  const closeWODialogRef = useDialogA11y(showCloseModal, handleCloseWOClose);
+  const approveDialogRef = useDialogA11y(showApproveModal, handleApproveClose);
+  const confirmDialogRef = useDialogA11y(!!confirmModal, handleConfirmClose);
+  const genPODialogRef   = useDialogA11y(showGeneratePO, handleGenPOClose);
 
   /**
    * Send a notification to the notification bell when a user is assigned to a work order.
@@ -499,10 +490,10 @@ export default function WorkOrdersPage() {
   const getStatusStyle = (statusName, isClosed) => {
     const hex = statusColorMap[statusName];
     if (!hex) {
-      // Fallback: closed = green, open = blue
+      // Fallback: closed = green, open = blue. Both verified WCAG AA (≥4.5:1).
       return isClosed
-        ? { background: '#d3f9d8', color: '#2b8a3e' }
-        : { background: '#e7f5ff', color: '#1971c2' };
+        ? { background: '#d3f9d8', color: '#1f6b30' }   // 5.72:1 (was #2b8a3e, 3.81:1)
+        : { background: '#e7f5ff', color: '#1971c2' };  // 4.52:1
     }
     // Convert hex to RGB to create a light tinted background
     const r = parseInt(hex.slice(1, 3), 16);
@@ -510,8 +501,11 @@ export default function WorkOrdersPage() {
     const b = parseInt(hex.slice(5, 7), 16);
     // Light background: mix with white at ~15% opacity
     const bg = `rgba(${r}, ${g}, ${b}, 0.15)`;
-    // Darken the hex color for text
-    const darken = (v) => Math.max(0, Math.floor(v * 0.6));
+    // Darken the hex color for text. Multiplier 0.55 (was 0.6) is the smallest fixed
+    // value that keeps every current status color above WCAG AA (4.5:1) against the
+    // 15% tint background — including high-luminance colors like yellow (#fab005)
+    // and lime (#23e76e) which previously failed at 0.6.
+    const darken = (v) => Math.max(0, Math.floor(v * 0.55));
     const textColor = `rgb(${darken(r)}, ${darken(g)}, ${darken(b)})`;
     return { background: bg, color: textColor };
   };
@@ -618,7 +612,7 @@ export default function WorkOrdersPage() {
       // Work orders list changes (INSERT, UPDATE, DELETE)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, () => {
         const view = currentViewRef.current;
-        if (view !== 'closed') loadWorkOrders(view, true);
+        if (view !== 'closed') scheduleListRefresh();
         // Only refresh WO detail if the view modal is actually open
         const wo = currentWORef.current;
         if (wo && !wo.isClosed && showViewModalRef.current) {
@@ -627,7 +621,7 @@ export default function WorkOrdersPage() {
       })
       // Closed work orders
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders_closed' }, () => {
-        if (currentViewRef.current === 'closed') loadWorkOrders('closed', true);
+        if (currentViewRef.current === 'closed') scheduleListRefresh();
       })
       // Requests
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_order_requests' }, () => {
@@ -671,7 +665,7 @@ export default function WorkOrdersPage() {
           // ignore them for count purposes.
         } else {
           // Payload missing wo_id (REPLICA IDENTITY may not be FULL on this table) — reconcile.
-          loadWorkOrders(currentViewRef.current, true);
+          scheduleListRefresh();
         }
       })
       // Linked Purchase Orders (refresh when PO status changes e.g. received)
@@ -690,7 +684,7 @@ export default function WorkOrdersPage() {
         }
         // Refresh the list assignments map silently
         const view = currentViewRef.current;
-        if (view !== 'closed') loadWorkOrders(view, true);
+        if (view !== 'closed') scheduleListRefresh();
       })
       .subscribe();
 
@@ -1578,7 +1572,6 @@ export default function WorkOrdersPage() {
         is_pm: currentWO.is_pm,
         pm_id: currentWO.pm_id,
         total_hours: currentWO.total_hours,
-        documents: currentWO.documents || null,
         days_open: daysOpen,
         was_late: wasLate
       };
@@ -1809,18 +1802,24 @@ export default function WorkOrdersPage() {
   // ---------- FILTER ----------
   const filteredWOs = useMemo(() => {
     const userEmail = (profile?.email || user?.email || '').toLowerCase();
+    // Cache the lower-cased search term once instead of recomputing it per row × per field.
+    // For large lists with rapid typing this measurably reduces work.
+    const q = (search || '').toLowerCase();
+    const hasQuery = q.length > 0;
     return woData.filter(wo => {
       // Smart search — also checks ALL assignees (primary + additional) by name and email
       const extraAssignees = woAssignments[wo.wo_id] || [];
-      const assigneeText = extraAssignees.map(a => `${a.name || ''} ${a.email || ''}`).join(' ');
-      const matchSearch = !search ||
-        wo.wo_id?.toLowerCase().includes(search.toLowerCase()) ||
-        wo.description?.toLowerCase().includes(search.toLowerCase()) ||
-        wo.asset_name?.toLowerCase().includes(search.toLowerCase()) ||
-        wo.assigned_to?.toLowerCase().includes(search.toLowerCase()) ||
-        wo.status?.toLowerCase().includes(search.toLowerCase()) ||
-        wo.created_by?.toLowerCase().includes(search.toLowerCase()) ||
-        assigneeText.toLowerCase().includes(search.toLowerCase());
+      const matchSearch = !hasQuery ||
+        wo.wo_id?.toLowerCase().includes(q) ||
+        wo.description?.toLowerCase().includes(q) ||
+        wo.asset_name?.toLowerCase().includes(q) ||
+        wo.assigned_to?.toLowerCase().includes(q) ||
+        wo.status?.toLowerCase().includes(q) ||
+        wo.created_by?.toLowerCase().includes(q) ||
+        extraAssignees.some(a =>
+          (a.name || '').toLowerCase().includes(q) ||
+          (a.email || '').toLowerCase().includes(q)
+        );
       const matchPriority = !priorityFilter || wo.priority === priorityFilter;
       const matchStatus = !statusFilter || wo.status === statusFilter;
       // "Assigned to Me" — matches if the logged-in user is ANY assignee (primary or additional)
@@ -1867,10 +1866,6 @@ export default function WorkOrdersPage() {
       setWoSortDirection('asc');
     }
   };
-
-  // Accessible sort indicator — returns visible icon + screen-reader label
-  const woSortIcon = (col) => woSortColumn === col ? (woSortDirection === 'asc' ? ' ▲' : ' ▼') : ' ⇅';
-  const ariaSort = (col) => woSortColumn === col ? (woSortDirection === 'asc' ? 'ascending' : 'descending') : 'none';
 
   const openStatuses = statuses.filter(s => s.is_closed_status !== 'Yes' && s.is_closed_status !== true);
   const pendingRequestCount = requestsData.length;
@@ -1965,7 +1960,16 @@ export default function WorkOrdersPage() {
   return (
     <div className="wo-page">
       {/* Toast */}
-      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+      {toast && (
+        <div
+          className={`toast toast-${toast.type}`}
+          role={toast.type === 'error' ? 'alert' : 'status'}
+          aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+          aria-atomic="true"
+        >
+          {toast.msg}
+        </div>
+      )}
 
       {/* Page-level assignee tooltip — rendered here so it's above all cards/overflow */}
       {assigneeTooltip && (
@@ -2030,7 +2034,7 @@ export default function WorkOrdersPage() {
             <option value="Low">Low</option>
           </select>
           {currentView !== 'requests' && (
-            <StatusSelectComponent
+            <StatusSelect
               statuses={currentView === 'closed' ? statuses : openStatuses}
               value={statusFilter}
               onChange={setStatusFilter}
@@ -2071,44 +2075,49 @@ export default function WorkOrdersPage() {
             <span className="badge">{sortedWOs.length}</span> work orders
           </div>
           <div className="table-container">
+            {(() => {
+              // Derived column count keeps loading/empty rows in sync if columns are added or removed.
+              const woColCount = 8;
+              return (
             <table className="data-table">
               <thead>
                 <tr>
-                  <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('wo_id')} onClick={() => handleWoSort('wo_id')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('wo_id'); } }}>WO ID{woSortIcon('wo_id')}</th>
-                  <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('description')} onClick={() => handleWoSort('description')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('description'); } }}>Description{woSortIcon('description')}</th>
-                  <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('asset_name')} onClick={() => handleWoSort('asset_name')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('asset_name'); } }}>Asset{woSortIcon('asset_name')}</th>
-                  <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('priority')} onClick={() => handleWoSort('priority')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('priority'); } }}>Priority{woSortIcon('priority')}</th>
+                  <SortableTh field="wo_id" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>WO ID</SortableTh>
+                  <SortableTh field="description" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Description</SortableTh>
+                  <SortableTh field="asset_name" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Asset</SortableTh>
+                  <SortableTh field="priority" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Priority</SortableTh>
                   {currentView === 'closed' ? (
-                    <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('closed_date')} onClick={() => handleWoSort('closed_date')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('closed_date'); } }}>Closed Date{woSortIcon('closed_date')}</th>
+                    <SortableTh field="closed_date" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Closed Date</SortableTh>
                   ) : (
-                    <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('due_date')} onClick={() => handleWoSort('due_date')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('due_date'); } }}>Due Date{woSortIcon('due_date')}</th>
+                    <SortableTh field="due_date" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Due Date</SortableTh>
                   )}
-                  <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('status')} onClick={() => handleWoSort('status')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('status'); } }}>Status{woSortIcon('status')}</th>
-                  <th scope="col" className="sortable-th" role="columnheader" aria-sort={ariaSort('assigned_to')} onClick={() => handleWoSort('assigned_to')} tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleWoSort('assigned_to'); } }}>Assigned To{woSortIcon('assigned_to')}</th>
+                  <SortableTh field="status" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Status</SortableTh>
+                  <SortableTh field="assigned_to" sortField={woSortColumn} sortDir={woSortDirection} onSort={handleWoSort}>Assigned To</SortableTh>
                   <th scope="col">Hours</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="8" className="loading-cell">Loading...</td></tr>
+                  <tr><td colSpan={woColCount} className="loading-cell">Loading...</td></tr>
                 ) : sortedWOs.length === 0 ? (
-                  <tr><td colSpan="8" className="loading-cell">No work orders found</td></tr>
+                  <tr><td colSpan={woColCount} className="loading-cell">No work orders found</td></tr>
                 ) : sortedWOs.map(wo => (
                   <tr key={wo.wo_id} onClick={() => loadWODetail(wo.wo_id)}>
                     <td>
-                      <span className="wo-id">{highlightMatch(wo.wo_id)}</span>
+                      <button
+                        type="button"
+                        className="wo-id wo-id-btn"
+                        onClick={(e) => { e.stopPropagation(); loadWODetail(wo.wo_id); }}
+                        aria-label={`Open work order ${wo.wo_id}${wo.description ? ': ' + wo.description : ''}`}
+                      >
+                        {highlightMatch(wo.wo_id)}
+                      </button>
                       {woHasDocs[wo.wo_id] > 0 && (
                         <>
                           <span
-                            className="material-icons"
+                            className="material-icons wo-doc-icon"
                             aria-hidden="true"
                             title={`${woHasDocs[wo.wo_id]} attached document${woHasDocs[wo.wo_id] === 1 ? '' : 's'}`}
-                            style={{
-                              fontSize: 14,
-                              color: '#868e96',
-                              marginLeft: 6,
-                              verticalAlign: 'middle',
-                            }}
                           >
                             attach_file
                           </span>
@@ -2174,6 +2183,8 @@ export default function WorkOrdersPage() {
                 ))}
               </tbody>
             </table>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -2219,10 +2230,16 @@ export default function WorkOrdersPage() {
       {/* Create/Edit WO Modal */}
       {showCreateModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowCreateModal(false)}>
-          <div className="modal modal-lg">
+          <div
+            ref={createDialogRef}
+            className="modal modal-lg"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wo-create-modal-title"
+          >
             <div className="modal-header">
-              <h3>{formData.wo_id ? 'Edit Work Order' : 'Create Work Order'}</h3>
-              <button className="modal-close" onClick={() => setShowCreateModal(false)}>&times;</button>
+              <h3 id="wo-create-modal-title">{formData.wo_id ? 'Edit Work Order' : 'Create Work Order'}</h3>
+              <button className="modal-close" aria-label="Close dialog" onClick={() => setShowCreateModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
               <div className="form-group">
@@ -2259,7 +2276,7 @@ export default function WorkOrdersPage() {
                     </div>
                     <div className="form-group">
                       <label className="form-label">Status</label>
-                      <StatusSelectComponent
+                      <StatusSelect
                         statuses={openStatuses}
                         value={formData.status || ''}
                         onChange={(val) => setFormData({ ...formData, status: val })}
@@ -2285,425 +2302,71 @@ export default function WorkOrdersPage() {
         </div>
       )}
 
-      {/* View WO Detail Modal */}
+      {/* View WO Detail Modal — extracted to WorkOrderDetailModal component */}
       {showViewModal && currentWO && (
-        <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && closeViewModal()}>
-          <div className="modal modal-xl">
-            <div className="modal-header">
-              <h3>
-                {!currentWO.isClosed && hasPerm('close_wo') && (
-                  <button className="btn btn-danger btn-sm" style={{ marginRight: 12 }} onClick={openCloseWOModalFn}>
-                    <span className="material-icons" style={{ fontSize: '1rem' }}>check_circle</span>Close WO
-                  </button>
-                )}
-                Work Order: {currentWO.wo_id}
-                {currentWO.is_pm === 'Yes' && (
-                  <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 12, fontSize: '0.7rem', fontWeight: 600, background: '#e7f5ff', color: '#1864ab', verticalAlign: 'middle' }}>PM</span>
-                )}
-              </h3>
-              <button className="modal-close" onClick={closeViewModal}>&times;</button>
-            </div>
-            <div className="modal-body">
-              {/* Header */}
-              <div className="wo-detail-header">
-                <div className="wo-detail-title">
-                  {!currentWO.isClosed && hasPerm('edit_wo') ? (
-                    <textarea className="form-input" value={viewDescription} onChange={e => setViewDescription(e.target.value)} rows={2} style={{ fontSize: '1.2rem', fontWeight: 600, resize: 'vertical' }} />
-                  ) : (
-                    <h2>{currentWO.description}</h2>
-                  )}
-                  <div className="wo-detail-badges">
-                    {!currentWO.isClosed && hasPerm('edit_priority') ? (
-                      <select className="form-input form-input-sm" value={viewPriority} onChange={e => setViewPriority(e.target.value)} style={{ maxWidth: 120, fontWeight: 600 }}>
-                        <option value="Low">Low</option>
-                        <option value="Medium">Medium</option>
-                        <option value="High">High</option>
-                        <option value="Critical">Critical</option>
-                      </select>
-                    ) : (
-                      <span className={`priority-badge ${currentWO.priority?.toLowerCase()}`}>{currentWO.priority}</span>
-                    )}
-                    <span className="status-badge" style={getStatusStyle(currentWO.status, currentWO.isClosed)}>{currentWO.status}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Detail Grid */}
-              <div className="detail-grid">
-                {/* Asset */}
-                <div className="detail-item">
-                  <label>Asset</label>
-                  {!currentWO.isClosed && hasPerm('edit_wo') && profile?.role !== 'Student' ? (
-                    <select className="form-input form-input-sm" value={viewAssetId} onChange={e => setViewAssetId(e.target.value)} style={{ maxWidth: 200 }}>
-                      <option value="">None</option>
-                      {assets.map(a => <option key={a.asset_id} value={a.asset_id} data-name={a.name}>{a.name} ({a.asset_id})</option>)}
-                    </select>
-                  ) : <span>{currentWO.asset_name || 'None'}</span>}
-                </div>
-
-                {/* Assigned To — derived from viewAssignees[0] to stay in sync without DB race */}
-                <div className="detail-item">
-                  <label>Primary Assignee</label>
-                  <span>{viewAssignees[0]?.name || 'Unassigned'}</span>
-                </div>
-
-                {/* Due Date */}
-                <div className="detail-item">
-                  <label id="detail-due-date-label">Due Date</label>
-                  {!currentWO.isClosed && hasPerm('edit_due_date') ? (
-                    <input type="date" className="form-input form-input-sm" value={viewDueDate} onChange={e => setViewDueDate(e.target.value)} style={{ maxWidth: 150 }} aria-labelledby="detail-due-date-label" />
-                  ) : <span>{formatDate(currentWO.due_date)}</span>}
-                </div>
-
-                {/* Closed Date — only shown for closed work orders */}
-                {currentWO.isClosed && currentWO.closed_date && (
-                  <div className="detail-item">
-                    <label>Closed Date</label>
-                    <span>{formatDate(currentWO.closed_date)}</span>
-                  </div>
-                )}
-
-                {/* Total Time */}
-                <div className="detail-item">
-                  <label>Total Time</label>
-                  <span>{formatHoursToTime(currentWO.total_hours || 0)}</span>
-                </div>
-
-                {/* Created */}
-                <div className="detail-item">
-                  <label>Created</label>
-                  <span>{formatDate(currentWO.created_at)} by {currentWO.created_by || '-'}</span>
-                </div>
-
-                {/* Status */}
-                <div className="detail-item">
-                  <label>Status</label>
-                  {!currentWO.isClosed && hasPerm('edit_status') ? (
-                    <StatusSelectComponent
-                      statuses={openStatuses}
-                      value={viewStatus}
-                      onChange={setViewStatus}
-                      id="view-wo-status"
-                      style={{ maxWidth: 200 }}
-                      colorMap={statusColorMap}
-                    />
-                  ) : <span>{currentWO.status || '-'}</span>}
-                </div>
-              </div>
-
-              {/* Assignees Section */}
-              {(() => {
-                const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
-                const myEmail = user?.email?.toLowerCase() || '';
-                const alreadyAssigned = viewAssignees.some(a => a.email.toLowerCase() === myEmail);
-
-                // What options can this user add?
-                // Instructor: anyone not already assigned
-                // Student/Work Study: only themselves (if not already on)
-                const addableOptions = isInstructor
-                  ? users.filter(u => !viewAssignees.find(a => a.email === u.email))
-                  : (!alreadyAssigned ? [{ email: myEmail, name: `${profile?.first_name} ${profile?.last_name}` }] : []);
-
-                const canManage = !currentWO.isClosed && (isInstructor || hasPerm('assign_wo') || !alreadyAssigned);
-
-                return (
-                  <div className="detail-section">
-                    <h4>
-                      <span className="material-icons">group</span>
-                      Assignees
-                      {viewAssignees.length > 0 && (
-                        <span style={{ marginLeft: 8, fontSize: '0.75rem', fontWeight: 400, color: '#868e96' }}>
-                          {viewAssignees.length} assigned
-                        </span>
-                      )}
-                    </h4>
-
-                    {/* Assignee chips */}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: viewAssignees.length > 0 ? 12 : 0 }}>
-                      {viewAssignees.length === 0 && (
-                        <span style={{ fontSize: '0.85rem', color: '#868e96' }}>No one assigned yet</span>
-                      )}
-                      {viewAssignees.map((a, idx) => {
-                        const isPrimary = idx === 0; // first in assigned_at order = primary
-                        const canRemove = !currentWO.isClosed && (
-                          isInstructor || a.email.toLowerCase() === myEmail
-                        );
-                        return (
-                          <span key={a.email} style={{
-                            display: 'inline-flex', alignItems: 'center', gap: 6,
-                            padding: '4px 10px', borderRadius: 20,
-                            background: isPrimary ? '#e7f5ff' : '#f1f3f5',
-                            color: isPrimary ? '#1864ab' : '#495057',
-                            border: `1px solid ${isPrimary ? '#a5d8ff' : '#dee2e6'}`,
-                            fontSize: '0.82rem', fontWeight: isPrimary ? 600 : 400
-                          }}>
-                            <span className="material-icons" style={{ fontSize: '0.95rem' }}>person</span>
-                            {a.name || a.email}
-                            {isPrimary && (
-                              <span style={{ fontSize: '0.68rem', color: '#1971c2', marginLeft: 2 }} title="Lead assignee">★</span>
-                            )}
-                            {!isPrimary && !currentWO.isClosed && isInstructor && !assigneeSaving && (
-                              <button
-                                onClick={() => promoteToLead(a.email)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0 2px', color: '#adb5bd', display: 'flex', alignItems: 'center', lineHeight: 1, fontSize: '0.68rem' }}
-                                title={`Make ${a.name || a.email} the lead`}
-                              >★</button>
-                            )}
-                            {canRemove && !assigneeSaving && (
-                              <button
-                                onClick={() => removeAssignee(a.email)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0 2px', color: '#868e96', display: 'flex', alignItems: 'center', lineHeight: 1 }}
-                                title={`Remove ${a.name}`}
-                              >
-                                <span className="material-icons" style={{ fontSize: '0.9rem' }}>close</span>
-                              </button>
-                            )}
-                          </span>
-                        );
-                      })}
-                    </div>
-
-                    {/* Add assignee controls — only shown on open WOs */}
-                    {canManage && addableOptions.length > 0 && (
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        {isInstructor ? (
-                          <>
-                            <select
-                              className="form-input form-input-sm"
-                              value={addAssigneeEmail}
-                              onChange={e => {
-                                const email = e.target.value;
-                                if (!email) return;
-                                setAddAssigneeEmail(email);
-                                const u = users.find(u => u.email === email);
-                                if (u) addAssignee(u.email, `${u.first_name} ${u.last_name}`);
-                              }}
-                              style={{ maxWidth: 220 }}
-                              disabled={assigneeSaving}
-                            >
-                              <option value="">{assigneeSaving ? 'Adding…' : 'Select person to add…'}</option>
-                              {addableOptions.map(u => (
-                                <option key={u.email} value={u.email}>
-                                  {u.email === myEmail ? `${u.first_name} ${u.last_name} (Me)` : `${u.first_name} ${u.last_name}`}
-                                </option>
-                              ))}
-                            </select>
-                          </>
-                        ) : (
-                          /* Student/Work Study — can only add themselves */
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            disabled={assigneeSaving}
-                            onClick={() => addAssignee(myEmail, `${profile?.first_name} ${profile?.last_name}`)}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                          >
-                            <span className="material-icons" style={{ fontSize: '0.9rem' }}>person_add</span>
-                            {assigneeSaving ? 'Adding…' : 'Add Myself'}
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Hint for students who are already on this WO */}
-                    {!currentWO.isClosed && !isInstructor && alreadyAssigned && (
-                      <p style={{ fontSize: '0.78rem', color: '#868e96', margin: '4px 0 0' }}>
-                        You're assigned to this work order. Remove yourself using the ✕ on your name above.
-                      </p>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* PM Procedure Section (only for PM work orders with a procedure) */}
-              {currentWO.is_pm === 'Yes' && currentWO.pm_id && pmProcedureUrl && (
-                <div className="detail-section">
-                  <h4><span className="material-icons">assignment</span>PM Procedure</h4>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', background: '#ebfaff', border: '1px solid #a5d8ff', borderRadius: 8 }}>
-                    <span className="material-icons" style={{ color: '#228be6', fontSize: '1.3rem' }}>description</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#1864ab' }}>Procedure Document</div>
-                      <div style={{ fontSize: '0.75rem', color: '#495057' }}>{pmProcedureName}</div>
-                    </div>
-                    <a href={pmProcedureUrl} target="_blank" rel="noopener noreferrer"
-                      className="doc-link" style={{ background: '#228be6', color: '#fff', fontWeight: 600 }}>
-                      <span className="material-icons">open_in_new</span>View Procedure
-                    </a>
-                  </div>
-                  <div style={{ fontSize: '0.72rem', color: '#868e96', marginTop: 6 }}>
-                    Linked from PM schedule: {currentWO.pm_id}
-                  </div>
-                </div>
-              )}
-
-              {/* PM badge info for PM WOs without a procedure */}
-              {currentWO.is_pm === 'Yes' && currentWO.pm_id && !pmProcedureUrl && (
-                <div className="detail-section">
-                  <h4><span className="material-icons">assignment</span>PM Information</h4>
-                  <div style={{ padding: '10px 14px', background: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef', fontSize: '0.85rem', color: '#495057' }}>
-                    This work order was generated from PM schedule <strong>{currentWO.pm_id}</strong>. No procedure document is attached.
-                  </div>
-                </div>
-              )}
-
-              {/* Work Logs */}
-              <div className="detail-section">
-                <h4><span className="material-icons">schedule</span>Work Logs</h4>
-                {workLogs.length > 0 ? (
-                  <div className="worklogs-list">
-                    {workLogs.map(log => (
-                      <div key={log.log_id} className="worklog-item">
-                        <div className="worklog-info">
-                          <h5>{log.user_name || log.user_email || 'Unknown'}</h5>
-                          <p>{formatDateTime(log.timestamp)}</p>
-                          <p>{log.work_description || ''}</p>
-                        </div>
-                        <div className="worklog-actions">
-                          <span className="worklog-hours">{formatHoursToTime(log.hours)}</span>
-                          {hasPerm('delete_wo') && (
-                            <button className="btn-delete-log" onClick={() => deleteWorkLog(log.log_id)}>
-                              <span className="material-icons">delete</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state"><span className="material-icons">schedule</span><p>No work logs yet</p></div>
-                )}
-              </div>
-
-              {/* Parts Used */}
-              <div className="detail-section">
-                <h4><span className="material-icons">inventory_2</span>Parts Used</h4>
-                {partsUsed.length > 0 ? (
-                  <div className="parts-list">
-                    {partsUsed.map(p => (
-                      <div key={p.record_id || p.id} className="part-item">
-                        <div className="part-info"><h5>{p.part_name}</h5></div>
-                        <span className="part-qty">x{p.quantity_used}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state"><span className="material-icons">inventory_2</span><p>No parts used</p></div>
-                )}
-              </div>
-
-              {/* Documents */}
-              <div className="detail-section">
-                <h4><span className="material-icons">attach_file</span>Documents</h4>
-                {woDocs.length > 0 ? (
-                  <div className="docs-list">
-                    {woDocs.map(doc => {
-                      const url = doc.file_path ? supabase.storage.from('work-order-documents').getPublicUrl(doc.file_path).data?.publicUrl : '';
-                      return (
-                        <div key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <a href={url} target="_blank" rel="noopener noreferrer" className="doc-link" style={{ flex: 1 }}>
-                            <span className="material-icons">description</span>{doc.file_name || 'Document'}
-                          </a>
-                          {hasPerm('delete_documents') && (
-                            <button className="btn-delete-log" onClick={() => deleteWODoc(doc)} title="Delete document">
-                              <span className="material-icons">delete</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="empty-state"><span className="material-icons">attach_file</span><p>No documents attached</p></div>
-                )}
-              </div>
-
-              {/* Linked Purchase Orders */}
-              <div className="detail-section">
-                <h4><span className="material-icons">local_shipping</span>Purchase Orders</h4>
-                {linkedPOs.length > 0 ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {linkedPOs.map(po => (
-                      <div key={po.order_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef' }}>
-                        <span className="material-icons" style={{ color: po.status === 'Received' ? '#40c057' : po.status === 'Ordered' ? '#228be6' : po.status === 'Rejected' ? '#fa5252' : '#fab005', fontSize: '1.2rem' }}>
-                          {po.status === 'Received' ? 'check_circle' : po.status === 'Ordered' ? 'local_shipping' : po.status === 'Rejected' ? 'cancel' : 'hourglass_empty'}
-                        </span>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#1a1a2e' }}>{po.order_id}</div>
-                          <div style={{ fontSize: '0.78rem', color: '#868e96' }}>{po.vendor_name || po.other_vendor || 'Unknown'} — ${parseFloat(po.total || 0).toFixed(2)}</div>
-                        </div>
-                        <span style={{ padding: '2px 10px', borderRadius: 12, fontSize: '0.72rem', fontWeight: 600,
-                          background: po.status === 'Received' ? '#d3f9d8' : po.status === 'Ordered' ? '#d0ebff' : po.status === 'Approved' ? '#d0ebff' : po.status === 'Rejected' ? '#ffe3e3' : po.status === 'Cancelled' ? '#f1f3f5' : '#fff3bf',
-                          color: po.status === 'Received' ? '#2b8a3e' : po.status === 'Ordered' ? '#1864ab' : po.status === 'Approved' ? '#1864ab' : po.status === 'Rejected' ? '#c92a2a' : po.status === 'Cancelled' ? '#868e96' : '#e67700'
-                        }}>
-                          {po.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="empty-state"><span className="material-icons">local_shipping</span><p>No purchase orders linked</p></div>
-                )}
-              </div>
-            </div>
-
-            {/* Footer Actions */}
-            <div className="modal-footer" style={{ flexDirection: 'column', gap: 0, padding: 0 }}>
-              {!currentWO.isClosed && (
-                <>
-                  {/* Action Toolbar */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '12px 20px', borderTop: '1px solid #e9ecef', background: '#f8f9fa', flexWrap: 'wrap' }}>
-                    {hasPerm('add_work_log') && (
-                      <button onClick={openWorkLogModalFn} className="wo-action-btn">
-                        <span className="material-icons">schedule</span>Work Log
-                      </button>
-                    )}
-                    {hasPerm('add_parts') && (
-                      <button onClick={openPartsModalFn} className="wo-action-btn">
-                        <span className="material-icons">inventory_2</span>Parts
-                      </button>
-                    )}
-                    {hasPerm('upload_wo_doc') && (
-                      <button onClick={uploadWODoc} className="wo-action-btn">
-                        <span className="material-icons">upload_file</span>Upload
-                      </button>
-                    )}
-                    {hasPerm('add_parts') && (
-                      <button onClick={openGeneratePO} className="wo-action-btn">
-                        <span className="material-icons">local_shipping</span>Generate PO
-                      </button>
-                    )}
-                    <div style={{ flex: 1 }} />
-                    {hasPerm('delete_wo') && (
-                      <button className="wo-action-btn wo-action-btn-delete" onClick={() => deleteWorkOrder(currentWO.wo_id)}>
-                        <span className="material-icons">delete_forever</span>
-                      </button>
-                    )}
-                  </div>
-                  {/* Save Bar */}
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 20px', borderTop: '1px solid #e9ecef' }}>
-                    <button className="btn btn-primary" onClick={saveWOInline} style={{ minWidth: 160 }}>
-                      <span className="material-icons" style={{ fontSize: '1rem' }}>save</span>Save Changes
-                    </button>
-                  </div>
-                </>
-              )}
-              {currentWO.isClosed && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, padding: '16px 20px', borderTop: '1px solid #e9ecef' }}>
-                  <button className="btn btn-secondary" onClick={closeViewModal}>Close</button>
-                  {hasPerm('edit_wo') && (
-                    <button className="btn btn-primary" onClick={reopenWorkOrder}><span className="material-icons">refresh</span>Reopen WO</button>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <WorkOrderDetailModal
+          wo={currentWO}
+          onClose={closeViewModal}
+          // Edit field state (lifted to this page so saves use the same source of truth)
+          description={viewDescription} setDescription={setViewDescription}
+          priority={viewPriority} setPriority={setViewPriority}
+          assetId={viewAssetId} setAssetId={setViewAssetId}
+          dueDate={viewDueDate} setDueDate={setViewDueDate}
+          status={viewStatus} setStatus={setViewStatus}
+          // Assignees
+          assignees={viewAssignees}
+          assigneeSaving={assigneeSaving}
+          addAssigneeEmail={addAssigneeEmail} setAddAssigneeEmail={setAddAssigneeEmail}
+          onAddAssignee={addAssignee}
+          onRemoveAssignee={removeAssignee}
+          onPromoteAssignee={promoteToLead}
+          // Child data
+          workLogs={workLogs}
+          partsUsed={partsUsed}
+          woDocs={woDocs}
+          linkedPOs={linkedPOs}
+          pmProcedureUrl={pmProcedureUrl}
+          pmProcedureName={pmProcedureName}
+          // Lookups
+          assets={assets}
+          users={users}
+          openStatuses={openStatuses}
+          statusColorMap={statusColorMap}
+          profile={profile}
+          user={user}
+          // Action callbacks
+          onSave={saveWOInline}
+          onReopen={reopenWorkOrder}
+          onDelete={deleteWorkOrder}
+          onCloseWO={openCloseWOModalFn}
+          onOpenWorkLogModal={openWorkLogModalFn}
+          onOpenPartsModal={openPartsModalFn}
+          onUploadDoc={uploadWODoc}
+          onOpenGeneratePO={openGeneratePO}
+          onDeleteWorkLog={deleteWorkLog}
+          onDeleteDoc={deleteWODoc}
+          // Permissions
+          hasPerm={hasPerm}
+          // Helpers
+          getStatusStyle={getStatusStyle}
+          formatDate={formatDate}
+          formatDateTime={formatDateTime}
+          formatHoursToTime={formatHoursToTime}
+        />
       )}
+
 
       {/* Work Log Modal */}
       {showWorkLogModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowWorkLogModal(false)}>
-          <div className="modal">
-            <div className="modal-header"><h3>Add Work Log</h3><button className="modal-close" onClick={() => setShowWorkLogModal(false)}>&times;</button></div>
+          <div
+            ref={workLogDialogRef}
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wo-worklog-modal-title"
+          >
+            <div className="modal-header"><h3 id="wo-worklog-modal-title">Add Work Log</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowWorkLogModal(false)}>&times;</button></div>
             <div className="modal-body">
               <div className="form-group">
                 <label className="form-label">Time Worked *</label>
@@ -2734,8 +2397,14 @@ export default function WorkOrdersPage() {
       {/* Parts Modal */}
       {showPartsModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowPartsModal(false)}>
-          <div className="modal modal-lg">
-            <div className="modal-header"><h3>Add Parts</h3><button className="modal-close" onClick={() => setShowPartsModal(false)}>&times;</button></div>
+          <div
+            ref={partsDialogRef}
+            className="modal modal-lg"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wo-parts-modal-title"
+          >
+            <div className="modal-header"><h3 id="wo-parts-modal-title">Add Parts</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowPartsModal(false)}>&times;</button></div>
             <div className="modal-body">
               <div className="form-group">
                 <label className="form-label">Search Inventory</label>
@@ -2791,8 +2460,14 @@ export default function WorkOrdersPage() {
       {/* Close WO Modal */}
       {showCloseModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowCloseModal(false)}>
-          <div className="modal">
-            <div className="modal-header"><h3>Close Work Order</h3><button className="modal-close" onClick={() => setShowCloseModal(false)}>&times;</button></div>
+          <div
+            ref={closeWODialogRef}
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wo-closewo-modal-title"
+          >
+            <div className="modal-header"><h3 id="wo-closewo-modal-title">Close Work Order</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowCloseModal(false)}>&times;</button></div>
             <div className="modal-body">
               <p style={{ marginBottom: 16 }}>Are you sure you want to close this work order?</p>
               <div className="form-group">
@@ -2811,8 +2486,14 @@ export default function WorkOrdersPage() {
       {/* Approve Request Modal */}
       {showApproveModal && currentRequest && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowApproveModal(false)}>
-          <div className="modal">
-            <div className="modal-header"><h3>Approve Request</h3><button className="modal-close" onClick={() => setShowApproveModal(false)}>&times;</button></div>
+          <div
+            ref={approveDialogRef}
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wo-approve-modal-title"
+          >
+            <div className="modal-header"><h3 id="wo-approve-modal-title">Approve Request</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowApproveModal(false)}>&times;</button></div>
             <div className="modal-body">
               <p><strong>From:</strong> {currentRequest.name || currentRequest.email}</p>
               <p><strong>Description:</strong> {currentRequest.description}</p>
@@ -2841,12 +2522,20 @@ export default function WorkOrdersPage() {
       {/* Confirm Modal */}
       {confirmModal && (
         <div className="modal-overlay visible" style={{ zIndex: 3000 }} onClick={e => e.target === e.currentTarget && setConfirmModal(null)}>
-          <div className="modal" style={{ maxWidth: 400 }}>
-            <div className="modal-header"><h3>{confirmModal.title || 'Confirm'}</h3><button className="modal-close" onClick={() => setConfirmModal(null)}>&times;</button></div>
+          <div
+            ref={confirmDialogRef}
+            className="modal"
+            style={{ maxWidth: 400 }}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="wo-confirm-modal-title"
+            aria-describedby="wo-confirm-modal-message"
+          >
+            <div className="modal-header"><h3 id="wo-confirm-modal-title">{confirmModal.title || 'Confirm'}</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setConfirmModal(null)}>&times;</button></div>
             <div className="modal-body">
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span className="material-icons" style={{ fontSize: 48, color: '#fab005' }}>help_outline</span>
-                <p style={{ margin: 0, fontSize: '1rem', color: '#495057' }}>{confirmModal.message}</p>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: 48, color: '#fab005' }}>help_outline</span>
+                <p id="wo-confirm-modal-message" style={{ margin: 0, fontSize: '1rem', color: '#495057' }}>{confirmModal.message}</p>
               </div>
             </div>
             <div className="modal-footer">
@@ -2860,12 +2549,19 @@ export default function WorkOrdersPage() {
       {/* Generate PO Modal */}
       {showGeneratePO && currentWO && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowGeneratePO(false)}>
-          <div className="modal modal-xl" style={{ maxWidth: 640 }}>
+          <div
+            ref={genPODialogRef}
+            className="modal modal-xl"
+            style={{ maxWidth: 640 }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wo-genpo-modal-title"
+          >
             <div className="modal-header">
-              <h3><span className="material-icons" style={{ color: '#40c057', marginRight: 8 }}>local_shipping</span>
+              <h3 id="wo-genpo-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#40c057', marginRight: 8 }}>local_shipping</span>
                 {addToExisting ? `Add Items to ${existingPO?.order_id}` : `Generate Purchase Order for ${currentWO.wo_id}`}
               </h3>
-              <button className="modal-close" onClick={() => setShowGeneratePO(false)}>&times;</button>
+              <button className="modal-close" aria-label="Close dialog" onClick={() => setShowGeneratePO(false)}>&times;</button>
             </div>
             <div className="modal-body" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
 
@@ -3117,13 +2813,14 @@ export default function WorkOrdersPage() {
         .wo-id { font-weight: 600; color: #228be6; }
         .wo-desc { max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .priority-badge { padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-        .priority-badge.high { background: #ffe3e3; color: #c92a2a; }
-        .priority-badge.medium { background: #fff3bf; color: #e67700; }
-        .priority-badge.low { background: #d3f9d8; color: #2b8a3e; }
+        /* Colors verified WCAG 2.1 AA (≥4.5:1 contrast) for normal text. */
+        .priority-badge.high { background: #ffe3e3; color: #a52121; }   /* 5.73:1 (was #c92a2a, 4.51:1) */
+        .priority-badge.medium { background: #fff3bf; color: #8a4900; } /* 6.21:1 (was #e67700, 2.69:1 — FAILED) */
+        .priority-badge.low { background: #d3f9d8; color: #1f6b30; }    /* 5.72:1 (was #2b8a3e, 3.81:1 — FAILED) */
         .status-badge { padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 500; display: inline-block; }
         .due-date { font-size: 0.85rem; }
-        .due-date.overdue { color: #c92a2a; font-weight: 600; }
-        .due-date.soon { color: #e67700; }
+        .due-date.overdue { color: #c92a2a; font-weight: 600; }          /* 5.46:1 — passes */
+        .due-date.soon { color: #a05500; }                               /* 5.53:1 (was #e67700, 3.00:1 — FAILED) */
         .hours-cell { font-weight: 500; }
         .wo-assignee-more { position: relative; }
         .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; }
@@ -3185,6 +2882,95 @@ export default function WorkOrdersPage() {
         .doc-link { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; background: #e7f5ff; color: #1971c2; text-decoration: none; border-radius: 8px; font-size: 0.85rem; transition: background 0.2s; }
         .doc-link:hover { background: #d0ebff; }
         .doc-link .material-icons { font-size: 1.1rem; }
+
+        /* ── B4: Classes that replace per-row inline styles (improves React shallow equality) ── */
+        /* WO ID button — looks like a link, behaves like a button (keyboard/AT entry point) */
+        .wo-id-btn {
+          background: none;
+          border: 0;
+          padding: 0;
+          margin: 0;
+          font: inherit;
+          color: inherit;
+          cursor: pointer;
+          text-align: inherit;
+          text-decoration: underline;
+          text-underline-offset: 2px;
+        }
+        .wo-id-btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 2px; }
+        /* Document indicator icon next to WO ID */
+        .wo-doc-icon {
+          font-size: 14px;
+          color: #868e96;
+          margin-left: 6px;
+          vertical-align: middle;
+        }
+        /* Sortable column header button — fills the th cell, inherits font/color */
+        .sortable-th-btn {
+          background: none;
+          border: 0;
+          padding: 0;
+          margin: 0;
+          font: inherit;
+          color: inherit;
+          cursor: pointer;
+          width: 100%;
+          text-align: inherit;
+          display: inline-flex;
+          align-items: center;
+        }
+        .sortable-th-btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 2px; }
+
+        /* ── D1: Mobile responsive — phones get a tighter layout with sticky WO-ID column ── */
+        @media (max-width: 768px) {
+          .page-toolbar { flex-direction: column; align-items: stretch; }
+          .toolbar-left { flex-direction: column; align-items: stretch; }
+          .toolbar-right { justify-content: flex-end; }
+          .search-box { flex: 1; }
+          .search-box input { min-width: 0; width: 100%; }
+          .filter-select { width: 100%; }
+          .data-table th, .data-table td { padding: 10px 8px; font-size: 0.82rem; }
+          .wo-desc { max-width: 160px; }
+          /* Sticky first column so WO ID stays visible while scrolling the rest of the row.
+             Explicit background is required — 'background: inherit' would resolve to transparent
+             in the default (non-hover) row state and let content show through. */
+          .data-table td:first-child {
+            position: sticky;
+            left: 0;
+            background: #fff;
+            z-index: 1;
+            box-shadow: 1px 0 0 0 #e9ecef;
+          }
+          .data-table th:first-child {
+            position: sticky;
+            left: 0;
+            background: #f8f9fa;
+            z-index: 2;
+            box-shadow: 1px 0 0 0 #e9ecef;
+          }
+          .data-table tr:hover td:first-child { background: #f8f9fa; }
+          /* Modal sizing — fill more of the screen on phones */
+          .modal { max-height: 95vh; }
+          .modal-lg, .modal-xl { max-width: 100%; }
+          .form-row { grid-template-columns: 1fr; }
+          .detail-grid { grid-template-columns: 1fr; }
+        }
+
+        /* ── D2: Touch targets — WCAG 2.5.5/2.5.8 — give touch devices ≥44px hit areas ── */
+        @media (pointer: coarse) {
+          .wo-action-btn { min-height: 44px; padding: 10px 14px; }
+          .wo-action-btn-delete { min-width: 44px; min-height: 44px; padding: 10px; }
+          .action-btn { min-width: 44px; min-height: 44px; padding: 10px; }
+          .modal-close { min-width: 44px; min-height: 44px; font-size: 1.75rem; }
+          .btn-delete-log { min-width: 44px; min-height: 44px; padding: 10px; }
+          .toggle-btn { min-height: 44px; padding: 10px 16px; }
+          /* Slightly taller rows so tapping a row is easier */
+          .data-table td { padding-top: 14px; padding-bottom: 14px; }
+          /* Sortable header buttons — make sure tap target spans the cell */
+          .sortable-th-btn { min-height: 44px; }
+          /* WO ID link — give it some padding so the tap target matches the underline area */
+          .wo-id-btn { padding: 6px 0; }
+        }
       `}</style>
     </div>
   );
