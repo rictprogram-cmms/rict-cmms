@@ -171,6 +171,7 @@ export default function WorkOrdersPage() {
   const [viewDueDate, setViewDueDate] = useState('');
   // Multi-assignment state
   const [woAssignments, setWoAssignments] = useState({}); // { [wo_id]: [{email, name}] } for list display
+  const [woHasDocs, setWoHasDocs] = useState({}); // { [wo_id]: count } — true count of documents attached, used to show paperclip icon in list
   const [viewAssignees, setViewAssignees] = useState([]);  // assignees for the currently open detail modal
   const [assigneeSaving, setAssigneeSaving] = useState(false);
   const [addAssigneeEmail, setAddAssigneeEmail] = useState(''); // instructor dropdown selection
@@ -652,6 +653,26 @@ export default function WorkOrdersPage() {
         if (wo && showViewModalRef.current && (payload.new?.wo_id === wo.wo_id || payload.old?.wo_id === wo.wo_id)) {
           loadWODetailSilent(wo.wo_id);
         }
+        // Keep the list-level paperclip icon in sync. Use surgical updates when payload
+        // carries the wo_id; otherwise fall back to a silent list reload.
+        const changedWoId = payload.new?.wo_id || payload.old?.wo_id;
+        if (changedWoId) {
+          if (payload.eventType === 'INSERT') {
+            setWoHasDocs(prev => ({ ...prev, [changedWoId]: (prev[changedWoId] || 0) + 1 }));
+          } else if (payload.eventType === 'DELETE') {
+            setWoHasDocs(prev => {
+              const next = { ...prev };
+              const cur = (next[changedWoId] || 0) - 1;
+              if (cur <= 0) delete next[changedWoId]; else next[changedWoId] = cur;
+              return next;
+            });
+          }
+          // UPDATE events on documents don't change which WO they're attached to in normal flows;
+          // ignore them for count purposes.
+        } else {
+          // Payload missing wo_id (REPLICA IDENTITY may not be FULL on this table) — reconcile.
+          loadWorkOrders(currentViewRef.current, true);
+        }
       })
       // Linked Purchase Orders (refresh when PO status changes e.g. received)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
@@ -786,6 +807,23 @@ export default function WorkOrdersPage() {
           });
           setWoAssignments(aMap);
         } catch (e) { console.warn('Assignments batch load error:', e); }
+
+        // Batch-load document counts for list display (shows paperclip icon when count > 0)
+        try {
+          const woIds = mapped.map(w => w.wo_id);
+          const { data: dData } = await supabase
+            .from('work_order_documents')
+            .select('wo_id')
+            .in('wo_id', woIds);
+          const dMap = {};
+          (dData || []).forEach(d => {
+            dMap[d.wo_id] = (dMap[d.wo_id] || 0) + 1;
+          });
+          setWoHasDocs(dMap);
+        } catch (e) { console.warn('Documents batch load error:', e); }
+      } else {
+        // Empty list: clear the docs map so stale data doesn't linger
+        setWoHasDocs({});
       }
     } catch (e) {
       if (!hasLoadedRef.current) showToast('Error loading work orders: ' + e.message, 'error');
@@ -2057,7 +2095,29 @@ export default function WorkOrdersPage() {
                   <tr><td colSpan="8" className="loading-cell">No work orders found</td></tr>
                 ) : sortedWOs.map(wo => (
                   <tr key={wo.wo_id} onClick={() => loadWODetail(wo.wo_id)}>
-                    <td><span className="wo-id">{highlightMatch(wo.wo_id)}</span></td>
+                    <td>
+                      <span className="wo-id">{highlightMatch(wo.wo_id)}</span>
+                      {woHasDocs[wo.wo_id] > 0 && (
+                        <>
+                          <span
+                            className="material-icons"
+                            aria-hidden="true"
+                            title={`${woHasDocs[wo.wo_id]} attached document${woHasDocs[wo.wo_id] === 1 ? '' : 's'}`}
+                            style={{
+                              fontSize: 14,
+                              color: '#868e96',
+                              marginLeft: 6,
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            attach_file
+                          </span>
+                          <span className="sr-only">
+                            {`(${woHasDocs[wo.wo_id]} attached document${woHasDocs[wo.wo_id] === 1 ? '' : 's'})`}
+                          </span>
+                        </>
+                      )}
+                    </td>
                     <td className="wo-desc">{highlightMatch(wo.description)}</td>
                     <td>{highlightMatch(wo.asset_name || 'None')}</td>
                     <td><span className={`priority-badge ${wo.priority?.toLowerCase()}`}>{wo.priority}</span></td>
