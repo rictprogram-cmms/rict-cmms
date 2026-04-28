@@ -1,38 +1,43 @@
 /**
  * RICT CMMS - WOC Ratio Page (React/Supabase)
- * Faithfully reproduces the GAS Evaluation page with updated scoring.
  *
- * Scoring:
- *   Base: 100%
+ * Scoring (hours-weighted credit + activity floor):
+ *   Base: 100 × activityFactor
+ *     activityFactor = MIN(1, hours_logged_in_period / expected_hours)
+ *     expected_hours = role-based per-week threshold × school weeks in range
  *   −2% per school day for late WOs assigned to you (open AND closed-late)
- *   −1% per school day for all team late WOs (open AND closed-late, shared penalty)
- *   −1% per school day for stale WOs (no update in >4 school days)
- *   +1% per school day early for completed WOs (before due date)
- *   Floor: 0%, Cap: 100%
+ *   −1% per school day for all team late WOs (shared)
+ *   −1% per school day for stale WOs — applies if you've logged hours OR are
+ *     the sole assignee (no penalty for auto-assigned PMs you never engaged with)
+ *   +earlyPctPerDay (default 0.5%) per school day early × (your_hours / total_hours),
+ *     capped at maxBonusPerWo (default 10%) from any single WO.
+ *     If no hours were logged on a WO, NO bonus is awarded — phantom credit fix.
+ *   +closerAckPct (default 2%) flat to whoever clicked Close, IF they logged
+ *     ≥ minCloserHours (default 0.25 hr) on that WO.
+ *   Floor: 0%, Cap: 100%. Uncapped raw score also surfaced for instructor view.
  *
  * School days: Mon–Thu only, excluding US holidays + custom closed days.
  *
  * Features:
- *   - Date range picker with quick presets for scoping evaluations
- *   - Closed-late WOs now factor into penalties (not just open WOs)
- *   - Personal score card with animated gauge + rank medal
- *   - Breakdown grid (personal, team, stale, early)
- *   - Completion time comparison (you vs team)
- *   - Detail list of every deduction/reward
- *   - Instructor view: all-users table ranked by score
+ *   - Date range picker with quick presets
+ *   - "How is this calculated?" accessible modal explaining the formula
+ *   - Personal score card with rank medal + animated gauge
+ *   - Activity factor + breakdown grid (6 cards)
+ *   - Detail list of every deduction/reward (incl. hours share % per WO, capped flag)
+ *   - Instructor view: all-users table ranked by score, with uncapped Raw column
  *   - Manage custom closed days (instructor)
- *   - Info box explaining the scoring formula
  */
 
 import React, { useState, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useWOCRatio, useClosedDaysActions } from '@/hooks/useWOCRatio'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Loader2, TrendingUp, TrendingDown, AlertTriangle, Award, Clock,
   Users, ChevronDown, ChevronUp, CalendarOff, Plus, Trash2, Info,
   Target, Zap, Timer, BarChart3, X, RefreshCw, Calendar, CheckCircle2,
-  CalendarRange
+  CalendarRange, Activity, HelpCircle, CheckCheck
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -65,6 +70,17 @@ function scoreLabel(score) {
   if (score >= 75) return 'Good'
   if (score >= 50) return 'Needs Improvement'
   return 'Critical'
+}
+
+/**
+ * Format a score-like number with at most 1 decimal place. Drops trailing .0
+ * for clean display: 72.538 → "72.5", 100 → "100", 0 → "0", null → "0".
+ * Used everywhere a percentage or score is rendered to keep things consistent.
+ */
+function fmt1(n) {
+  if (n == null || isNaN(n)) return '0'
+  const r = Math.round(Number(n) * 10) / 10
+  return r % 1 === 0 ? String(r) : r.toFixed(1)
 }
 
 function formatDate(val) {
@@ -174,7 +190,12 @@ function RankMedal({ rank, total }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <svg width={size} height={size + 22} viewBox="0 0 120 140" xmlns="http://www.w3.org/2000/svg">
+      <svg
+        width={size} height={size + 22} viewBox="0 0 120 140"
+        xmlns="http://www.w3.org/2000/svg"
+        role="img"
+        aria-label={`Rank ${getOrdinal(rank)} of ${total}`}
+      >
         <defs>
           {/* Medal face gradient */}
           <radialGradient id={`medal-face-${rank}`} cx="40%" cy="35%" r="60%">
@@ -299,7 +320,11 @@ function ScoreGauge({ score }) {
 
   return (
     <div style={{ position: 'relative', width: 140, height: 140 }}>
-      <svg width="140" height="140" viewBox="0 0 120 120">
+      <svg
+        width="140" height="140" viewBox="0 0 120 120"
+        role="img"
+        aria-label={`Score ${fmt1(score)} out of 100`}
+      >
         <circle cx="60" cy="60" r="54" fill="none" stroke="#e2e8f0" strokeWidth="8" />
         <circle
           cx="60" cy="60" r="54" fill="none"
@@ -317,8 +342,8 @@ function ScoreGauge({ score }) {
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center'
       }}>
-        <span style={{ fontSize: 32, fontWeight: 800, color }}>{Math.round(score)}</span>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>/ 100</span>
+        <span style={{ fontSize: 32, fontWeight: 800, color }} aria-hidden="true">{fmt1(score)}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }} aria-hidden="true">/ 100</span>
       </div>
     </div>
   )
@@ -328,10 +353,25 @@ function ScoreGauge({ score }) {
 // BREAKDOWN CARD
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function BreakdownCard({ icon: Icon, label, value, isNegative, isPositive }) {
-  const color = isPositive ? '#22c55e' : isNegative ? '#ef4444' : '#64748b'
-  const bg = isPositive ? 'rgba(34,197,94,0.08)' : isNegative ? 'rgba(239,68,68,0.08)' : 'rgba(100,116,139,0.08)'
-  const prefix = isPositive ? '+' : isNegative ? '−' : ''
+/**
+ * Generic breakdown card.
+ *  - If `display` is provided, it's rendered verbatim as the value (used for
+ *    the Activity Factor card which shows "0.85×" etc.).
+ *  - Otherwise the value number is rendered with a +/− prefix and % suffix.
+ *  - `subtitle` adds a small line under the label (e.g. "12 / 18 hr expected").
+ *  - `tone` overrides the inferred color: 'positive' | 'negative' | 'neutral' | 'info'.
+ */
+function BreakdownCard({ icon: Icon, label, value, isNegative, isPositive, display, subtitle, tone }) {
+  let color, bg
+  if (tone === 'info')      { color = '#7c3aed'; bg = 'rgba(124,58,237,0.08)' }
+  else if (tone === 'positive' || isPositive) { color = '#22c55e'; bg = 'rgba(34,197,94,0.08)' }
+  else if (tone === 'negative' || isNegative) { color = '#ef4444'; bg = 'rgba(239,68,68,0.08)' }
+  else                      { color = '#64748b'; bg = 'rgba(100,116,139,0.08)' }
+
+  const prefix = display !== undefined ? '' : (isPositive ? '+' : isNegative ? '−' : '')
+  const valueText = display !== undefined
+    ? display
+    : `${prefix}${fmt1(Math.abs(Number(value) || 0))}%`
 
   return (
     <div style={{
@@ -342,14 +382,17 @@ function BreakdownCard({ icon: Icon, label, value, isNegative, isPositive }) {
         width: 40, height: 40, borderRadius: 10,
         background: `${color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexShrink: 0
-      }}>
+      }} aria-hidden="true">
         <Icon size={20} color={color} />
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 20, fontWeight: 700, color }}>
-          {prefix}{Math.abs(value)}%
+          {valueText}
         </div>
         <div style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>{label}</div>
+        {subtitle && (
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{subtitle}</div>
+        )}
       </div>
     </div>
   )
@@ -369,13 +412,198 @@ function StatCard({ icon: Icon, label, value, sub, color = '#3b82f6' }) {
         width: 44, height: 44, borderRadius: 12,
         background: `${color}14`, display: 'flex', alignItems: 'center', justifyContent: 'center',
         flexShrink: 0
-      }}>
+      }} aria-hidden="true">
         <Icon size={22} color={color} />
       </div>
       <div>
         <div style={{ fontSize: 22, fontWeight: 700, color: '#1a1a2e' }}>{value}</div>
         <div style={{ fontSize: 12, color: '#64748b' }}>{label}</div>
         {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HOW-CALCULATED MODAL (WCAG 2.1 AA — focus trap, Escape, restored focus)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function HowCalculatedModal({ isOpen, onClose, scoringConfig }) {
+  const dialogRef = useDialogA11y(isOpen, onClose)
+  if (!isOpen) return null
+
+  const cfg = scoringConfig || {
+    studentHoursPerWeek: 1.5, workStudyHoursPerWeek: 5,
+    closerAckPct: 2, minCloserHours: 0.25, staleThreshold: 4,
+    earlyPctPerDay: 0.5, maxBonusPerWo: 10,
+  }
+
+  const Section = ({ title, children, color = '#1a1a2e' }) => (
+    <section style={{ marginBottom: 22 }}>
+      <h3 style={{
+        fontSize: 14, fontWeight: 700, color, margin: '0 0 8px 0',
+        textTransform: 'uppercase', letterSpacing: 0.5
+      }}>
+        {title}
+      </h3>
+      <div style={{ fontSize: 14, lineHeight: 1.65, color: '#334155' }}>
+        {children}
+      </div>
+    </section>
+  )
+
+  const Tag = ({ children, color }) => (
+    <span style={{
+      display: 'inline-block', padding: '1px 7px', borderRadius: 4,
+      background: `${color}18`, color, fontWeight: 700, fontSize: 13,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace'
+    }}>
+      {children}
+    </span>
+  )
+
+  return (
+    <div
+      onClick={onClose}
+      role="presentation"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: 20
+      }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="how-calc-title"
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 16, maxWidth: 720, width: '100%',
+          maxHeight: '85vh', overflowY: 'auto',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+        }}
+      >
+        {/* Sticky header */}
+        <div style={{
+          padding: '20px 24px', borderBottom: '1px solid #e2e8f0',
+          position: 'sticky', top: 0, background: '#fff', zIndex: 1,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <HelpCircle size={20} color="#3b82f6" aria-hidden="true" />
+            <h2 id="how-calc-title" style={{
+              fontSize: 18, fontWeight: 800, color: '#1a1a2e', margin: 0
+            }}>
+              How Your Score Is Calculated
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close dialog"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: 6, borderRadius: 6, color: '#64748b',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ padding: '22px 24px' }}>
+
+          <Section title="The Formula">
+            <div style={{
+              background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10,
+              padding: '14px 18px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontSize: 13, color: '#1a1a2e', lineHeight: 1.9, overflowX: 'auto'
+            }}>
+              <div><strong>score</strong> = (100 × <span style={{ color: '#7c3aed' }}>activityFactor</span>)</div>
+              <div style={{ paddingLeft: 22 }}>− <span style={{ color: '#ef4444' }}>personal_late</span> − <span style={{ color: '#f59e0b' }}>team_late</span> − <span style={{ color: '#8b5cf6' }}>stale</span></div>
+              <div style={{ paddingLeft: 22 }}>+ <span style={{ color: '#22c55e' }}>early_share</span> + <span style={{ color: '#0891b2' }}>closer_ack</span></div>
+              <div style={{ paddingLeft: 22, color: '#64748b', fontSize: 12 }}>(clamped 0 – 100)</div>
+            </div>
+          </Section>
+
+          <Section title="Activity Factor" color="#7c3aed">
+            Your starting base of 100 is multiplied by how much you've actually
+            worked during the evaluation period, measured in <strong>work-log hours</strong>.
+            <ul style={{ paddingLeft: 22, marginTop: 8 }}>
+              <li><Tag color="#7c3aed">expected</Tag> = <strong>{cfg.studentHoursPerWeek} hr/week</strong> for Students,{' '}
+                <strong>{cfg.workStudyHoursPerWeek} hr/week</strong> for Work Study, scaled by school weeks in range.</li>
+              <li><Tag color="#7c3aed">activityFactor</Tag> = MIN(1, your_hours ÷ expected_hours).</li>
+              <li>If you log no time, your starting base drops to near zero — but your <em>rewards</em> still count on top.</li>
+            </ul>
+          </Section>
+
+          <Section title="Penalties" color="#ef4444">
+            <ul style={{ paddingLeft: 22, margin: 0 }}>
+              <li>
+                <Tag color="#ef4444">personal_late</Tag> — <strong>−2%</strong> per school day
+                for late WOs assigned to you (open <em>or</em> closed late). Closing a late WO
+                does not erase the penalty.
+              </li>
+              <li style={{ marginTop: 6 }}>
+                <Tag color="#f59e0b">team_late</Tag> — <strong>−1%</strong> per school day
+                for every late WO in the system. Shared by all students — late work is a
+                team accountability measure.
+              </li>
+              <li style={{ marginTop: 6 }}>
+                <Tag color="#8b5cf6">stale</Tag> — <strong>−1%</strong> per school day past{' '}
+                {cfg.staleThreshold} days without an update on an open WO. Only applies if
+                you've logged hours on the WO, OR you're the sole assignee. (We don't penalize
+                you for an auto-assigned PM you never engaged with.)
+              </li>
+            </ul>
+          </Section>
+
+          <Section title="Rewards" color="#22c55e">
+            <ul style={{ paddingLeft: 22, margin: 0 }}>
+              <li>
+                <Tag color="#22c55e">early_share</Tag> — <strong>+{cfg.earlyPctPerDay}%</strong> per school day
+                early × <strong>your share of work-log hours</strong> on that WO.
+                If you logged 50% of the hours, you get 50% of the bonus. If you logged
+                nothing, you earn nothing — that's the fairness fix. Capped at{' '}
+                <strong>{cfg.maxBonusPerWo}%</strong> from any single WO so one massive
+                early-close can't dominate the whole period.
+              </li>
+              <li style={{ marginTop: 6 }}>
+                <Tag color="#0891b2">closer_ack</Tag> — flat <strong>+{cfg.closerAckPct}%</strong> for
+                clicking <em>Close</em> on an early-completed WO, but only if you logged
+                at least <strong>{cfg.minCloserHours} hr</strong> on that WO. Recognizes
+                the person who took responsibility for finishing it.
+              </li>
+            </ul>
+          </Section>
+
+          <Section title="School Days">
+            Only <strong>Mon–Thu</strong> count as school days. US federal holidays and any
+            custom closed days set by an instructor are excluded from all "per school day"
+            calculations.
+          </Section>
+
+          <Section title="Raw vs. Capped Score">
+            Your displayed score is clamped between <strong>0%</strong> and <strong>100%</strong>.
+            The instructor view also shows a <em>Raw</em> column with the uncapped value —
+            useful for telling apart top performers who all hit the 100% ceiling.
+          </Section>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+            <button
+              onClick={onClose}
+              style={{
+                padding: '9px 18px', borderRadius: 8, border: 'none',
+                background: '#3b82f6', color: '#fff', fontWeight: 600,
+                fontSize: 14, cursor: 'pointer'
+              }}
+            >
+              Got it
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -415,14 +643,15 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
           display: 'flex', alignItems: 'center', gap: 8,
           color: '#475569', fontWeight: 600, fontSize: 14, flexShrink: 0
         }}>
-          <CalendarRange size={18} color="#3b82f6" />
+          <CalendarRange size={18} color="#3b82f6" aria-hidden="true" />
           Evaluation Period:
         </div>
 
         {/* Start Date */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>From</label>
+          <label htmlFor="woc-start-date" style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>From</label>
           <input
+            id="woc-start-date"
             type="date"
             value={startDate}
             onChange={e => onStartChange(e.target.value)}
@@ -435,8 +664,9 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
 
         {/* End Date */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <label style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>To</label>
+          <label htmlFor="woc-end-date" style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>To</label>
           <input
+            id="woc-end-date"
             type="date"
             value={endDate}
             onChange={e => onEndChange(e.target.value)}
@@ -451,6 +681,8 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
         <div style={{ position: 'relative' }}>
           <button
             onClick={() => setShowPresets(!showPresets)}
+            aria-haspopup="menu"
+            aria-expanded={showPresets}
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '7px 14px', borderRadius: 8,
@@ -459,9 +691,9 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
               color: '#3b82f6'
             }}
           >
-            <Calendar size={14} />
+            <Calendar size={14} aria-hidden="true" />
             {activePreset ? activePreset.label : 'Quick Select'}
-            <ChevronDown size={14} />
+            <ChevronDown size={14} aria-hidden="true" />
           </button>
 
           {showPresets && (
@@ -471,7 +703,7 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
                 onClick={() => setShowPresets(false)}
                 style={{ position: 'fixed', inset: 0, zIndex: 99 }}
               />
-              <div style={{
+              <div role="menu" style={{
                 position: 'absolute', top: '100%', left: 0, marginTop: 4,
                 background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 100,
@@ -479,6 +711,7 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
               }}>
                 {presets.map(p => (
                   <button
+                    role="menuitem"
                     key={p.label}
                     onClick={() => handlePreset(p)}
                     style={{
@@ -515,7 +748,7 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
               color: '#dc2626'
             }}
           >
-            <X size={14} />
+            <X size={14} aria-hidden="true" />
             Clear
           </button>
         )}
@@ -529,7 +762,7 @@ function DateRangePicker({ startDate, endDate, onStartChange, onEndChange }) {
         }}>
           <div style={{
             width: 6, height: 6, borderRadius: '50%', background: '#3b82f6'
-          }} />
+          }} aria-hidden="true" />
           Showing scores for: <strong style={{ color: '#1a1a2e' }}>
             {startDate ? formatDateShort(startDate) : 'Beginning'}
             {' — '}
@@ -592,20 +825,21 @@ function ClosedDaysManager({ closedDays, onRefresh }) {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <CalendarOff size={20} color="#f59e0b" />
+          <CalendarOff size={20} color="#f59e0b" aria-hidden="true" />
           <span style={{ fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
             Manage School Closed Days
           </span>
         </div>
         <button
           onClick={() => setShowHolidays(!showHolidays)}
+          aria-expanded={showHolidays}
           style={{
             background: 'none', border: '1px solid #e2e8f0', borderRadius: 8,
             padding: '6px 14px', fontSize: 13, cursor: 'pointer', color: '#3b82f6',
             fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6
           }}
         >
-          <Calendar size={14} />
+          <Calendar size={14} aria-hidden="true" />
           {showHolidays ? 'Hide' : 'Show'} US Holidays
         </button>
       </div>
@@ -613,7 +847,13 @@ function ClosedDaysManager({ closedDays, onRefresh }) {
       <div style={{ padding: '20px 24px' }}>
         {/* Add closed day */}
         <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+          <label htmlFor="closed-day-input" className="sr-only" style={{
+            position: 'absolute', width: 1, height: 1, padding: 0,
+            margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)',
+            whiteSpace: 'nowrap', border: 0
+          }}>Add a closed day</label>
           <input
+            id="closed-day-input"
             type="date"
             value={newDate}
             onChange={e => setNewDate(e.target.value)}
@@ -632,7 +872,7 @@ function ClosedDaysManager({ closedDays, onRefresh }) {
               opacity: saving || !newDate ? 0.5 : 1
             }}
           >
-            <Plus size={16} /> Add Closed Day
+            <Plus size={16} aria-hidden="true" /> Add Closed Day
           </button>
         </div>
 
@@ -653,12 +893,13 @@ function ClosedDaysManager({ closedDays, onRefresh }) {
                 <button
                   onClick={() => handleRemove(d.date)}
                   disabled={saving}
+                  aria-label={`Remove closed day ${d.label}`}
                   style={{
                     background: 'none', border: 'none', cursor: 'pointer', padding: 2,
                     color: '#92400e', opacity: saving ? 0.5 : 0.7
                   }}
                 >
-                  <X size={14} />
+                  <X size={14} aria-hidden="true" />
                 </button>
               </div>
             ))}
@@ -704,7 +945,7 @@ function DetailTable({ details }) {
         textAlign: 'center', padding: 24, color: '#22c55e',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8
       }}>
-        <CheckCircle2 size={32} />
+        <CheckCircle2 size={32} aria-hidden="true" />
         <span style={{ fontWeight: 600 }}>No deductions — great work!</span>
       </div>
     )
@@ -713,36 +954,60 @@ function DetailTable({ details }) {
   const shown = expanded ? details : details.slice(0, 5)
 
   const typeLabels = {
-    personal_late: { label: 'Personal Late', color: '#ef4444', icon: '⚠️' },
-    team_late: { label: 'Team Late', color: '#f59e0b', icon: '👥' },
-    stale: { label: 'Stale (>4 days)', color: '#8b5cf6', icon: '🕐' },
-    early_completion: { label: 'Early Completion', color: '#22c55e', icon: '🏆' }
+    personal_late:    { label: 'Personal Late',    color: '#ef4444', icon: '⚠️' },
+    team_late:        { label: 'Team Late',        color: '#f59e0b', icon: '👥' },
+    stale:            { label: 'Stale (>4 days)',  color: '#8b5cf6', icon: '🕐' },
+    early_completion: { label: 'Early Completion', color: '#22c55e', icon: '🏆' },
+    early_share:      { label: 'Early Share',      color: '#22c55e', icon: '🏆' },
+    closer_ack:       { label: 'Closer Ack',       color: '#0891b2', icon: '✅' },
+  }
+
+  /** Format a number with at most one decimal — drops trailing .0 */
+  const fmt = (n) => {
+    const r = Math.round(n * 10) / 10
+    return r % 1 === 0 ? String(r) : r.toFixed(1)
   }
 
   return (
     <div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <caption style={{
+            position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+            overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0
+          }}>
+            Score breakdown details
+          </caption>
           <thead>
             <tr style={{ borderBottom: '2px solid #e2e8f0' }}>
-              <th style={{ textAlign: 'left', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Type</th>
-              <th style={{ textAlign: 'left', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>WO ID</th>
-              <th style={{ textAlign: 'left', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Description</th>
-              <th style={{ textAlign: 'center', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Source</th>
-              <th style={{ textAlign: 'right', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Days</th>
-              <th style={{ textAlign: 'right', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Impact</th>
+              <th scope="col" style={{ textAlign: 'left',   padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Type</th>
+              <th scope="col" style={{ textAlign: 'left',   padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>WO ID</th>
+              <th scope="col" style={{ textAlign: 'left',   padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Description</th>
+              <th scope="col" style={{ textAlign: 'center', padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Source</th>
+              <th scope="col" style={{ textAlign: 'right',  padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Days / Share</th>
+              <th scope="col" style={{ textAlign: 'right',  padding: '10px 12px', color: '#64748b', fontWeight: 600 }}>Impact</th>
             </tr>
           </thead>
           <tbody>
             {shown.map((d, i) => {
               const t = typeLabels[d.type] || { label: d.type, color: '#64748b', icon: '•' }
-              const impact = d.type === 'early_completion'
-                ? `+${d.reward}%`
-                : `−${d.deduction}%`
-              const impactColor = d.type === 'early_completion' ? '#22c55e' : '#ef4444'
+              const isReward = d.type === 'early_completion' || d.type === 'early_share' || d.type === 'closer_ack'
+              const impactRaw = isReward ? d.reward : d.deduction
+              const impact = `${isReward ? '+' : '−'}${fmt(impactRaw)}%`
+              const impactColor = isReward ? '#22c55e' : '#ef4444'
               const sourceLabel = d.source === 'closed' ? 'Closed' : 'Open'
               const sourceBg = d.source === 'closed' ? '#f0fdf4' : '#fefce8'
               const sourceColor = d.source === 'closed' ? '#15803d' : '#a16207'
+
+              // Days/share column: hours-weighted bonuses get a richer display
+              let daysCol = ''
+              if (d.type === 'early_share') {
+                daysCol = `${d.days}d × ${fmt(d.pctOfWork)}% (${fmt(d.myHours)}/${fmt(d.totalHours)} hr)`
+              } else if (d.type === 'closer_ack') {
+                daysCol = '—'
+              } else if (d.days != null) {
+                daysCol = `${d.days}d`
+              }
 
               return (
                 <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -752,7 +1017,7 @@ function DetailTable({ details }) {
                       background: `${t.color}14`, color: t.color,
                       borderRadius: 6, padding: '3px 10px', fontSize: 12, fontWeight: 600
                     }}>
-                      {t.icon} {t.label}
+                      <span aria-hidden="true">{t.icon}</span> {t.label}
                     </span>
                   </td>
                   <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1a1a2e' }}>{d.woId}</td>
@@ -765,8 +1030,20 @@ function DetailTable({ details }) {
                       {sourceLabel}
                     </span>
                   </td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: '#1a1a2e' }}>{d.days}</td>
-                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: impactColor }}>{impact}</td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 600, color: '#1a1a2e', fontSize: 12 }}>
+                    {daysCol}
+                  </td>
+                  <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: 700, color: impactColor }}>
+                    {impact}
+                    {d.capped && (
+                      <span
+                        style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: '#94a3b8' }}
+                        title={`Capped — would have been +${fmt(d.originalReward)}%`}
+                      >
+                        (capped)
+                      </span>
+                    )}
+                  </td>
                 </tr>
               )
             })}
@@ -776,13 +1053,14 @@ function DetailTable({ details }) {
       {details.length > 5 && (
         <button
           onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, margin: '12px auto 0',
             background: 'none', border: 'none', cursor: 'pointer',
             color: '#3b82f6', fontSize: 13, fontWeight: 600
           }}
         >
-          {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          {expanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
           {expanded ? 'Show less' : `Show all ${details.length} items`}
         </button>
       )}
@@ -808,24 +1086,32 @@ function AllUsersTable({ scores, teamCompletion }) {
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <caption style={{
+          position: 'absolute', width: 1, height: 1, padding: 0, margin: -1,
+          overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0
+        }}>
+          All student and work study evaluations, ranked by score
+        </caption>
         <thead>
           <tr style={{ borderBottom: '2px solid #e2e8f0', background: '#f8fafc' }}>
-            <th style={{ textAlign: 'left', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>#</th>
-            <th style={{ textAlign: 'left', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Name</th>
-            <th style={{ textAlign: 'left', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Role</th>
-            <th style={{ textAlign: 'center', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Score</th>
-            <th style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Personal</th>
-            <th style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Team</th>
-            <th style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Stale</th>
-            <th style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Early Bonus</th>
-            <th style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Avg Days</th>
-            <th style={{ textAlign: 'right', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Open WOs</th>
+            <th scope="col" style={{ textAlign: 'left',   padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>#</th>
+            <th scope="col" style={{ textAlign: 'left',   padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Name</th>
+            <th scope="col" style={{ textAlign: 'left',   padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Role</th>
+            <th scope="col" style={{ textAlign: 'center', padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Score</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Raw</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Activity</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Personal</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Team</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Early Bonus</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Avg Days</th>
+            <th scope="col" style={{ textAlign: 'right',  padding: '12px 14px', color: '#64748b', fontWeight: 600 }}>Open WOs</th>
           </tr>
         </thead>
         <tbody>
           {scores.map((u, i) => {
             const sc = scoreColor(u.score)
             const isExpanded = expandedUser === u.email
+            const totalReward = (u.earlyShare || 0) + (u.closerAckBonus || 0)
 
             return (
               <React.Fragment key={u.email}>
@@ -842,9 +1128,9 @@ function AllUsersTable({ scores, teamCompletion }) {
                   <td style={{ padding: '12px 14px', color: '#94a3b8', fontWeight: 600 }}>{i + 1}</td>
                   <td style={{ padding: '12px 14px', fontWeight: 600, color: '#1a1a2e' }}>
                     {u.name}
-                    {i === 0 && <span style={{ marginLeft: 8, fontSize: 14 }}>🥇</span>}
-                    {i === 1 && <span style={{ marginLeft: 8, fontSize: 14 }}>🥈</span>}
-                    {i === 2 && <span style={{ marginLeft: 8, fontSize: 14 }}>🥉</span>}
+                    {i === 0 && <span style={{ marginLeft: 8, fontSize: 14 }} aria-hidden="true">🥇</span>}
+                    {i === 1 && <span style={{ marginLeft: 8, fontSize: 14 }} aria-hidden="true">🥈</span>}
+                    {i === 2 && <span style={{ marginLeft: 8, fontSize: 14 }} aria-hidden="true">🥉</span>}
                   </td>
                   <td style={{ padding: '12px 14px' }}>
                     <span style={{
@@ -861,20 +1147,40 @@ function AllUsersTable({ scores, teamCompletion }) {
                       borderRadius: 8, fontWeight: 800, fontSize: 15,
                       color: sc, background: scoreBg(u.score)
                     }}>
-                      {Math.round(u.score)}%
+                      {fmt1(u.score)}%
                     </span>
                   </td>
+                  <td
+                    style={{
+                      padding: '12px 14px', textAlign: 'right', fontWeight: 600,
+                      color: (u.rawScore ?? u.score) > 100 ? '#2563eb'
+                           : (u.rawScore ?? u.score) < 0   ? '#ef4444'
+                           : '#94a3b8'
+                    }}
+                    title={
+                      (u.rawScore ?? u.score) > 100
+                        ? 'Above the 100% cap — uncapped value'
+                        : (u.rawScore ?? u.score) < 0
+                          ? 'Below 0 — clamped to 0% in the Score column'
+                          : 'Uncapped raw score'
+                    }
+                  >
+                    {fmt1(u.rawScore ?? u.score)}%
+                  </td>
+                  <td
+                    style={{ padding: '12px 14px', textAlign: 'right', color: '#7c3aed', fontWeight: 600 }}
+                    title={`${u.activityHours || 0} of ${u.expectedHours || 0} hr expected`}
+                  >
+                    {(u.activityFactor != null ? u.activityFactor.toFixed(2) : '1.00')}×
+                  </td>
                   <td style={{ padding: '12px 14px', textAlign: 'right', color: u.personalDeduction > 0 ? '#ef4444' : '#94a3b8', fontWeight: 600 }}>
-                    {u.personalDeduction > 0 ? `−${u.personalDeduction}%` : '0'}
+                    {u.personalDeduction > 0 ? `−${fmt1(u.personalDeduction)}%` : '0'}
                   </td>
                   <td style={{ padding: '12px 14px', textAlign: 'right', color: u.teamDeduction > 0 ? '#f59e0b' : '#94a3b8', fontWeight: 600 }}>
-                    {u.teamDeduction > 0 ? `−${u.teamDeduction}%` : '0'}
+                    {u.teamDeduction > 0 ? `−${fmt1(u.teamDeduction)}%` : '0'}
                   </td>
-                  <td style={{ padding: '12px 14px', textAlign: 'right', color: u.staleDays > 0 ? '#8b5cf6' : '#94a3b8', fontWeight: 600 }}>
-                    {u.staleDays > 0 ? `−${u.staleDays}%` : '0'}
-                  </td>
-                  <td style={{ padding: '12px 14px', textAlign: 'right', color: u.earlyDays > 0 ? '#22c55e' : '#94a3b8', fontWeight: 600 }}>
-                    {u.earlyDays > 0 ? `+${u.earlyDays}%` : '0'}
+                  <td style={{ padding: '12px 14px', textAlign: 'right', color: totalReward > 0 ? '#22c55e' : '#94a3b8', fontWeight: 600 }}>
+                    {totalReward > 0 ? `+${fmt1(totalReward)}%` : '0'}
                   </td>
                   <td style={{ padding: '12px 14px', textAlign: 'right', color: '#1a1a2e' }}>
                     {u.avgCompletionDays > 0 ? `${u.avgCompletionDays}d` : '—'}
@@ -885,7 +1191,7 @@ function AllUsersTable({ scores, teamCompletion }) {
                 </tr>
                 {isExpanded && (
                   <tr>
-                    <td colSpan={10} style={{ padding: '0 14px 16px 14px', background: '#f8fafc' }}>
+                    <td colSpan={11} style={{ padding: '0 14px 16px 14px', background: '#f8fafc' }}>
                       <DetailTable details={u.details} />
                     </td>
                   </tr>
@@ -911,10 +1217,12 @@ export default function WOCRatioPage() {
   // Date range state
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  // Modal state
+  const [showHowCalc, setShowHowCalc] = useState(false)
 
   const {
     loading, myScore, allScores, teamStats,
-    teamCompletion, closedDaysList, refresh
+    teamCompletion, closedDaysList, scoringConfig, refresh
   } = useWOCRatio({ canViewAll: isInstructor, startDate: startDate || null, endDate: endDate || null })
 
   const [tab, setTab] = useState('my') // my | team | settings
@@ -922,7 +1230,7 @@ export default function WOCRatioPage() {
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-        <Loader2 size={32} className="animate-spin" color="#3b82f6" />
+        <Loader2 size={32} className="animate-spin" color="#3b82f6" aria-label="Loading evaluation data" />
       </div>
     )
   }
@@ -937,7 +1245,7 @@ export default function WOCRatioPage() {
 
   const sc = myScore.score
   const comp = myScore.completion
-  const compClass = comp.avgDays <= teamCompletion.avgDays ? 'faster' : 'slower'
+  const totalReward = (myScore.earlyShare || 0) + (myScore.closerAckBonus || 0)
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 0 40px' }}>
@@ -951,7 +1259,7 @@ export default function WOCRatioPage() {
             width: 42, height: 42, borderRadius: 12,
             background: 'linear-gradient(135deg, #f59e0b, #d97706)',
             display: 'flex', alignItems: 'center', justifyContent: 'center'
-          }}>
+          }} aria-hidden="true">
             <Target size={22} color="#fff" />
           </div>
           <div>
@@ -973,7 +1281,7 @@ export default function WOCRatioPage() {
               background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 500, color: '#475569'
             }}
           >
-            <RefreshCw size={14} /> Refresh
+            <RefreshCw size={14} aria-hidden="true" /> Refresh
           </button>
         </div>
       </div>
@@ -986,27 +1294,41 @@ export default function WOCRatioPage() {
         onEndChange={setEndDate}
       />
 
-      {/* Info Banner */}
+      {/* Info Banner — concise; full explanation lives in the modal */}
       <div style={{
         background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12,
-        padding: '14px 20px', marginBottom: 24, display: 'flex', gap: 12, alignItems: 'flex-start'
+        padding: '12px 18px', marginBottom: 24, display: 'flex', gap: 12, alignItems: 'center',
+        flexWrap: 'wrap'
       }}>
-        <Info size={18} color="#3b82f6" style={{ marginTop: 2, flexShrink: 0 }} />
-        <div style={{ fontSize: 13, color: '#1e40af', lineHeight: 1.6 }}>
-          <strong>Scoring:</strong> Start at 100%.
-          Deductions: <strong>−2%</strong>/school day for your late WOs (open <em>and</em> closed late),{' '}
-          <strong>−1%</strong>/day for all team late WOs (open <em>and</em> closed late),{' '}
-          <strong>−1%</strong>/day for stale WOs (no update &gt;4 school days).
-          Reward: <strong>+1%</strong>/school day early for on-time completions.
-          Only Mon–Thu count (holidays &amp; school closed days excluded). Capped at 100%.
-          <br />
-          <strong style={{ color: '#1e3a5f' }}>Note:</strong> Closing a late work order still counts the late days from due date to close date — the penalty does not disappear.
+        <Info size={18} color="#3b82f6" style={{ flexShrink: 0 }} aria-hidden="true" />
+        <div style={{ fontSize: 13, color: '#1e40af', lineHeight: 1.55, flex: 1, minWidth: 200 }}>
+          <strong>Scoring:</strong> Your starting score scales with your work-log activity.
+          Early-completion bonuses are split by hours logged on each WO — credit follows real
+          contribution, not just assignment.
         </div>
+        <button
+          onClick={() => setShowHowCalc(true)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: '#3b82f6', color: '#fff', border: 'none',
+            padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+            cursor: 'pointer', flexShrink: 0
+          }}
+        >
+          <HelpCircle size={14} aria-hidden="true" />
+          How is this calculated?
+        </button>
       </div>
+
+      <HowCalculatedModal
+        isOpen={showHowCalc}
+        onClose={() => setShowHowCalc(false)}
+        scoringConfig={scoringConfig}
+      />
 
       {/* Tabs (instructor only sees team tab) */}
       {isInstructor && (
-        <div style={{
+        <div role="tablist" style={{
           display: 'flex', gap: 4, marginBottom: 24,
           background: '#f1f5f9', borderRadius: 10, padding: 4, width: 'fit-content'
         }}>
@@ -1017,6 +1339,8 @@ export default function WOCRatioPage() {
           ].map(t => (
             <button
               key={t.key}
+              role="tab"
+              aria-selected={tab === t.key}
               onClick={() => setTab(t.key)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6,
@@ -1028,7 +1352,7 @@ export default function WOCRatioPage() {
                 transition: 'all 0.15s'
               }}
             >
-              <t.icon size={15} />
+              <t.icon size={15} aria-hidden="true" />
               {t.label}
             </button>
           ))}
@@ -1061,7 +1385,9 @@ export default function WOCRatioPage() {
                   background: scoreBg(sc), color: scoreColor(sc),
                   fontWeight: 700, fontSize: 14
                 }}>
-                  {sc >= 75 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  {sc >= 75
+                    ? <TrendingUp size={16} aria-hidden="true" />
+                    : <TrendingDown size={16} aria-hidden="true" />}
                   {scoreLabel(sc)}
                 </div>
               </div>
@@ -1075,14 +1401,21 @@ export default function WOCRatioPage() {
               </div>
             </div>
 
-            {/* Breakdown grid */}
+            {/* Breakdown grid — 6 cards */}
             <div style={{
               display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
               gap: 12, padding: '0 32px 28px'
             }}>
               <BreakdownCard
+                icon={Activity}
+                label="Activity Factor"
+                tone="info"
+                display={`${(myScore.activityFactor ?? 1).toFixed(2)}×`}
+                subtitle={`${myScore.activityHours ?? 0} / ${myScore.expectedHours ?? 0} hr expected`}
+              />
+              <BreakdownCard
                 icon={AlertTriangle}
-                label="Personal (Your Late WOs)"
+                label="Personal (Your Late + Stale)"
                 value={myScore.personalDeduction}
                 isNegative={myScore.personalDeduction > 0}
               />
@@ -1100,9 +1433,15 @@ export default function WOCRatioPage() {
               />
               <BreakdownCard
                 icon={Zap}
-                label="Early Completion Bonus"
-                value={myScore.totalReward}
-                isPositive={myScore.totalReward > 0}
+                label="Early Completion Share"
+                value={myScore.earlyShare ?? 0}
+                isPositive={(myScore.earlyShare ?? 0) > 0}
+              />
+              <BreakdownCard
+                icon={CheckCheck}
+                label="Closer Acknowledgments"
+                value={myScore.closerAckBonus ?? 0}
+                isPositive={(myScore.closerAckBonus ?? 0) > 0}
               />
             </div>
           </div>
@@ -1151,7 +1490,7 @@ export default function WOCRatioPage() {
               padding: '18px 24px', borderBottom: '1px solid #e2e8f0',
               display: 'flex', alignItems: 'center', gap: 10
             }}>
-              <BarChart3 size={18} color="#3b82f6" />
+              <BarChart3 size={18} color="#3b82f6" aria-hidden="true" />
               <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>
                 Score Breakdown Details
               </span>
@@ -1180,7 +1519,7 @@ export default function WOCRatioPage() {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <Award size={18} color="#f59e0b" />
+              <Award size={18} color="#f59e0b" aria-hidden="true" />
               <span style={{ fontSize: 15, fontWeight: 700, color: '#1a1a2e' }}>
                 All Student &amp; Work Study Evaluations
               </span>

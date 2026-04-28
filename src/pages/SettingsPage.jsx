@@ -13,7 +13,7 @@ import {
   Tag, MapPin, Box, Truck, ClipboardList, GraduationCap, Sliders,
   Users, Calendar, Clock, BookOpen, ChevronDown, ChevronUp, Search,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
-  LayoutDashboard, FlaskConical, MessageSquare
+  LayoutDashboard, FlaskConical, MessageSquare, Target
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -30,6 +30,7 @@ export default function SettingsPage() {
     { id: 'general', label: 'General', icon: Sliders },
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'weekly_labs', label: 'Weekly Labs', icon: FlaskConical },
+    { id: 'evaluation', label: 'WOC Ratio', icon: Target },
     { id: 'categories', label: 'Categories', icon: Tag },
     { id: 'asset_locations', label: 'Asset Locations', icon: MapPin },
     { id: 'inv_locations', label: 'Inventory Locations', icon: Box },
@@ -81,6 +82,7 @@ export default function SettingsPage() {
       {tab === 'general' && <GeneralSettings />}
       {tab === 'dashboard' && <DashboardSettings />}
       {tab === 'weekly_labs' && <WeeklyLabsSettings />}
+      {tab === 'evaluation' && <EvaluationSettings />}
       {tab === 'categories' && <CategoriesSection />}
       {tab === 'asset_locations' && <AssetLocationsSection />}
       {tab === 'inv_locations' && <InventoryLocationsSection />}
@@ -140,6 +142,7 @@ const CATEGORY_ICONS = {
   'Storage': Box,
   'General': Sliders,
   'Time Clock': Clock,
+  'Evaluation': Target,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1207,7 +1210,7 @@ function GeneralSettings() {
     const cat = s.category || 'General'
     // Skip settings managed elsewhere or no longer relevant
     if (cat === 'Storage') return    // Google Drive folder IDs - not relevant in Supabase
-    if (cat === 'Evaluation') return // Managed on the WOC Ratio page
+    if (cat === 'Evaluation') return // Managed on the Evaluation tab (and the WOC Ratio page itself)
     if (cat === 'PM') return         // Managed on the Preventive Maintenance page
     if (cat === 'Weekly Labs') return // Weeks derived from class start/end dates
     if (cat === 'program_cost') return      // Managed via Program Cost page (tuition rates, delivery modes)
@@ -1338,6 +1341,272 @@ function GeneralSettings() {
           <p className="text-sm">No settings configured yet. Run the migration SQL to seed default settings.</p>
         </div>
       )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EVALUATION SETTINGS (WOC Ratio scoring)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The seven knobs that drive the WOC Ratio scoring engine. Each entry has the
+ * defaults baked into useWOCRatio.js, so even without rows in the settings
+ * table the scoring works. Saving here just persists overrides.
+ */
+const EVAL_SETTINGS = [
+  {
+    key: 'woc_activity_hours_per_week_student',
+    label: 'Student: Hours/Week Threshold',
+    desc: 'Expected work-log hours per school week to reach a 1.00× activity factor (Student role).',
+    default: '1.5',
+    min: '0', step: '0.1',
+    suffix: 'hr/week',
+  },
+  {
+    key: 'woc_activity_hours_per_week_workstudy',
+    label: 'Work Study: Hours/Week Threshold',
+    desc: 'Expected work-log hours per school week to reach a 1.00× activity factor (Work Study role).',
+    default: '5.0',
+    min: '0', step: '0.5',
+    suffix: 'hr/week',
+  },
+  {
+    key: 'woc_early_pct_per_day',
+    label: 'Early Completion Rate',
+    desc: 'Percentage points awarded per school day a WO was closed before its due date. Multiplied by your share of work-log hours on that WO.',
+    default: '0.5',
+    min: '0', step: '0.1',
+    suffix: '% per day',
+  },
+  {
+    key: 'woc_max_bonus_per_wo',
+    label: 'Max Bonus Per WO',
+    desc: 'Hard cap on the early-completion bonus from any single WO. Prevents one massive early-close from dominating the score.',
+    default: '10',
+    min: '0', step: '1',
+    suffix: '%',
+  },
+  {
+    key: 'woc_closer_ack_bonus_pct',
+    label: 'Closer Acknowledgment Bonus',
+    desc: 'Flat percentage added when a user clicks Close on an early-completed WO they\u2019ve worked on.',
+    default: '2',
+    min: '0', step: '0.5',
+    suffix: '%',
+  },
+  {
+    key: 'woc_min_closer_hours_for_ack',
+    label: 'Minimum Hours for Closer Bonus',
+    desc: 'Minimum hours a user must have logged on a WO to qualify for the closer acknowledgment bonus.',
+    default: '0.25',
+    min: '0', step: '0.05',
+    suffix: 'hr',
+  },
+  {
+    key: 'woc_stale_threshold_days',
+    label: 'Stale Threshold',
+    desc: 'School days an open WO can go without an update before the stale penalty starts (\u22121% per day past the threshold).',
+    default: '4',
+    min: '1', step: '1',
+    suffix: 'days',
+  },
+]
+
+function EvaluationSettings() {
+  const { settings, loading, refresh } = useSettings()
+  const actions = useSettingsActions()
+  const [edits, setEdits] = useState({})
+  const [dirty, setDirty] = useState({})
+
+  // Build a quick lookup of the current settings by key.
+  const settingsMap = useMemo(() => {
+    const m = {}
+    settings.forEach(s => { m[s.setting_key] = s.setting_value })
+    return m
+  }, [settings])
+
+  // Initialize / reset edit state whenever fresh settings come in.
+  // Missing rows fall back to the documented defaults so the UI is fully
+  // populated even before any rows have been seeded.
+  useEffect(() => {
+    const next = {}
+    EVAL_SETTINGS.forEach(es => {
+      const live = settingsMap[es.key]
+      next[es.key] = (live !== undefined && live !== null && live !== '')
+        ? String(live)
+        : es.default
+    })
+    setEdits(next)
+    setDirty({})
+  }, [settingsMap])
+
+  const handleChange = (key, value) => {
+    setEdits(prev => ({ ...prev, [key]: value }))
+    const original = settingsMap[key] ?? EVAL_SETTINGS.find(e => e.key === key)?.default ?? ''
+    setDirty(prev => ({ ...prev, [key]: String(value) !== String(original) }))
+  }
+
+  const handleResetDefault = (key) => {
+    const meta = EVAL_SETTINGS.find(e => e.key === key)
+    if (!meta) return
+    handleChange(key, meta.default)
+  }
+
+  const persist = async (key) => {
+    const meta = EVAL_SETTINGS.find(e => e.key === key)
+    if (!meta) return
+    const valueToSave = (edits[key] === '' || edits[key] === undefined)
+      ? meta.default
+      : String(edits[key])
+    await actions.updateSetting(key, valueToSave, {
+      category: 'Evaluation',
+      description: meta.desc
+    })
+    setDirty(prev => ({ ...prev, [key]: false }))
+    refresh()
+  }
+
+  const persistAll = async () => {
+    const dirtyKeys = Object.keys(dirty).filter(k => dirty[k])
+    for (const key of dirtyKeys) {
+      const meta = EVAL_SETTINGS.find(e => e.key === key)
+      if (!meta) continue
+      const valueToSave = (edits[key] === '' || edits[key] === undefined)
+        ? meta.default
+        : String(edits[key])
+      await actions.updateSetting(key, valueToSave, {
+        category: 'Evaluation',
+        description: meta.desc
+      })
+    }
+    setDirty({})
+    refresh()
+  }
+
+  const hasDirty = Object.values(dirty).some(Boolean)
+  const dirtyCount = Object.values(dirty).filter(Boolean).length
+
+  if (loading) {
+    return <div className="text-center py-12 text-surface-400">Loading evaluation settings...</div>
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Intro / context card */}
+      <div className="bg-white rounded-xl border border-surface-200 p-4">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+            <Target size={18} className="text-amber-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-sm font-semibold text-surface-900 mb-1">WOC Ratio Scoring</h2>
+            <p className="text-xs text-surface-500 leading-relaxed">
+              These seven knobs tune the student evaluation score. Changes take effect immediately
+              on the WOC Ratio page. Custom closed days and US holiday handling are managed separately
+              on the WOC Ratio page itself.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Save All bar (only when something is dirty) */}
+      {hasDirty && (
+        <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2.5 flex items-center justify-between">
+          <span className="text-sm text-brand-700 font-medium">
+            You have unsaved changes ({dirtyCount} setting{dirtyCount === 1 ? '' : 's'} modified)
+          </span>
+          <button
+            onClick={persistAll}
+            disabled={actions.saving}
+            className="px-4 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1.5 hover:bg-brand-700"
+          >
+            {actions.saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Save size={12} aria-hidden="true" />} Save All
+          </button>
+        </div>
+      )}
+
+      {/* Settings list */}
+      <div className="bg-white rounded-xl border border-surface-200">
+        <div className="px-4 py-3 border-b border-surface-100 flex items-center gap-2">
+          <Sliders size={15} className="text-brand-500" aria-hidden="true" />
+          <h3 className="text-sm font-semibold text-surface-900">Scoring Parameters</h3>
+        </div>
+        <div className="divide-y divide-surface-100">
+          {EVAL_SETTINGS.map(es => {
+            const isDirty = !!dirty[es.key]
+            const isUnset = settingsMap[es.key] === undefined || settingsMap[es.key] === null || settingsMap[es.key] === ''
+            const inputId = `eval-${es.key}`
+            return (
+              <div
+                key={es.key}
+                className={`px-4 py-3 flex items-center gap-3 ${isDirty ? 'bg-yellow-50' : ''}`}
+              >
+                <div className="flex-1 min-w-0">
+                  <label htmlFor={inputId} className="text-sm font-medium text-surface-700 block">
+                    {es.label}
+                  </label>
+                  {es.desc && <div className="text-xs text-surface-400 mt-0.5">{es.desc}</div>}
+                  {isUnset && (
+                    <div className="text-[11px] text-surface-400 mt-1 italic">
+                      Using default — no override saved.
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <input
+                    id={inputId}
+                    type="number"
+                    inputMode="decimal"
+                    min={es.min}
+                    step={es.step}
+                    value={edits[es.key] ?? ''}
+                    onChange={e => handleChange(es.key, e.target.value)}
+                    className="input text-sm w-24 text-right"
+                    aria-describedby={`${inputId}-suffix`}
+                  />
+                  {es.suffix && (
+                    <span id={`${inputId}-suffix`} className="text-xs text-surface-400 w-16">
+                      {es.suffix}
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleResetDefault(es.key)}
+                  disabled={actions.saving || edits[es.key] === es.default}
+                  className={`p-2 rounded-lg transition-colors ${
+                    edits[es.key] === es.default ? 'text-surface-300' : 'hover:bg-surface-100 text-surface-500'
+                  }`}
+                  title={`Reset to default (${es.default})`}
+                  aria-label={`Reset ${es.label} to default value of ${es.default}`}
+                >
+                  <RotateCcw size={14} aria-hidden="true" />
+                </button>
+                <button
+                  onClick={() => persist(es.key)}
+                  disabled={actions.saving || !isDirty}
+                  className={`p-2 rounded-lg transition-colors ${
+                    isDirty ? 'hover:bg-brand-50 text-brand-600' : 'text-surface-300'
+                  }`}
+                  title="Save this setting"
+                  aria-label={`Save ${es.label}`}
+                >
+                  <Save size={14} aria-hidden="true" />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Footer note about closed-day management */}
+      <div className="bg-surface-50 border border-surface-200 rounded-xl px-4 py-3 flex items-start gap-3">
+        <Calendar size={15} className="text-surface-400 mt-0.5 flex-shrink-0" aria-hidden="true" />
+        <p className="text-xs text-surface-500 leading-relaxed">
+          Custom school closed days are managed on the <strong>WOC Ratio</strong> page under the{' '}
+          <em>Closed Days</em> tab. They affect the school-day count used by every penalty and reward here.
+        </p>
+      </div>
     </div>
   )
 }
