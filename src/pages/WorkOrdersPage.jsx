@@ -141,6 +141,9 @@ export default function WorkOrdersPage() {
   const [pmProcedureUrl, setPmProcedureUrl] = useState(null);
   const [pmProcedureName, setPmProcedureName] = useState('');
 
+  // Linked SOPs (fetched whenever a WO is opened — covers PM-inherited and direct SOP links)
+  const [linkedSops, setLinkedSops] = useState([]);
+
   // Generate PO modal
   const [showGeneratePO, setShowGeneratePO] = useState(false);
   const [poForm, setPoForm] = useState({ vendorId: '', vendorName: '', otherVendor: '', notes: '' });
@@ -545,13 +548,45 @@ export default function WorkOrdersPage() {
           .eq('pm_id', wo.pm_id)
           .maybeSingle();
         if (pm?.procedure_file_id) {
-          const { data } = supabase.storage.from('pm-procedure').getPublicUrl(pm.procedure_file_id);
+          // Bucket name is `pm-procedures` (plural) — matches usePMSchedules upload bucket.
+          const { data } = supabase.storage.from('pm-procedures').getPublicUrl(pm.procedure_file_id);
           setPmProcedureUrl(data?.publicUrl || null);
           setPmProcedureName(pm.procedure_file_id.split('/').pop() || 'PM Procedure');
         }
       } catch (err) {
         console.warn('Failed to fetch PM procedure:', err);
       }
+    }
+  };
+
+  // Helper to fetch SOPs linked to this work order (via sop_work_orders junction).
+  // Covers two cases:
+  //   1. SOPs directly linked to a WO from the SOPs page
+  //   2. SOPs that were copied forward from a PM at WO-generation time
+  // Active SOPs only — paused/inactive SOPs are filtered out.
+  const fetchLinkedSops = async (woId) => {
+    setLinkedSops([]);
+    if (!woId) return;
+    try {
+      const { data: links } = await supabase
+        .from('sop_work_orders')
+        .select('sop_id')
+        .eq('wo_id', woId);
+      const sopIds = [...new Set((links || []).map(l => l.sop_id).filter(Boolean))];
+      if (sopIds.length === 0) return;
+
+      const { data: sops } = await supabase
+        .from('sops')
+        .select('sop_id, name, description, document_url, document_name, status')
+        .in('sop_id', sopIds)
+        .order('name', { ascending: true });
+
+      // Only show Active SOPs in the WO view
+      const active = (sops || []).filter(s => s.status !== 'Inactive');
+      setLinkedSops(active);
+    } catch (err) {
+      console.warn('Failed to fetch linked SOPs:', err);
+      setLinkedSops([]);
     }
   };
 
@@ -685,6 +720,14 @@ export default function WorkOrdersPage() {
         // Refresh the list assignments map silently
         const view = currentViewRef.current;
         if (view !== 'closed') scheduleListRefresh();
+      })
+      // SOP <-> Work Order links — refresh detail if a link change touches the open WO
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_work_orders' }, (payload) => {
+        const wo = currentWORef.current;
+        const changedWoId = payload.new?.wo_id || payload.old?.wo_id;
+        if (wo && showViewModalRef.current && changedWoId === wo.wo_id) {
+          fetchLinkedSops(wo.wo_id);
+        }
       })
       .subscribe();
 
@@ -847,6 +890,7 @@ export default function WorkOrdersPage() {
     setAddAssigneeEmail('');
     setPmProcedureUrl(null);
     setPmProcedureName('');
+    setLinkedSops([]);
 
     // Update the ref synchronously so the realtime handler immediately knows which WO
     // is active. Relying solely on the useEffect means the ref can lag one render behind,
@@ -913,6 +957,9 @@ export default function WorkOrdersPage() {
     // Fetch PM procedure if this is a PM work order
     await fetchPmProcedure(wo);
 
+    // Fetch SOPs linked to this WO (covers both PM-inherited and direct links)
+    await fetchLinkedSops(woId);
+
     showViewModalRef.current = true;
     setShowViewModal(true);
   };
@@ -942,6 +989,9 @@ export default function WorkOrdersPage() {
 
         // Refresh PM procedure if needed
         await fetchPmProcedure(updatedWO);
+
+        // Refresh linked SOPs (instructor may have linked/unlinked from SOPs page)
+        await fetchLinkedSops(woId);
       }
 
       const { data: logs } = await supabase.from('work_log').select('*').eq('wo_id', woId).order('timestamp', { ascending: false });
@@ -2332,6 +2382,7 @@ export default function WorkOrdersPage() {
           linkedPOs={linkedPOs}
           pmProcedureUrl={pmProcedureUrl}
           pmProcedureName={pmProcedureName}
+          linkedSops={linkedSops}
           // Lookups
           assets={assets}
           users={users}
