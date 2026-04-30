@@ -12,10 +12,19 @@
  *  - Sync missing permissions (adds any new defaults)
  *  - Remove duplicates cleanup
  *  - Initialize permissions table if empty
+ *  - Verify Integrity (NEW): compares DEFAULT_PERMISSIONS to DB and reports drift
+ *  - Export Seed SQL (NEW): exports current DB state as recovery SQL
+ *  - Validation banner (NEW): warns if DEFAULT_PERMISSIONS array has internal duplicates
+ *  - ID collision protection (NEW): syncMissing auto-renames colliding IDs instead
+ *    of silently overwriting another page's permission row
  *
  * Supabase table: permissions
  *   Columns: permission_id, page, feature, student, work_study, instructor,
  *            description, updated_at, updated_by
+ *
+ * Recommended companion DB constraint:
+ *   ALTER TABLE permissions
+ *     ADD CONSTRAINT permissions_page_feature_unique UNIQUE (page, feature);
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
@@ -33,6 +42,8 @@ const PAGE_ICONS = {
   'PM': 'event_repeat',
   'Lab Signup': 'event_available',
   'Equipment Scheduling': 'build',
+  'SOPs': 'description',
+  'Network Map': 'lan',
   'Reports': 'assessment',
   'WOC Ratio': 'score',
   'Bug Tracker': 'bug_report',
@@ -47,6 +58,10 @@ const PAGE_ICONS = {
 
 // All default permissions — synced to match actual database state
 // NOTE: When adding new features, add the permission here AND in the DB
+//
+// CRITICAL: permission_id must be globally unique. (page, feature) must be globally unique.
+//           Any violation will be flagged at page load and risky bulk operations will be
+//           disabled until the duplicates are resolved.
 const DEFAULT_PERMISSIONS = [
   // Dashboard
   ['P001', 'Dashboard', 'view_page', true, true, true, 'Can access Dashboard page'],
@@ -83,6 +98,7 @@ const DEFAULT_PERMISSIONS = [
   ['P029', 'Inventory', 'create_order', true, true, true, 'Can create new parts orders'],
   ['P02A', 'Inventory', 'view_orders', false, true, true, 'Can view pending and past orders'],
   ['P02B', 'Inventory', 'receive_orders', false, false, true, 'Can mark orders as received (partial or full)'],
+  ['P0AB', 'Inventory', 'view_low_stock', false, true,  true, 'Can view low stock filter and column on Inventory page'],
 
   // Assets
   ['P030', 'Assets', 'view_page', true, true, true, 'Can access Assets page'],
@@ -104,6 +120,9 @@ const DEFAULT_PERMISSIONS = [
   ['P0A6', 'Purchase Orders', 'send_po', false, true, true, 'Can mark PO as ordered/sent to vendor'],
   ['P0A7', 'Purchase Orders', 'receive_po', false, false, true, 'Can receive items against purchase orders'],
   ['P0A8', 'Purchase Orders', 'cancel_po', false, false, true, 'Can cancel purchase orders'],
+  ['P0A9', 'Purchase Orders', 'view_dashboard_spend', false, false, true, 'Can view spend dashboard / totals on Purchase Orders page'],
+  ['P0AA', 'Purchase Orders', 'print_po',             false, true,  true, 'Can print purchase orders'],
+  ['P0AC', 'Purchase Orders', 'view_low_stock',       false, true,  true, 'Can view the Low Stock tab on Purchase Orders page'],
 
   // PM
   ['P040', 'PM', 'view_page', true, true, true, 'Can access PM page'],
@@ -129,6 +148,32 @@ const DEFAULT_PERMISSIONS = [
   ['P123', 'Equipment Scheduling', 'cancel_own_booking',  true,  true,  true,  'Can cancel own equipment bookings'],
   ['P124', 'Equipment Scheduling', 'manage_all_bookings', false, false, true,  "Can manage any user's equipment bookings"],
   ['P125', 'Equipment Scheduling', 'manage_equipment',    false, false, true,  'Can add, edit, and retire equipment entries'],
+
+  // SOPs (Standard Operating Procedures)
+  // NOTE: IDs P149-P154 were assigned after a recovery — original P120-P125 were
+  // accidentally reassigned to Equipment Scheduling. P126/P127/P130/P131 are the
+  // pre-recovery survivors. Do NOT renumber these without a coordinated DB migration.
+  ['P149', 'SOPs', 'view_page',         true,  true,  true,  'Can access SOPs page'],
+  ['P150', 'SOPs', 'create_sop',        false, true,  true,  'Can create new SOPs'],
+  ['P151', 'SOPs', 'edit_sop',          false, true,  true,  'Can edit SOP name/description'],
+  ['P152', 'SOPs', 'delete_sop',        false, false, true,  'Can delete SOPs'],
+  ['P153', 'SOPs', 'upload_document',   false, true,  true,  'Can upload PDF document to SOP'],
+  ['P154', 'SOPs', 'replace_document',  false, true,  true,  'Can replace existing PDF document'],
+  ['P126', 'SOPs', 'delete_document',   false, false, true,  'Can delete PDF document from SOP'],
+  ['P127', 'SOPs', 'link_items',        false, true,  true,  'Can link/unlink assets, PMs, and WOs'],
+  ['P130', 'SOPs', 'download_template', true,  true,  true,  'Can download the blank SOP template file'],
+  ['P131', 'SOPs', 'manage_template',   false, false, true,  'Can upload or replace the blank SOP template'],
+
+  // Network Map
+  ['P140', 'Network Map', 'view_page',       true,  true,  true,  'Can access Network Map page'],
+  ['P141', 'Network Map', 'edit_devices',    false, true,  true,  'Can edit device entries on the Network Map'],
+  ['P142', 'Network Map', 'suggest_changes', true,  true,  true,  'Can submit suggested changes to the Network Map'],
+  ['P143', 'Network Map', 'approve_changes', false, false, true,  'Can approve or reject suggested Network Map changes'],
+  ['P144', 'Network Map', 'delete_devices',  false, false, true,  'Can delete device entries from the Network Map'],
+  ['P145', 'Network Map', 'add_devices',     false, true,  true,  'Can add new device entries to the Network Map'],
+  ['P146', 'Network Map', 'print_map',       false, true,  true,  'Can print the Network Map'],
+  ['P147', 'Network Map', 'export_data',     false, true,  true,  'Can export Network Map data'],
+  ['P148', 'Network Map', 'manage_subnets',  false, false, true,  'Can manage subnet definitions (planned feature)'],
 
   // Reports (Time Cards)
   ['P060', 'Reports', 'view_page', true, true, true, 'Can access Reports/Time Cards'],
@@ -156,12 +201,18 @@ const DEFAULT_PERMISSIONS = [
   ['P0B1', 'Announcements', 'compose_message', false, false, true, 'Can compose and send announcements'],
   ['P0B2', 'Announcements', 'view_sent', false, false, true, 'Can view sent message history'],
   ['P0B3', 'Announcements', 'manage_templates', false, false, true, 'Can create and edit message templates'],
+  ['P0B4', 'Announcements', 'manage_holds',     false, false, true, 'Can manage student holds from the Announcements page'],
 
   // Program Budget
+  // NOTE: Some Program Budget IDs use the "PB##" naming pattern instead of "P0C#".
+  // Both formats coexist in the DB; both are kept here to match.
   ['P0C0', 'Program Budget', 'view_page', false, false, true, 'Can access Program Budget page'],
   ['P0C1', 'Program Budget', 'add_entries', false, false, true, 'Can add budget entries'],
   ['P0C2', 'Program Budget', 'edit_entries', false, false, true, 'Can edit and delete budget entries'],
   ['P0C3', 'Program Budget', 'manage_years', false, false, true, 'Can manage school year settings'],
+  ['PB02', 'Program Budget', 'view_transactions', false, false, true, 'Can view the Transactions tab'],
+  ['PB05', 'Program Budget', 'delete_entries',    false, false, true, 'Can delete budget entries'],
+  ['PB06', 'Program Budget', 'import_data',       false, false, true, 'Can import data into Program Budget'],
 
   // Weekly Labs Tracker
   ['P0D0', 'Weekly Labs', 'view_page', true, true, true, 'Can access Weekly Labs Tracker'],
@@ -209,6 +260,51 @@ function formatFeature(f) {
   return f.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
 }
 
+/**
+ * Detect duplicate permission_ids and duplicate (page, feature) pairs in
+ * the DEFAULT_PERMISSIONS source array. Runs once at module load.
+ *
+ * Why this matters: when adding a new page, it's easy to manually pick a
+ * permission_id that already belongs to another page. Before this check,
+ * doing so caused syncMissing() to silently overwrite the original page's
+ * permission row in the DB. Now the page renders a blocking warning banner
+ * if duplicates are present, and bulk operations are disabled until fixed.
+ */
+function validateDefaultPermissions() {
+  const idToRows = new Map()
+  const keyToIds = new Map()
+
+  DEFAULT_PERMISSIONS.forEach(([permId, page, feature]) => {
+    if (!idToRows.has(permId)) idToRows.set(permId, [])
+    idToRows.get(permId).push({ page, feature })
+
+    const key = page + '|' + feature
+    if (!keyToIds.has(key)) keyToIds.set(key, [])
+    keyToIds.get(key).push(permId)
+  })
+
+  const duplicateIds = []
+  idToRows.forEach((rows, id) => {
+    if (rows.length > 1) duplicateIds.push({ permission_id: id, occurrences: rows })
+  })
+
+  const duplicateKeys = []
+  keyToIds.forEach((ids, key) => {
+    if (ids.length > 1) {
+      const [page, feature] = key.split('|')
+      duplicateKeys.push({ page, feature, ids })
+    }
+  })
+
+  return {
+    duplicateIds,
+    duplicateKeys,
+    hasIssues: duplicateIds.length > 0 || duplicateKeys.length > 0,
+  }
+}
+
+const ARRAY_VALIDATION = validateDefaultPermissions()
+
 export default function AccessPage() {
   const { profile } = useAuth()
 
@@ -220,8 +316,11 @@ export default function AccessPage() {
   const [saving, setSaving] = useState(false)
   const [confirmModal, setConfirmModal] = useState(null)
   const [needsSetup, setNeedsSetup] = useState(false)
+  const [integrityResult, setIntegrityResult] = useState(null)
+  const [seedSQL, setSeedSQL] = useState(null)
 
   const isSuperAdmin = profile?.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+  const arrayHasIssues = ARRAY_VALIDATION.hasIssues
 
   // Load permissions
   const loadPermissions = useCallback(async () => {
@@ -372,8 +471,12 @@ export default function AccessPage() {
     setSaving(false)
   }
 
-  // Initialize permissions table with defaults
+  // Initialize permissions table with defaults (only runs when DB is empty)
   async function initializePermissions() {
+    if (arrayHasIssues) {
+      showToast('Cannot initialize: DEFAULT_PERMISSIONS array has duplicates. Resolve them in code first.', 'error')
+      return
+    }
     setSaving(true)
     try {
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : 'Admin'
@@ -391,7 +494,10 @@ export default function AccessPage() {
         updated_by: userName
       }))
 
-      const { error } = await supabase.from('permissions').upsert(rows, { onConflict: 'permission_id' })
+      // Plain insert — initialize is only called when DB is empty (needsSetup=true).
+      // Using insert (not upsert) so any unexpected pre-existing row surfaces as an
+      // error instead of being silently overwritten.
+      const { error } = await supabase.from('permissions').insert(rows)
       if (error) throw error
 
       showToast(`Created ${rows.length} permissions!`, 'success')
@@ -402,33 +508,84 @@ export default function AccessPage() {
     setSaving(false)
   }
 
-  // Add missing permissions (uses upsert to avoid duplicate key conflicts)
+  // Add missing permissions — with ID-collision protection.
+  //
+  // OLD (buggy) behavior: used upsert with onConflict='permission_id'. When a new
+  // page was added with a manually-picked ID that already belonged to a different
+  // page in the DB (e.g. SOPs P120 vs Equipment Scheduling P120), upsert silently
+  // overwrote the existing row, destroying the original page's permission data.
+  //
+  // NEW behavior: filter to truly missing (page, feature) rows as before, then
+  // for each row check if its array-supplied permission_id is already taken in the
+  // DB by a different (page, feature). If so, auto-assign the next available
+  // P### ID and log the rename. Plain INSERT used so any unexpected error surfaces.
   async function syncMissing() {
+    if (arrayHasIssues) {
+      showToast('Cannot sync: DEFAULT_PERMISSIONS array has duplicates. Resolve them in code first.', 'error')
+      return
+    }
     setConfirmModal({
       title: 'Add Missing Permissions',
-      message: 'This will add any missing permissions to the database. Continue?',
+      message: 'This will add any missing permissions to the database. ID collisions with existing rows will be auto-resolved by assigning a new ID. Continue?',
       onConfirm: async () => {
         setConfirmModal(null)
         setSaving(true)
         try {
           const existingKeys = new Set(permissions.map(p => p.page + '|' + p.feature))
+          const existingIds = new Set(permissions.map(p => p.permission_id))
           const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : 'Admin'
           const now = new Date().toISOString()
 
-          const missing = DEFAULT_PERMISSIONS
+          // Find the highest existing P<number> so we can mint new IDs above the high-water mark
+          let maxNum = 0
+          permissions.forEach(p => {
+            const m = p.permission_id?.match(/^P(\d+)$/)
+            if (m) {
+              const n = parseInt(m[1], 10)
+              if (n > maxNum) maxNum = n
+            }
+          })
+
+          const renamed = []
+          const missing = []
+
+          DEFAULT_PERMISSIONS
             .filter(([, page, feature]) => !existingKeys.has(page + '|' + feature))
-            .map(([permId, page, feature, student, workStudy, instructor, description]) => ({
-              permission_id: permId, page, feature, student, work_study: workStudy,
-              instructor, description, updated_at: now, updated_by: userName
-            }))
+            .forEach(([permId, page, feature, student, workStudy, instructor, description]) => {
+              let finalId = permId
+              if (existingIds.has(permId)) {
+                // Collision: this ID already belongs to a different (page, feature).
+                // Mint a fresh ID above the high-water mark.
+                maxNum++
+                finalId = 'P' + maxNum
+                renamed.push({ from: permId, to: finalId, page, feature })
+              }
+              existingIds.add(finalId) // reserve so subsequent rows in this batch don't pick it
+              missing.push({
+                permission_id: finalId,
+                page,
+                feature,
+                student,
+                work_study: workStudy,
+                instructor,
+                description,
+                updated_at: now,
+                updated_by: userName
+              })
+            })
 
           if (missing.length === 0) {
             showToast('All permissions already exist!', 'success')
           } else {
-            // Use upsert to avoid 409 duplicate key conflicts
-            const { error } = await supabase.from('permissions').upsert(missing, { onConflict: 'permission_id' })
+            const { error } = await supabase.from('permissions').insert(missing)
             if (error) throw error
-            showToast(`Added ${missing.length} missing permissions!`, 'success')
+
+            if (renamed.length > 0) {
+              console.warn('AccessPage: Auto-renamed permission IDs to avoid collisions:', renamed)
+              showToast(`Added ${missing.length} permissions (${renamed.length} ID auto-renamed — see browser console)`, 'success')
+            } else {
+              showToast(`Added ${missing.length} missing permissions!`, 'success')
+            }
             loadPermissions()
           }
         } catch (e) {
@@ -476,6 +633,105 @@ export default function AccessPage() {
     })
   }
 
+  // Verify Integrity — read-only health check. Compares DEFAULT_PERMISSIONS to
+  // current DB state and reports three failure modes:
+  //   1. orphans: rows in DB with no matching (page, feature) in the array
+  //   2. missing: rows in array with no matching (page, feature) in the DB
+  //   3. idConflicts: same permission_id in array and DB but pointing at different (page, feature)
+  // Run this any time you suspect drift after a manual SQL change or a bulk import.
+  function verifyIntegrity() {
+    try {
+      const arrayKeyToId = new Map()
+      const arrayIdToKey = new Map()
+      DEFAULT_PERMISSIONS.forEach(([permId, page, feature]) => {
+        arrayKeyToId.set(page + '|' + feature, permId)
+        arrayIdToKey.set(permId, { page, feature })
+      })
+
+      const dbKeyToId = new Map()
+      const dbIdToRow = new Map()
+      permissions.forEach(p => {
+        dbKeyToId.set(p.page + '|' + p.feature, p.permission_id)
+        dbIdToRow.set(p.permission_id, { page: p.page, feature: p.feature })
+      })
+
+      const orphans = []
+      const missing = []
+      const idConflicts = []
+
+      permissions.forEach(p => {
+        if (!arrayKeyToId.has(p.page + '|' + p.feature)) {
+          orphans.push({ id: p.permission_id, page: p.page, feature: p.feature })
+        }
+      })
+
+      DEFAULT_PERMISSIONS.forEach(([permId, page, feature]) => {
+        if (!dbKeyToId.has(page + '|' + feature)) {
+          missing.push({ id: permId, page, feature })
+        }
+      })
+
+      arrayIdToKey.forEach((arrRow, id) => {
+        if (dbIdToRow.has(id)) {
+          const dbRow = dbIdToRow.get(id)
+          if (dbRow.page !== arrRow.page || dbRow.feature !== arrRow.feature) {
+            idConflicts.push({
+              id,
+              db: `${dbRow.page} / ${dbRow.feature}`,
+              array: `${arrRow.page} / ${arrRow.feature}`
+            })
+          }
+        }
+      })
+
+      setIntegrityResult({ orphans, missing, idConflicts, checkedAt: new Date() })
+    } catch (e) {
+      showToast('Integrity check error: ' + e.message, 'error')
+    }
+  }
+
+  // Export Seed SQL — generates an idempotent SQL script that fully re-creates
+  // the current permissions table state. Save this to your repo as a recovery
+  // artifact; if anything ever nukes the table again, this script restores it.
+  function exportSeedSQL() {
+    if (!permissions.length) {
+      showToast('No permissions loaded to export.', 'error')
+      return
+    }
+    const escape = (v) => {
+      if (v == null) return 'NULL'
+      return `'${String(v).replace(/'/g, "''")}'`
+    }
+    const sortedPerms = [...permissions].sort((a, b) => {
+      if (a.page !== b.page) return a.page.localeCompare(b.page)
+      return a.feature.localeCompare(b.feature)
+    })
+    const lines = []
+    lines.push(`-- RICT CMMS Permissions Seed`)
+    lines.push(`-- Generated: ${new Date().toISOString()}`)
+    lines.push(`-- Source: AccessPage.jsx Export Seed SQL`)
+    lines.push(`-- Row count: ${sortedPerms.length}`)
+    lines.push(``)
+    lines.push(`-- Recommended companion constraint (run once):`)
+    lines.push(`-- ALTER TABLE permissions ADD CONSTRAINT permissions_page_feature_unique UNIQUE (page, feature);`)
+    lines.push(``)
+    lines.push(`INSERT INTO permissions (permission_id, page, feature, student, work_study, instructor, description, updated_at, updated_by) VALUES`)
+    const valueLines = sortedPerms.map((p, i) => {
+      const isLast = i === sortedPerms.length - 1
+      return `  (${escape(p.permission_id)}, ${escape(p.page)}, ${escape(p.feature)}, ${p.student}, ${p.work_study}, ${p.instructor}, ${escape(p.description)}, now(), 'Seed')${isLast ? ';' : ','}`
+    })
+    lines.push(...valueLines)
+    setSeedSQL(lines.join('\n'))
+  }
+
+  function copySeedToClipboard() {
+    if (!seedSQL) return
+    navigator.clipboard.writeText(seedSQL).then(
+      () => showToast('Copied to clipboard!', 'success'),
+      () => showToast('Copy failed — please select and copy manually.', 'error')
+    )
+  }
+
   function toggleSection(page) {
     setExpandedSections(prev => ({ ...prev, [page]: !prev[page] }))
   }
@@ -489,8 +745,8 @@ export default function AccessPage() {
   if (!isSuperAdmin) {
     return (
       <div className="access-page">
-        <div className="access-denied">
-          <span className="material-icons" style={{ fontSize: '5rem', color: '#fa5252', marginBottom: 20 }}>lock</span>
+        <div className="access-denied" role="alert">
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: '5rem', color: '#fa5252', marginBottom: 20 }}>lock</span>
           <h2>Access Denied</h2>
           <p>Only the Super Admin can access the Access Control page.</p>
         </div>
@@ -499,81 +755,147 @@ export default function AccessPage() {
     )
   }
 
+  const integrityClean = integrityResult
+    && integrityResult.orphans.length === 0
+    && integrityResult.missing.length === 0
+    && integrityResult.idConflicts.length === 0
+
   return (
     <div className="access-page">
-      {/* Toast */}
-      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+      {/* Toast (announced to screen readers via role) */}
+      {toast && (
+        <div
+          className={`toast toast-${toast.type}`}
+          role={toast.type === 'error' ? 'alert' : 'status'}
+          aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+        >
+          {toast.msg}
+        </div>
+      )}
 
       {/* Header */}
       <div className="access-header">
         <div className="access-title">
-          <span className="material-icons">admin_panel_settings</span>
+          <span className="material-icons" aria-hidden="true">admin_panel_settings</span>
           Access Control
           <span className="super-badge">SUPER ADMIN</span>
         </div>
         <div className="access-actions">
-          <button className="btn btn-secondary" onClick={loadPermissions}>
-            <span className="material-icons">refresh</span>Refresh
+          <button className="btn btn-secondary" onClick={loadPermissions} aria-label="Refresh permissions list">
+            <span className="material-icons" aria-hidden="true">refresh</span>Refresh
           </button>
-          <button className="btn btn-primary" onClick={syncMissing}>
-            <span className="material-icons">sync</span>Add Missing
+          <button className="btn btn-primary" onClick={syncMissing} disabled={arrayHasIssues} aria-label="Add any permissions missing from the database">
+            <span className="material-icons" aria-hidden="true">sync</span>Add Missing
           </button>
-          <button className="btn btn-secondary" style={{ color: '#fa5252' }} onClick={cleanupDuplicates}>
-            <span className="material-icons">delete_sweep</span>Remove Duplicates
+          <button className="btn btn-secondary" onClick={verifyIntegrity} aria-label="Verify integrity of permissions data">
+            <span className="material-icons" aria-hidden="true">fact_check</span>Verify
+          </button>
+          <button className="btn btn-secondary" onClick={exportSeedSQL} aria-label="Export current permissions as SQL seed script">
+            <span className="material-icons" aria-hidden="true">file_download</span>Export Seed
+          </button>
+          <button className="btn btn-secondary" style={{ color: '#fa5252' }} onClick={cleanupDuplicates} aria-label="Remove duplicate permission rows from database">
+            <span className="material-icons" aria-hidden="true">delete_sweep</span>Remove Duplicates
           </button>
         </div>
       </div>
 
+      {/* Source-array validation banner — only renders when there's a code-level problem */}
+      {arrayHasIssues && (
+        <div className="validation-banner" role="alert">
+          <span className="material-icons" aria-hidden="true">warning</span>
+          <div>
+            <div className="validation-title">DEFAULT_PERMISSIONS array has duplicates — bulk operations disabled</div>
+            <div className="validation-body">
+              {ARRAY_VALIDATION.duplicateIds.length > 0 && (
+                <div>
+                  <strong>Duplicate IDs:</strong>{' '}
+                  {ARRAY_VALIDATION.duplicateIds.map(d =>
+                    `${d.permission_id} (${d.occurrences.map(o => `${o.page}/${o.feature}`).join(', ')})`
+                  ).join('; ')}
+                </div>
+              )}
+              {ARRAY_VALIDATION.duplicateKeys.length > 0 && (
+                <div>
+                  <strong>Duplicate (page, feature):</strong>{' '}
+                  {ARRAY_VALIDATION.duplicateKeys.map(d =>
+                    `${d.page}/${d.feature} → ${d.ids.join(', ')}`
+                  ).join('; ')}
+                </div>
+              )}
+              <div style={{ marginTop: 8, fontSize: '0.85em' }}>
+                Fix DEFAULT_PERMISSIONS in AccessPage.jsx before running Add Missing or Initialize.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Stats */}
-      <div className="stats-row">
+      <div className="stats-row" role="group" aria-label="Permission counts by role">
         <div className="stat-card student">
           <div className="stat-label">Student Permissions</div>
-          <div className="stat-value">{stats.student}/{stats.total}</div>
+          <div className="stat-value" aria-live="polite">{stats.student}/{stats.total}</div>
         </div>
         <div className="stat-card workstudy">
           <div className="stat-label">Work Study Permissions</div>
-          <div className="stat-value">{stats.workStudy}/{stats.total}</div>
+          <div className="stat-value" aria-live="polite">{stats.workStudy}/{stats.total}</div>
         </div>
         <div className="stat-card instructor">
           <div className="stat-label">Instructor Permissions</div>
-          <div className="stat-value">{stats.instructor}/{stats.total}</div>
+          <div className="stat-value" aria-live="polite">{stats.instructor}/{stats.total}</div>
         </div>
       </div>
 
       {/* Content */}
       <div id="permissions-content">
         {loading ? (
-          <div className="loading-state">Loading permissions...</div>
+          <div className="loading-state" role="status">Loading permissions...</div>
         ) : needsSetup ? (
           <div className="setup-prompt">
-            <span className="material-icons setup-icon">settings_suggest</span>
+            <span className="material-icons setup-icon" aria-hidden="true">settings_suggest</span>
             <div className="setup-title">Setup Required</div>
             <div className="setup-text">No permissions found. Click below to create the default permissions.</div>
-            <button className="btn btn-primary" onClick={initializePermissions} disabled={saving}>
+            <button className="btn btn-primary" onClick={initializePermissions} disabled={saving || arrayHasIssues}>
               {saving ? 'Creating...' : 'Create Permissions'}
             </button>
           </div>
         ) : (
           Object.entries(groupedPermissions).map(([pageName, perms]) => {
             const icon = PAGE_ICONS[pageName] || 'folder'
-            const isExpanded = expandedSections[pageName]
+            const isExpanded = !!expandedSections[pageName]
+            const sectionId = `perm-section-${pageName.replace(/\s+/g, '-').toLowerCase()}`
 
             return (
               <div key={pageName} className="page-section">
-                <div className="page-header" onClick={() => toggleSection(pageName)}>
+                {/* Page header — now a real button so keyboard / screen-reader users can expand */}
+                <button
+                  type="button"
+                  className="page-header"
+                  onClick={() => toggleSection(pageName)}
+                  aria-expanded={isExpanded}
+                  aria-controls={sectionId}
+                >
                   <div className="page-header-left">
                     <div className="page-icon">
-                      <span className="material-icons">{icon}</span>
+                      <span className="material-icons" aria-hidden="true">{icon}</span>
                     </div>
                     <div>
                       <div className="page-name">{pageName}</div>
                       <div className="page-count">{perms.length} permissions</div>
                     </div>
                   </div>
-                  <span className={`material-icons collapse-icon${isExpanded ? '' : ' collapsed'}`}>expand_more</span>
-                </div>
+                  <span
+                    className={`material-icons collapse-icon${isExpanded ? '' : ' collapsed'}`}
+                    aria-hidden="true"
+                  >expand_more</span>
+                </button>
 
-                <div className={`page-content${isExpanded ? ' expanded' : ''}`}>
+                <div
+                  id={sectionId}
+                  className={`page-content${isExpanded ? ' expanded' : ''}`}
+                  role="region"
+                  aria-label={`${pageName} permissions`}
+                >
                   <table className="permission-table">
                     <thead>
                       <tr>
@@ -596,6 +918,7 @@ export default function AccessPage() {
                                 type="checkbox"
                                 checked={getPermValue(p.permission_id, 'Student', p.student)}
                                 onChange={e => handleToggle(p.permission_id, 'Student', e.target.checked)}
+                                aria-label={`Student access to ${formatFeature(p.feature)} on ${pageName}`}
                               />
                               <span className="toggle-slider" />
                             </label>
@@ -606,6 +929,7 @@ export default function AccessPage() {
                                 type="checkbox"
                                 checked={getPermValue(p.permission_id, 'Work Study', p.work_study)}
                                 onChange={e => handleToggle(p.permission_id, 'Work Study', e.target.checked)}
+                                aria-label={`Work Study access to ${formatFeature(p.feature)} on ${pageName}`}
                               />
                               <span className="toggle-slider" />
                             </label>
@@ -616,6 +940,7 @@ export default function AccessPage() {
                                 type="checkbox"
                                 checked={getPermValue(p.permission_id, 'Instructor', p.instructor)}
                                 onChange={e => handleToggle(p.permission_id, 'Instructor', e.target.checked)}
+                                aria-label={`Instructor access to ${formatFeature(p.feature)} on ${pageName}`}
                               />
                               <span className="toggle-slider" />
                             </label>
@@ -633,15 +958,15 @@ export default function AccessPage() {
 
       {/* Changes bar */}
       {changeCount > 0 && (
-        <div className="changes-bar">
+        <div className="changes-bar" role="region" aria-label="Unsaved changes">
           <div>
             You have unsaved changes
-            <span className="changes-count">{changeCount}</span>
+            <span className="changes-count" aria-live="polite">{changeCount}</span>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             <button className="btn btn-secondary" onClick={discardChanges}>Discard</button>
             <button className="btn btn-success" onClick={saveAllChanges} disabled={saving}>
-              <span className="material-icons">save</span>
+              <span className="material-icons" aria-hidden="true">save</span>
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
@@ -650,21 +975,151 @@ export default function AccessPage() {
 
       {/* Confirm Modal */}
       {confirmModal && (
-        <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setConfirmModal(null)}>
+        <div
+          className="modal-overlay visible"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-modal-title"
+          onClick={e => e.target === e.currentTarget && setConfirmModal(null)}
+        >
           <div className="modal" style={{ maxWidth: 440 }}>
             <div className="modal-header">
-              <h3>{confirmModal.title}</h3>
-              <button className="modal-close" onClick={() => setConfirmModal(null)}>&times;</button>
+              <h3 id="confirm-modal-title">{confirmModal.title}</h3>
+              <button className="modal-close" onClick={() => setConfirmModal(null)} aria-label="Close dialog">&times;</button>
             </div>
             <div className="modal-body">
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span className="material-icons" style={{ fontSize: 48, color: '#fab005' }}>help_outline</span>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: 48, color: '#fab005' }}>help_outline</span>
                 <p style={{ margin: 0, fontSize: '1rem', color: '#495057' }}>{confirmModal.message}</p>
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setConfirmModal(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={confirmModal.onConfirm}>Continue</button>
+              <button className="btn btn-primary" onClick={confirmModal.onConfirm} autoFocus>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Integrity Result Modal */}
+      {integrityResult && (
+        <div
+          className="modal-overlay visible"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="integrity-modal-title"
+          onClick={e => e.target === e.currentTarget && setIntegrityResult(null)}
+        >
+          <div className="modal" style={{ maxWidth: 700, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="modal-header">
+              <h3 id="integrity-modal-title">
+                {integrityClean ? '✓ Integrity Check: Clean' : 'Integrity Check Results'}
+              </h3>
+              <button className="modal-close" onClick={() => setIntegrityResult(null)} aria-label="Close dialog">&times;</button>
+            </div>
+            <div className="modal-body" style={{ overflowY: 'auto' }}>
+              {integrityClean ? (
+                <p style={{ color: '#2b8a3e' }}>
+                  All {permissions.length} database rows match DEFAULT_PERMISSIONS. No drift detected.
+                </p>
+              ) : (
+                <>
+                  {integrityResult.idConflicts.length > 0 && (
+                    <section style={{ marginBottom: 20 }}>
+                      <h4 style={{ color: '#c92a2a', marginBottom: 8 }}>
+                        ⚠ ID Conflicts ({integrityResult.idConflicts.length})
+                      </h4>
+                      <p style={{ fontSize: '0.85rem', color: '#868e96', margin: '0 0 8px' }}>
+                        Same permission_id maps to different (page, feature) in array vs DB. Most serious — indicates an array entry has been overwritten.
+                      </p>
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85rem' }}>
+                        {integrityResult.idConflicts.map(c => (
+                          <li key={c.id}><strong>{c.id}</strong>: array says <em>{c.array}</em>, DB has <em>{c.db}</em></li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                  {integrityResult.missing.length > 0 && (
+                    <section style={{ marginBottom: 20 }}>
+                      <h4 style={{ color: '#fab005', marginBottom: 8 }}>
+                        Missing in DB ({integrityResult.missing.length})
+                      </h4>
+                      <p style={{ fontSize: '0.85rem', color: '#868e96', margin: '0 0 8px' }}>
+                        In DEFAULT_PERMISSIONS but not in DB. Run "Add Missing" to add them.
+                      </p>
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85rem' }}>
+                        {integrityResult.missing.map(m => (
+                          <li key={`${m.page}-${m.feature}`}><strong>{m.id}</strong> {m.page} / {m.feature}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                  {integrityResult.orphans.length > 0 && (
+                    <section style={{ marginBottom: 20 }}>
+                      <h4 style={{ color: '#228be6', marginBottom: 8 }}>
+                        Orphans in DB ({integrityResult.orphans.length})
+                      </h4>
+                      <p style={{ fontSize: '0.85rem', color: '#868e96', margin: '0 0 8px' }}>
+                        In DB but not in DEFAULT_PERMISSIONS. Either add to the array or remove from DB. Safe to keep.
+                      </p>
+                      <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.85rem' }}>
+                        {integrityResult.orphans.map(o => (
+                          <li key={o.id}><strong>{o.id}</strong> {o.page} / {o.feature}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-primary" onClick={() => setIntegrityResult(null)} autoFocus>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Seed SQL Modal */}
+      {seedSQL && (
+        <div
+          className="modal-overlay visible"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="seed-modal-title"
+          onClick={e => e.target === e.currentTarget && setSeedSQL(null)}
+        >
+          <div className="modal" style={{ maxWidth: 800, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="modal-header">
+              <h3 id="seed-modal-title">Permissions Seed SQL</h3>
+              <button className="modal-close" onClick={() => setSeedSQL(null)} aria-label="Close dialog">&times;</button>
+            </div>
+            <div className="modal-body" style={{ overflowY: 'auto' }}>
+              <p style={{ fontSize: '0.85rem', color: '#495057', margin: '0 0 12px' }}>
+                Save this SQL as a recovery artifact (e.g. <code>supabase/migrations/permissions_seed.sql</code>).
+                If the permissions table is ever wiped, run this script in the SQL Editor to restore.
+              </p>
+              <textarea
+                readOnly
+                value={seedSQL}
+                aria-label="Generated SQL seed script"
+                style={{
+                  width: '100%',
+                  minHeight: 320,
+                  fontFamily: 'monospace',
+                  fontSize: '0.78rem',
+                  border: '1px solid #dee2e6',
+                  borderRadius: 8,
+                  padding: 12,
+                  resize: 'vertical',
+                  background: '#f8f9fa',
+                }}
+              />
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setSeedSQL(null)}>Close</button>
+              <button className="btn btn-primary" onClick={copySeedToClipboard} autoFocus>
+                <span className="material-icons" aria-hidden="true">content_copy</span>Copy to Clipboard
+              </button>
             </div>
           </div>
         </div>
@@ -672,8 +1127,13 @@ export default function AccessPage() {
 
       {/* Saving overlay */}
       {saving && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(255,255,255,0.8)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
-          <div className="spinner" />
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(255,255,255,0.8)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}
+          role="status"
+          aria-live="polite"
+          aria-label="Processing"
+        >
+          <div className="spinner" aria-hidden="true" />
           <div style={{ color: '#495057', fontWeight: 500 }}>Processing...</div>
         </div>
       )}
@@ -697,6 +1157,7 @@ const styles = `
 
   .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 8px; transition: background 0.2s; }
   .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
   .btn .material-icons { font-size: 1.1rem; }
   .btn-primary { background: #228be6; color: white; }
   .btn-primary:hover:not(:disabled) { background: #1971c2; }
@@ -704,6 +1165,12 @@ const styles = `
   .btn-success:hover:not(:disabled) { background: #2f9e44; }
   .btn-secondary { background: #f1f3f5; color: #495057; border: 1px solid #dee2e6; }
   .btn-secondary:hover:not(:disabled) { background: #e9ecef; }
+
+  .validation-banner { display: flex; gap: 14px; align-items: flex-start; background: #fff5f5; border: 1px solid #ffc9c9; border-left: 4px solid #fa5252; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; color: #862e2e; }
+  .validation-banner .material-icons { color: #fa5252; font-size: 1.5rem; flex-shrink: 0; }
+  .validation-title { font-weight: 600; margin-bottom: 6px; color: #862e2e; }
+  .validation-body { font-size: 0.85rem; line-height: 1.5; }
+  .validation-body code { background: #ffe3e3; padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
 
   .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
   .stat-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
@@ -714,8 +1181,10 @@ const styles = `
   .stat-value { font-size: 1.75rem; font-weight: 700; color: #1a1a2e; }
 
   .page-section { background: white; border-radius: 12px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
-  .page-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; background: #f8f9fa; cursor: pointer; user-select: none; }
+  /* Header is now a <button>; reset native button styling */
+  .page-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; background: #f8f9fa; cursor: pointer; user-select: none; width: 100%; border: none; text-align: left; font: inherit; color: inherit; }
   .page-header:hover { background: #f1f3f5; }
+  .page-header:focus-visible { outline: 2px solid #228be6; outline-offset: -2px; }
   .page-header-left { display: flex; align-items: center; gap: 12px; }
   .page-icon { width: 40px; height: 40px; background: #228be6; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; }
   .page-icon .material-icons { font-size: 1.2rem; }
@@ -738,6 +1207,7 @@ const styles = `
 
   .toggle-switch { position: relative; width: 44px; height: 24px; display: inline-block; }
   .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-switch input:focus-visible + .toggle-slider { box-shadow: 0 0 0 3px rgba(34,139,230,0.4); }
   .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #dee2e6; border-radius: 24px; transition: 0.3s; }
   .toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.3s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
   .toggle-switch input:checked + .toggle-slider { background: #40c057; }
@@ -755,17 +1225,19 @@ const styles = `
   .changes-bar { position: fixed; bottom: 0; left: 260px; right: 0; background: #1a1a2e; color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; z-index: 100; animation: slideUp 0.3s ease; }
   .changes-count { background: #fab005; color: #1a1a2e; padding: 4px 12px; border-radius: 12px; font-weight: 600; margin-left: 12px; }
 
-  .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: white; font-weight: 500; z-index: 3000; animation: slideIn 0.3s ease; }
+  .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: white; font-weight: 500; z-index: 3000; animation: slideIn 0.3s ease; max-width: 480px; }
   .toast-success { background: #40c057; }
   .toast-error { background: #fa5252; }
   .toast-info { background: #228be6; }
 
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: center; justify-content: center; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 20px; }
   .modal-overlay.visible { display: flex; }
   .modal { background: white; border-radius: 16px; width: 90%; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
   .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #e9ecef; }
-  .modal-header h3 { font-size: 1.1rem; font-weight: 600; }
+  .modal-header h3 { font-size: 1.1rem; font-weight: 600; margin: 0; }
   .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; padding: 4px 8px; }
+  .modal-close:hover { color: #495057; }
+  .modal-close:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 4px; }
   .modal-body { padding: 24px; }
   .modal-footer { padding: 16px 24px; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 12px; }
 
