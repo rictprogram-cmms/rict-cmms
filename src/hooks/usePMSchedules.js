@@ -530,6 +530,45 @@ export function usePMActions() {
       // The WorkOrdersPage should look up pm_schedules.procedure_file_id
       // when displaying a WO with is_pm='Yes' to show the procedure link.
 
+      // ── Carry linked SOPs forward to the new WO ──
+      // Any SOPs linked to this PM (via sop_pm_schedules) are copied into
+      // sop_work_orders so they appear as attachments on the generated work order.
+      // Pre-check existing pairs to make this idempotent without depending on a
+      // unique constraint at the DB level.
+      try {
+        const { data: pmSops } = await supabase
+          .from('sop_pm_schedules')
+          .select('sop_id')
+          .eq('pm_id', pmId)
+
+        const sopIds = (pmSops || []).map(r => r.sop_id).filter(Boolean)
+        if (sopIds.length > 0) {
+          const { data: existing } = await supabase
+            .from('sop_work_orders')
+            .select('sop_id')
+            .eq('wo_id', woId)
+            .in('sop_id', sopIds)
+          const existingSet = new Set((existing || []).map(r => r.sop_id))
+          const toInsert = sopIds
+            .filter(id => !existingSet.has(id))
+            .map(id => ({ sop_id: id, wo_id: woId }))
+
+          if (toInsert.length > 0) {
+            const { error: linkErr } = await supabase
+              .from('sop_work_orders')
+              .insert(toInsert)
+              .select() // surface RLS blocks per project convention
+            if (linkErr) {
+              console.warn('Failed to copy SOP links to new WO:', linkErr.message)
+            }
+          }
+        }
+      } catch (sopErr) {
+        // Don't fail the whole generation if SOP linkage copy hiccups —
+        // the WO is already created and is the primary deliverable.
+        console.warn('SOP linkage copy error (non-fatal):', sopErr)
+      }
+
       // Update PM: last generated + next due
       // Next due is calculated from TODAY, not from the previous due date
       const nextDue = calculateNextDueDate(new Date(), pm.frequency, pm.frequency_value)

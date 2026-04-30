@@ -45,6 +45,7 @@ export default function WorkOrderDetailModal({
   linkedPOs,
   pmProcedureUrl,
   pmProcedureName,
+  linkedSops = [],
 
   // Lookups
   assets,
@@ -343,6 +344,111 @@ export default function WorkOrderDetailModal({
               <div style={{ padding: '10px 14px', background: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef', fontSize: '0.85rem', color: '#495057' }}>
                 This work order was generated from PM schedule <strong>{wo.pm_id}</strong>. No procedure document is attached.
               </div>
+            </div>
+          )}
+
+          {/* Linked SOPs Section — covers SOPs linked directly to this WO and SOPs
+              inherited from the PM at WO-generation time. Each SOP card shows
+              the SOP id, name, description preview, and a "View Document" link
+              that opens the PDF in a new tab. */}
+          {linkedSops.length > 0 && (
+            <div className="detail-section">
+              <h4>
+                <span className="material-icons" aria-hidden="true">menu_book</span>
+                Standard Operating Procedures
+                <span style={{ marginLeft: 8, fontSize: '0.75rem', fontWeight: 400, color: '#868e96' }}>
+                  {linkedSops.length} linked
+                </span>
+              </h4>
+              <ul
+                style={{ display: 'flex', flexDirection: 'column', gap: 8, listStyle: 'none', padding: 0, margin: 0 }}
+                aria-label={`${linkedSops.length} linked Standard Operating Procedure${linkedSops.length === 1 ? '' : 's'}`}
+              >
+                {linkedSops.map(sop => {
+                  const hasDoc = !!sop.document_url;
+                  const docName = sop.document_name || `${sop.sop_id}.pdf`;
+                  // High-contrast palette matching the existing PM Procedure card (WCAG AA verified).
+                  return (
+                    <li
+                      key={sop.sop_id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 10,
+                        padding: '12px 16px',
+                        background: '#fff8e1',
+                        border: '1px solid #ffd166',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <span
+                        className="material-icons"
+                        aria-hidden="true"
+                        style={{ color: '#b07c00', fontSize: '1.3rem', marginTop: 2 }}
+                      >
+                        menu_book
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#7a4f00' }}>
+                          {sop.name}
+                          <span
+                            style={{
+                              marginLeft: 8,
+                              fontSize: '0.7rem',
+                              fontWeight: 500,
+                              color: '#7a4f00',
+                              background: '#ffe9a8',
+                              padding: '1px 8px',
+                              borderRadius: 10,
+                            }}
+                          >
+                            {sop.sop_id}
+                          </span>
+                        </div>
+                        {sop.description && (
+                          <div
+                            style={{
+                              fontSize: '0.78rem',
+                              color: '#5b4500',
+                              marginTop: 4,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                            }}
+                          >
+                            {sop.description}
+                          </div>
+                        )}
+                        {!hasDoc && (
+                          <div style={{ fontSize: '0.72rem', color: '#868e96', marginTop: 4, fontStyle: 'italic' }}>
+                            No document attached to this SOP yet.
+                          </div>
+                        )}
+                      </div>
+                      {hasDoc && (
+                        <a
+                          href={sop.document_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="doc-link"
+                          style={{ background: '#b07c00', color: '#fff', fontWeight: 600, flexShrink: 0 }}
+                          aria-label={`View SOP document: ${sop.name} (${docName}), opens in new tab`}
+                        >
+                          <span className="material-icons" aria-hidden="true">open_in_new</span>
+                          View Document
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {wo.is_pm === 'Yes' && wo.pm_id && (
+                <div style={{ fontSize: '0.72rem', color: '#868e96', marginTop: 8 }}>
+                  Some SOPs may have been carried forward from PM schedule <strong>{wo.pm_id}</strong>.
+                </div>
+              )}
             </div>
           )}
 
