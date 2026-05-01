@@ -413,6 +413,11 @@ function InstructorOverview({ navigate }) {
   const [dayLoading, setDayLoading] = useState(true);
   const [woLoading, setWoLoading] = useState(true);
 
+  // Asset checkouts (count of currently-out + overdue)
+  const [outCount, setOutCount] = useState(0);
+  const [overdueCheckoutCount, setOverdueCheckoutCount] = useState(0);
+  const [checkoutLoading, setCheckoutLoading] = useState(true);
+
   // Temp access state
   const [activeTempAccess, setActiveTempAccess] = useState([]);
   const [tempAccessLoading, setTempAccessLoading] = useState(true);
@@ -500,6 +505,30 @@ function InstructorOverview({ navigate }) {
       .subscribe();
     return () => supabase.removeChannel(ch);
   }, [fetchLateWOs]);
+
+  // ── Fetch asset checkouts (open & overdue) ──
+  const fetchCheckoutCounts = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('asset_checkouts')
+        .select('checkout_id, expected_return')
+        .is('returned_at', null);
+      const rows = data || [];
+      const now = new Date();
+      const overdue = rows.filter(r => r.expected_return && new Date(r.expected_return) < now).length;
+      setOutCount(rows.length);
+      setOverdueCheckoutCount(overdue);
+    } catch { /* ignore — table may not yet exist */ }
+    setCheckoutLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchCheckoutCounts();
+    const ch = supabase.channel(`dash-inst-checkouts-${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, fetchCheckoutCounts)
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [fetchCheckoutCounts]);
 
   // ── Fetch day signups + clock ──
   const fetchDayData = useCallback(async () => {
@@ -754,6 +783,41 @@ function InstructorOverview({ navigate }) {
             <div className="dash-metric-value">{dayLoading ? '—' : punchedInCount}</div>
             <div className="dash-metric-label">Punched In</div>
             <div className="dash-metric-sub">{punchedInCount === 0 ? 'No one currently' : 'tap to view'}</div>
+          </button>
+
+          {/* Asset Checkouts tile — clickable */}
+          <button
+            type="button"
+            className="dash-metric-tile"
+            onClick={() => navigate('/asset-checkouts')}
+            aria-label={
+              checkoutLoading ? 'Asset Checkouts, loading'
+              : overdueCheckoutCount > 0
+                ? `Asset Checkouts: ${outCount} out, ${overdueCheckoutCount} overdue, open list`
+                : outCount === 0
+                  ? 'Asset Checkouts: nothing out'
+                  : `Asset Checkouts: ${outCount} out, all on time, open list`
+            }
+            style={overdueCheckoutCount > 0 ? { borderColor: '#ffe3e3' } : {}}
+          >
+            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{
+              color: overdueCheckoutCount > 0 ? '#fa5252' : (outCount > 0 ? '#d9480f' : '#40c057'),
+              background: overdueCheckoutCount > 0 ? '#ffe3e3' : (outCount > 0 ? '#fff4e6' : '#d3f9d8'),
+            }}>
+              {overdueCheckoutCount > 0 ? 'warning' : (outCount > 0 ? 'schedule' : 'check_circle')}
+            </span>
+            <div className="dash-metric-value" style={{
+              color: overdueCheckoutCount > 0 ? '#fa5252' : (outCount > 0 ? '#d9480f' : '#40c057'),
+            }}>
+              {checkoutLoading ? '—' : outCount}
+            </div>
+            <div className="dash-metric-label">Assets Out</div>
+            <div className="dash-metric-sub">
+              {checkoutLoading ? '' :
+                overdueCheckoutCount > 0
+                  ? `${overdueCheckoutCount} overdue`
+                  : (outCount > 0 ? 'tap to view' : 'All returned')}
+            </div>
           </button>
 
         </div>

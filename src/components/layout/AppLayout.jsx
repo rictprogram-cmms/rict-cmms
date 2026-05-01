@@ -48,6 +48,7 @@ import {
   FileSearch,
   Printer,
   Network,
+  History,
 } from 'lucide-react'
 
 const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
@@ -63,6 +64,7 @@ const navSections = [
       { name: 'Work Orders', href: '/work-orders', icon: ClipboardList, permPage: 'Work Orders', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Inventory', href: '/inventory', icon: Package, permPage: 'Inventory', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Assets', href: '/assets', icon: BoxIcon, permPage: 'Assets', roles: ['Student', 'Work Study', 'Instructor'] },
+      { name: 'Asset Checkouts', href: '/asset-checkouts', icon: History, permPage: 'Asset Checkouts', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'SOPs', href: '/sops', icon: FileText, permPage: 'SOPs', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Purchase Orders', href: '/purchase-orders', icon: ShoppingCart, permPage: 'Purchase Orders', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Network Map', href: '/network-map', icon: Network, permPage: 'Network Map', roles: ['Student', 'Work Study', 'Instructor'] },
