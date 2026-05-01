@@ -54,7 +54,13 @@
   .dash-metrics-grid { grid-template-columns: repeat(2, 1fr); }
 }
 .dash-inst-tiles {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  max-width: 720px;
+}
+@media (max-width: 480px) {
+  .dash-inst-tiles { grid-template-columns: 1fr; }
 }
 
 /* ── Metric tile (now a <button> after Pass 2) ───────────────────────────── */

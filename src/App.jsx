@@ -7,6 +7,7 @@ import LoginPage from '@/pages/LoginPage'
 import DashboardPage from '@/pages/DashboardPage'
 import WorkOrdersPage from '@/pages/WorkOrdersPage'
 import AssetsPage from '@/pages/AssetsPage'
+import AssetCheckoutsPage from '@/pages/AssetCheckoutsPage'
 import InventoryPage from '@/pages/InventoryPage'
 import LabSignupPage from '@/pages/LabSignupPage'
 import EquipmentSchedulingPage from '@/pages/EquipmentSchedulingPage'
@@ -360,6 +361,7 @@ function AppRoutes() {
             <Route path="/work-orders" element={<WorkOrdersPage />} />
             <Route path="/inventory" element={<InventoryPage />} />
             <Route path="/assets" element={<AssetsPage />} />
+            <Route path="/asset-checkouts" element={<AssetCheckoutsPage />} />
             <Route path="/sops" element={<SOPsPage />} />
             <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
             <Route path="/network-map" element={<NetworkMapPage />} />

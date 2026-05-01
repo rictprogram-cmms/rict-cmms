@@ -21,6 +21,12 @@ import { supabase } from '@/lib/supabase'
 import { generateSafeAssetId } from '@/lib/generateSafeAssetId'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import {
+  useAssetCheckoutHistory,
+  useCheckoutActions,
+  fakeUtcToDisplay,
+  daysOverdue,
+} from '@/hooks/useAssetCheckouts'
 
 function formatDate(iso) {
   if (!iso) return '-'
@@ -84,6 +90,20 @@ export default function AssetsPage() {
   const [selectedLabelIds, setSelectedLabelIds] = useState([])
 
   const { hasPerm } = usePermissions('Assets')
+  const { hasPerm: hasCheckoutPerm } = usePermissions('Asset Checkouts')
+
+  // checkout filter: '' (all) | 'available' | 'out' | 'overdue' (only meaningful for is_checkoutable assets)
+  const [checkoutFilter, setCheckoutFilter] = useState('')
+
+  // Map: asset_id -> { user_name, user_email, checked_out_at, expected_return, checkout_status, checkout_id }
+  const [openCheckoutMap, setOpenCheckoutMap] = useState({})
+
+  // Per-asset checkout dialog state (driven by viewAsset)
+  const [showCheckOutModal, setShowCheckOutModal] = useState(false)
+  const [showCheckInModal, setShowCheckInModal] = useState(false)
+  const [showCheckoutHistoryModal, setShowCheckoutHistoryModal] = useState(false)
+
+  const checkoutActions = useCheckoutActions()
 
   // SOP link counts keyed by asset_id
   const [assetSopCounts, setAssetSopCounts] = useState({})
@@ -158,6 +178,43 @@ export default function AssetsPage() {
     return () => { supabase.removeChannel(ch) }
   }, [profile?.role])
 
+  /* ── Checkout map: who currently has each asset ────────────────── */
+  const refreshOpenCheckouts = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('asset_checkouts')
+        .select('checkout_id, asset_id, user_email, user_name, checked_out_at, expected_return')
+        .is('returned_at', null)
+      const map = {}
+      const now = new Date()
+      ;(data || []).forEach(c => {
+        const overdue = c.expected_return && new Date(c.expected_return) < now
+        map[c.asset_id] = {
+          checkout_id:     c.checkout_id,
+          user_email:      c.user_email,
+          user_name:       c.user_name,
+          checked_out_at:  c.checked_out_at,
+          expected_return: c.expected_return,
+          checkout_status: overdue ? 'Overdue' : 'Out',
+        }
+      })
+      setOpenCheckoutMap(map)
+    } catch (e) {
+      console.warn('Failed to load open checkouts:', e.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!profile?.role) return
+    refreshOpenCheckouts()
+    const channelName = `assets-page-checkouts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const channel = supabase
+      .channel(channelName)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, refreshOpenCheckouts)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [profile?.role, refreshOpenCheckouts])
+
   /* ── Fetch SOPs linked to a specific asset (for view modal) ─────── */
   async function fetchSOPsForAsset(assetId) {
     setViewModalSOPs([])
@@ -197,8 +254,18 @@ export default function AssetsPage() {
     if (categoryFilter) list = list.filter(a => a.category === categoryFilter)
     if (locationFilter) list = list.filter(a => a.location === locationFilter)
     if (statusFilter) list = list.filter(a => a.status === statusFilter)
+    if (checkoutFilter) {
+      list = list.filter(a => {
+        if (!a.is_checkoutable) return false
+        const c = openCheckoutMap[a.asset_id]
+        if (checkoutFilter === 'available') return !c
+        if (checkoutFilter === 'out')       return !!c
+        if (checkoutFilter === 'overdue')   return c && c.checkout_status === 'Overdue'
+        return true
+      })
+    }
     return list
-  }, [assets, search, categoryFilter, locationFilter, statusFilter])
+  }, [assets, search, categoryFilter, locationFilter, statusFilter, checkoutFilter, openCheckoutMap])
 
   const [sortCol, setSortCol] = useState('')
   const [sortDir, setSortDir] = useState('asc')
@@ -291,6 +358,7 @@ export default function AssetsPage() {
         location: formData.location || '',
         status: formData.status || 'Active',
         serial_number: formData.serial_number || '',
+        is_checkoutable: !!formData.is_checkoutable,
         image_url: imageFileId,
         updated_at: new Date().toISOString(),
         updated_by: `${profile.first_name} ${profile.last_name?.charAt(0)}.`,
@@ -363,6 +431,7 @@ export default function AssetsPage() {
         location: duplicateSource.location || '',
         status: duplicateSource.status || 'Active',
         serial_number: duplicateSerial.trim(),
+        is_checkoutable: !!duplicateSource.is_checkoutable,
         image_url: duplicateSource.image_url || '',
         created_at: new Date().toISOString(),
         created_by: fullName,
@@ -640,6 +709,12 @@ export default function AssetsPage() {
             <option value="Active">Active</option>
             <option value="Archived">Archived</option>
           </select>
+          <select className="filter-select" value={checkoutFilter} onChange={e => setCheckoutFilter(e.target.value)} aria-label="Filter by checkout status">
+            <option value="">All Checkout</option>
+            <option value="available">Available</option>
+            <option value="out">Currently Out</option>
+            <option value="overdue">Overdue</option>
+          </select>
         </div>
         <div className="toolbar-right" style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary" onClick={printAssetList} title="Print a clean one-line-per-asset list">
@@ -722,6 +797,34 @@ export default function AssetsPage() {
                           📋 {assetSopCounts[asset.asset_id]} SOP{assetSopCounts[asset.asset_id] > 1 ? 's' : ''}
                         </button>
                       )}
+                      {asset.is_checkoutable && (() => {
+                        const c = openCheckoutMap[asset.asset_id]
+                        if (!c) {
+                          return (
+                            <span
+                              className="checkout-badge checkout-badge-available"
+                              title="Available for checkout"
+                              aria-label="Available for checkout"
+                            >
+                              <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.78rem' }}>check_circle</span>
+                              Available
+                            </span>
+                          )
+                        }
+                        const overdue = c.checkout_status === 'Overdue'
+                        return (
+                          <span
+                            className={`checkout-badge ${overdue ? 'checkout-badge-overdue' : 'checkout-badge-out'}`}
+                            title={`${overdue ? 'Overdue with' : 'Checked out to'} ${c.user_name}`}
+                            aria-label={`${overdue ? 'Overdue with' : 'Checked out to'} ${c.user_name}`}
+                          >
+                            <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.78rem' }}>
+                              {overdue ? 'warning' : 'schedule'}
+                            </span>
+                            {overdue ? 'Overdue: ' : 'Out: '}{c.user_name}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td>
                       {asset.serial_number
@@ -777,7 +880,37 @@ export default function AssetsPage() {
                     value={formData.serial_number || ''}
                     onChange={e => setFormData({ ...formData, serial_number: e.target.value })} />
                 </div>
-                <div className="form-group" />
+                <div className="form-group">
+                  {hasCheckoutPerm('manage_checkoutable') ? (
+                    <>
+                      <label className="form-label" htmlFor="is_checkoutable_toggle">
+                        Allow checkout
+                      </label>
+                      <label
+                        htmlFor="is_checkoutable_toggle"
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '10px 12px', border: '1px solid #dee2e6', borderRadius: 8,
+                          background: formData.is_checkoutable ? '#ebfbee' : 'white',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          id="is_checkoutable_toggle"
+                          type="checkbox"
+                          checked={!!formData.is_checkoutable}
+                          onChange={e => setFormData({ ...formData, is_checkoutable: e.target.checked })}
+                          style={{ width: 18, height: 18 }}
+                        />
+                        <span style={{ fontSize: '0.85rem', color: '#495057' }}>
+                          {formData.is_checkoutable
+                            ? <>Users can check this asset out</>
+                            : <>This asset is not checkout-able</>}
+                        </span>
+                      </label>
+                    </>
+                  ) : null}
+                </div>
               </div>
               <div className="form-group">
                 <label className="form-label">Description</label>
@@ -888,6 +1021,17 @@ export default function AssetsPage() {
                 <div className="detail-label">Last Updated</div>
                 <div className="detail-value">{viewAsset.updated_by} — {formatDate(viewAsset.updated_at)}</div>
               </div>
+
+              {/* ── Checkout Status (only when is_checkoutable) ─── */}
+              {viewAsset.is_checkoutable && (
+                <CheckoutStatusSection
+                  asset={viewAsset}
+                  hasCheckoutPerm={hasCheckoutPerm}
+                  onCheckOut={() => setShowCheckOutModal(true)}
+                  onCheckIn={() => setShowCheckInModal(true)}
+                  onViewHistory={() => setShowCheckoutHistoryModal(true)}
+                />
+              )}
 
               {/* ── Linked SOPs ──────────────────────────────────── */}
               <div className="linked-sops-section">
@@ -1106,6 +1250,38 @@ export default function AssetsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Check Out Modal ──────────────────────────────────────── */}
+      {showCheckOutModal && viewAsset && (
+        <CheckOutAssetModal
+          asset={viewAsset}
+          profile={profile}
+          actions={checkoutActions}
+          hasCheckoutPerm={hasCheckoutPerm}
+          onClose={() => setShowCheckOutModal(false)}
+          onDone={() => { setShowCheckOutModal(false); refreshOpenCheckouts() }}
+        />
+      )}
+
+      {/* ── Check In Modal ──────────────────────────────────────── */}
+      {showCheckInModal && viewAsset && (
+        <CheckInAssetModal
+          asset={viewAsset}
+          openCheckout={openCheckoutMap[viewAsset.asset_id] || null}
+          profile={profile}
+          actions={checkoutActions}
+          onClose={() => setShowCheckInModal(false)}
+          onDone={() => { setShowCheckInModal(false); refreshOpenCheckouts() }}
+        />
+      )}
+
+      {/* ── Checkout History Modal ─────────────────────────────── */}
+      {showCheckoutHistoryModal && viewAsset && (
+        <CheckoutHistoryModal
+          asset={viewAsset}
+          onClose={() => setShowCheckoutHistoryModal(false)}
+        />
       )}
 
       {/* ── Duplicate Asset Modal ────────────────────────────────── */}
@@ -1510,6 +1686,18 @@ export default function AssetsPage() {
         .sop-badge { display: inline-flex; align-items: center; gap: 3px; margin-top: 4px; background: #e7f5ff; color: #1971c2; font-size: 0.72rem; font-weight: 600; padding: 2px 7px; border-radius: 10px; white-space: nowrap; }
         .sop-badge-btn { border: none; cursor: pointer; transition: background 0.15s, transform 0.1s; }
         .sop-badge-btn:hover { background: #d0ebff; transform: translateY(-1px); }
+        .checkout-badge { display: inline-flex; align-items: center; gap: 3px; margin-top: 4px; margin-left: 4px; font-size: 0.72rem; font-weight: 600; padding: 2px 7px; border-radius: 10px; white-space: nowrap; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+        .checkout-badge-available { background: #d3f9d8; color: #2b8a3e; }
+        .checkout-badge-out { background: #fff4e6; color: #d9480f; }
+        .checkout-badge-overdue { background: #ffe3e3; color: #c92a2a; }
+        .checkout-section { margin-top: 16px; padding: 14px; border-radius: 10px; border: 1px solid #e9ecef; }
+        .checkout-section.available { background: #ebfbee; border-color: #c3fae8; }
+        .checkout-section.out { background: #fff4e6; border-color: #ffe8cc; }
+        .checkout-section.overdue { background: #fff5f5; border-color: #ffc9c9; }
+        .checkout-section-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 0.95rem; font-weight: 600; }
+        .checkout-section-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px 16px; font-size: 0.85rem; }
+        .checkout-section-rows .lbl { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #495057; margin-bottom: 2px; }
+        .checkout-action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
         .linked-sops-section { margin-top: 20px; border-top: 1px solid #e9ecef; padding-top: 16px; }
         .linked-sops-header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 0.95rem; }
         .linked-sops-list { display: flex; flex-direction: column; gap: 8px; }
@@ -1525,3 +1713,1001 @@ export default function AssetsPage() {
     </div>
   )
 }
+
+/* ════════════════════════════════════════════════════════════════════════ */
+/*  Asset Checkout — Detail-modal sub-components                            */
+/*  (Defined at module level to keep the main component clean.)             */
+/* ════════════════════════════════════════════════════════════════════════ */
+
+function CheckoutStatusSection({ asset, hasCheckoutPerm, onCheckOut, onCheckIn, onViewHistory }) {
+  const { openCheckout, loading } = useAssetCheckoutHistory(asset.asset_id)
+
+  if (loading) {
+    return (
+      <div className="checkout-section" role="status" aria-live="polite">
+        Loading checkout status…
+      </div>
+    )
+  }
+
+  // Available
+  if (!openCheckout) {
+    return (
+      <div className="checkout-section available">
+        <div className="checkout-section-header" style={{ color: '#2b8a3e' }}>
+          <span className="material-icons" aria-hidden="true">check_circle</span>
+          Available for checkout
+        </div>
+        <p style={{ fontSize: '0.85rem', color: '#495057', margin: '0 0 12px' }}>
+          This asset is currently available. Anyone with checkout permission can take it.
+        </p>
+        <div className="checkout-action-row">
+          {hasCheckoutPerm('checkout_self') && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onCheckOut}
+              aria-label={`Check out ${asset.name}`}
+            >
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>logout</span>
+              Check Out
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onViewHistory}
+            aria-label={`View checkout history for ${asset.name}`}
+          >
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>history</span>
+            History
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Out / overdue
+  const overdue = openCheckout.expected_return && new Date(openCheckout.expected_return) < new Date()
+  const sectionClass = overdue ? 'checkout-section overdue' : 'checkout-section out'
+  const sectionColor = overdue ? '#c92a2a' : '#d9480f'
+
+  const out = fakeUtcToDisplay(openCheckout.checked_out_at)
+  const due = fakeUtcToDisplay(openCheckout.expected_return)
+
+  return (
+    <div className={sectionClass}>
+      <div className="checkout-section-header" style={{ color: sectionColor }}>
+        <span className="material-icons" aria-hidden="true">{overdue ? 'warning' : 'schedule'}</span>
+        {overdue ? 'Overdue checkout' : 'Currently checked out'}
+      </div>
+      <div className="checkout-section-rows">
+        <div>
+          <div className="lbl">User</div>
+          <div>{openCheckout.user_name}</div>
+          <div style={{ fontSize: '0.75rem', color: '#868e96' }}>{openCheckout.user_email}</div>
+        </div>
+        <div>
+          <div className="lbl">Out since</div>
+          <div>{out ? `${out.date}` : '—'}</div>
+          {out && <div style={{ fontSize: '0.75rem', color: '#868e96' }}>{out.time}</div>}
+        </div>
+        <div>
+          <div className="lbl">{overdue ? 'Was due' : 'Due back'}</div>
+          <div>{due ? due.date : 'Not specified'}</div>
+          {overdue && (
+            <div style={{ fontSize: '0.75rem', color: '#c92a2a', fontWeight: 600 }}>
+              {Math.max(0, daysOverdue(openCheckout.expected_return))} day{Math.max(0, daysOverdue(openCheckout.expected_return)) !== 1 ? 's' : ''} late
+            </div>
+          )}
+        </div>
+        {openCheckout.checkout_condition && (
+          <div>
+            <div className="lbl">Out condition</div>
+            <div>{openCheckout.checkout_condition}</div>
+          </div>
+        )}
+      </div>
+      {openCheckout.checkout_notes && (
+        <div style={{ marginTop: 10, fontSize: '0.85rem', color: '#495057' }}>
+          <span style={{ fontWeight: 600 }}>Notes:</span> {openCheckout.checkout_notes}
+        </div>
+      )}
+      <div className="checkout-action-row">
+        {hasCheckoutPerm('checkin_assets') && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={onCheckIn}
+            style={{ background: '#2b8a3e' }}
+            aria-label={`Check in ${asset.name}`}
+          >
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>login</span>
+            Check In
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onViewHistory}
+          aria-label={`View checkout history for ${asset.name}`}
+        >
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>history</span>
+          Full History
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose, onDone }) {
+  const meEmail = profile?.email || ''
+  const meName  = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : ''
+  const meUserId = profile?.user_id || null
+
+  // Mode: self vs other (only instructors with checkout_others see the picker)
+  const canCheckoutOthers = hasCheckoutPerm('checkout_others')
+  const [mode, setMode] = useState('self') // 'self' | 'other'
+
+  // Other-user picker
+  const [allProfiles, setAllProfiles] = useState([])
+  const [selectedEmail, setSelectedEmail] = useState('')
+  const [userSearch, setUserSearch] = useState('')
+
+  // Form
+  const [dueDateStr, setDueDateStr] = useState('') // yyyy-mm-dd
+  const [condition, setCondition] = useState('Good')
+  const [notes, setNotes] = useState('')
+  const [acknowledgmentName, setAcknowledgmentName] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Hand-off mode: instructor passes device to student to sign
+  const [handoffMode, setHandoffMode] = useState(false)
+  const [studentSignedAt, setStudentSignedAt] = useState(null) // ISO string when student confirmed
+  const ackInputRef = useRef(null)
+
+  // Auto-focus the ack input when entering hand-off mode
+  useEffect(() => {
+    if (handoffMode && ackInputRef.current) {
+      setTimeout(() => ackInputRef.current?.focus(), 100)
+    }
+  }, [handoffMode])
+
+  // If user changes after signing, the signature is no longer valid
+  useEffect(() => {
+    if (studentSignedAt) {
+      setStudentSignedAt(null)
+      setAcknowledgmentName('')
+    }
+  }, [selectedEmail, mode]) // eslint-disable-line
+
+  // Load profiles when in 'other' mode
+  useEffect(() => {
+    if (mode !== 'other') return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, user_id, email, first_name, last_name, role, status')
+        .eq('status', 'Active')
+        .order('first_name', { ascending: true })
+      if (!cancelled) setAllProfiles((data || []).filter(p => p.email && p.email !== 'rictprogram@gmail.com'))
+    })()
+    return () => { cancelled = true }
+  }, [mode])
+
+  // Quick presets for due date
+  const setPreset = (days) => {
+    const d = new Date()
+    d.setDate(d.getDate() + days)
+    setDueDateStr(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+  }
+
+  // Filter profiles by search
+  const filteredProfiles = useMemo(() => {
+    if (!userSearch) return allProfiles
+    const s = userSearch.toLowerCase()
+    return allProfiles.filter(p =>
+      (p.first_name || '').toLowerCase().includes(s) ||
+      (p.last_name || '').toLowerCase().includes(s) ||
+      (p.email || '').toLowerCase().includes(s)
+    )
+  }, [allProfiles, userSearch])
+
+  // Resolve target user
+  const targetUser = (() => {
+    if (mode === 'self') {
+      return { email: meEmail, name: meName, user_id: meUserId }
+    }
+    const p = allProfiles.find(p => p.email === selectedEmail)
+    if (!p) return null
+    return {
+      email: p.email,
+      name: `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
+      user_id: p.user_id || null,
+    }
+  })()
+
+  const expectedName = targetUser?.name || ''
+  const ackMatches = !!acknowledgmentName && expectedName &&
+    acknowledgmentName.trim().toLowerCase() === expectedName.toLowerCase()
+
+  // Submit gate:
+  //  - Self-checkout: just needs ack to match
+  //  - Other-user checkout: requires student to have confirmed via hand-off (studentSignedAt set)
+  //    — instructor cannot submit unless the student has signed
+  const canSubmit = !!targetUser && !submitting && (
+    mode === 'self' ? ackMatches : !!studentSignedAt
+  )
+
+  const handleSubmit = async () => {
+    if (!targetUser) return
+    setSubmitting(true)
+    try {
+      const expectedReturn = dueDateStr
+        ? (() => {
+            const [y, m, d] = dueDateStr.split('-').map(Number)
+            return new Date(y, m - 1, d, 23, 59, 0)
+          })()
+        : null
+      await actions.checkOut({
+        asset: { asset_id: asset.asset_id, name: asset.name, serial_number: asset.serial_number },
+        user: targetUser,
+        expectedReturn,
+        condition,
+        notes,
+        acknowledgmentName: acknowledgmentName.trim(),
+      })
+      onDone?.()
+    } catch (e) {
+      // hook displays toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div
+      className="modal-overlay visible"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="co-modal-title"
+      onClick={e => e.target === e.currentTarget && !submitting && !handoffMode && onClose()}
+      onKeyDown={e => {
+        if (e.key !== 'Escape') return
+        if (submitting) return
+        if (handoffMode) { setHandoffMode(false); setAcknowledgmentName(''); return }
+        onClose()
+      }}
+    >
+      <div className="modal modal-lg">
+        <div className="modal-header">
+          <h3 id="co-modal-title">
+            <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>logout</span>
+            Check Out — {asset.name}
+          </h3>
+          <button
+            className="modal-close"
+            onClick={() => {
+              if (submitting) return
+              if (handoffMode) { setHandoffMode(false); setAcknowledgmentName(''); return }
+              onClose()
+            }}
+            aria-label={handoffMode ? 'Cancel hand-off' : 'Close check-out form'}
+          >&times;</button>
+        </div>
+        <div className="modal-body">
+          {/* Asset summary */}
+          <div style={{ background: '#f8f9fa', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: '0.85rem' }}>
+            <div><span style={{ color: '#868e96' }}>Asset:</span> <strong>{asset.name}</strong> <span style={{ color: '#868e96', fontFamily: 'monospace' }}>({asset.asset_id})</span></div>
+            {asset.serial_number && (
+              <div><span style={{ color: '#868e96' }}>Serial #:</span> <span style={{ fontFamily: 'monospace' }}>{asset.serial_number}</span></div>
+            )}
+          </div>
+
+          {/* Form fields — visually locked during hand-off so the student
+              focuses on signing and instructor can't accidentally change details */}
+          <div
+            aria-hidden={handoffMode}
+            style={{
+              opacity: handoffMode ? 0.4 : 1,
+              pointerEvents: handoffMode ? 'none' : 'auto',
+              transition: 'opacity 0.2s',
+            }}
+          >
+
+          {/* Mode selector — only show if user can checkout others */}
+          {canCheckoutOthers && (
+            <fieldset className="form-group" style={{ border: 'none', padding: 0, margin: '0 0 16px' }}>
+              <legend className="form-label" style={{ padding: 0 }}>Checking out for</legend>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[
+                  { id: 'self', label: 'Myself' },
+                  { id: 'other', label: 'Another user' },
+                ].map(opt => (
+                  <label key={opt.id}
+                    style={{
+                      flex: 1, padding: '10px 12px', border: `2px solid ${mode === opt.id ? '#228be6' : '#dee2e6'}`,
+                      borderRadius: 8, background: mode === opt.id ? '#e7f5ff' : 'white',
+                      cursor: 'pointer', fontSize: '0.85rem',
+                      color: mode === opt.id ? '#1971c2' : '#495057', fontWeight: 500,
+                      textAlign: 'center',
+                    }}>
+                    <input
+                      type="radio" name="co-mode" className="sr-only"
+                      checked={mode === opt.id}
+                      onChange={() => { setMode(opt.id); setAcknowledgmentName('') }}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {/* Other-user picker */}
+          {mode === 'other' && (
+            <div className="form-group">
+              <label className="form-label" htmlFor="co-user-search">Select user *</label>
+              {selectedEmail && targetUser ? (
+                /* Collapsed selected state — no ambiguity */
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '12px 14px',
+                    background: '#ebfbee',
+                    border: '2px solid #40c057',
+                    borderRadius: 10,
+                  }}
+                >
+                  <span
+                    className="material-icons"
+                    aria-hidden="true"
+                    style={{ color: '#2b8a3e', fontSize: '1.4rem' }}
+                  >
+                    check_circle
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#2b8a3e', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Selected
+                    </div>
+                    <div style={{ fontWeight: 600, color: '#1a1a2e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {targetUser.name}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#495057', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {targetUser.email}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedEmail(''); setUserSearch('') }}
+                    style={{
+                      padding: '8px 12px', borderRadius: 8,
+                      border: '1px solid #40c057', background: 'white',
+                      color: '#2b8a3e', fontSize: '0.8rem', fontWeight: 600,
+                      cursor: 'pointer', flexShrink: 0,
+                    }}
+                    aria-label={`Change selected user (currently ${targetUser.name})`}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    id="co-user-search"
+                    type="text"
+                    className="form-input"
+                    placeholder="Search by name or email…"
+                    value={userSearch}
+                    onChange={e => setUserSearch(e.target.value)}
+                    style={{ marginBottom: 8 }}
+                  />
+                  <div
+                    role="listbox"
+                    aria-label="User list"
+                    style={{
+                      maxHeight: 180, overflowY: 'auto',
+                      border: '1px solid #dee2e6', borderRadius: 8, background: 'white',
+                    }}
+                  >
+                    {filteredProfiles.length === 0 ? (
+                      <div style={{ padding: 12, fontSize: '0.85rem', color: '#868e96', textAlign: 'center' }}>No users match</div>
+                    ) : filteredProfiles.map(p => {
+                      const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email
+                      const sel = selectedEmail === p.email
+                      return (
+                        <button
+                          key={p.email}
+                          type="button"
+                          role="option"
+                          aria-selected={sel}
+                          onClick={() => setSelectedEmail(p.email)}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '8px 12px', width: '100%', textAlign: 'left',
+                            background: sel ? '#e7f5ff' : 'white', border: 'none',
+                            borderBottom: '1px solid #f1f3f5', cursor: 'pointer', fontSize: '0.85rem',
+                          }}
+                        >
+                          <span>
+                            <span style={{ fontWeight: 600 }}>{fullName}</span>
+                            <span style={{ color: '#868e96', marginLeft: 8 }}>{p.email}</span>
+                          </span>
+                          <span style={{ color: '#868e96', fontSize: '0.75rem' }}>{p.role}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Due date */}
+          <div className="form-group">
+            <label className="form-label" htmlFor="co-due">Expected return date <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span></label>
+            <input
+              id="co-due"
+              type="date"
+              className="form-input"
+              value={dueDateStr}
+              onChange={e => setDueDateStr(e.target.value)}
+              style={{ maxWidth: 240 }}
+            />
+            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              {[
+                { d: 1, label: 'Tomorrow' },
+                { d: 7, label: '+1 week' },
+                { d: 14, label: '+2 weeks' },
+                { d: 30, label: '+30 days' },
+              ].map(opt => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => setPreset(opt.d)}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.75rem' }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              {dueDateStr && (
+                <button
+                  type="button"
+                  onClick={() => setDueDateStr('')}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.75rem' }}
+                  aria-label="Clear due date"
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem' }}>close</span>
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Condition */}
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label" htmlFor="co-condition">Condition at checkout</label>
+              <select
+                id="co-condition"
+                className="form-input"
+                value={condition}
+                onChange={e => setCondition(e.target.value)}
+              >
+                <option>Good</option>
+                <option>Fair</option>
+                <option>Poor</option>
+              </select>
+            </div>
+            <div className="form-group" />
+          </div>
+
+          {/* Notes */}
+          <div className="form-group">
+            <label className="form-label" htmlFor="co-notes">Notes <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span></label>
+            <textarea
+              id="co-notes"
+              rows={2}
+              className="form-input"
+              placeholder="e.g. Taking off-site for senior project demo"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+            />
+          </div>
+
+          </div>{/* end form-fields wrapper */}
+
+          {/* Acknowledgment — three states: signed / handoff active / default */}
+          {studentSignedAt ? (
+            // STATE 3: Student has signed — locked confirmation
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                border: '2px solid #40c057',
+                borderRadius: 8,
+                padding: 14,
+                background: '#ebfbee',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#2b8a3e', marginBottom: 6 }}>
+                <span className="material-icons" aria-hidden="true">verified</span>
+                Signed by {acknowledgmentName}
+              </div>
+              <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: '#2f9e44' }}>
+                Acknowledgment captured {new Date(studentSignedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.
+                You can now confirm the check out.
+              </p>
+              <button
+                type="button"
+                onClick={() => { setStudentSignedAt(null); setAcknowledgmentName('') }}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  color: '#2f9e44', fontSize: '0.78rem', textDecoration: 'underline',
+                  cursor: 'pointer',
+                }}
+              >
+                Clear signature and re-do
+              </button>
+            </div>
+          ) : handoffMode ? (
+            // STATE 2: Hand-off active — student-facing UI
+            <fieldset
+              style={{
+                border: '3px solid #228be6',
+                borderRadius: 10,
+                padding: 18,
+                background: '#e7f5ff',
+                margin: 0,
+                position: 'relative',
+              }}
+            >
+              <legend
+                style={{
+                  fontWeight: 700, color: '#1971c2', fontSize: '0.95rem',
+                  padding: '2px 10px', background: 'white', borderRadius: 6,
+                  border: '2px solid #228be6',
+                }}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.05rem', verticalAlign: 'middle', marginRight: 4 }}>phone_iphone</span>
+                {expectedName}'s turn
+              </legend>
+              <p style={{ fontSize: '0.95rem', color: '#1971c2', margin: '4px 0 12px', fontWeight: 500 }}>
+                Hand the device to <strong>{expectedName}</strong>. Please read and type your full name to acknowledge:
+              </p>
+              <blockquote
+                style={{
+                  margin: '0 0 14px', padding: '12px 16px', background: 'white',
+                  borderRadius: 8, fontSize: '0.95rem', color: '#1a1a2e',
+                  fontStyle: 'italic', borderLeft: '4px solid #228be6',
+                  lineHeight: 1.5,
+                }}
+              >
+                "I, <strong>{expectedName}</strong>, accept responsibility for asset {asset.asset_id} ({asset.name}{asset.serial_number ? `, SN ${asset.serial_number}` : ''}) until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
+              </blockquote>
+              <label className="form-label" htmlFor="co-ack" style={{ color: '#1971c2', fontSize: '0.95rem' }}>
+                Type your full name *
+              </label>
+              <input
+                ref={ackInputRef}
+                id="co-ack"
+                type="text"
+                className="form-input"
+                placeholder={expectedName}
+                value={acknowledgmentName}
+                onChange={e => setAcknowledgmentName(e.target.value)}
+                aria-describedby="co-ack-hint"
+                style={{
+                  fontFamily: 'cursive', fontSize: '1.15rem',
+                  padding: '14px 16px',
+                  borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
+                  borderWidth: 2,
+                }}
+              />
+              <div id="co-ack-hint" style={{ fontSize: '0.85rem', color: '#1971c2', marginTop: 8, fontWeight: 500 }}>
+                {ackMatches ? '✓ Looks good. Tap "I confirm" below.'
+                  : acknowledgmentName ? '⚠ Doesn\'t match — must be exactly "' + expectedName + '"'
+                  : `Type "${expectedName}" exactly.`}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button
+                  type="button"
+                  onClick={() => { setHandoffMode(false); setAcknowledgmentName('') }}
+                  style={{
+                    flex: 1, padding: '12px', borderRadius: 10,
+                    border: '1px solid #dee2e6', background: 'white',
+                    color: '#495057', fontWeight: 500, fontSize: '0.9rem',
+                    cursor: 'pointer',
+                  }}
+                  aria-label="Cancel hand-off and return to instructor"
+                >
+                  Cancel hand-off
+                </button>
+                <button
+                  type="button"
+                  disabled={!ackMatches}
+                  onClick={() => {
+                    setStudentSignedAt(new Date().toISOString())
+                    setHandoffMode(false)
+                  }}
+                  style={{
+                    flex: 2, padding: '12px', borderRadius: 10,
+                    border: 'none',
+                    background: ackMatches ? '#2b8a3e' : '#adb5bd',
+                    color: 'white', fontWeight: 600, fontSize: '0.95rem',
+                    cursor: ackMatches ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  }}
+                  aria-label="Confirm signature and hand back to instructor"
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>check</span>
+                  I confirm — hand back
+                </button>
+              </div>
+            </fieldset>
+          ) : (
+            // STATE 1: Default — instructor view
+            <fieldset
+              style={{
+                border: '2px solid #fbbf24',
+                borderRadius: 8,
+                padding: 16,
+                background: '#fffbeb',
+                margin: 0,
+              }}
+            >
+              <legend
+                style={{
+                  fontWeight: 700, color: '#92400e', fontSize: '0.9rem',
+                  padding: '0 8px',
+                }}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem', verticalAlign: 'middle', marginRight: 4 }}>edit_note</span>
+                Acknowledgment
+              </legend>
+
+              {mode === 'other' && targetUser ? (
+                <>
+                  <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
+                    To complete this checkout, <strong>{expectedName}</strong> must sign by typing their full name.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setHandoffMode(true)}
+                    style={{
+                      width: '100%', padding: '14px', borderRadius: 10,
+                      border: 'none', background: '#228be6', color: 'white',
+                      fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    }}
+                    aria-label={`Hand the device to ${expectedName} to sign`}
+                  >
+                    <span className="material-icons" aria-hidden="true">phone_iphone</span>
+                    Hand to {expectedName} to sign
+                  </button>
+                  <p style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 8, marginBottom: 0 }}>
+                    Tap to lock the form so {expectedName} can type their name. They'll hand it back when done.
+                  </p>
+                </>
+              ) : mode === 'self' ? (
+                <>
+                  <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
+                    By typing your full name below, I agree:
+                  </p>
+                  <blockquote
+                    style={{
+                      margin: '0 0 12px', padding: '10px 14px', background: 'white',
+                      borderRadius: 6, fontSize: '0.85rem', color: '#495057',
+                      fontStyle: 'italic', borderLeft: '3px solid #fbbf24',
+                    }}
+                  >
+                    "I, <strong>{expectedName || '[user]'}</strong>, accept responsibility for asset {asset.asset_id} ({asset.name}{asset.serial_number ? `, SN ${asset.serial_number}` : ''}) until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
+                  </blockquote>
+                  <label className="form-label" htmlFor="co-ack" style={{ color: '#92400e' }}>
+                    Type full name to acknowledge *
+                  </label>
+                  <input
+                    id="co-ack"
+                    type="text"
+                    className="form-input"
+                    placeholder={expectedName || ''}
+                    value={acknowledgmentName}
+                    onChange={e => setAcknowledgmentName(e.target.value)}
+                    aria-describedby="co-ack-hint"
+                    style={{
+                      fontFamily: 'cursive', fontSize: '1rem',
+                      borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
+                    }}
+                  />
+                  <div id="co-ack-hint" style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 6 }}>
+                    {ackMatches ? '✓ Acknowledgment matches expected name.'
+                      : acknowledgmentName ? '⚠ Doesn\'t match — must be exact.'
+                      : `Type "${expectedName}" to confirm.`}
+                  </div>
+                </>
+              ) : (
+                <p style={{ fontSize: '0.85rem', color: '#92400e', margin: 0 }}>
+                  Select a user above to enable acknowledgment.
+                </p>
+              )}
+            </fieldset>
+          )}
+        </div>
+        {!handoffMode && (
+          <div className="modal-footer">
+            <button className="btn btn-secondary" onClick={() => !submitting && onClose()} disabled={submitting}>Cancel</button>
+            <button
+              className="btn btn-primary"
+              disabled={!canSubmit}
+              onClick={handleSubmit}
+              title={
+                !canSubmit && mode === 'other' && targetUser && !studentSignedAt
+                  ? `${expectedName} must sign before submitting`
+                  : undefined
+              }
+            >
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>check</span>
+              {submitting ? 'Checking out…' : 'Confirm Check Out'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onDone }) {
+  const [condition, setCondition] = useState('Good')
+  const [notes, setNotes] = useState('')
+  const [needsRepair, setNeedsRepair] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  // Fetch the actual checkout row if we only got the summary from openCheckoutMap
+  const [resolvedCheckoutId, setResolvedCheckoutId] = useState(openCheckout?.checkout_id || null)
+
+  useEffect(() => {
+    if (resolvedCheckoutId) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('asset_checkouts')
+        .select('checkout_id')
+        .eq('asset_id', asset.asset_id)
+        .is('returned_at', null)
+        .limit(1)
+        .maybeSingle()
+      if (!cancelled && data?.checkout_id) setResolvedCheckoutId(data.checkout_id)
+    })()
+    return () => { cancelled = true }
+  }, [resolvedCheckoutId, asset.asset_id])
+
+  // If user marks needs repair, default condition to "Damaged"
+  useEffect(() => {
+    if (needsRepair && condition === 'Good') setCondition('Damaged')
+  }, [needsRepair]) // eslint-disable-line
+
+  const handleSubmit = async () => {
+    if (!resolvedCheckoutId) {
+      alert('Could not find an open checkout to close.')
+      return
+    }
+    setSubmitting(true)
+    try {
+      let relatedWoId = null
+      if (needsRepair) {
+        try {
+          let woId = null
+          try {
+            const { data } = await supabase.rpc('get_next_id', { p_type: 'work_order' })
+            if (data) woId = data
+          } catch {}
+          if (!woId) woId = 'WO' + String(Date.now()).slice(-6)
+
+          const fullName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : 'Unknown'
+          const { error: woErr } = await supabase.from('work_orders').insert({
+            wo_id: woId,
+            description: `Asset returned damaged — needs repair: ${asset.name}`,
+            priority: 'Medium',
+            status: 'Open',
+            asset_id: asset.asset_id,
+            asset_name: asset.name,
+            asset: asset.name,
+            created_at: new Date().toISOString(),
+            created_by: fullName,
+            is_pm: false,
+          })
+          if (!woErr) relatedWoId = woId
+        } catch (e) {
+          console.warn('Auto-WO failed:', e.message)
+        }
+      }
+
+      await actions.checkIn({
+        checkoutId: resolvedCheckoutId,
+        condition,
+        notes,
+        needsRepair,
+        relatedWoId,
+      })
+      onDone?.()
+    } catch (e) {
+      // toast handled in hook
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const out = openCheckout ? fakeUtcToDisplay(openCheckout.checked_out_at) : null
+
+  return (
+    <div
+      className="modal-overlay visible"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ci-modal-title"
+      onClick={e => e.target === e.currentTarget && !submitting && onClose()}
+      onKeyDown={e => e.key === 'Escape' && !submitting && onClose()}
+    >
+      <div className="modal modal-lg">
+        <div className="modal-header">
+          <h3 id="ci-modal-title">
+            <span className="material-icons" aria-hidden="true" style={{ color: '#2b8a3e' }}>login</span>
+            Check In — {asset.name}
+          </h3>
+          <button className="modal-close" onClick={() => !submitting && onClose()} aria-label="Close check-in form">&times;</button>
+        </div>
+        <div className="modal-body">
+          <div style={{ background: '#f8f9fa', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: '0.85rem' }}>
+            <div><span style={{ color: '#868e96' }}>Asset:</span> <strong>{asset.name}</strong> <span style={{ color: '#868e96', fontFamily: 'monospace' }}>({asset.asset_id})</span></div>
+            {openCheckout?.user_name && <div><span style={{ color: '#868e96' }}>User:</span> {openCheckout.user_name}</div>}
+            {out && <div><span style={{ color: '#868e96' }}>Out since:</span> {out.date} {out.time}</div>}
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label className="form-label" htmlFor="ci-asset-condition">Return condition</label>
+              <select
+                id="ci-asset-condition"
+                className="form-input"
+                value={condition}
+                onChange={e => setCondition(e.target.value)}
+              >
+                <option>Good</option>
+                <option>Fair</option>
+                <option>Poor</option>
+                <option>Damaged</option>
+              </select>
+            </div>
+            <div className="form-group" />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label" htmlFor="ci-asset-notes">
+              Return notes <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <textarea
+              id="ci-asset-notes"
+              rows={3}
+              className="form-input"
+              placeholder="e.g. Came back missing power cable"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+            />
+          </div>
+
+          <label
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 10,
+              padding: '10px 12px', border: `1px solid ${needsRepair ? '#ffa94d' : '#dee2e6'}`,
+              borderRadius: 8, background: needsRepair ? '#fff4e6' : 'white',
+              cursor: 'pointer', fontSize: '0.9rem',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={needsRepair}
+              onChange={e => setNeedsRepair(e.target.checked)}
+              style={{ marginTop: 2, width: 18, height: 18 }}
+            />
+            <span>
+              <strong style={{ color: needsRepair ? '#d9480f' : '#495057' }}>Needs repair</strong>
+              <span style={{ display: 'block', fontSize: '0.78rem', color: '#868e96', marginTop: 2 }}>
+                Auto-create a work order and link it to this asset.
+              </span>
+            </span>
+          </label>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={() => !submitting && onClose()} disabled={submitting}>Cancel</button>
+          <button
+            className="btn btn-primary"
+            style={{ background: '#2b8a3e' }}
+            disabled={submitting || !resolvedCheckoutId}
+            onClick={handleSubmit}
+          >
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>check</span>
+            {submitting ? 'Saving…' : 'Confirm Return'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CheckoutHistoryModal({ asset, onClose }) {
+  const { history, loading } = useAssetCheckoutHistory(asset.asset_id)
+
+  return (
+    <div
+      className="modal-overlay visible"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="hist-modal-title"
+      onClick={e => e.target === e.currentTarget && onClose()}
+      onKeyDown={e => e.key === 'Escape' && onClose()}
+    >
+      <div className="modal modal-lg">
+        <div className="modal-header">
+          <h3 id="hist-modal-title">
+            <span className="material-icons" aria-hidden="true">history</span>
+            Checkout History — {asset.name}
+          </h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close history">&times;</button>
+        </div>
+        <div className="modal-body">
+          {loading ? (
+            <p style={{ textAlign: 'center', color: '#868e96', padding: 30 }}>Loading…</p>
+          ) : history.length === 0 ? (
+            <p style={{ textAlign: 'center', color: '#868e96', padding: 30 }}>No checkout history yet.</p>
+          ) : (
+            <table className="data-table" aria-label={`${history.length} checkout records for ${asset.name}`}>
+              <caption className="sr-only">{history.length} checkout records.</caption>
+              <thead>
+                <tr>
+                  <th scope="col">User</th>
+                  <th scope="col">Out</th>
+                  <th scope="col">Due</th>
+                  <th scope="col">Returned</th>
+                  <th scope="col">Cond.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map(c => {
+                  const out = fakeUtcToDisplay(c.checked_out_at)
+                  const due = fakeUtcToDisplay(c.expected_return)
+                  const ret = fakeUtcToDisplay(c.returned_at)
+                  const isOpen = !c.returned_at
+                  return (
+                    <tr key={c.checkout_id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{c.user_name}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#868e96' }}>{c.user_email}</div>
+                      </td>
+                      <td>{out ? `${out.date}` : '—'}</td>
+                      <td>{due ? due.date : '—'}</td>
+                      <td>
+                        {isOpen
+                          ? <span style={{ color: '#d9480f', fontWeight: 600 }}>Currently out</span>
+                          : (ret ? `${ret.date}` : '—')}
+                      </td>
+                      <td style={{ fontSize: '0.8rem' }}>
+                        {c.return_condition || c.checkout_condition || '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+

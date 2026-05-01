@@ -26,6 +26,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useCheckoutActions, fakeUtcToDisplay, daysOverdue } from '@/hooks/useAssetCheckouts'
 
 export default function AssetScanPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -58,6 +59,14 @@ export default function AssetScanPage() {
   const userShort = profile ? `${profile.first_name || ''} ${profile.last_name?.charAt(0) || ''}.`.trim() : 'Unknown'
 
   const { hasPerm } = usePermissions('Assets')
+  const { hasPerm: hasCheckoutPerm } = usePermissions('Asset Checkouts')
+
+  // Open checkout for the currently loaded asset (null if available / not checkoutable)
+  const [openCheckout, setOpenCheckout] = useState(null)
+  const [checkoutLoading, setCheckoutLoading] = useState(false)
+  const [showCheckOut, setShowCheckOut] = useState(false)
+  const [showCheckIn, setShowCheckIn] = useState(false)
+  const checkoutActions = useCheckoutActions()
 
   /* ── Load Material Icons Font ────────────────────────────────────── */
   useEffect(() => {
@@ -115,12 +124,34 @@ export default function AssetScanPage() {
         setAsset(data)
         loadWorkOrders(targetId)
         loadDocuments(targetId)
+        loadOpenCheckout(targetId)
       }
     } catch {
       setError({ title: 'Error', message: 'Failed to load asset data.' })
     }
     setLoading(false)
   }, [assetId])
+
+  /* ── Open Checkout ───────────────────────────────────────────────── */
+  const loadOpenCheckout = useCallback(async (id) => {
+    if (!id) return
+    setCheckoutLoading(true)
+    try {
+      const { data } = await supabase
+        .from('asset_checkouts')
+        .select('*')
+        .eq('asset_id', id)
+        .is('returned_at', null)
+        .limit(1)
+        .maybeSingle()
+      setOpenCheckout(data || null)
+    } catch (e) {
+      console.warn('loadOpenCheckout error:', e.message)
+      setOpenCheckout(null)
+    } finally {
+      setCheckoutLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (assetId) loadAsset()
@@ -515,6 +546,30 @@ export default function AssetScanPage() {
         </div>
       )}
 
+      {/* ── Mobile Check Out Modal ─────────────────────────────────── */}
+      {showCheckOut && asset && (
+        <ScanCheckOutModal
+          asset={asset}
+          profile={profile}
+          actions={checkoutActions}
+          hasCheckoutPerm={hasCheckoutPerm}
+          onClose={() => setShowCheckOut(false)}
+          onDone={() => { setShowCheckOut(false); loadOpenCheckout(asset.asset_id) }}
+        />
+      )}
+
+      {/* ── Mobile Check In Modal ──────────────────────────────────── */}
+      {showCheckIn && asset && openCheckout && (
+        <ScanCheckInModal
+          asset={asset}
+          openCheckout={openCheckout}
+          profile={profile}
+          actions={checkoutActions}
+          onClose={() => setShowCheckIn(false)}
+          onDone={() => { setShowCheckIn(false); loadOpenCheckout(asset.asset_id) }}
+        />
+      )}
+
       {/* ── Content ────────────────────────────────────────────────── */}
       <div style={{ padding: '16px 16px 100px', maxWidth: 500, margin: '0 auto' }}>
 
@@ -661,6 +716,95 @@ export default function AssetScanPage() {
                     padding: '2px 10px', borderRadius: 12, fontSize: '0.8rem', fontWeight: 700
                   }}>{docCount}</span>
                 </button>
+
+                {/* ── Checkout Status Banner & Action ──────────────────── */}
+                {asset.is_checkoutable && (() => {
+                  const overdue = openCheckout?.expected_return && new Date(openCheckout.expected_return) < new Date()
+                  const out = openCheckout ? fakeUtcToDisplay(openCheckout.checked_out_at) : null
+                  const due = openCheckout ? fakeUtcToDisplay(openCheckout.expected_return) : null
+
+                  if (checkoutLoading) {
+                    return (
+                      <div role="status" aria-live="polite" style={{
+                        padding: 14, borderRadius: 14, marginTop: 6,
+                        background: '#f1f3f5', color: '#495057', fontSize: '0.85rem', textAlign: 'center',
+                      }}>
+                        Loading checkout status…
+                      </div>
+                    )
+                  }
+
+                  if (!openCheckout) {
+                    return (
+                      <div style={{
+                        padding: 14, borderRadius: 14, marginTop: 6,
+                        background: '#ebfbee', border: '1px solid #c3fae8',
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.95rem', fontWeight: 600, color: '#2b8a3e', marginBottom: 4 }}>
+                          <span className="material-icons" aria-hidden="true">check_circle</span>
+                          Available for checkout
+                        </div>
+                        {hasCheckoutPerm('checkout_self') && (
+                          <button
+                            onClick={() => setShowCheckOut(true)}
+                            aria-label={`Check out ${asset.name}`}
+                            style={{
+                              width: '100%', padding: '14px 16px', borderRadius: 12, fontSize: '0.95rem',
+                              fontWeight: 600, cursor: 'pointer', border: 'none',
+                              background: '#2b8a3e', color: 'white',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                              marginTop: 8,
+                              WebkitAppearance: 'none', touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent',
+                            }}
+                          >
+                            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>logout</span>
+                            Check Out
+                          </button>
+                        )}
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div style={{
+                      padding: 14, borderRadius: 14, marginTop: 6,
+                      background: overdue ? '#fff5f5' : '#fff4e6',
+                      border: `1px solid ${overdue ? '#ffc9c9' : '#ffe8cc'}`,
+                    }}>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 8,
+                        fontSize: '0.95rem', fontWeight: 600,
+                        color: overdue ? '#c92a2a' : '#d9480f', marginBottom: 8,
+                      }}>
+                        <span className="material-icons" aria-hidden="true">{overdue ? 'warning' : 'schedule'}</span>
+                        {overdue ? 'Overdue' : 'Currently checked out'}
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: '#495057', lineHeight: 1.5 }}>
+                        <div><strong>{openCheckout.user_name}</strong></div>
+                        <div style={{ color: '#868e96', fontSize: '0.78rem' }}>{openCheckout.user_email}</div>
+                        {out && <div style={{ marginTop: 4 }}>Out since {out.date}</div>}
+                        {due && <div>{overdue ? 'Was due' : 'Due'} {due.date}{overdue ? ` · ${Math.max(0, daysOverdue(openCheckout.expected_return))} day${Math.max(0, daysOverdue(openCheckout.expected_return)) !== 1 ? 's' : ''} late` : ''}</div>}
+                      </div>
+                      {hasCheckoutPerm('checkin_assets') && (
+                        <button
+                          onClick={() => setShowCheckIn(true)}
+                          aria-label={`Check in ${asset.name}`}
+                          style={{
+                            width: '100%', padding: '14px 16px', borderRadius: 12, fontSize: '0.95rem',
+                            fontWeight: 600, cursor: 'pointer', border: 'none',
+                            background: '#228be6', color: 'white',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                            marginTop: 10,
+                            WebkitAppearance: 'none', touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent',
+                          }}
+                        >
+                          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>login</span>
+                          Check In
+                        </button>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {/* Edit & Delete — permission-gated */}
                 {(hasPerm('edit_assets') || hasPerm('delete_assets')) && (
@@ -859,3 +1003,633 @@ export default function AssetScanPage() {
     </div>
   )
 }
+
+/* ════════════════════════════════════════════════════════════════════════ */
+/*  Mobile Check Out / Check In modals (bottom-sheet style to match page)   */
+/* ════════════════════════════════════════════════════════════════════════ */
+
+function ScanCheckOutModal({ asset, profile, actions, hasCheckoutPerm, onClose, onDone }) {
+  const meEmail = profile?.email || ''
+  const meName  = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : ''
+  const meUserId = profile?.user_id || null
+
+  const canCheckoutOthers = hasCheckoutPerm('checkout_others')
+  const [mode, setMode] = useState('self')
+  const [allProfiles, setAllProfiles] = useState([])
+  const [selectedEmail, setSelectedEmail] = useState('')
+  const [userSearch, setUserSearch] = useState('')
+
+  const [dueDateStr, setDueDateStr] = useState('')
+  const [condition, setCondition] = useState('Good')
+  const [notes, setNotes] = useState('')
+  const [acknowledgmentName, setAcknowledgmentName] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Hand-off mode
+  const [handoffMode, setHandoffMode] = useState(false)
+  const [studentSignedAt, setStudentSignedAt] = useState(null)
+  const ackInputRef = useRef(null)
+
+  useEffect(() => {
+    if (handoffMode && ackInputRef.current) {
+      setTimeout(() => ackInputRef.current?.focus(), 100)
+    }
+  }, [handoffMode])
+
+  // Invalidate signature if user/mode changes
+  useEffect(() => {
+    if (studentSignedAt) {
+      setStudentSignedAt(null)
+      setAcknowledgmentName('')
+    }
+  }, [selectedEmail, mode]) // eslint-disable-line
+
+  useEffect(() => {
+    if (mode !== 'other') return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, user_id, email, first_name, last_name, role, status')
+        .eq('status', 'Active')
+        .order('first_name', { ascending: true })
+      if (!cancelled) setAllProfiles((data || []).filter(p => p.email && p.email !== 'rictprogram@gmail.com'))
+    })()
+    return () => { cancelled = true }
+  }, [mode])
+
+  const setPreset = (days) => {
+    const d = new Date()
+    d.setDate(d.getDate() + days)
+    setDueDateStr(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)
+  }
+
+  const filteredProfiles = !userSearch ? allProfiles : allProfiles.filter(p => {
+    const s = userSearch.toLowerCase()
+    return (p.first_name || '').toLowerCase().includes(s) ||
+      (p.last_name || '').toLowerCase().includes(s) ||
+      (p.email || '').toLowerCase().includes(s)
+  })
+
+  const targetUser = (() => {
+    if (mode === 'self') return { email: meEmail, name: meName, user_id: meUserId }
+    const p = allProfiles.find(p => p.email === selectedEmail)
+    if (!p) return null
+    return {
+      email: p.email,
+      name: `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email,
+      user_id: p.user_id || null,
+    }
+  })()
+
+  const expectedName = targetUser?.name || ''
+  const ackMatches = !!acknowledgmentName && expectedName &&
+    acknowledgmentName.trim().toLowerCase() === expectedName.toLowerCase()
+  // Same gate as desktop modal — student must sign in 'other' mode
+  const canSubmit = !!targetUser && !submitting && (
+    mode === 'self' ? ackMatches : !!studentSignedAt
+  )
+
+  const handleSubmit = async () => {
+    if (!targetUser) return
+    setSubmitting(true)
+    try {
+      const expectedReturn = dueDateStr
+        ? (() => {
+            const [y, m, d] = dueDateStr.split('-').map(Number)
+            return new Date(y, m - 1, d, 23, 59, 0)
+          })()
+        : null
+      await actions.checkOut({
+        asset: { asset_id: asset.asset_id, name: asset.name, serial_number: asset.serial_number },
+        user: targetUser,
+        expectedReturn,
+        condition,
+        notes,
+        acknowledgmentName: acknowledgmentName.trim(),
+      })
+      onDone?.()
+    } catch (e) { /* toast */ } finally { setSubmitting(false) }
+  }
+
+  const inputStyle = { width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box' }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="scan-co-title"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000,
+        display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+      }}
+      onClick={e => e.target === e.currentTarget && !submitting && !handoffMode && onClose()}
+      onKeyDown={e => {
+        if (e.key !== 'Escape') return
+        if (submitting) return
+        if (handoffMode) { setHandoffMode(false); setAcknowledgmentName(''); return }
+        onClose()
+      }}
+    >
+      <div style={{
+        background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 500,
+        maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+        animation: 'slideUp 0.3s ease',
+      }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e9ecef', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 id="scan-co-title" style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="material-icons" aria-hidden="true" style={{ color: '#2b8a3e' }}>logout</span>
+            Check Out
+          </h3>
+          <button
+            onClick={() => {
+              if (submitting) return
+              if (handoffMode) { setHandoffMode(false); setAcknowledgmentName(''); return }
+              onClose()
+            }}
+            aria-label={handoffMode ? 'Cancel hand-off' : 'Close'}
+            style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96', padding: 4 }}
+          >×</button>
+        </div>
+
+        <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
+          <div style={{ background: '#f8f9fa', borderRadius: 10, padding: '12px 14px', marginBottom: 16, fontSize: '0.85rem' }}>
+            <div><strong>{asset.name}</strong> <span style={{ color: '#868e96', fontFamily: 'monospace' }}>({asset.asset_id})</span></div>
+            {asset.serial_number && <div style={{ color: '#868e96', fontSize: '0.8rem' }}>SN: {asset.serial_number}</div>}
+          </div>
+
+          {/* Form fields — visually locked during hand-off */}
+          <div
+            aria-hidden={handoffMode}
+            style={{
+              opacity: handoffMode ? 0.4 : 1,
+              pointerEvents: handoffMode ? 'none' : 'auto',
+              transition: 'opacity 0.2s',
+            }}
+          >
+
+          {canCheckoutOthers && (
+            <fieldset style={{ border: 'none', padding: 0, margin: '0 0 16px' }}>
+              <legend style={{ fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6, padding: 0 }}>For</legend>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[{ id: 'self', label: 'Myself' }, { id: 'other', label: 'Another user' }].map(opt => (
+                  <label key={opt.id} style={{
+                    flex: 1, padding: '10px 12px', borderRadius: 10, fontSize: '0.85rem', textAlign: 'center',
+                    border: `2px solid ${mode === opt.id ? '#228be6' : '#dee2e6'}`,
+                    background: mode === opt.id ? '#e7f5ff' : 'white',
+                    color: mode === opt.id ? '#1971c2' : '#495057',
+                    fontWeight: 500, cursor: 'pointer',
+                  }}>
+                    <input type="radio" name="scan-co-mode" className="sr-only" checked={mode === opt.id}
+                      onChange={() => { setMode(opt.id); setAcknowledgmentName('') }} />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
+
+          {mode === 'other' && (
+            <div style={{ marginBottom: 16 }}>
+              <label htmlFor="scan-co-search" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Select user *</label>
+              {selectedEmail && targetUser ? (
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '12px 14px',
+                    background: '#ebfbee',
+                    border: '2px solid #40c057',
+                    borderRadius: 12,
+                  }}
+                >
+                  <span
+                    className="material-icons"
+                    aria-hidden="true"
+                    style={{ color: '#2b8a3e', fontSize: '1.5rem' }}
+                  >
+                    check_circle
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#2b8a3e', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Selected
+                    </div>
+                    <div style={{ fontWeight: 600, color: '#1a1a2e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {targetUser.name}
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#495057', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {targetUser.email}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedEmail(''); setUserSearch('') }}
+                    style={{
+                      padding: '8px 14px', borderRadius: 10,
+                      border: '1px solid #40c057', background: 'white',
+                      color: '#2b8a3e', fontSize: '0.85rem', fontWeight: 600,
+                      cursor: 'pointer', flexShrink: 0,
+                    }}
+                    aria-label={`Change selected user (currently ${targetUser.name})`}
+                  >
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input id="scan-co-search" type="text" placeholder="Search by name or email…"
+                    value={userSearch} onChange={e => setUserSearch(e.target.value)}
+                    style={{ ...inputStyle, marginBottom: 8 }} />
+                  <div role="listbox" aria-label="User list" style={{
+                    maxHeight: 180, overflowY: 'auto', border: '1px solid #dee2e6', borderRadius: 10, background: 'white',
+                  }}>
+                    {filteredProfiles.length === 0 ? (
+                      <div style={{ padding: 12, fontSize: '0.85rem', color: '#868e96', textAlign: 'center' }}>No users match</div>
+                    ) : filteredProfiles.map(p => {
+                      const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email
+                      const sel = selectedEmail === p.email
+                      return (
+                        <button key={p.email} type="button" role="option" aria-selected={sel}
+                          onClick={() => setSelectedEmail(p.email)}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '10px 12px', width: '100%', textAlign: 'left',
+                            background: sel ? '#e7f5ff' : 'white', border: 'none',
+                            borderBottom: '1px solid #f1f3f5', cursor: 'pointer', fontSize: '0.85rem',
+                          }}>
+                          <span><span style={{ fontWeight: 600 }}>{fullName}</span> <span style={{ color: '#868e96', marginLeft: 6 }}>{p.email}</span></span>
+                          <span style={{ color: '#868e96', fontSize: '0.75rem' }}>{p.role}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="scan-co-due" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>
+              Expected return <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <input id="scan-co-due" type="date" value={dueDateStr} onChange={e => setDueDateStr(e.target.value)} style={inputStyle} />
+            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              {[{ d: 1, label: 'Tomorrow' }, { d: 7, label: '+1 wk' }, { d: 14, label: '+2 wk' }, { d: 30, label: '+30 d' }].map(opt => (
+                <button key={opt.label} type="button" onClick={() => setPreset(opt.d)}
+                  style={{
+                    padding: '6px 10px', borderRadius: 8, fontSize: '0.75rem', fontWeight: 500,
+                    border: '1px solid #dee2e6', background: 'white', color: '#495057', cursor: 'pointer',
+                  }}>{opt.label}</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="scan-co-cond" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Condition</label>
+            <select id="scan-co-cond" value={condition} onChange={e => setCondition(e.target.value)}
+              style={{ ...inputStyle, background: 'white' }}>
+              <option>Good</option><option>Fair</option><option>Poor</option>
+            </select>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="scan-co-notes" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>
+              Notes <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <textarea id="scan-co-notes" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+              style={{ ...inputStyle, resize: 'vertical' }} />
+          </div>
+
+          </div>{/* end form-fields wrapper */}
+
+          {/* Acknowledgment — three states */}
+          {studentSignedAt ? (
+            // STATE 3: Signed
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                border: '2px solid #40c057', borderRadius: 12, padding: 14, background: '#ebfbee',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#2b8a3e', marginBottom: 6 }}>
+                <span className="material-icons" aria-hidden="true">verified</span>
+                Signed by {acknowledgmentName}
+              </div>
+              <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: '#2f9e44' }}>
+                Captured {new Date(studentSignedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.
+                Tap "Confirm" below to complete.
+              </p>
+              <button
+                type="button"
+                onClick={() => { setStudentSignedAt(null); setAcknowledgmentName('') }}
+                style={{
+                  background: 'none', border: 'none', padding: 0,
+                  color: '#2f9e44', fontSize: '0.78rem', textDecoration: 'underline', cursor: 'pointer',
+                }}
+              >
+                Clear and re-do
+              </button>
+            </div>
+          ) : handoffMode ? (
+            // STATE 2: Hand-off active
+            <fieldset
+              style={{
+                border: '3px solid #228be6', borderRadius: 12, padding: 16,
+                background: '#e7f5ff', margin: 0,
+              }}
+            >
+              <legend
+                style={{
+                  fontWeight: 700, color: '#1971c2', fontSize: '0.95rem',
+                  padding: '2px 10px', background: 'white', borderRadius: 6,
+                  border: '2px solid #228be6',
+                }}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.05rem', verticalAlign: 'middle', marginRight: 4 }}>phone_iphone</span>
+                {expectedName}'s turn
+              </legend>
+              <p style={{ fontSize: '0.95rem', color: '#1971c2', margin: '4px 0 12px', fontWeight: 500 }}>
+                Hand the device to <strong>{expectedName}</strong>:
+              </p>
+              <blockquote
+                style={{
+                  margin: '0 0 14px', padding: '12px 14px', background: 'white',
+                  borderRadius: 8, fontSize: '0.9rem', color: '#1a1a2e',
+                  fontStyle: 'italic', borderLeft: '4px solid #228be6', lineHeight: 1.5,
+                }}
+              >
+                "I, <strong>{expectedName}</strong>, accept responsibility for asset {asset.asset_id} until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
+              </blockquote>
+              <label htmlFor="scan-co-ack" style={{ display: 'block', fontSize: '0.95rem', fontWeight: 600, color: '#1971c2', marginBottom: 6 }}>
+                Type your full name *
+              </label>
+              <input
+                ref={ackInputRef}
+                id="scan-co-ack"
+                type="text"
+                value={acknowledgmentName}
+                onChange={e => setAcknowledgmentName(e.target.value)}
+                placeholder={expectedName}
+                aria-describedby="scan-co-ack-hint"
+                style={{
+                  ...inputStyle, fontFamily: 'cursive', fontSize: '1.15rem', padding: '14px 16px',
+                  borderWidth: 2,
+                  borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
+                }}
+              />
+              <div id="scan-co-ack-hint" style={{ fontSize: '0.85rem', color: '#1971c2', marginTop: 8, fontWeight: 500 }}>
+                {ackMatches ? '✓ Looks good. Tap "I confirm" below.'
+                  : acknowledgmentName ? '⚠ Doesn\'t match — must be exact'
+                  : `Type "${expectedName}" exactly.`}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                <button
+                  type="button"
+                  onClick={() => { setHandoffMode(false); setAcknowledgmentName('') }}
+                  style={{
+                    flex: 1, padding: 14, borderRadius: 12,
+                    border: '1px solid #dee2e6', background: 'white',
+                    color: '#495057', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer',
+                  }}
+                  aria-label="Cancel hand-off"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!ackMatches}
+                  onClick={() => {
+                    setStudentSignedAt(new Date().toISOString())
+                    setHandoffMode(false)
+                  }}
+                  style={{
+                    flex: 2, padding: 14, borderRadius: 12,
+                    border: 'none',
+                    background: ackMatches ? '#2b8a3e' : '#adb5bd',
+                    color: 'white', fontWeight: 600, fontSize: '0.95rem',
+                    cursor: ackMatches ? 'pointer' : 'not-allowed',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                  }}
+                  aria-label="Confirm signature and hand back to instructor"
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>check</span>
+                  I confirm
+                </button>
+              </div>
+            </fieldset>
+          ) : (
+            // STATE 1: Default
+            <fieldset style={{ border: '2px solid #fbbf24', borderRadius: 12, padding: 14, background: '#fffbeb', margin: 0 }}>
+              <legend style={{ fontWeight: 700, color: '#92400e', fontSize: '0.85rem', padding: '0 6px' }}>
+                Acknowledgment
+              </legend>
+
+              {mode === 'other' && targetUser ? (
+                <>
+                  <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
+                    To complete, <strong>{expectedName}</strong> must sign by typing their full name.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setHandoffMode(true)}
+                    style={{
+                      width: '100%', padding: '14px', borderRadius: 12, border: 'none',
+                      background: '#228be6', color: 'white', fontWeight: 600, fontSize: '0.95rem',
+                      cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    }}
+                    aria-label={`Hand the device to ${expectedName} to sign`}
+                  >
+                    <span className="material-icons" aria-hidden="true">phone_iphone</span>
+                    Hand to {expectedName} to sign
+                  </button>
+                  <p style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 8, marginBottom: 0 }}>
+                    Tap to lock the form so {expectedName} can type their name.
+                  </p>
+                </>
+              ) : mode === 'self' ? (
+                <>
+                  <p style={{ fontSize: '0.8rem', color: '#92400e', margin: '0 0 8px', lineHeight: 1.5 }}>
+                    "I, <strong>{expectedName || '[user]'}</strong>, accept responsibility for asset {asset.asset_id} until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
+                  </p>
+                  <label htmlFor="scan-co-ack" style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#92400e', marginBottom: 4 }}>Type full name to acknowledge *</label>
+                  <input
+                    id="scan-co-ack"
+                    type="text"
+                    value={acknowledgmentName}
+                    onChange={e => setAcknowledgmentName(e.target.value)}
+                    placeholder={expectedName}
+                    aria-describedby="scan-co-ack-hint"
+                    style={{
+                      ...inputStyle, fontFamily: 'cursive',
+                      borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
+                    }}
+                  />
+                  <div id="scan-co-ack-hint" style={{ fontSize: '0.72rem', color: '#92400e', marginTop: 4 }}>
+                    {ackMatches ? '✓ Matches.'
+                      : acknowledgmentName ? '⚠ Doesn\'t match — must be exact.'
+                      : `Type "${expectedName}" to confirm.`}
+                  </div>
+                </>
+              ) : (
+                <p style={{ fontSize: '0.85rem', color: '#92400e', margin: 0 }}>
+                  Select a user above to enable acknowledgment.
+                </p>
+              )}
+            </fieldset>
+          )}
+        </div>
+
+        {!handoffMode && (
+        <div style={{ padding: '12px 20px 20px', display: 'flex', gap: 12, borderTop: '1px solid #e9ecef' }}>
+          <button onClick={() => !submitting && onClose()} disabled={submitting}
+            style={{ flex: 1, padding: 14, borderRadius: 12, fontSize: '1rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #dee2e6', background: '#f8f9fa', color: '#495057' }}>
+            Cancel
+          </button>
+          <button onClick={handleSubmit} disabled={!canSubmit}
+            title={
+              !canSubmit && mode === 'other' && targetUser && !studentSignedAt
+                ? `${expectedName} must sign before submitting`
+                : undefined
+            }
+            style={{ flex: 1, padding: 14, borderRadius: 12, fontSize: '1rem', fontWeight: 600, cursor: 'pointer', border: 'none', background: '#2b8a3e', color: 'white', opacity: canSubmit ? 1 : 0.6 }}>
+            {submitting ? 'Saving…' : 'Confirm'}
+          </button>
+        </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ScanCheckInModal({ asset, openCheckout, profile, actions, onClose, onDone }) {
+  const [condition, setCondition] = useState('Good')
+  const [notes, setNotes] = useState('')
+  const [needsRepair, setNeedsRepair] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (needsRepair && condition === 'Good') setCondition('Damaged')
+  }, [needsRepair]) // eslint-disable-line
+
+  const handleSubmit = async () => {
+    setSubmitting(true)
+    try {
+      let relatedWoId = null
+      if (needsRepair) {
+        try {
+          let woId = null
+          try {
+            const { data } = await supabase.rpc('get_next_id', { p_type: 'work_order' })
+            if (data) woId = data
+          } catch {}
+          if (!woId) woId = 'WO' + String(Date.now()).slice(-6)
+          const fullName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : 'Unknown'
+          const { error: woErr } = await supabase.from('work_orders').insert({
+            wo_id: woId,
+            description: `Asset returned damaged — needs repair: ${asset.name}`,
+            priority: 'Medium',
+            status: 'Open',
+            asset_id: asset.asset_id,
+            asset_name: asset.name,
+            asset: asset.name,
+            created_at: new Date().toISOString(),
+            created_by: fullName,
+            is_pm: false,
+          })
+          if (!woErr) relatedWoId = woId
+        } catch (e) { console.warn('Auto-WO failed:', e.message) }
+      }
+
+      await actions.checkIn({
+        checkoutId: openCheckout.checkout_id,
+        condition, notes, needsRepair, relatedWoId,
+      })
+      onDone?.()
+    } catch (e) { /* toast */ } finally { setSubmitting(false) }
+  }
+
+  const out = fakeUtcToDisplay(openCheckout.checked_out_at)
+  const inputStyle = { width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box' }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="scan-ci-title"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000,
+        display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+      }}
+      onClick={e => e.target === e.currentTarget && !submitting && onClose()}
+      onKeyDown={e => e.key === 'Escape' && !submitting && onClose()}
+    >
+      <div style={{
+        background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 500,
+        maxHeight: '90vh', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+        animation: 'slideUp 0.3s ease',
+      }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #e9ecef', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 id="scan-ci-title" style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>login</span>
+            Check In
+          </h3>
+          <button onClick={() => !submitting && onClose()} aria-label="Close"
+            style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96', padding: 4 }}>×</button>
+        </div>
+
+        <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
+          <div style={{ background: '#f8f9fa', borderRadius: 10, padding: '12px 14px', marginBottom: 16, fontSize: '0.85rem' }}>
+            <div><strong>{asset.name}</strong> <span style={{ color: '#868e96', fontFamily: 'monospace' }}>({asset.asset_id})</span></div>
+            <div style={{ color: '#495057' }}>From: <strong>{openCheckout.user_name}</strong></div>
+            {out && <div style={{ color: '#868e96', fontSize: '0.78rem' }}>Out since {out.date}</div>}
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="scan-ci-cond" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Return condition</label>
+            <select id="scan-ci-cond" value={condition} onChange={e => setCondition(e.target.value)}
+              style={{ ...inputStyle, background: 'white' }}>
+              <option>Good</option><option>Fair</option><option>Poor</option><option>Damaged</option>
+            </select>
+          </div>
+
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="scan-ci-notes" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>
+              Notes <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <textarea id="scan-ci-notes" rows={3} value={notes} onChange={e => setNotes(e.target.value)}
+              style={{ ...inputStyle, resize: 'vertical' }} />
+          </div>
+
+          <label style={{
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+            padding: '12px 14px', borderRadius: 10,
+            border: `1px solid ${needsRepair ? '#ffa94d' : '#dee2e6'}`,
+            background: needsRepair ? '#fff4e6' : 'white', cursor: 'pointer', fontSize: '0.9rem',
+          }}>
+            <input type="checkbox" checked={needsRepair} onChange={e => setNeedsRepair(e.target.checked)}
+              style={{ marginTop: 2, width: 20, height: 20 }} />
+            <span>
+              <strong style={{ color: needsRepair ? '#d9480f' : '#495057' }}>Needs repair</strong>
+              <span style={{ display: 'block', fontSize: '0.78rem', color: '#868e96', marginTop: 2 }}>
+                Auto-create a work order linked to this asset.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div style={{ padding: '12px 20px 20px', display: 'flex', gap: 12, borderTop: '1px solid #e9ecef' }}>
+          <button onClick={() => !submitting && onClose()} disabled={submitting}
+            style={{ flex: 1, padding: 14, borderRadius: 12, fontSize: '1rem', fontWeight: 600, cursor: 'pointer', border: '1px solid #dee2e6', background: '#f8f9fa', color: '#495057' }}>
+            Cancel
+          </button>
+          <button onClick={handleSubmit} disabled={submitting}
+            style={{ flex: 1, padding: 14, borderRadius: 12, fontSize: '1rem', fontWeight: 600, cursor: 'pointer', border: 'none', background: '#228be6', color: 'white', opacity: submitting ? 0.6 : 1 }}>
+            {submitting ? 'Saving…' : 'Confirm'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+

@@ -38,6 +38,7 @@ const PAGE_ICONS = {
   'Work Orders': 'assignment',
   'Inventory': 'inventory_2',
   'Assets': 'precision_manufacturing',
+  'Asset Checkouts': 'history',
   'Purchase Orders': 'local_shipping',
   'PM': 'event_repeat',
   'Lab Signup': 'event_available',
@@ -109,6 +110,18 @@ const DEFAULT_PERMISSIONS = [
   ['P035', 'Assets', 'view_history', true, true, true, 'Can view asset history'],
   ['P036', 'Assets', 'print_labels', false, true, true, 'Can print asset labels'],
   ['P128', 'Assets', 'duplicate_assets', false, true, true, 'Can duplicate an existing asset'],
+
+  // Asset Checkouts
+  ['P160', 'Asset Checkouts', 'view_page',           true,  true,  true,  'Can access Asset Checkouts page'],
+  ['P161', 'Asset Checkouts', 'view_own',            true,  true,  true,  'Can view own checkouts'],
+  ['P162', 'Asset Checkouts', 'view_all',            false, true,  true,  'Can view all checkouts'],
+  ['P163', 'Asset Checkouts', 'checkout_self',       true,  true,  true,  'Can check out an asset to self'],
+  ['P164', 'Asset Checkouts', 'checkout_others',     false, false, true,  'Can check out an asset on behalf of another user'],
+  ['P165', 'Asset Checkouts', 'checkin_assets',      false, true,  true,  'Can check assets back in'],
+  ['P166', 'Asset Checkouts', 'extend_due_date',     false, false, true,  'Can extend due date on an open checkout'],
+  ['P167', 'Asset Checkouts', 'force_return',        false, false, true,  'Can force-return without typed acknowledgment'],
+  ['P168', 'Asset Checkouts', 'export_data',         false, false, true,  'Can export checkout data and run reports'],
+  ['P169', 'Asset Checkouts', 'manage_checkoutable', false, false, true,  'Can flag assets as checkoutable'],
 
   // Purchase Orders
   ['P0A0', 'Purchase Orders', 'view_page', true, true, true, 'Can access Purchase Orders page'],
