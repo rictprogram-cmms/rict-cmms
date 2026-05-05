@@ -114,6 +114,7 @@ export default function PMPage() {
   const dueSoon = schedules.filter(s => s.isDueSoon && s.status === 'Active').length
   const activeCount = schedules.filter(s => s.status === 'Active').length
   const pausedCount = schedules.filter(s => s.status === 'Paused').length
+  const archivedCount = schedules.filter(s => s.status === 'Archived').length
   const withProcedure = schedules.filter(s => !!s.procedure_file_id || sopLinkedPMIds.has(s.pm_id)).length
 
   const handleEdit = (pm) => {
@@ -150,6 +151,7 @@ export default function PMPage() {
           <p className="text-xs text-surface-500 mt-0.5">
             {activeCount} active schedule{activeCount !== 1 && 's'}
             {withProcedure > 0 && <> · {withProcedure} with procedure</>}
+            {archivedCount > 0 && <> · {archivedCount} archived</>}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -245,6 +247,7 @@ export default function PMPage() {
           <option value="">All Status</option>
           <option value="Active">Active</option>
           <option value="Paused">Paused</option>
+          <option value="Archived">Archived</option>
         </select>
       </div>
 
@@ -309,7 +312,9 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
       ? 'border-l-yellow-500 bg-yellow-50/50'
       : pm.status === 'Paused'
         ? 'border-l-surface-300 bg-surface-50'
-        : 'border-l-emerald-500'
+        : pm.status === 'Archived'
+          ? 'border-l-surface-200 bg-surface-50/60 opacity-75'
+          : 'border-l-emerald-500'
 
   // Has a directly-attached procedure file
   const hasFileProcedure = !!pm.procedure_file_id
@@ -349,11 +354,12 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
   }
 
   // Determine if generate is disabled
-  const generateDisabled = saving || pm.status === 'Paused' || globalPaused || !!openWO
+  const generateDisabled = saving || pm.status === 'Paused' || pm.status === 'Archived' || globalPaused || !!openWO
 
   let generateTooltip = 'Generate work order'
   if (globalPaused) generateTooltip = 'PM generation is paused for break'
   else if (pm.status === 'Paused') generateTooltip = 'This PM is paused'
+  else if (pm.status === 'Archived') generateTooltip = 'This PM is archived (asset retired)'
   else if (openWO) generateTooltip = `${openWO.wo_id} is still open — close it first`
 
   return (
@@ -366,6 +372,11 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
             {pm.status === 'Paused' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-200 text-surface-500 flex items-center gap-0.5">
                 <Pause size={8} /> Paused
+              </span>
+            )}
+            {pm.status === 'Archived' && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-400 flex items-center gap-0.5" title="Asset is archived — PM no longer generates">
+                <Trash2 size={8} aria-hidden="true" /> Archived
               </span>
             )}
             {hasProcedure && (
@@ -634,6 +645,7 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
             <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
               <option value="Active">Active</option>
               <option value="Paused">Paused</option>
+              <option value="Archived">Archived</option>
             </select>
           </div>
         )}

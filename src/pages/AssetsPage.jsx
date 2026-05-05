@@ -44,7 +44,9 @@ export default function AssetsPage() {
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
   const [locationFilter, setLocationFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState('')
+  // Default to "Active" so archived assets are hidden by default. Users can flip the
+  // filter dropdown to view "Archived" or "All Status".
+  const [statusFilter, setStatusFilter] = useState('Active')
 
   // dropdowns
   const [categories, setCategories] = useState([])
@@ -351,18 +353,31 @@ export default function AssetsPage() {
         if (!upErr) imageFileId = path
       }
 
+      const userShort = `${profile.first_name} ${profile.last_name?.charAt(0)}.`
+      const newStatus = formData.status || 'Active'
+
       const row = {
         name: formData.name,
         description: formData.description || '',
         category: formData.category || '',
         location: formData.location || '',
-        status: formData.status || 'Active',
+        status: newStatus,
         serial_number: formData.serial_number || '',
         is_checkoutable: !!formData.is_checkoutable,
         image_url: imageFileId,
         updated_at: new Date().toISOString(),
-        updated_by: `${profile.first_name} ${profile.last_name?.charAt(0)}.`,
+        updated_by: userShort,
       }
+
+      // Track previous status BEFORE update so we can detect transitions
+      // and cascade to associated PM schedules.
+      let prevStatus = null
+      if (formData.asset_id) {
+        const existing = assets.find(a => a.asset_id === formData.asset_id)
+        prevStatus = existing?.status || null
+      }
+
+      let savedAssetId = formData.asset_id
 
       if (formData.asset_id) {
         const { data: rows, error } = await supabase.from('assets').update(row).eq('asset_id', formData.asset_id).select()
@@ -374,8 +389,9 @@ export default function AssetsPage() {
         }
       } else {
         row.asset_id = await generateSafeAssetId()
+        savedAssetId = row.asset_id
         row.created_at = new Date().toISOString()
-        row.created_by = `${profile.first_name} ${profile.last_name?.charAt(0)}.`
+        row.created_by = userShort
         const { data: rows, error } = await supabase.from('assets').insert(row).select()
         if (error) throw error
         if (!rows || rows.length === 0) {
@@ -385,12 +401,122 @@ export default function AssetsPage() {
         }
       }
 
+      // ── Cascade to PMs on status transition (edits only — not new creates) ──
+      if (formData.asset_id && prevStatus && prevStatus !== newStatus) {
+        if (prevStatus === 'Active' && newStatus === 'Archived') {
+          await cascadeArchivePMs(savedAssetId, userShort)
+        } else if (prevStatus === 'Archived' && newStatus === 'Active') {
+          await maybeRestorePMs(savedAssetId, userShort)
+        }
+      }
+
       setShowAssetModal(false)
       loadAssets()
     } catch (e) {
       alert('Error: ' + e.message)
     }
     setSaving(false)
+  }
+
+  /* ── Cascade Archive PMs when an Asset is Archived ─────────────── */
+  // When an asset is archived, any active or paused PM schedules pointing at it
+  // are auto-archived. Archived PMs are excluded from the pg_cron auto-generation
+  // job and the client-side fallback (both filter on status='Active').
+  async function cascadeArchivePMs(assetId, userShort) {
+    try {
+      // Find PMs that aren't already archived
+      const { data: pms } = await supabase
+        .from('pm_schedules')
+        .select('pm_id, pm_name, status')
+        .eq('asset_id', assetId)
+        .neq('status', 'Archived')
+
+      if (!pms || pms.length === 0) return
+
+      const { error: updateError } = await supabase
+        .from('pm_schedules')
+        .update({
+          status: 'Archived',
+          updated_at: new Date().toISOString(),
+          updated_by: userShort,
+        })
+        .eq('asset_id', assetId)
+        .neq('status', 'Archived')
+
+      if (updateError) {
+        console.warn('Failed to cascade archive PMs:', updateError.message)
+        return
+      }
+
+      // Audit log — non-fatal if it fails
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userShort,
+          action: 'Cascade Archive',
+          entity_type: 'PM Schedule',
+          entity_id: assetId,
+          details: `Auto-archived ${pms.length} PM schedule(s) when asset ${assetId} was archived: ${pms.map(p => p.pm_id).join(', ')}`,
+        })
+      } catch {}
+
+      alert(`Asset archived. ${pms.length} PM schedule${pms.length === 1 ? '' : 's'} also auto-archived.`)
+    } catch (err) {
+      console.warn('cascadeArchivePMs error:', err.message)
+    }
+  }
+
+  /* ── Restore PMs on un-archive (with confirmation) ─────────────── */
+  // We don't auto-restore — the instructor may have intentionally retired
+  // some PMs separately. Confirm before bulk-restoring.
+  async function maybeRestorePMs(assetId, userShort) {
+    try {
+      const { data: archivedPMs } = await supabase
+        .from('pm_schedules')
+        .select('pm_id, pm_name')
+        .eq('asset_id', assetId)
+        .eq('status', 'Archived')
+
+      if (!archivedPMs || archivedPMs.length === 0) return
+
+      const proceed = confirm(
+        `This asset has ${archivedPMs.length} archived PM schedule${archivedPMs.length === 1 ? '' : 's'}.\n\n` +
+        `Restore ${archivedPMs.length === 1 ? 'it' : 'them all'} to Active status?\n\n` +
+        `Cancel to leave them archived — you can restore individual ones from the PM page.`
+      )
+
+      if (!proceed) return
+
+      const { error: updateError } = await supabase
+        .from('pm_schedules')
+        .update({
+          status: 'Active',
+          updated_at: new Date().toISOString(),
+          updated_by: userShort,
+        })
+        .eq('asset_id', assetId)
+        .eq('status', 'Archived')
+
+      if (updateError) {
+        console.warn('Failed to restore PMs:', updateError.message)
+        return
+      }
+
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userShort,
+          action: 'Cascade Restore',
+          entity_type: 'PM Schedule',
+          entity_id: assetId,
+          details: `Restored ${archivedPMs.length} PM schedule(s) when asset ${assetId} was un-archived: ${archivedPMs.map(p => p.pm_id).join(', ')}`,
+        })
+      } catch {}
+
+      alert(`Restored ${archivedPMs.length} PM schedule${archivedPMs.length === 1 ? '' : 's'} to Active.`)
+    } catch (err) {
+      console.warn('maybeRestorePMs error:', err.message)
+    }
   }
 
   /* ── Delete Asset ──────────────────────────────────────────────── */
