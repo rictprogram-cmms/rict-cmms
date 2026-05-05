@@ -25,7 +25,7 @@ export default function NotificationBell() {
   // and update that one slice — instead of re-running 8+ queries on every event.
   // The derived `items` array preserves the original render order.
   const [itemsByTable, setItemsByTable] = useState({
-    access: [], wo: [], parts: [], time: [], lab: [], temp: [], help: [], announcement: [],
+    access: [], wo: [], parts: [], time: [], lab: [], temp: [], help: [], announcement: [], netchg: [],
   });
   const items = useMemo(() => [
     ...(itemsByTable.access || []),
@@ -36,6 +36,7 @@ export default function NotificationBell() {
     ...(itemsByTable.temp || []),
     ...(itemsByTable.help || []),
     ...(itemsByTable.announcement || []),
+    ...(itemsByTable.netchg || []),
   ], [itemsByTable]);
   const [open, setOpen] = useState(false);
   const [hasNew, setHasNew] = useState(false);
@@ -571,9 +572,49 @@ export default function NotificationBell() {
     setItemsByTable(prev => ({ ...prev, announcement: _items }));
   }, [profile?.email]);
 
+  // ── INSTRUCTOR ONLY: Pending network change requests ──
+  // Surfaces the same "Pending Changes" count shown on /network-map so instructors
+  // are alerted via the bell instead of having to visit the page to discover them.
+  // One item per pending request → the bell count badge stays accurate, and the
+  // Set-based ID comparison fires the ding when a new request arrives even if
+  // another was approved in the same poll cycle.
+  const fetchNetworkChanges = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, netchg: [] }));
+      return;
+    }
+    const _items = [];
+    try {
+      const { data } = await supabase
+        .from('network_change_requests')
+        .select('request_id, ip_address, change_type, submitted_by_name, submitted_by, submitted_date, reason')
+        .eq('status', 'Pending')
+        .order('submitted_date', { ascending: false })
+        .limit(50);
+      (data || []).forEach(r => {
+        const action =
+          r.change_type === 'add' ? 'Add' :
+          r.change_type === 'delete' ? 'Delete' :
+          r.change_type === 'edit' ? 'Edit' :
+          'Change';
+        _items.push({
+          id: `netchg-${r.request_id}`,
+          type: 'netchg',
+          icon: 'router',
+          color: '#7c3aed',
+          title: `${action} ${r.ip_address || 'device'}`,
+          subtitle: `Submitted by ${r.submitted_by_name || r.submitted_by || 'someone'}`,
+          date: r.submitted_date,
+          raw: r,
+        });
+      });
+    } catch {}
+    setItemsByTable(prev => ({ ...prev, netchg: _items }));
+  }, [profile?.email, isInstructor]);
+
   // Wrapper used by polling, opening the panel, and post-action refreshes.
   // Each call_site that previously called fetchNotifications still does so —
-  // this just dispatches to all 8 per-table fetchers.
+  // this just dispatches to all per-table fetchers.
   const fetchNotifications = useCallback(() => {
     if (!profile?.email) return;
     fetchAccessRequests();
@@ -584,7 +625,8 @@ export default function NotificationBell() {
     fetchTempRequests();
     fetchHelpRequests();
     fetchAnnouncements();
-  }, [profile?.email, fetchAccessRequests, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements]);
+    fetchNetworkChanges();
+  }, [profile?.email, fetchAccessRequests, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges]);
 
   // ── Play sound on new item arrival ──
   // Compares the SET OF item IDs across renders. This catches the case where one
@@ -649,6 +691,7 @@ export default function NotificationBell() {
       temp_access_requests: fetchTempRequests,
       help_requests:        fetchHelpRequests,
       announcements:        fetchAnnouncements,
+      network_change_requests: fetchNetworkChanges,
     };
     const tables = Object.keys(tableToFetcher);
     console.log('[NotificationBell] Setting up per-table realtime subscriptions for:', tables);
@@ -677,7 +720,7 @@ export default function NotificationBell() {
       console.log('[NotificationBell] Cleaning up realtime channel');
       supabase.removeChannel(channel);
     };
-  }, [profile?.email, fetchAccessRequests, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements]);
+  }, [profile?.email, fetchAccessRequests, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges]);
 
   // Persistent ding: play sound every 60 seconds while there are unresolved notifications
   useEffect(() => {
@@ -1303,7 +1346,8 @@ export default function NotificationBell() {
     // volunteer_punch removed — time clock punches are auto-approved
     announcement: 'ANNOUNCEMENT',
     wo_assignment: 'WORK ORDER ASSIGNED',
-    help: 'NEEDS HELP'
+    help: 'NEEDS HELP',
+    netchg: 'NETWORK CHANGE'
   };
 
   // Navigate to announcements without marking read — InboxTab marks read on expand
@@ -1321,6 +1365,13 @@ export default function NotificationBell() {
     navigate('/work-orders');
   };
 
+  // Navigate to the Network Map page so the instructor can review pending changes.
+  // Approve/Reject lives on the Network Map page (existing UI), so this is view-only.
+  const viewNetworkChange = () => {
+    setOpen(false);
+    navigate('/network-map');
+  };
+
   const renderActions = (item) => {
     const disabled = actionLoading === item.id;
     switch (item.type) {
@@ -1336,6 +1387,7 @@ export default function NotificationBell() {
       case 'announcement': return (<button className="nbtn nbtn-view" onClick={() => viewAnnouncement(item)}><span className="material-icons" aria-hidden="true">visibility</span>View</button>);
       case 'wo_assignment': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
       case 'help': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
+      case 'netchg': return (<button className="nbtn nbtn-view" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
       default: return null;
     }
   };
