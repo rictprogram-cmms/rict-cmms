@@ -86,14 +86,19 @@ export default function WorkOrderDetailModal({
   const myEmail = user?.email?.toLowerCase() || '';
   const alreadyAssigned = assignees.some(a => a.email.toLowerCase() === myEmail);
 
+  // Late WOs (overdue) are off-limits for student/work-study self-assign — late
+  // assignments must go through an instructor. Instructors are unaffected.
+  // `wo.isLate` is computed by the parent during loadWorkOrders.
+  const blockedByLate = !isInstructor && wo.isLate === true;
+
   // What options can this user add?
   // Instructor: anyone not already assigned
-  // Student/Work Study: only themselves (if not already on)
+  // Student/Work Study: only themselves (if not already on AND WO isn't overdue)
   const addableOptions = isInstructor
     ? users.filter(u => !assignees.find(a => a.email === u.email))
-    : (!alreadyAssigned ? [{ email: myEmail, name: `${profile?.first_name} ${profile?.last_name}` }] : []);
+    : (!alreadyAssigned && !blockedByLate ? [{ email: myEmail, name: `${profile?.first_name} ${profile?.last_name}` }] : []);
 
-  const canManage = !wo.isClosed && (isInstructor || hasPerm('assign_wo') || !alreadyAssigned);
+  const canManage = !wo.isClosed && (isInstructor || hasPerm('assign_wo') || (!alreadyAssigned && !blockedByLate));
 
   return (
     <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -226,9 +231,10 @@ export default function WorkOrderDetailModal({
               )}
               {assignees.map((a, idx) => {
                 const isPrimary = idx === 0; // first in assigned_at order = primary
-                const canRemove = !wo.isClosed && (
-                  isInstructor || a.email.toLowerCase() === myEmail
-                );
+                // Instructor-only removal. Students/Work Study cannot remove themselves
+                // or anyone else — this prevents bailing on late or undesirable WOs.
+                // The parent's removeAssignee() also enforces this server-side.
+                const canRemove = !wo.isClosed && isInstructor;
                 return (
                   <span key={a.email} style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -308,10 +314,24 @@ export default function WorkOrderDetailModal({
               </div>
             )}
 
-            {/* Hint for students who are already on this WO */}
+            {/* Hints for non-instructors. role="note" gives screen readers context that
+                this is supplementary information about the assignment area above. */}
             {!wo.isClosed && !isInstructor && alreadyAssigned && (
-              <p style={{ fontSize: '0.78rem', color: '#868e96', margin: '4px 0 0' }}>
-                You're assigned to this work order. Remove yourself using the ✕ on your name above.
+              <p
+                role="note"
+                style={{ fontSize: '0.78rem', color: '#868e96', margin: '4px 0 0' }}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>info</span>
+                You're assigned to this work order. Only an instructor can remove you.
+              </p>
+            )}
+            {!wo.isClosed && !isInstructor && !alreadyAssigned && blockedByLate && (
+              <p
+                role="note"
+                style={{ fontSize: '0.78rem', color: '#a52121', margin: '4px 0 0' }}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>warning</span>
+                This work order is overdue. Only an instructor can assign people to it.
               </p>
             )}
           </div>

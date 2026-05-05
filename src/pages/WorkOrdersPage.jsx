@@ -263,17 +263,60 @@ export default function WorkOrdersPage() {
     }
   }, [profile]);
 
+  /**
+   * Send a notification to a user when they are removed from a work order
+   * (instructor-initiated unassignment). Mirrors sendWOAssignmentNotification
+   * — silently skips self-removal so an instructor removing themselves doesn't
+   * spam their own bell. Non-critical: notification failures don't block the DB
+   * delete that already succeeded.
+   */
+  const sendWOUnassignmentNotification = useCallback(async (removedEmail, woId, woDescription) => {
+    if (!profile?.email || !removedEmail) return;
+    // Don't notify if you're removing yourself (instructor unassigning self)
+    if (removedEmail.toLowerCase() === profile.email.toLowerCase()) return;
+    try {
+      const senderName = profile
+        ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
+        : 'Instructor';
+      await supabase.from('announcements').insert({
+        recipient_email: removedEmail.toLowerCase(),
+        sender_email: profile.email,
+        sender_name: senderName,
+        subject: `Removed from Work Order: ${woId}`,
+        body: woDescription
+          ? `You have been removed from work order ${woId}: "${woDescription}". You are no longer responsible for this work order.`
+          : `You have been removed from work order ${woId}. You are no longer responsible for this work order.`,
+        read: false,
+        notification_type: 'wo_unassignment',
+        created_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      // Non-critical — don't surface notification errors to the user
+      console.warn('sendWOUnassignmentNotification failed:', e.message);
+    }
+  }, [profile]);
+
   // ---------- ASSIGNMENT MANAGEMENT ----------
 
   /**
    * Add a user to the work_order_assignments junction table.
    * Instructors can add anyone; students/work study can only add themselves.
+   * Students/Work Study cannot self-assign to overdue WOs — late assignments
+   * must go through an instructor (prevents last-minute credit-grabbing on
+   * already-late work).
    * If this is the first assignee, also syncs assigned_to/assigned_email on the WO.
    */
   const addAssignee = async (email, name) => {
     if (!currentWO || currentWO.isClosed) return;
     if (viewAssignees.find(a => a.email === email)) {
       showToast('Already assigned to this user', 'error'); return;
+    }
+    // Block non-instructor self-assign on overdue WOs.
+    // Instructors and Super Admins bypass this — they can still assign anyone (including themselves).
+    const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
+    if (!isInstructor && currentWO.isLate) {
+      showToast('This work order is overdue. Only an instructor can assign people to it.', 'error');
+      return;
     }
     setAssigneeSaving(true);
     const userName = profile ? `${profile.first_name} ${profile.last_name?.charAt(0)}.` : '';
@@ -333,13 +376,34 @@ export default function WorkOrdersPage() {
 
   /**
    * Remove a user from the work_order_assignments junction table.
-   * Anyone can remove themselves; instructors can remove anyone.
+   *
+   * INSTRUCTOR-ONLY: Only Instructors and Super Admins can remove anyone
+   * (including themselves). Students and Work Study cannot remove themselves
+   * once assigned — this prevents bailing on late or undesirable work orders.
+   * To self-assign and then immediately self-remove, students must instead ask
+   * an instructor.
+   *
    * If the removed user was the primary assignee, promotes the next in line.
+   * Notifies the removed user via their bell when an instructor removes them
+   * (skipped silently when an instructor removes themselves).
+   *
+   * Defense in depth: this client-side guard should be paired with an RLS
+   * policy on work_order_assignments DELETE that restricts to instructor
+   * email — see migration in /sql/2026_lock_assignment_delete_to_instructor.sql.
    */
   const removeAssignee = async (email) => {
     if (!currentWO || currentWO.isClosed) return;
+    // Instructor-only gate. Even if the UI is bypassed (devtools, stale render),
+    // this stops the request before it ever hits the network.
+    const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
+    if (!isInstructor) {
+      showToast('Only an instructor can remove an assignee from a work order.', 'error');
+      return;
+    }
     setAssigneeSaving(true);
     const userName = profile ? `${profile.first_name} ${profile.last_name?.charAt(0)}.` : '';
+    // Capture the display name BEFORE we mutate state so the notification reads naturally
+    const removedAssignee = viewAssignees.find(a => a.email === email);
     try {
       // Use .select() so RLS silent failures (0 rows, no error) are detectable
       const { data: delRows, error } = await supabase.from('work_order_assignments')
@@ -375,7 +439,16 @@ export default function WorkOrdersPage() {
       // Update local assignments map for list display
       setWoAssignments(prev => ({ ...prev, [currentWO.wo_id]: newAssignees }));
 
-      showToast('Assignee removed', 'success');
+      // Notify the unassigned user (skips automatically if instructor removed themselves).
+      // Fired after DB success so we never notify on a failed delete.
+      await sendWOUnassignmentNotification(email, currentWO.wo_id, currentWO.description);
+
+      showToast(
+        removedAssignee?.name
+          ? `${removedAssignee.name} removed from work order`
+          : 'Assignee removed',
+        'success'
+      );
       loadWorkOrders(currentViewRef.current, true);
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
     setAssigneeSaving(false);
