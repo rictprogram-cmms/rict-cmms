@@ -80,6 +80,9 @@ export default function TVDisplayPage() {
   const [lastUpdated, setLastUpdated] = useState('--')
   const [instructorAway, setInstructorAway] = useState(false)
   const [awayReturnTime, setAwayReturnTime] = useState('')
+  // Today's hour-level lab closures (e.g. "2-3pm Faculty Meeting")
+  // Each entry: { startMin, endMin, startStr, endStr, reason, isCurrent, isUpcoming }
+  const [todayClosures, setTodayClosures] = useState([])
 
   const woScrollRef = useRef(null)
   const pplScrollRef = useRef(null)
@@ -393,6 +396,66 @@ export default function TVDisplayPage() {
         }))
       setHelpQueue(helpList)
 
+      // ---------- 8. Today's hour-level closures ----------
+      // Query the day's calendar row, parse closed_blocks, and label each
+      // block as current / upcoming / past relative to the wall clock.
+      try {
+        const { data: calToday } = await supabase
+          .from('lab_calendar')
+          .select('closed_blocks, status')
+          .eq('date', todayStr + 'T12:00:00')
+          .maybeSingle()
+
+        const raw = calToday?.closed_blocks
+        let arr = raw
+        if (typeof arr === 'string') {
+          try { arr = JSON.parse(arr) } catch { arr = [] }
+        }
+        if (!Array.isArray(arr)) arr = []
+
+        const nowMin = now.getHours() * 60 + now.getMinutes()
+        const parseMin = (t) => {
+          const m = String(t || '').match(/^(\d{1,2}):(\d{2})/)
+          if (!m) return null
+          return parseInt(m[1], 10) * 60 + parseInt(m[2], 10)
+        }
+        const fmt12 = (t) => {
+          const m = parseMin(t)
+          if (m == null) return t || ''
+          const h = Math.floor(m / 60)
+          const mm = m % 60
+          const ap = h >= 12 ? 'PM' : 'AM'
+          const dh = h % 12 || 12
+          return mm === 0 ? `${dh}:00 ${ap}` : `${dh}:${String(mm).padStart(2, '0')} ${ap}`
+        }
+
+        const closures = arr
+          .map(b => {
+            const sm = parseMin(b?.start)
+            const em = parseMin(b?.end)
+            if (sm == null || em == null || em <= sm) return null
+            return {
+              startMin:   sm,
+              endMin:     em,
+              startStr:   fmt12(b.start),
+              endStr:     fmt12(b.end),
+              reason:     (b?.reason && String(b.reason).trim()) || 'Lab closed',
+              isCurrent:  sm <= nowMin && nowMin < em,
+              isUpcoming: sm > nowMin,
+              isPast:     em <= nowMin,
+            }
+          })
+          .filter(Boolean)
+          // Hide past closures — they no longer matter to anyone walking up
+          .filter(c => !c.isPast)
+          .sort((a, b) => a.startMin - b.startMin)
+
+        setTodayClosures(closures)
+      } catch (closureErr) {
+        console.error('TV display closure load error:', closureErr)
+        setTodayClosures([])
+      }
+
       setLastUpdated(new Date().toLocaleTimeString('en-US'))
     } catch (e) {
       console.error('TV display load error:', e)
@@ -408,10 +471,18 @@ export default function TVDisplayPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, () => { loadData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { loadData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { loadData() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { loadData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { loadData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, () => { loadData() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
+  }, [loadData])
+
+  // ── Minute-tick refresh so closure "isCurrent / isUpcoming" labels stay accurate ──
+  // (The data itself doesn't change, just our derived now-relative flags.)
+  useEffect(() => {
+    const id = setInterval(loadData, 60_000)
+    return () => clearInterval(id)
   }, [loadData])
 
   // ── Fallback polling (5 min) — safety net if a realtime message is missed ──
@@ -497,8 +568,54 @@ export default function TVDisplayPage() {
         </div>
       )}
 
+      {/* ── TODAY'S LAB CLOSURES BANNER ─────────────────────────
+          Surfaces hour-level closures (e.g. 2-3pm Faculty Meeting) so
+          students walking in can see the lab is unavailable for that
+          window without checking the signup page. */}
+      {todayClosures.length > 0 && (
+        <div
+          style={{
+            ...S.closureBanner,
+            top: 80 + (instructorAway ? 60 : 0),
+          }}
+          role="status"
+          aria-live="polite"
+        >
+          <span style={S.closureIcon} aria-hidden="true">🚫</span>
+          <div style={S.closureBody}>
+            <div style={S.closureTitle}>
+              {todayClosures.some(c => c.isCurrent)
+                ? 'Lab is closed right now'
+                : 'Lab closures today'}
+            </div>
+            <div style={S.closureChips}>
+              {todayClosures.map((c, i) => (
+                <span
+                  key={i}
+                  style={{
+                    ...S.closureChip,
+                    ...(c.isCurrent ? S.closureChipActive : {}),
+                  }}
+                  title={c.reason}
+                >
+                  <strong style={{ marginRight: 6 }}>{c.startStr}–{c.endStr}</strong>
+                  {c.reason}
+                  {c.isCurrent && <span style={S.closureNowDot} aria-label=" — currently in effect" />}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── MAIN ───────────────────────────────────────────────── */}
-      <div style={{ ...S.main, ...(instructorAway ? { marginTop: 140, height: 'calc(100vh - 140px)' } : {}) }}>
+      <div style={{
+        ...S.main,
+        ...((instructorAway || todayClosures.length > 0) ? (() => {
+          const offset = (instructorAway ? 60 : 0) + (todayClosures.length > 0 ? 76 : 0)
+          return { marginTop: 80 + offset, height: `calc(100vh - ${80 + offset}px)` }
+        })() : {})
+      }}>
         {/* LEFT — Work Orders */}
         <div style={S.woPanel}>
           <div style={S.panelHeader}>
@@ -910,4 +1027,31 @@ const S = {
   awayIcon: { fontSize: '2rem', flexShrink: 0 },
   awayTitle: { fontSize: '1.4rem', fontWeight: 700, color: '#fecaca' },
   awayText: { fontSize: '1.1rem', color: '#fca5a5', marginTop: 2 },
+
+  // ── Today's Closures Banner ──
+  closureBanner: {
+    position: 'fixed', left: 0, right: 0, zIndex: 98,
+    display: 'flex', alignItems: 'center', gap: 16,
+    padding: '10px 32px', minHeight: 76,
+    background: 'linear-gradient(135deg, #422006, #78350f)',
+    borderBottom: '2px solid #d97706',
+  },
+  closureIcon: { fontSize: '1.75rem', flexShrink: 0 },
+  closureBody: { display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 },
+  closureTitle: { fontSize: '1.05rem', fontWeight: 700, color: '#fde68a' },
+  closureChips: { display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  closureChip: {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '4px 10px', borderRadius: 8,
+    background: 'rgba(252,211,77,0.12)', border: '1px solid #b45309',
+    color: '#fde68a', fontSize: '0.9rem',
+  },
+  closureChipActive: {
+    background: 'rgba(239,68,68,0.18)', border: '1px solid #ef4444',
+    color: '#fecaca', fontWeight: 600,
+  },
+  closureNowDot: {
+    display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+    background: '#ef4444', marginLeft: 6, boxShadow: '0 0 6px #ef4444',
+  },
 }

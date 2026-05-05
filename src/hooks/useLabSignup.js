@@ -50,7 +50,79 @@ function isDeadlinePassed(weekStartDate) {
   return now > deadline
 }
 
-export { formatDateKey, formatHour, getHourFromTime, getWeekStart, isDeadlinePassed }
+// ─── Closure-block helpers ──────────────────────────────────────────────────
+// closed_blocks is a JSONB array of { start: 'HH:MM', end: 'HH:MM', reason: string }.
+// Times are 24-hour local. `end` is exclusive. `reason` is a short label.
+
+/** Parse 'HH:MM' or 'HH:MM:SS' into total minutes-since-midnight. Returns null on parse failure. */
+function timeToMinutes(timeStr) {
+  if (typeof timeStr !== 'string') return null
+  const m = timeStr.match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  const h = parseInt(m[1], 10)
+  const mm = parseInt(m[2], 10)
+  if (isNaN(h) || isNaN(mm)) return null
+  return h * 60 + mm
+}
+
+/** Format minutes-since-midnight as 'HH:MM' (24-hour). */
+function minutesToTimeStr(min) {
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+/** Coerce a possibly-NULL/string/array `closed_blocks` value into a sanitized array. */
+function normalizeClosedBlocks(raw) {
+  let arr = raw
+  if (typeof arr === 'string') {
+    try { arr = JSON.parse(arr) } catch { return [] }
+  }
+  if (!Array.isArray(arr)) return []
+  return arr
+    .map(b => {
+      if (!b || typeof b !== 'object') return null
+      const startMin = timeToMinutes(b.start)
+      const endMin   = timeToMinutes(b.end)
+      if (startMin == null || endMin == null) return null
+      if (endMin <= startMin) return null
+      return {
+        start:  minutesToTimeStr(startMin),
+        end:    minutesToTimeStr(endMin),
+        reason: typeof b.reason === 'string' ? b.reason : '',
+      }
+    })
+    .filter(Boolean)
+}
+
+/**
+ * Returns the closure reason string if the time-range [slotStartMin, slotEndMin)
+ * overlaps any block in closedBlocks, otherwise null. The first overlapping
+ * block's reason wins.
+ */
+function findOverlappingClosure(slotStartMin, slotEndMin, closedBlocks) {
+  if (!Array.isArray(closedBlocks) || closedBlocks.length === 0) return null
+  for (const b of closedBlocks) {
+    const bs = timeToMinutes(b.start)
+    const be = timeToMinutes(b.end)
+    if (bs == null || be == null) continue
+    if (bs < slotEndMin && be > slotStartMin) {
+      return (b.reason && String(b.reason).trim()) || 'Lab closed'
+    }
+  }
+  return null
+}
+
+/** Convenience for hour-based slots: an hour H covers [H*60, H*60+60). */
+function findClosureForHour(hour, closedBlocks) {
+  return findOverlappingClosure(hour * 60, hour * 60 + 60, closedBlocks)
+}
+
+export {
+  formatDateKey, formatHour, getHourFromTime, getWeekStart, isDeadlinePassed,
+  timeToMinutes, minutesToTimeStr, normalizeClosedBlocks,
+  findOverlappingClosure, findClosureForHour,
+}
 
 // ─── Lab Calendar (Instructor) ──────────────────────────────────────────────
 
@@ -94,6 +166,7 @@ export function useLabCalendar(year, month) {
         status: row.status || 'Open',
         lunchHour: row.lunch_hour != null ? parseInt(row.lunch_hour) : null,
         notes: row.notes || '',
+        closedBlocks: normalizeClosedBlocks(row.closed_blocks),
       }
     })
     setEntries(map)
@@ -141,6 +214,7 @@ export function useLabCalendarActions() {
             status: dayData.status || 'Open',
             lunch_hour: dayData.lunchHour || null,
             notes: dayData.notes || '',
+            closed_blocks: normalizeClosedBlocks(dayData.closedBlocks),
           })
           .eq('calendar_id', existing.calendar_id)
         if (error) throw error
@@ -169,6 +243,7 @@ export function useLabCalendarActions() {
           status: dayData.status || 'Open',
           lunch_hour: dayData.lunchHour || null,
           notes: dayData.notes || '',
+          closed_blocks: normalizeClosedBlocks(dayData.closedBlocks),
           created_by: profile?.email,
           created_at: new Date().toISOString(),
         })
@@ -198,7 +273,128 @@ export function useLabCalendarActions() {
     }
   }
 
-  return { saveDay, deleteDay, saving }
+  /**
+   * Find existing (non-cancelled) signups for `dateStr` whose time slot overlaps
+   * any of the given closure blocks. Returns an array of affected signup rows
+   * shaped for display in the conflict-warning modal.
+   *
+   * Pure read — does NOT modify any data.
+   */
+  const findConflictingSignups = async (dateStr, closedBlocks) => {
+    const blocks = normalizeClosedBlocks(closedBlocks)
+    if (blocks.length === 0) return []
+    try {
+      const targetDate = new Date(dateStr + 'T12:00:00')
+      const { data, error } = await supabase
+        .from('lab_signup')
+        .select('signup_id, user_name, user_email, class_id, start_time, end_time, status, date')
+        .eq('date', targetDate.toISOString())
+        .neq('status', 'Cancelled')
+      if (error) throw error
+
+      return (data || [])
+        .map(row => {
+          const sMin = timeToMinutes(row.start_time)
+          // end_time may be missing for older rows; fall back to start + 60 min
+          const eMin = timeToMinutes(row.end_time) ?? (sMin != null ? sMin + 60 : null)
+          if (sMin == null || eMin == null) return null
+          const reason = findOverlappingClosure(sMin, eMin, blocks)
+          if (!reason) return null
+          return {
+            signupId:  row.signup_id,
+            userName:  row.user_name || '',
+            userEmail: row.user_email || '',
+            classId:   row.class_id || '',
+            startTime: row.start_time,
+            endTime:   row.end_time,
+            startMin:  sMin,
+            endMin:    eMin,
+            reason,
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.startMin - b.startMin || a.userName.localeCompare(b.userName))
+    } catch (err) {
+      console.error('findConflictingSignups error:', err)
+      toast.error('Could not check for conflicts: ' + err.message)
+      return []
+    }
+  }
+
+  /**
+   * Cancel a list of signups (by signup_id) with status='Cancelled' and a
+   * rejection_reason note. Optionally fires the send-closure-notification
+   * Edge Function to email each affected student.
+   *
+   * Returns { cancelled, emailed, emailFailed, errors }
+   */
+  const cancelSignupsForClosure = async ({
+    dateStr,
+    blockReason,
+    affectedSignups,
+    sendEmail,
+  }) => {
+    if (!Array.isArray(affectedSignups) || affectedSignups.length === 0) {
+      return { cancelled: 0, emailed: 0, emailFailed: 0, errors: [] }
+    }
+    setSaving(true)
+    try {
+      const ids = affectedSignups.map(s => s.signupId).filter(Boolean)
+      const { error: updateErr } = await supabase
+        .from('lab_signup')
+        .update({ status: 'Cancelled' })
+        .in('signup_id', ids)
+      if (updateErr) throw updateErr
+
+      let emailed = 0
+      let emailFailed = 0
+      const errors = []
+
+      if (sendEmail) {
+        try {
+          const { data: fnData, error: fnErr } = await supabase.functions.invoke(
+            'send-closure-notification',
+            {
+              body: {
+                date:    dateStr,
+                reason:  blockReason || 'Lab closed',
+                signups: affectedSignups.map(s => ({
+                  email:     s.userEmail,
+                  name:      s.userName,
+                  startTime: s.startTime,
+                  endTime:   s.endTime,
+                  classId:   s.classId,
+                })),
+              },
+            }
+          )
+          if (fnErr) {
+            // Edge function fully failed (network, deployment, auth, etc.)
+            emailFailed = ids.length
+            errors.push(fnErr.message || String(fnErr))
+          } else if (fnData) {
+            emailed     = fnData.sent || 0
+            emailFailed = fnData.failed || 0
+            if (Array.isArray(fnData.errors)) {
+              fnData.errors.forEach(e => errors.push(`${e.email}: ${e.error}`))
+            }
+          }
+        } catch (err) {
+          emailFailed = ids.length
+          errors.push(err.message || String(err))
+        }
+      }
+
+      return { cancelled: ids.length, emailed, emailFailed, errors }
+    } catch (err) {
+      toast.error('Error cancelling signups: ' + err.message)
+      return { cancelled: 0, emailed: 0, emailFailed: 0, errors: [err.message || String(err)] }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return { saveDay, deleteDay, findConflictingSignups, cancelSignupsForClosure, saving }
 }
 
 // ─── Lab Signup Data (Combined Load) ────────────────────────────────────────
@@ -262,6 +458,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
           notes: row.notes || '',
           lunchHour: isNaN(lunchH) ? null : lunchH,
           isOpen: row.status === 'Open',
+          closedBlocks: normalizeClosedBlocks(row.closed_blocks),
         }
         if (row.status === 'Open') {
           for (let h = startH; h < endH; h++) allHoursSet.add(h)
@@ -331,6 +528,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
             lunchHour: config?.lunchHour ?? null,
             notes: config ? config.notes : '',
             hasEntry: !!config,
+            closedBlocks: config?.closedBlocks || [],
           })
 
           // Build slots
@@ -349,6 +547,13 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
               }
             })
 
+            // Hour-level closure check (e.g. 2-3pm offsite meeting)
+            const closureReason = day.isOpen
+              ? findClosureForHour(hour, day.closedBlocks)
+              : null
+            const withinDayHours = hour >= day.startHour && hour < day.endHour
+            const isHourClosed = !!closureReason
+
             slots[key] = {
               date: dateKey,
               hour,
@@ -356,8 +561,11 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
               currentSignups: signups.length,
               availableSpots: Math.max(0, day.maxStudents - signups.length),
               isFull: signups.length >= day.maxStudents,
-              isOpen: day.isOpen && hour >= day.startHour && hour < day.endHour,
+              // isOpen now also requires that the hour is NOT inside a closure
+              isOpen: day.isOpen && withinDayHours && !isHourClosed,
               isLunch,
+              isHourClosed,
+              closureReason: closureReason || '',
               mySignupId,
               myClassId,
               deadlinePassed: weekDeadlinePassed,
