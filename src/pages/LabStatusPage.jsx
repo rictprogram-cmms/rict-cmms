@@ -403,6 +403,8 @@ export default function LabStatusPage() {
   const [instructorAway, setInstructorAway] = useState(false);
   const [awayReturnTime, setAwayReturnTime] = useState('');
   const [awayToggling, setAwayToggling] = useState(false);
+  // Today's hour-level lab closures (e.g. "2-3pm Faculty Meeting")
+  const [todayClosures, setTodayClosures] = useState([]);
 
   const fetchAwayMode = useCallback(async () => {
     try {
@@ -437,7 +439,7 @@ export default function LabStatusPage() {
     const todayStr = toLocalDateStr(today);
 
     try {
-      const [{ data: clockData }, { data: helpData }, { data: profilesData }, { data: signupData }] = await Promise.all([
+      const [{ data: clockData }, { data: helpData }, { data: profilesData }, { data: signupData }, { data: calData }] = await Promise.all([
         supabase.from('time_clock').select('record_id, user_name, user_email, punch_in, course_id, entry_type')
           .eq('status', 'Punched In').gte('punch_in', todayStr + 'T00:00:00').lte('punch_in', todayStr + 'T23:59:59')
           .order('punch_in', { ascending: true }),
@@ -446,7 +448,54 @@ export default function LabStatusPage() {
         supabase.from('profiles').select('email, time_clock_only').eq('time_clock_only', 'Yes'),
         supabase.from('lab_signup').select('user_name, user_email, start_time, end_time, status')
           .eq('date', todayStr).neq('status', 'Cancelled'),
+        supabase.from('lab_calendar').select('closed_blocks').eq('date', todayStr + 'T12:00:00').maybeSingle(),
       ]);
+
+      // ── Today's hour-level closures ──
+      // Surface "Lab closed 2-3pm — Faculty Meeting" banner so students walking
+      // up to the lab status display see it without checking the signup page.
+      try {
+        let arr = calData?.closed_blocks
+        if (typeof arr === 'string') {
+          try { arr = JSON.parse(arr) } catch { arr = [] }
+        }
+        if (!Array.isArray(arr)) arr = []
+
+        const nowMin = now.getHours() * 60 + now.getMinutes()
+        const parseMin = (t) => {
+          const m = String(t || '').match(/^(\d{1,2}):(\d{2})/)
+          if (!m) return null
+          return parseInt(m[1], 10) * 60 + parseInt(m[2], 10)
+        }
+        const fmt12 = (t) => {
+          const m = parseMin(t)
+          if (m == null) return t || ''
+          const h = Math.floor(m / 60)
+          const mm = m % 60
+          const ap = h >= 12 ? 'PM' : 'AM'
+          const dh = h % 12 || 12
+          return mm === 0 ? `${dh}:00 ${ap}` : `${dh}:${String(mm).padStart(2, '0')} ${ap}`
+        }
+        const closures = arr
+          .map(b => {
+            const sm = parseMin(b?.start)
+            const em = parseMin(b?.end)
+            if (sm == null || em == null || em <= sm) return null
+            return {
+              startMin: sm, endMin: em,
+              startStr: fmt12(b.start), endStr: fmt12(b.end),
+              reason: (b?.reason && String(b.reason).trim()) || 'Lab closed',
+              isCurrent: sm <= nowMin && nowMin < em,
+              isPast: em <= nowMin,
+            }
+          })
+          .filter(c => c && !c.isPast)
+          .sort((a, b) => a.startMin - b.startMin)
+        setTodayClosures(closures)
+      } catch (closureErr) {
+        console.error('[LabStatus] closure parse error:', closureErr)
+        setTodayClosures([])
+      }
 
       // TCO emails
       const tcoEmails = new Set();
@@ -541,8 +590,15 @@ export default function LabStatusPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchData)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, fetchData)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchData)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, fetchData)
       .subscribe();
     return () => supabase.removeChannel(channel);
+  }, [fetchData]);
+
+  // Minute-tick to keep closure isCurrent labels fresh
+  useEffect(() => {
+    const id = setInterval(fetchData, 60000);
+    return () => clearInterval(id);
   }, [fetchData]);
 
   // ── Touch interactions ──
@@ -635,6 +691,58 @@ export default function LabStatusPage() {
           <div style={{ fontSize: '0.62rem', color: '#6c757d' }}>{dateLabel}</div>
         </div>
       </header>
+
+      {/* ══ TODAY'S CLOSURES STRIP ══
+          Compact horizontal strip showing hour-level lab closures
+          (e.g. faculty meeting 2-3pm). Hidden when there are no closures.
+          Sized for the 800x480 kiosk — small but unmissable. */}
+      {todayClosures.length > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '6px 14px', flexShrink: 0,
+            background: todayClosures.some(c => c.isCurrent)
+              ? 'linear-gradient(90deg, rgba(127,29,29,0.4), rgba(67,20,7,0.4))'
+              : 'linear-gradient(90deg, rgba(67,20,7,0.4), rgba(67,20,7,0.2))',
+            borderBottom: '1px solid #78350f',
+          }}
+        >
+          <span className="material-icons" style={{ color: '#fbbf24', fontSize: '1rem' }} aria-hidden="true">
+            event_busy
+          </span>
+          <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#fde68a', letterSpacing: '0.5px', textTransform: 'uppercase', flexShrink: 0 }}>
+            {todayClosures.some(c => c.isCurrent) ? 'Closed Now' : 'Closing Today'}
+          </span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 0 }}>
+            {todayClosures.map((c, i) => (
+              <span
+                key={i}
+                title={c.reason}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '2px 8px', borderRadius: 6,
+                  background: c.isCurrent ? 'rgba(239,68,68,0.25)' : 'rgba(252,211,77,0.10)',
+                  border: `1px solid ${c.isCurrent ? '#ef4444' : '#b45309'}`,
+                  color: c.isCurrent ? '#fecaca' : '#fde68a',
+                  fontSize: '0.7rem',
+                  whiteSpace: 'nowrap', maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+              >
+                <strong>{c.startStr}–{c.endStr}</strong>
+                <span style={{ opacity: 0.85 }}>· {c.reason}</span>
+                {c.isCurrent && (
+                  <span
+                    aria-label=" — currently in effect"
+                    style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#ef4444', marginLeft: 2 }}
+                  />
+                )}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ══ MAIN ══ */}
       <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', overflow: 'hidden', minHeight: 0 }}>

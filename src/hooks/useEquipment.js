@@ -6,6 +6,8 @@ import {
   formatDateKey,
   getHourFromTime,
   getWeekStart,
+  normalizeClosedBlocks,
+  findOverlappingClosure,
 } from '@/hooks/useLabSignup'
 import {
   generateSafeEquipmentId,
@@ -398,6 +400,7 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
           notes: row.notes || '',
           lunchHour: isNaN(lunchH) ? null : lunchH,
           isOpen: row.status === 'Open',
+          closedBlocks: normalizeClosedBlocks(row.closed_blocks),
         }
       })
 
@@ -474,6 +477,7 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
             startMin: (config?.startHour ?? 8) * 60,
             endMin: (config?.endHour ?? 16) * 60,
             lunchStartMin: config?.lunchHour != null ? config.lunchHour * 60 : null,
+            closedBlocks: config?.closedBlocks || [],
           }
           days[dateKey] = dayInfo
           weekDays.push(dayInfo)
@@ -489,6 +493,13 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
                 && min >= dayInfo.lunchStartMin
                 && min < dayInfo.lunchStartMin + 60
 
+              // Hour-level lab closure (e.g. faculty meeting 2-3pm)
+              const closureReason = findOverlappingClosure(
+                min,
+                min + 30,
+                dayInfo.closedBlocks
+              )
+
               const conflictEntry = mySlotsByTime[`${dateKey}_${min}`]
 
               equipment.forEach(e => {
@@ -503,10 +514,17 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
                 // Lunch hour is NOT a blocking state — students may schedule
                 // across lunch. The `isLunch` boolean is attached to each slot
                 // for any future decoration but does not affect interactivity.
+                //
+                // Closures (closed_blocks on lab_calendar) DO block bookings.
+                // We mark these as state='closed'; the GridCell falls through
+                // to the default ('Unavailable') case if it doesn't recognize
+                // 'closed', which is fine — the slot is non-interactive.
                 if (booking) {
                   state = booking.userEmail === profile.email ? 'mine' : 'other'
                 } else if (isPast) {
                   state = 'past'
+                } else if (closureReason) {
+                  state = 'closed'
                 } else if (e.status === 'Maintenance') {
                   state = 'maintenance'
                 } else if (conflictEntry && conflictEntry.equipmentId !== e.equipmentId) {
@@ -523,6 +541,7 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
                   state,
                   isPast,
                   isLunch,
+                  closureReason: closureReason || '',
                   booking: booking || null,
                   conflictEquipmentId: conflictEntry?.equipmentId || null,
                 }

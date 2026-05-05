@@ -6,13 +6,15 @@ import {
   useLabCalendar, useLabCalendarActions, useDailyRoster,
   useStudentsList, useInstructorSignup,
   formatDateKey, formatHour, getHourFromTime, getWeekStart,
+  timeToMinutes, minutesToTimeStr, findOverlappingClosure,
 } from '@/hooks/useLabSignup'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   Calendar, Clock, ChevronLeft, ChevronRight, Plus, X, Trash2,
   CheckCircle2, XCircle, Users, UserPlus, Printer, AlertTriangle,
-  Info, CalendarDays, ClipboardList, Shield, Loader2,
+  Info, CalendarDays, ClipboardList, Shield, Loader2, Ban, Mail,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -616,8 +618,21 @@ function WeeklySignupTab() {
                         ) : null
 
                         if (!slot.isOpen) {
-                          cellClass += 'bg-red-50 text-red-300 cursor-default'
-                          cellContent = '—'
+                          // Distinguish a within-day closure (e.g. faculty meeting
+                          // 2-3pm) from the day being closed entirely. Both render
+                          // non-interactive, but the closure case shows the reason.
+                          if (slot.isHourClosed) {
+                            cellClass += 'bg-red-50 text-red-500 cursor-default border border-red-200'
+                            cellContent = (
+                              <span className="inline-flex items-center gap-0.5 leading-none">
+                                <Ban size={10} aria-hidden="true" />
+                                <span className="text-[8px] font-semibold uppercase">Closed</span>
+                              </span>
+                            )
+                          } else {
+                            cellClass += 'bg-red-50 text-red-300 cursor-default'
+                            cellContent = '—'
+                          }
                         } else if (isMarkedCancel) {
                           cellClass += 'bg-red-100 border-2 border-red-400 text-red-500 cursor-pointer line-through'
                           cellContent = slot.myClassId ? courseLabel(slot.myClassId) : 'X'
@@ -665,22 +680,29 @@ function WeeklySignupTab() {
                           }
                         }
 
+                        // Build accessible label that surfaces closure reason for screen readers
+                        const titleText =
+                          !slot.isOpen
+                            ? (slot.isHourClosed
+                                ? `Closed: ${slot.closureReason}`
+                                : 'Lab closed')
+                          : isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up — click for details`
+                          : isMarkedCancel ? 'Click to undo cancel'
+                          : isMine && isLunch ? 'Lunch hour — click to cancel'
+                          : isMine ? 'Click to cancel this signup'
+                          : isSelected ? `${owningClass} — click to deselect`
+                          : slot.isFull ? 'No spots available'
+                          : isLunch ? `Lunch hour — ${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} (instructor on break)`
+                          : `${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} open${slot.deadlinePassed && !isInstructor ? ' (requires approval)' : ''}`
+
                         return (
                           <td key={key} className="px-1 py-1">
                             <button
                               className={cellClass}
                               onClick={handleClick}
-                              title={
-                                !slot.isOpen ? 'Lab closed' :
-                                isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up — click for details` :
-                                isMarkedCancel ? 'Click to undo cancel' :
-                                isMine && isLunch ? 'Lunch hour — click to cancel' :
-                                isMine ? 'Click to cancel this signup' :
-                                isSelected ? `${owningClass} — click to deselect` :
-                                slot.isFull ? 'No spots available' :
-                                isLunch ? `Lunch hour — ${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} (instructor on break)` :
-                                `${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} open${slot.deadlinePassed && !isInstructor ? ' (requires approval)' : ''}`
-                              }
+                              title={titleText}
+                              aria-label={`${day.dayName} ${formatHour(hour)} — ${titleText}`}
+                              disabled={!slot.isOpen}
                             >
                               {lunchBadge}
                               {cellContent}
@@ -990,9 +1012,10 @@ function LabCalendarTab() {
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth())
   const [editingDay, setEditingDay] = useState(null)
+  const [conflictModal, setConflictModal] = useState(null)
 
   const { entries, loading, refresh } = useLabCalendar(year, month)
-  const { saveDay, deleteDay, saving } = useLabCalendarActions()
+  const { saveDay, deleteDay, findConflictingSignups, cancelSignupsForClosure, saving } = useLabCalendarActions()
 
   const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
   const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -1038,12 +1061,114 @@ function LabCalendarTab() {
       maxStudents: entry?.maxStudents || 24,
       lunchHour: entry?.lunchHour ?? 12,
       notes: entry?.notes || '',
+      // Hour-level closures within an Open day (e.g. 2-3pm faculty meeting)
+      closedBlocks: Array.isArray(entry?.closedBlocks)
+        ? entry.closedBlocks.map(b => ({ ...b }))
+        : [],
     })
+  }
+
+  // Validate closed_blocks before save: must have start < end, both within
+  // day hours (when status === 'Open'), and no zero-length ranges. Returns
+  // { ok: true, blocks } on success, { ok: false, message } on failure.
+  const validateClosedBlocks = (day) => {
+    const blocks = Array.isArray(day.closedBlocks) ? day.closedBlocks : []
+    if (day.status !== 'Open' || blocks.length === 0) {
+      return { ok: true, blocks: [] }
+    }
+    const dayStartMin = timeToMinutes(day.startTime)
+    const dayEndMin   = timeToMinutes(day.endTime)
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]
+      const bs = timeToMinutes(b.start)
+      const be = timeToMinutes(b.end)
+      if (bs == null || be == null) {
+        return { ok: false, message: `Closed period #${i + 1} is missing a start or end time.` }
+      }
+      if (be <= bs) {
+        return { ok: false, message: `Closed period #${i + 1} ends before it starts.` }
+      }
+      if (dayStartMin != null && bs < dayStartMin) {
+        return { ok: false, message: `Closed period #${i + 1} starts before the lab opens.` }
+      }
+      if (dayEndMin != null && be > dayEndMin) {
+        return { ok: false, message: `Closed period #${i + 1} ends after the lab closes.` }
+      }
+    }
+    return { ok: true, blocks }
   }
 
   const handleSave = async () => {
     if (!editingDay) return
-    await saveDay(editingDay)
+
+    // Validate before any DB work
+    const v = validateClosedBlocks(editingDay)
+    if (!v.ok) {
+      toast.error(v.message)
+      return
+    }
+
+    // If the day is fully closed OR there are no closure blocks, no conflict
+    // check needed — save directly.
+    const blocks = v.blocks
+    if (editingDay.status !== 'Open' || blocks.length === 0) {
+      await saveDay({ ...editingDay, closedBlocks: [] })
+      setEditingDay(null)
+      refresh()
+      return
+    }
+
+    // Check for existing student signups that overlap any new closure block.
+    // Only the *new* (or expanded) closures need a warning — but for simplicity
+    // and predictability we re-check all current blocks on save, and only show
+    // signups still active. This way the modal correctly reflects what will
+    // actually be cancelled when Save is pressed.
+    const conflicts = await findConflictingSignups(editingDay.date, blocks)
+    if (conflicts.length === 0) {
+      await saveDay({ ...editingDay, closedBlocks: blocks })
+      setEditingDay(null)
+      refresh()
+      return
+    }
+
+    // Open conflict modal to confirm + offer to email
+    setConflictModal({
+      day: { ...editingDay, closedBlocks: blocks },
+      conflicts,
+      sendEmail: true,
+    })
+  }
+
+  // Called from the conflict modal's Confirm button
+  const handleConfirmConflict = async () => {
+    if (!conflictModal) return
+    const { day, conflicts, sendEmail } = conflictModal
+
+    // Cancel signups (and optionally email) BEFORE persisting the closure so
+    // that, even if persistence fails, students don't see a stale signup that
+    // was supposedly cancelled.
+    const blockReason = (day.closedBlocks.find(b => (b.reason || '').trim())?.reason || 'Lab closed')
+    const result = await cancelSignupsForClosure({
+      dateStr:         day.date,
+      blockReason:     blockReason,
+      affectedSignups: conflicts,
+      sendEmail,
+    })
+
+    // Persist the calendar day with closures
+    await saveDay(day)
+
+    if (sendEmail) {
+      if (result.emailFailed > 0) {
+        toast.error(`Cancelled ${result.cancelled}, but ${result.emailFailed} email${result.emailFailed === 1 ? '' : 's'} failed to send`)
+      } else {
+        toast.success(`Cancelled ${result.cancelled} signup${result.cancelled === 1 ? '' : 's'} and sent ${result.emailed} notification${result.emailed === 1 ? '' : 's'}`)
+      }
+    } else {
+      toast.success(`Cancelled ${result.cancelled} signup${result.cancelled === 1 ? '' : 's'}`)
+    }
+
+    setConflictModal(null)
     setEditingDay(null)
     refresh()
   }
@@ -1068,9 +1193,15 @@ function LabCalendarTab() {
       </div>
 
       {/* Legend */}
-      <div className="flex gap-4 justify-center text-xs text-surface-500 py-2 border-b border-surface-100">
+      <div className="flex gap-4 justify-center text-xs text-surface-500 py-2 border-b border-surface-100 flex-wrap">
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-emerald-100 border border-emerald-300" /> Open</span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-red-50 border border-red-200" /> Closed</span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-sm bg-emerald-100 border border-emerald-300 relative">
+            <Ban size={8} className="absolute -top-1 -right-1 text-red-500 bg-white rounded-full" aria-hidden="true" />
+          </span>
+          Open with closure(s)
+        </span>
         <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-surface-50 border border-surface-200" /> Not Set</span>
       </div>
 
@@ -1084,6 +1215,7 @@ function LabCalendarTab() {
           ))}
           {calDays.map((cell, i) => {
             const entry = entries[cell.date]
+            const closureCount = (entry?.closedBlocks || []).length
             let bgClass = 'bg-white border-surface-200'
             if (cell.isOther) bgClass = 'bg-surface-50/50 border-surface-100 opacity-40'
             else if (cell.isToday) bgClass = 'bg-blue-50 border-blue-300'
@@ -1091,12 +1223,29 @@ function LabCalendarTab() {
             if (entry?.status === 'Closed') bgClass = 'bg-red-50 border-red-200'
 
             return (
-              <div
+              <button
                 key={i}
+                type="button"
                 onClick={() => handleEditDay(cell.date)}
-                className={`min-h-[70px] border-2 rounded-lg p-1.5 cursor-pointer hover:border-brand-400 transition-colors ${bgClass}`}
+                className={`text-left min-h-[70px] border-2 rounded-lg p-1.5 cursor-pointer hover:border-brand-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 transition-colors ${bgClass}`}
+                aria-label={
+                  `${cell.date}` +
+                  (entry ? ` — ${entry.status}` : ' — Not set') +
+                  (closureCount > 0 ? `, ${closureCount} closed period${closureCount === 1 ? '' : 's'}` : '') +
+                  '. Click to edit.'
+                }
               >
-                <div className="text-sm font-bold text-surface-900">{cell.day}</div>
+                <div className="flex items-start justify-between gap-1">
+                  <div className="text-sm font-bold text-surface-900">{cell.day}</div>
+                  {closureCount > 0 && entry?.status === 'Open' && (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-[8px] font-bold bg-red-100 text-red-700 px-1 py-0.5 rounded leading-none"
+                      title={`${closureCount} closed period${closureCount === 1 ? '' : 's'}`}
+                    >
+                      <Ban size={8} aria-hidden="true" /> {closureCount}
+                    </span>
+                  )}
+                </div>
                 {entry && (
                   <>
                     <div className={`text-[8px] font-bold mt-0.5 px-1 py-0.5 rounded inline-block ${
@@ -1114,7 +1263,7 @@ function LabCalendarTab() {
                     )}
                   </>
                 )}
-              </div>
+              </button>
             )
           })}
         </div>
@@ -1123,13 +1272,19 @@ function LabCalendarTab() {
 
       {/* Edit Day Modal */}
       {editingDay && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditingDay(null)}>
-          <div className="bg-white rounded-xl w-full max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
-            <div className="px-4 py-3 border-b border-surface-200 flex items-center justify-between">
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          onClick={() => setEditingDay(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Edit lab calendar for ${editingDay.date}`}
+        >
+          <div className="bg-white rounded-xl w-full max-w-md shadow-xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-surface-200 flex items-center justify-between flex-shrink-0">
               <span className="font-semibold text-sm">{editingDay.date}</span>
-              <button onClick={() => setEditingDay(null)} className="text-surface-400 hover:text-surface-600"><X size={18} /></button>
+              <button onClick={() => setEditingDay(null)} aria-label="Close" className="text-surface-400 hover:text-surface-600"><X size={18} /></button>
             </div>
-            <div className="p-4 space-y-4">
+            <div className="p-4 space-y-4 overflow-y-auto">
               {/* Status Toggle */}
               <div className="flex gap-2">
                 <button
@@ -1137,12 +1292,14 @@ function LabCalendarTab() {
                   className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-medium transition-colors ${
                     editingDay.status === 'Open' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-surface-200 text-surface-500'
                   }`}
+                  aria-pressed={editingDay.status === 'Open'}
                 >Lab Open</button>
                 <button
                   onClick={() => setEditingDay(d => ({ ...d, status: 'Closed' }))}
                   className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-medium transition-colors ${
                     editingDay.status === 'Closed' ? 'border-red-500 bg-red-50 text-red-700' : 'border-surface-200 text-surface-500'
                   }`}
+                  aria-pressed={editingDay.status === 'Closed'}
                 >Lab Closed</button>
               </div>
 
@@ -1177,6 +1334,14 @@ function LabCalendarTab() {
                         className="mt-1 w-full px-3 py-2 border border-surface-200 rounded-lg text-sm" />
                     </label>
                   </div>
+
+                  {/* ─── Closed Periods (hour-level closures) ─────────────── */}
+                  <ClosedPeriodsEditor
+                    blocks={editingDay.closedBlocks || []}
+                    dayStartTime={editingDay.startTime}
+                    dayEndTime={editingDay.endTime}
+                    onChange={(blocks) => setEditingDay(d => ({ ...d, closedBlocks: blocks }))}
+                  />
                 </>
               )}
 
@@ -1186,7 +1351,7 @@ function LabCalendarTab() {
                   placeholder="e.g. Holiday" className="mt-1 w-full px-3 py-2 border border-surface-200 rounded-lg text-sm" />
               </label>
             </div>
-            <div className="px-4 py-3 border-t border-surface-200 flex justify-between">
+            <div className="px-4 py-3 border-t border-surface-200 flex justify-between flex-shrink-0">
               <button onClick={handleDelete} disabled={saving}
                 className="px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50">
                 Remove
@@ -1197,13 +1362,294 @@ function LabCalendarTab() {
                 </button>
                 <button onClick={handleSave} disabled={saving}
                   className="px-4 py-2 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-                  {saving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                  {saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : 'Save'}
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Conflict Warning Sub-Modal */}
+      {conflictModal && (
+        <ClosureConflictModal
+          modal={conflictModal}
+          saving={saving}
+          onCancel={() => setConflictModal(null)}
+          onToggleEmail={(checked) => setConflictModal(m => ({ ...m, sendEmail: checked }))}
+          onConfirm={handleConfirmConflict}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Closed Periods Editor (sub-form of LabCalendarTab edit modal) ──────────
+//
+// Edits an array of { start, end, reason } closure blocks. Used inside the
+// LabCalendarTab edit modal to mark hour ranges as closed within an Open day
+// (e.g. "2-3pm offsite meeting"). Quick presets cover the common cases.
+
+function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
+  const addBlock = (preset = null) => {
+    const next = [...(blocks || [])]
+    if (preset) {
+      next.push(preset)
+    } else {
+      // Default new block: one hour starting at the day's start time
+      const startMin = timeToMinutes(dayStartTime) ?? 8 * 60
+      next.push({
+        start:  minutesToTimeStr(startMin),
+        end:    minutesToTimeStr(startMin + 60),
+        reason: '',
+      })
+    }
+    onChange(next)
+  }
+
+  const updateBlock = (idx, patch) => {
+    const next = blocks.map((b, i) => i === idx ? { ...b, ...patch } : b)
+    onChange(next)
+  }
+
+  const removeBlock = (idx) => {
+    onChange(blocks.filter((_, i) => i !== idx))
+  }
+
+  return (
+    <fieldset className="border border-surface-200 rounded-lg p-3 space-y-2">
+      <legend className="text-xs font-semibold text-surface-700 px-1 inline-flex items-center gap-1">
+        <Ban size={12} aria-hidden="true" /> Closed Periods
+      </legend>
+      <p className="text-[11px] text-surface-500 -mt-1">
+        Mark specific hour ranges as closed (e.g. faculty meeting 2-3pm). Students will see these as closed in the signup grid.
+      </p>
+
+      {(blocks || []).length === 0 && (
+        <p className="text-[11px] text-surface-400 italic py-1">No closed periods. Lab is open the entire scheduled time.</p>
+      )}
+
+      {(blocks || []).map((b, idx) => (
+        <div key={idx} className="grid grid-cols-[1fr_1fr_1.2fr_auto] gap-2 items-end bg-surface-50 rounded-md p-2">
+          <label className="text-[10px] font-medium text-surface-600">
+            <span className="block mb-0.5">Start</span>
+            <input
+              type="time"
+              value={b.start || ''}
+              onChange={e => updateBlock(idx, { start: e.target.value })}
+              className="w-full px-2 py-1.5 border border-surface-200 rounded text-xs"
+              aria-label={`Closed period ${idx + 1} start time`}
+            />
+          </label>
+          <label className="text-[10px] font-medium text-surface-600">
+            <span className="block mb-0.5">End</span>
+            <input
+              type="time"
+              value={b.end || ''}
+              onChange={e => updateBlock(idx, { end: e.target.value })}
+              className="w-full px-2 py-1.5 border border-surface-200 rounded text-xs"
+              aria-label={`Closed period ${idx + 1} end time`}
+            />
+          </label>
+          <label className="text-[10px] font-medium text-surface-600">
+            <span className="block mb-0.5">Reason</span>
+            <input
+              type="text"
+              value={b.reason || ''}
+              onChange={e => updateBlock(idx, { reason: e.target.value })}
+              placeholder="e.g. Faculty meeting"
+              className="w-full px-2 py-1.5 border border-surface-200 rounded text-xs"
+              aria-label={`Closed period ${idx + 1} reason`}
+              maxLength={80}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => removeBlock(idx)}
+            className="p-1.5 text-red-500 hover:bg-red-50 rounded border border-transparent hover:border-red-200 self-end"
+            aria-label={`Remove closed period ${idx + 1}`}
+            title="Remove this closed period"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ))}
+
+      <div className="flex flex-wrap gap-2 pt-1">
+        <button
+          type="button"
+          onClick={() => addBlock()}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-brand-700 bg-brand-50 border border-brand-200 rounded hover:bg-brand-100"
+        >
+          <Plus size={12} aria-hidden="true" /> Add closed period
+        </button>
+
+        {/* Quick presets */}
+        <button
+          type="button"
+          onClick={() => addBlock({ start: '14:00', end: '15:00', reason: '' })}
+          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200"
+          title="Add a 2:00–3:00 PM block"
+        >
+          + 2-3 PM
+        </button>
+        <button
+          type="button"
+          onClick={() => addBlock({ start: '09:00', end: '10:00', reason: '' })}
+          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200"
+          title="Add a 9:00–10:00 AM block"
+        >
+          + 9-10 AM
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const startMin = timeToMinutes(dayStartTime) ?? 8 * 60
+            const endMin   = timeToMinutes(dayEndTime)   ?? 16 * 60
+            const noonMin  = 12 * 60
+            const closeStart = noonMin <= startMin ? startMin : noonMin
+            if (closeStart >= endMin) return
+            addBlock({ start: minutesToTimeStr(closeStart), end: minutesToTimeStr(endMin), reason: '' })
+          }}
+          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200"
+          title="Closed afternoon (noon to end of day)"
+        >
+          + Afternoon
+        </button>
+      </div>
+    </fieldset>
+  )
+}
+
+// ─── Closure Conflict Warning Modal ────────────────────────────────────────
+//
+// Shown when an instructor tries to save closure(s) that overlap existing
+// (non-cancelled) student signups. Lists every affected student and offers
+// to email them when their signup is cancelled.
+
+function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmail }) {
+  const dialogRef = useDialogA11y(true, onCancel)
+  const { conflicts, sendEmail, day } = modal
+
+  // Group conflicts by hour for display
+  const grouped = useMemo(() => {
+    const map = new Map()
+    for (const c of conflicts) {
+      const key = `${c.startTime}-${c.endTime}`
+      if (!map.has(key)) map.set(key, { startMin: c.startMin, items: [] })
+      map.get(key).items.push(c)
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[1].startMin - b[1].startMin)
+      .map(([key, v]) => ({ timeKey: key, ...v }))
+  }, [conflicts])
+
+  const fmt = (timeStr) => {
+    const m = timeToMinutes(timeStr)
+    if (m == null) return timeStr
+    const h = Math.floor(m / 60)
+    const mm = m % 60
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    const dispH = h % 12 || 12
+    return mm === 0 ? `${dispH}:00 ${ampm}` : `${dispH}:${String(mm).padStart(2, '0')} ${ampm}`
+  }
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4"
+      onClick={onCancel}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="closure-conflict-title"
+        aria-describedby="closure-conflict-desc"
+        className="bg-white rounded-xl w-full max-w-md shadow-2xl max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b border-surface-200 flex items-center justify-between flex-shrink-0 bg-amber-50">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={18} className="text-amber-600" aria-hidden="true" />
+            <span id="closure-conflict-title" className="font-semibold text-sm text-amber-900">
+              Existing signups will be cancelled
+            </span>
+          </div>
+          <button onClick={onCancel} aria-label="Cancel" className="text-surface-500 hover:text-surface-700">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3 overflow-y-auto">
+          <p id="closure-conflict-desc" className="text-xs text-surface-600 leading-relaxed">
+            <strong>{conflicts.length}</strong> student signup{conflicts.length === 1 ? '' : 's'} on{' '}
+            <strong>{day.date}</strong> overlap{conflicts.length === 1 ? 's' : ''} the closure period
+            {(day.closedBlocks || []).length === 1 ? '' : 's'} you've added. Saving will cancel
+            {conflicts.length === 1 ? ' this signup' : ' these signups'} so {conflicts.length === 1 ? 'the student' : 'students'} can pick a different time.
+          </p>
+
+          <div className="border border-surface-200 rounded-lg divide-y divide-surface-100 max-h-[40vh] overflow-y-auto">
+            {grouped.map(group => (
+              <div key={group.timeKey} className="bg-white">
+                <div className="px-3 py-1.5 bg-red-50 text-red-700 text-[11px] font-bold uppercase tracking-wide">
+                  {fmt(group.items[0].startTime)} – {fmt(group.items[0].endTime)}
+                  <span className="ml-2 text-red-500 font-normal normal-case">
+                    {group.items.length} signup{group.items.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <ul className="divide-y divide-surface-50">
+                  {group.items.map(c => (
+                    <li key={c.signupId} className="px-3 py-1.5 text-xs flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-surface-900 truncate">{c.userName || c.userEmail}</div>
+                        <div className="text-surface-500 text-[10px] truncate">
+                          {c.userEmail}{c.classId ? ` · ${c.classId}` : ''}
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+
+          <label className="flex items-start gap-2 p-2.5 bg-surface-50 border border-surface-200 rounded-lg cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!sendEmail}
+              onChange={e => onToggleEmail(e.target.checked)}
+              className="mt-0.5"
+              aria-describedby="closure-email-help"
+            />
+            <span className="flex-1">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-surface-800">
+                <Mail size={12} aria-hidden="true" /> Email each student about the cancellation
+              </span>
+              <span id="closure-email-help" className="text-[10px] text-surface-500 block mt-0.5">
+                Sends an automated note explaining their signup was cancelled and asking them to pick another time.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="px-4 py-3 border-t border-surface-200 flex justify-end gap-2 flex-shrink-0">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="px-3 py-2 text-xs font-medium bg-surface-100 rounded-lg hover:bg-surface-200 disabled:opacity-50"
+          >
+            Back to edit
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={saving}
+            className="px-4 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-1.5"
+          >
+            {saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />}
+            {saving ? 'Working…' : `Cancel ${conflicts.length} signup${conflicts.length === 1 ? '' : 's'} & save closure`}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
