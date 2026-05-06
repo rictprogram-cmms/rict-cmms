@@ -136,6 +136,74 @@ export function useLookupTable(tableName, idColumn, nameColumn, orderColumn) {
   return { items, loading, refresh: fetch }
 }
 
+/**
+ * Drift-resistant lookup-table ID generator.
+ *
+ * Reads both the `counters` row AND the actual max numeric ID from the target
+ * table, then returns `prefix + (max(counter, table_max) + 1)`. Writes the
+ * corrected value back to `counters` so the row self-heals.
+ *
+ * Returns `null` if there is no counter row configured for this table — caller
+ * should let the insert fail naturally in that case (matches prior behavior).
+ *
+ * Why client-side max calc instead of just trusting the counter:
+ *   Bulk imports (e.g. SQL inserts during data migration) can populate the
+ *   table without bumping the counter, leaving the counter behind the actual
+ *   max. The next add then collides with `inventory_locations_pkey` and fails.
+ *   See userMemory: "Client-side fallbacks must write corrected values back
+ *   to counters or drift occurs."
+ *
+ * Lookup tables are small (<2000 rows in normal use), so pulling all IDs to
+ * compute max is cheap. If a table grows beyond that, move this to an RPC.
+ */
+async function generateLookupId(counterName, tableName, idColumn) {
+  // 1. Read counter
+  const { data: counter, error: counterErr } = await supabase
+    .from('counters')
+    .select('current_value, prefix')
+    .eq('counter_name', counterName)
+    .maybeSingle()
+
+  if (counterErr || !counter) return null
+
+  const counterVal = counter.current_value || 1000
+  const prefix = counter.prefix || ''
+
+  // 2. Read actual max numeric ID from the target table (drift detection).
+  //    Note: lex-sort is unsafe (e.g. "INV9999" > "INV10000" lexically), so
+  //    we pull the column and compute max numerically in JS.
+  let tableMax = 0
+  try {
+    const { data: rows } = await supabase.from(tableName).select(idColumn)
+    if (rows && rows.length > 0) {
+      for (const r of rows) {
+        const raw = (r[idColumn] || '').toString()
+        const digits = raw.replace(/\D/g, '')
+        const n = digits ? parseInt(digits, 10) : 0
+        if (Number.isFinite(n) && n > tableMax) tableMax = n
+      }
+    }
+  } catch (e) {
+    console.warn(`generateLookupId: max scan failed for ${tableName}, using counter only:`, e.message)
+  }
+
+  // 3. Use whichever is higher, then +1
+  const nextVal = Math.max(counterVal, tableMax) + 1
+
+  // 4. Heal the counter row so future calls don't repeat the work
+  try {
+    await supabase.from('counters').update({
+      current_value: nextVal,
+      updated_at: new Date().toISOString()
+    }).eq('counter_name', counterName)
+  } catch (e) {
+    // Non-fatal — we still have a valid ID to attempt the insert with
+    console.warn(`generateLookupId: counter update failed for ${counterName}:`, e.message)
+  }
+
+  return `${prefix}${nextVal}`
+}
+
 export function useLookupActions(tableName, idColumn) {
   const { profile } = useAuth()
   const [saving, setSaving] = useState(false)
@@ -144,30 +212,53 @@ export function useLookupActions(tableName, idColumn) {
   const addItem = async (data) => {
     setSaving(true)
     try {
+      const wasAutoGen = !data[idColumn]
+      const counterName = getCounterName(tableName)
+
       // Auto-generate ID if not provided
-      if (!data[idColumn]) {
-        const { data: counter } = await supabase
-          .from('counters')
-          .select('current_value, prefix')
-          .eq('counter_name', getCounterName(tableName))
-          .maybeSingle()
+      if (wasAutoGen) {
+        const newId = await generateLookupId(counterName, tableName, idColumn)
+        if (newId) data[idColumn] = newId
+        // If no counter is configured (newId === null), let the insert fail
+        // naturally below — preserves prior behavior for tables without counters.
+      }
 
-        if (counter) {
-          const nextVal = (counter.current_value || 1000) + 1
-          data[idColumn] = `${counter.prefix}${nextVal}`
-          await supabase.from('counters').update({
-            current_value: nextVal,
-            updated_at: new Date().toISOString()
-          }).eq('counter_name', getCounterName(tableName))
+      // Insert with retry-on-duplicate-key (handles concurrent insert races
+      // and any lingering drift). Only retries when WE generated the ID.
+      const maxAttempts = wasAutoGen ? 3 : 1
+      let inserted = null
+      let lastError = null
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const { data: rows, error } = await supabase.from(tableName).insert(data).select()
+
+        if (!error) {
+          if (!rows || rows.length === 0) {
+            // RLS blocked the insert — preserve original message
+            toast.error('Add failed — you may not have permission.')
+            return
+          }
+          inserted = rows
+          break
         }
+
+        lastError = error
+
+        // 23505 = unique_violation. If we auto-gen'd and have retries left,
+        // recompute the ID (drift may have just been observed) and try again.
+        if (error.code === '23505' && wasAutoGen && attempt < maxAttempts - 1) {
+          const retryId = await generateLookupId(counterName, tableName, idColumn)
+          if (retryId) {
+            data[idColumn] = retryId
+            continue
+          }
+        }
+
+        // Non-retryable, or retries exhausted — throw to outer catch
+        throw error
       }
 
-      const { data: rows, error } = await supabase.from(tableName).insert(data).select()
-      if (error) throw error
-      if (!rows || rows.length === 0) {
-        toast.error('Add failed — you may not have permission.')
-        return
-      }
+      if (!inserted) return
 
       // Audit
       try {
@@ -183,7 +274,12 @@ export function useLookupActions(tableName, idColumn) {
 
       toast.success('Added successfully')
     } catch (err) {
-      toast.error(err.message)
+      // Friendlier message for unique-violation; otherwise show raw message
+      if (err && err.code === '23505') {
+        toast.error('Could not generate a unique ID — please refresh and try again.')
+      } else {
+        toast.error(err.message || 'Add failed')
+      }
       throw err
     } finally {
       setSaving(false)
