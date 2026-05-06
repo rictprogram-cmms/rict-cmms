@@ -3,12 +3,20 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 
+// ─── Helper: unique realtime channel suffix ──────────────────────────────────
+// Per project rule: channel names must be unique per mounted component to
+// prevent conflicts when multiple instances of a hook are alive at once.
+function makeChannelSuffix() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+}
+
 // ─── General Settings ────────────────────────────────────────────────────────
 
 export function useSettings() {
   const [settings, setSettings] = useState([])
   const [loading, setLoading] = useState(true)
   const hasLoadedRef = useRef(false)
+  const channelIdRef = useRef(`settings-changes-${makeChannelSuffix()}`)
 
   const fetch = useCallback(async () => {
     if (!hasLoadedRef.current) setLoading(true)
@@ -30,10 +38,10 @@ export function useSettings() {
 
   useEffect(() => { fetch() }, [fetch])
 
-  // Real-time: refresh when settings change
+  // Real-time: refresh when settings change (unique channel per mount)
   useEffect(() => {
     const channel = supabase
-      .channel('settings-changes')
+      .channel(channelIdRef.current)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => { fetch() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
@@ -105,6 +113,7 @@ export function useSettingsActions() {
 export function useLookupTable(tableName, idColumn, nameColumn, orderColumn) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
+  const channelIdRef = useRef(`lookup-${tableName}-${makeChannelSuffix()}`)
 
   const fetch = useCallback(async () => {
     setLoading(true)
@@ -124,10 +133,10 @@ export function useLookupTable(tableName, idColumn, nameColumn, orderColumn) {
 
   useEffect(() => { fetch() }, [fetch])
 
-  // Real-time: refresh when the lookup table changes
+  // Real-time: refresh when the lookup table changes (unique channel per mount)
   useEffect(() => {
     const channel = supabase
-      .channel(`lookup-${tableName}-changes`)
+      .channel(channelIdRef.current)
       .on('postgres_changes', { event: '*', schema: 'public', table: tableName }, () => { fetch() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
@@ -137,27 +146,37 @@ export function useLookupTable(tableName, idColumn, nameColumn, orderColumn) {
 }
 
 /**
- * Drift-resistant lookup-table ID generator.
+ * Lookup-table ID generator with two-tier strategy.
  *
- * Reads both the `counters` row AND the actual max numeric ID from the target
- * table, then returns `prefix + (max(counter, table_max) + 1)`. Writes the
- * corrected value back to `counters` so the row self-heals.
+ * Tier 1 (default): atomic `get_next_id` RPC. Race-safe at DB level. This is
+ *   the preferred path used by the rest of the app (work_order, asset, etc.).
  *
- * Returns `null` if there is no counter row configured for this table — caller
- * should let the insert fail naturally in that case (matches prior behavior).
+ * Tier 2 (fallback / drift recovery): drift-resistant client-side max scan.
+ *   Reads `counters` AND the actual MAX numeric ID from the target table,
+ *   uses `MAX(counter, table_max) + 1`, and writes the corrected value back
+ *   to `counters`. Used when:
+ *     - the RPC fails or returns null, or
+ *     - caller passes `forceClient: true` (used for retry-after-23505)
  *
- * Why client-side max calc instead of just trusting the counter:
- *   Bulk imports (e.g. SQL inserts during data migration) can populate the
- *   table without bumping the counter, leaving the counter behind the actual
- *   max. The next add then collides with `inventory_locations_pkey` and fails.
- *   See userMemory: "Client-side fallbacks must write corrected values back
- *   to counters or drift occurs."
- *
- * Lookup tables are small (<2000 rows in normal use), so pulling all IDs to
- * compute max is cheap. If a table grows beyond that, move this to an RPC.
+ * Returns a fully prefixed ID string (e.g. "INV2006") or `null` if no counter
+ * is configured for this table.
  */
-async function generateLookupId(counterName, tableName, idColumn) {
-  // 1. Read counter
+async function generateLookupId(counterName, tableName, idColumn, options = {}) {
+  const { forceClient = false } = options
+
+  // ── Tier 1: atomic RPC ─────────────────────────────────────────────────────
+  if (!forceClient) {
+    try {
+      const { data: rpcId, error: rpcErr } = await supabase.rpc('get_next_id', { p_type: counterName })
+      if (!rpcErr && rpcId) return rpcId
+      if (rpcErr) console.warn(`generateLookupId: RPC error for ${counterName}, falling through:`, rpcErr.message)
+    } catch (e) {
+      console.warn(`generateLookupId: RPC threw for ${counterName}, falling through:`, e.message)
+    }
+  }
+
+  // ── Tier 2: drift-resistant client-side ────────────────────────────────────
+  // 1. Read counter row (for current_value + prefix)
   const { data: counter, error: counterErr } = await supabase
     .from('counters')
     .select('current_value, prefix')
@@ -172,6 +191,7 @@ async function generateLookupId(counterName, tableName, idColumn) {
   // 2. Read actual max numeric ID from the target table (drift detection).
   //    Note: lex-sort is unsafe (e.g. "INV9999" > "INV10000" lexically), so
   //    we pull the column and compute max numerically in JS.
+  //    Lookup tables are small (<2000 rows in normal use) so this is cheap.
   let tableMax = 0
   try {
     const { data: rows } = await supabase.from(tableName).select(idColumn)
@@ -190,7 +210,7 @@ async function generateLookupId(counterName, tableName, idColumn) {
   // 3. Use whichever is higher, then +1
   const nextVal = Math.max(counterVal, tableMax) + 1
 
-  // 4. Heal the counter row so future calls don't repeat the work
+  // 4. Heal the counter row so future RPC calls return correct values
   try {
     await supabase.from('counters').update({
       current_value: nextVal,
@@ -215,16 +235,16 @@ export function useLookupActions(tableName, idColumn) {
       const wasAutoGen = !data[idColumn]
       const counterName = getCounterName(tableName)
 
-      // Auto-generate ID if not provided
+      // Auto-generate ID if not provided (Tier 1: RPC)
       if (wasAutoGen) {
         const newId = await generateLookupId(counterName, tableName, idColumn)
         if (newId) data[idColumn] = newId
-        // If no counter is configured (newId === null), let the insert fail
-        // naturally below — preserves prior behavior for tables without counters.
+        // If null (no counter configured), let the insert fail naturally below.
       }
 
-      // Insert with retry-on-duplicate-key (handles concurrent insert races
-      // and any lingering drift). Only retries when WE generated the ID.
+      // Insert with retry-on-duplicate-key. On collision, switch to the
+      // drift-resistant client path (which heals the counter + computes a
+      // post-drift safe ID) and retry up to 3 times total.
       const maxAttempts = wasAutoGen ? 3 : 1
       let inserted = null
       let lastError = null
@@ -245,9 +265,9 @@ export function useLookupActions(tableName, idColumn) {
         lastError = error
 
         // 23505 = unique_violation. If we auto-gen'd and have retries left,
-        // recompute the ID (drift may have just been observed) and try again.
+        // force the drift-resistant client path and retry.
         if (error.code === '23505' && wasAutoGen && attempt < maxAttempts - 1) {
-          const retryId = await generateLookupId(counterName, tableName, idColumn)
+          const retryId = await generateLookupId(counterName, tableName, idColumn, { forceClient: true })
           if (retryId) {
             data[idColumn] = retryId
             continue
