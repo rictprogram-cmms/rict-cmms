@@ -28,6 +28,11 @@ import { useVolunteerData } from '@/hooks/useVolunteerHours';
 import { useStudentLabReport } from '@/hooks/useWeeklyLabs';
 import { useWOCRatio } from '@/hooks/useWOCRatio';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
+import {
+  useUserPendingAcknowledgments,
+  formatCountdown,
+} from '@/hooks/useAssetCheckouts';
+import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
 import '@/styles/dashboard.css';
 
 // ─── Fun Facts ──────────────────────────────────────────────────────────
@@ -1188,6 +1193,174 @@ function InstructorOverview({ navigate }) {
 // ─── Main Dashboard ─────────────────────────────────────────────────────
 // ═════════════════════════════════════════════════════════════════════════
 
+/* ════════════════════════════════════════════════════════════════════════ */
+/*  Pending Asset-Checkout Acknowledgment Banner                            */
+/*                                                                          */
+/*  Top-of-dashboard nudge for students/staff who have one or more asset    */
+/*  checkout requests waiting on their e-signature. Returns null when there */
+/*  is nothing pending — zero visual noise for the typical case.            */
+/*                                                                          */
+/*  WCAG 2.1 AA:                                                            */
+/*    - role="region" + aria-label so screen-reader users can navigate to it */
+/*    - aria-live="polite" on the headline so urgency changes are announced  */
+/*      (urgent < 30m, soon < 2h, expired)                                   */
+/*    - Color is paired with an icon + label — never the only signal         */
+/*    - Real <button> elements, proper focus rings                           */
+/*    - The "Review & Sign" buttons set focus into the dialog automatically  */
+/*      via useDialogA11y on the modal                                       */
+/* ════════════════════════════════════════════════════════════════════════ */
+function PendingAckBanner() {
+  const { profile } = useAuth();
+  const { pending, now } = useUserPendingAcknowledgments(profile?.email);
+  const [target, setTarget] = useState(null);
+
+  if (!pending || pending.length === 0) return null;
+
+  // Headline urgency derived from the SOONEST-expiring pending request.
+  // Hook returns rows ordered by expires_at asc, so pending[0] is the most urgent.
+  const head = pending[0];
+  const cd = formatCountdown(head.expires_at, now);
+
+  // Banner color tier — paired with icon + label, color is never the only signal
+  let tier = 'normal'; // amber (informational)
+  if (cd?.expired) tier = 'expired';
+  else if (cd?.urgent) tier = 'urgent';
+  else if (cd?.soon) tier = 'soon';
+
+  const styles = {
+    normal:   { bg: '#fff8e1', border: '#fbbf24', fg: '#92400e', accent: '#d97706' },
+    soon:     { bg: '#fff4e6', border: '#fb923c', fg: '#9a3412', accent: '#c2410c' },
+    urgent:   { bg: '#fef2f2', border: '#f87171', fg: '#991b1b', accent: '#b91c1c' },
+    expired:  { bg: '#f5f5f5', border: '#9ca3af', fg: '#374151', accent: '#4b5563' },
+  }[tier];
+
+  const headlineText = pending.length === 1
+    ? '1 asset checkout needs your signature'
+    : `${pending.length} asset checkouts need your signature`;
+
+  return (
+    <>
+      <section
+        role="region"
+        aria-label="Pending asset checkout acknowledgments"
+        style={{
+          background: styles.bg,
+          border: `2px solid ${styles.border}`,
+          borderRadius: 12,
+          padding: '14px 16px',
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+          <div
+            style={{
+              width: 40, height: 40, borderRadius: '50%',
+              background: 'white', flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              border: `2px solid ${styles.border}`,
+            }}
+            aria-hidden="true"
+          >
+            <span className="material-icons" style={{ color: styles.accent, fontSize: '1.3rem' }}>
+              {tier === 'expired' ? 'history' : 'verified_user'}
+            </span>
+          </div>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <div
+              aria-live="polite"
+              style={{ fontSize: '0.95rem', fontWeight: 700, color: styles.fg, marginBottom: 2 }}
+            >
+              {headlineText}
+            </div>
+            <div style={{ fontSize: '0.85rem', color: styles.fg }}>
+              {pending.length === 1
+                ? <>An asset is reserved for you and is waiting for your e-signature.</>
+                : <>Assets are reserved for you and are waiting for your e-signature.</>
+              }
+              {cd && !cd.expired && (
+                <> The most urgent expires in <strong style={{ color: styles.accent }}>{cd.label}</strong>.</>
+              )}
+              {cd?.expired && (
+                <> The earliest one has expired — sign now or it will be released.</>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* List of pending items — one button per request.
+            Single-item case still gets one button (no special-casing). */}
+        <ul style={{ listStyle: 'none', padding: 0, margin: '12px 0 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {pending.map(p => {
+            const itemCd = formatCountdown(p.expires_at, now);
+            const itemTier = itemCd?.expired ? 'expired'
+              : itemCd?.urgent ? 'urgent'
+              : itemCd?.soon ? 'soon'
+              : 'normal';
+            const itemAccent = {
+              normal: '#d97706', soon: '#c2410c', urgent: '#b91c1c', expired: '#4b5563',
+            }[itemTier];
+            return (
+              <li key={p.checkout_id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                  background: 'white', borderRadius: 8, padding: '10px 12px',
+                  border: `1px solid ${styles.border}`,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.92rem', fontWeight: 600, color: '#1a1a2e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.asset_name || p.asset_id}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: 2 }}>
+                    <span style={{ fontFamily: 'monospace' }}>{p.asset_id}</span>
+                    {p.asset_serial_number && <> · <span style={{ fontFamily: 'monospace' }}>SN {p.asset_serial_number}</span></>}
+                    {itemCd && (
+                      <>
+                        {' · '}
+                        <span style={{ color: itemAccent, fontWeight: 600 }} aria-label={itemCd.ariaLabel}>
+                          {itemCd.expired ? 'Expired' : `${itemCd.label} left`}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTarget(p)}
+                  style={{
+                    padding: '8px 14px', borderRadius: 8,
+                    border: 'none', background: itemAccent, color: 'white',
+                    fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    flexShrink: 0,
+                  }}
+                  aria-label={`Review and sign for ${p.asset_name || p.asset_id}`}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.05rem' }}>
+                    {itemCd?.expired ? 'visibility' : 'verified_user'}
+                  </span>
+                  {itemCd?.expired ? 'Review' : 'Review & Sign'}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {target && (
+        <PendingAcknowledgmentModal
+          isOpen={!!target}
+          onClose={() => setTarget(null)}
+          checkout={target}
+          userName={target.user_name || (profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : '')}
+          onAcknowledged={() => setTarget(null)}
+          onDeclined={() => setTarget(null)}
+        />
+      )}
+    </>
+  );
+}
+
 export default function DashboardPage() {
   const { profile } = useAuth();
   const navigate = useNavigate();
@@ -1208,6 +1381,9 @@ export default function DashboardPage() {
 
   return (
     <div className="dash-root">
+      {/* ── Pending Asset Checkout Acknowledgments (top priority — time-sensitive) ── */}
+      <PendingAckBanner />
+
       {/* ── Welcome Section (compact) ── */}
       <div className="dash-welcome">
         <h2 className="dash-welcome-title">Welcome back, {profile?.first_name || 'there'}!</h2>
