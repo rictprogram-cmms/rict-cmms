@@ -1966,6 +1966,39 @@ function CheckoutStatusSection({ asset, hasCheckoutPerm, onCheckOut, onCheckIn, 
   )
 }
 
+/* ════════════════════════════════════════════════════════════════════════ */
+/*  Check-Out modal                                                         */
+/*                                                                          */
+/*  Three flows, decided by the caller's `mode`:                            */
+/*                                                                          */
+/*  1. Self ('self')                                                        */
+/*       Student/instructor checks an asset out for themselves. Their auth  */
+/*       session is the authoritative signature, so the row is created      */
+/*       immediately with status='checked_out' and handoff_method=          */
+/*       'student_self'. Same UX as before.                                 */
+/*                                                                          */
+/*  2. Send to student ('other', primary)                                   */
+/*       Instructor fills the form and hits "Send for e-signature". A       */
+/*       pending row is created (status='pending_acknowledgment'); the      */
+/*       student then signs from THEIR OWN session via the bell /           */
+/*       dashboard / Pending tab. This is the gold-standard audit trail.    */
+/*                                                                          */
+/*  3. In-person hand-off ('other', legacy/secondary)                       */
+/*       Instructor explicitly opts in via a smaller "Use in-person         */
+/*       hand-off" link. The original hand-off UI runs (instructor passes   */
+/*       device to student, student types name, instructor submits). Row    */
+/*       written with handoff_method='instructor_attested' so the audit     */
+/*       trail clearly distinguishes from the gold-standard flow.           */
+/*                                                                          */
+/*  WCAG 2.1 AA:                                                            */
+/*    - role="dialog" + aria-modal="true", aria-labelledby                  */
+/*    - All interactive controls are real <button>/<input>/<textarea>      */
+/*    - Hand-off lock-state has aria-hidden on the form so SR doesn't       */
+/*      read locked controls                                                */
+/*    - Live region (role="status", aria-live="polite") on the              */
+/*      "Signed by …" confirmation panel                                    */
+/*    - Escape closes the right thing depending on inner state              */
+/* ════════════════════════════════════════════════════════════════════════ */
 function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose, onDone }) {
   const meEmail = profile?.email || ''
   const meName  = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : ''
@@ -1974,6 +2007,12 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
   // Mode: self vs other (only instructors with checkout_others see the picker)
   const canCheckoutOthers = hasCheckoutPerm('checkout_others')
   const [mode, setMode] = useState('self') // 'self' | 'other'
+
+  // For 'other' mode: which submission path is the instructor taking?
+  //   'send'      — primary, request a student e-signature (pending_acknowledgment)
+  //   'in_person' — legacy in-person hand-off
+  // ('self' ignores this — self-sign is a single straightforward path)
+  const [otherFlow, setOtherFlow] = useState('send')
 
   // Other-user picker
   const [allProfiles, setAllProfiles] = useState([])
@@ -1987,17 +2026,17 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
   const [acknowledgmentName, setAcknowledgmentName] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  // Hand-off mode: instructor passes device to student to sign
-  const [handoffMode, setHandoffMode] = useState(false)
+  // In-person hand-off sub-states (only used when otherFlow === 'in_person')
+  const [handoffActive, setHandoffActive] = useState(false)
   const [studentSignedAt, setStudentSignedAt] = useState(null) // ISO string when student confirmed
   const ackInputRef = useRef(null)
 
-  // Auto-focus the ack input when entering hand-off mode
+  // Auto-focus the ack input when the in-person hand-off panel opens
   useEffect(() => {
-    if (handoffMode && ackInputRef.current) {
+    if (handoffActive && ackInputRef.current) {
       setTimeout(() => ackInputRef.current?.focus(), 100)
     }
-  }, [handoffMode])
+  }, [handoffActive])
 
   // If user changes after signing, the signature is no longer valid
   useEffect(() => {
@@ -2005,7 +2044,9 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
       setStudentSignedAt(null)
       setAcknowledgmentName('')
     }
-  }, [selectedEmail, mode]) // eslint-disable-line
+    // Switching mode/user also resets the in-person flow
+    setHandoffActive(false)
+  }, [selectedEmail, mode, otherFlow]) // eslint-disable-line
 
   // Load profiles when in 'other' mode
   useEffect(() => {
@@ -2058,38 +2099,81 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
   const ackMatches = !!acknowledgmentName && expectedName &&
     acknowledgmentName.trim().toLowerCase() === expectedName.toLowerCase()
 
-  // Submit gate:
-  //  - Self-checkout: just needs ack to match
-  //  - Other-user checkout: requires student to have confirmed via hand-off (studentSignedAt set)
-  //    — instructor cannot submit unless the student has signed
-  const canSubmit = !!targetUser && !submitting && (
-    mode === 'self' ? ackMatches : !!studentSignedAt
-  )
+  // Build the expectedReturn Date once for the submit handlers
+  const expectedReturn = dueDateStr
+    ? (() => {
+        const [y, m, d] = dueDateStr.split('-').map(Number)
+        return new Date(y, m - 1, d, 23, 59, 0)
+      })()
+    : null
 
-  const handleSubmit = async () => {
-    if (!targetUser) return
+  // Submit gates per flow
+  const canSubmitSelf       = mode === 'self' && !!targetUser && ackMatches && !submitting
+  const canSubmitSend       = mode === 'other' && !!targetUser && otherFlow === 'send' && !submitting
+  const canSubmitInPerson   = mode === 'other' && !!targetUser && otherFlow === 'in_person' && !!studentSignedAt && !submitting
+
+  // ── Submit handlers ──────────────────────────────────────────────────
+  const handleSubmitSelf = async () => {
+    if (!canSubmitSelf) return
     setSubmitting(true)
     try {
-      const expectedReturn = dueDateStr
-        ? (() => {
-            const [y, m, d] = dueDateStr.split('-').map(Number)
-            return new Date(y, m - 1, d, 23, 59, 0)
-          })()
-        : null
-      await actions.checkOut({
+      await actions.instructorAttestedCheckout({
         asset: { asset_id: asset.asset_id, name: asset.name, serial_number: asset.serial_number },
         user: targetUser,
         expectedReturn,
         condition,
         notes,
         acknowledgmentName: acknowledgmentName.trim(),
+        handoffMethod: 'student_self',
       })
       onDone?.()
-    } catch (e) {
-      // hook displays toast
-    } finally {
-      setSubmitting(false)
+    } catch (e) { /* hook displays toast */ }
+    finally { setSubmitting(false) }
+  }
+
+  const handleSubmitSend = async () => {
+    if (!canSubmitSend) return
+    setSubmitting(true)
+    try {
+      await actions.requestCheckout({
+        asset: { asset_id: asset.asset_id, name: asset.name, serial_number: asset.serial_number },
+        user: targetUser,
+        expectedReturn,
+        condition,
+        notes,
+      })
+      onDone?.()
+    } catch (e) { /* hook displays toast */ }
+    finally { setSubmitting(false) }
+  }
+
+  const handleSubmitInPerson = async () => {
+    if (!canSubmitInPerson) return
+    setSubmitting(true)
+    try {
+      await actions.instructorAttestedCheckout({
+        asset: { asset_id: asset.asset_id, name: asset.name, serial_number: asset.serial_number },
+        user: targetUser,
+        expectedReturn,
+        condition,
+        notes,
+        acknowledgmentName: acknowledgmentName.trim(),
+        handoffMethod: 'instructor_attested',
+      })
+      onDone?.()
+    } catch (e) { /* hook displays toast */ }
+    finally { setSubmitting(false) }
+  }
+
+  // Esc key handling: cancel hand-off panel first, then close modal
+  const handleEscape = () => {
+    if (submitting) return
+    if (handoffActive) {
+      setHandoffActive(false)
+      setAcknowledgmentName('')
+      return
     }
+    onClose()
   }
 
   return (
@@ -2098,13 +2182,8 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
       role="dialog"
       aria-modal="true"
       aria-labelledby="co-modal-title"
-      onClick={e => e.target === e.currentTarget && !submitting && !handoffMode && onClose()}
-      onKeyDown={e => {
-        if (e.key !== 'Escape') return
-        if (submitting) return
-        if (handoffMode) { setHandoffMode(false); setAcknowledgmentName(''); return }
-        onClose()
-      }}
+      onClick={e => e.target === e.currentTarget && !submitting && !handoffActive && onClose()}
+      onKeyDown={e => { if (e.key === 'Escape') handleEscape() }}
     >
       <div className="modal modal-lg">
         <div className="modal-header">
@@ -2116,12 +2195,13 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
             className="modal-close"
             onClick={() => {
               if (submitting) return
-              if (handoffMode) { setHandoffMode(false); setAcknowledgmentName(''); return }
+              if (handoffActive) { setHandoffActive(false); setAcknowledgmentName(''); return }
               onClose()
             }}
-            aria-label={handoffMode ? 'Cancel hand-off' : 'Close check-out form'}
+            aria-label={handoffActive ? 'Cancel hand-off' : 'Close check-out form'}
           >&times;</button>
         </div>
+
         <div className="modal-body">
           {/* Asset summary */}
           <div style={{ background: '#f8f9fa', borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: '0.85rem' }}>
@@ -2131,13 +2211,15 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
             )}
           </div>
 
-          {/* Form fields — visually locked during hand-off so the student
-              focuses on signing and instructor can't accidentally change details */}
+          {/* Form fields — visually locked during in-person hand-off so the
+              student focuses on signing and instructor can't accidentally
+              change details. The form section is also aria-hidden during
+              hand-off so screen readers skip it. */}
           <div
-            aria-hidden={handoffMode}
+            aria-hidden={handoffActive}
             style={{
-              opacity: handoffMode ? 0.4 : 1,
-              pointerEvents: handoffMode ? 'none' : 'auto',
+              opacity: handoffActive ? 0.4 : 1,
+              pointerEvents: handoffActive ? 'none' : 'auto',
               transition: 'opacity 0.2s',
             }}
           >
@@ -2230,40 +2312,45 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                     style={{ marginBottom: 8 }}
                   />
                   <div
-                    role="listbox"
-                    aria-label="User list"
                     style={{
-                      maxHeight: 180, overflowY: 'auto',
-                      border: '1px solid #dee2e6', borderRadius: 8, background: 'white',
+                      maxHeight: 200, overflowY: 'auto',
+                      border: '1px solid #dee2e6', borderRadius: 8,
+                      background: 'white',
                     }}
+                    role="listbox"
+                    aria-label="Active users"
                   >
                     {filteredProfiles.length === 0 ? (
-                      <div style={{ padding: 12, fontSize: '0.85rem', color: '#868e96', textAlign: 'center' }}>No users match</div>
-                    ) : filteredProfiles.map(p => {
-                      const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email
-                      const sel = selectedEmail === p.email
-                      return (
-                        <button
-                          key={p.email}
-                          type="button"
-                          role="option"
-                          aria-selected={sel}
-                          onClick={() => setSelectedEmail(p.email)}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            padding: '8px 12px', width: '100%', textAlign: 'left',
-                            background: sel ? '#e7f5ff' : 'white', border: 'none',
-                            borderBottom: '1px solid #f1f3f5', cursor: 'pointer', fontSize: '0.85rem',
-                          }}
-                        >
-                          <span>
-                            <span style={{ fontWeight: 600 }}>{fullName}</span>
-                            <span style={{ color: '#868e96', marginLeft: 8 }}>{p.email}</span>
-                          </span>
-                          <span style={{ color: '#868e96', fontSize: '0.75rem' }}>{p.role}</span>
-                        </button>
-                      )
-                    })}
+                      <div style={{ padding: 12, fontSize: '0.85rem', color: '#868e96', textAlign: 'center' }}>
+                        No users match.
+                      </div>
+                    ) : (
+                      filteredProfiles.map(p => {
+                        const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email
+                        const isSel = selectedEmail === p.email
+                        return (
+                          <button
+                            key={p.email}
+                            type="button"
+                            role="option"
+                            aria-selected={isSel}
+                            onClick={() => setSelectedEmail(p.email)}
+                            style={{
+                              display: 'block', width: '100%', textAlign: 'left',
+                              padding: '10px 12px', border: 'none',
+                              background: isSel ? '#e7f5ff' : 'white',
+                              borderBottom: '1px solid #f1f3f5',
+                              cursor: 'pointer', fontSize: '0.85rem',
+                            }}
+                          >
+                            <div style={{ fontWeight: 500, color: '#1a1a2e' }}>{fullName}</div>
+                            <div style={{ fontSize: '0.78rem', color: '#868e96' }}>
+                              {p.email} · {p.role}
+                            </div>
+                          </button>
+                        )
+                      })
+                    )}
                   </div>
                 </>
               )}
@@ -2272,63 +2359,45 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
 
           {/* Due date */}
           <div className="form-group">
-            <label className="form-label" htmlFor="co-due">Expected return date <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span></label>
+            <label className="form-label" htmlFor="co-due-date">Expected return date <span style={{ color: '#868e96', fontWeight: 400 }}>(optional)</span></label>
             <input
-              id="co-due"
+              id="co-due-date"
               type="date"
               className="form-input"
               value={dueDateStr}
               onChange={e => setDueDateStr(e.target.value)}
-              style={{ maxWidth: 240 }}
+              min={new Date().toISOString().split('T')[0]}
             />
             <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
               {[
-                { d: 1, label: 'Tomorrow' },
-                { d: 7, label: '+1 week' },
-                { d: 14, label: '+2 weeks' },
-                { d: 30, label: '+30 days' },
-              ].map(opt => (
-                <button
-                  key={opt.label}
-                  type="button"
-                  onClick={() => setPreset(opt.d)}
-                  className="btn btn-secondary btn-sm"
-                  style={{ fontSize: '0.75rem' }}
+                { label: 'Tomorrow', days: 1 },
+                { label: '+1 week',  days: 7 },
+                { label: '+2 weeks', days: 14 },
+                { label: '+30 days', days: 30 },
+              ].map(p => (
+                <button key={p.days} type="button" onClick={() => setPreset(p.days)}
+                  style={{
+                    padding: '4px 10px', fontSize: '0.78rem',
+                    border: '1px solid #dee2e6', borderRadius: 16,
+                    background: 'white', color: '#495057',
+                    cursor: 'pointer',
+                  }}
                 >
-                  {opt.label}
+                  {p.label}
                 </button>
               ))}
-              {dueDateStr && (
-                <button
-                  type="button"
-                  onClick={() => setDueDateStr('')}
-                  className="btn btn-secondary btn-sm"
-                  style={{ fontSize: '0.75rem' }}
-                  aria-label="Clear due date"
-                >
-                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem' }}>close</span>
-                  Clear
-                </button>
-              )}
             </div>
           </div>
 
           {/* Condition */}
-          <div className="form-row">
-            <div className="form-group">
-              <label className="form-label" htmlFor="co-condition">Condition at checkout</label>
-              <select
-                id="co-condition"
-                className="form-input"
-                value={condition}
-                onChange={e => setCondition(e.target.value)}
-              >
-                <option>Good</option>
-                <option>Fair</option>
-                <option>Poor</option>
-              </select>
-            </div>
-            <div className="form-group" />
+          <div className="form-group">
+            <label className="form-label" htmlFor="co-cond">Condition at checkout</label>
+            <select id="co-cond" className="form-input" value={condition} onChange={e => setCondition(e.target.value)}>
+              <option>Good</option>
+              <option>Fair</option>
+              <option>Poor</option>
+              <option>Damaged</option>
+            </select>
           </div>
 
           {/* Notes */}
@@ -2346,136 +2415,16 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
 
           </div>{/* end form-fields wrapper */}
 
-          {/* Acknowledgment — three states: signed / handoff active / default */}
-          {studentSignedAt ? (
-            // STATE 3: Student has signed — locked confirmation
-            <div
-              role="status"
-              aria-live="polite"
-              style={{
-                border: '2px solid #40c057',
-                borderRadius: 8,
-                padding: 14,
-                background: '#ebfbee',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#2b8a3e', marginBottom: 6 }}>
-                <span className="material-icons" aria-hidden="true">verified</span>
-                Signed by {acknowledgmentName}
-              </div>
-              <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: '#2f9e44' }}>
-                Acknowledgment captured {new Date(studentSignedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.
-                You can now confirm the check out.
-              </p>
-              <button
-                type="button"
-                onClick={() => { setStudentSignedAt(null); setAcknowledgmentName('') }}
-                style={{
-                  background: 'none', border: 'none', padding: 0,
-                  color: '#2f9e44', fontSize: '0.78rem', textDecoration: 'underline',
-                  cursor: 'pointer',
-                }}
-              >
-                Clear signature and re-do
-              </button>
-            </div>
-          ) : handoffMode ? (
-            // STATE 2: Hand-off active — student-facing UI
-            <fieldset
-              style={{
-                border: '3px solid #228be6',
-                borderRadius: 10,
-                padding: 18,
-                background: '#e7f5ff',
-                margin: 0,
-                position: 'relative',
-              }}
-            >
-              <legend
-                style={{
-                  fontWeight: 700, color: '#1971c2', fontSize: '0.95rem',
-                  padding: '2px 10px', background: 'white', borderRadius: 6,
-                  border: '2px solid #228be6',
-                }}
-              >
-                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.05rem', verticalAlign: 'middle', marginRight: 4 }}>phone_iphone</span>
-                {expectedName}'s turn
-              </legend>
-              <p style={{ fontSize: '0.95rem', color: '#1971c2', margin: '4px 0 12px', fontWeight: 500 }}>
-                Hand the device to <strong>{expectedName}</strong>. Please read and type your full name to acknowledge:
-              </p>
-              <blockquote
-                style={{
-                  margin: '0 0 14px', padding: '12px 16px', background: 'white',
-                  borderRadius: 8, fontSize: '0.95rem', color: '#1a1a2e',
-                  fontStyle: 'italic', borderLeft: '4px solid #228be6',
-                  lineHeight: 1.5,
-                }}
-              >
-                "I, <strong>{expectedName}</strong>, accept responsibility for asset {asset.asset_id} ({asset.name}{asset.serial_number ? `, SN ${asset.serial_number}` : ''}) until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
-              </blockquote>
-              <label className="form-label" htmlFor="co-ack" style={{ color: '#1971c2', fontSize: '0.95rem' }}>
-                Type your full name *
-              </label>
-              <input
-                ref={ackInputRef}
-                id="co-ack"
-                type="text"
-                className="form-input"
-                placeholder={expectedName}
-                value={acknowledgmentName}
-                onChange={e => setAcknowledgmentName(e.target.value)}
-                aria-describedby="co-ack-hint"
-                style={{
-                  fontFamily: 'cursive', fontSize: '1.15rem',
-                  padding: '14px 16px',
-                  borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
-                  borderWidth: 2,
-                }}
-              />
-              <div id="co-ack-hint" style={{ fontSize: '0.85rem', color: '#1971c2', marginTop: 8, fontWeight: 500 }}>
-                {ackMatches ? '✓ Looks good. Tap "I confirm" below.'
-                  : acknowledgmentName ? '⚠ Doesn\'t match — must be exactly "' + expectedName + '"'
-                  : `Type "${expectedName}" exactly.`}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                <button
-                  type="button"
-                  onClick={() => { setHandoffMode(false); setAcknowledgmentName('') }}
-                  style={{
-                    flex: 1, padding: '12px', borderRadius: 10,
-                    border: '1px solid #dee2e6', background: 'white',
-                    color: '#495057', fontWeight: 500, fontSize: '0.9rem',
-                    cursor: 'pointer',
-                  }}
-                  aria-label="Cancel hand-off and return to instructor"
-                >
-                  Cancel hand-off
-                </button>
-                <button
-                  type="button"
-                  disabled={!ackMatches}
-                  onClick={() => {
-                    setStudentSignedAt(new Date().toISOString())
-                    setHandoffMode(false)
-                  }}
-                  style={{
-                    flex: 2, padding: '12px', borderRadius: 10,
-                    border: 'none',
-                    background: ackMatches ? '#2b8a3e' : '#adb5bd',
-                    color: 'white', fontWeight: 600, fontSize: '0.95rem',
-                    cursor: ackMatches ? 'pointer' : 'not-allowed',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                  }}
-                  aria-label="Confirm signature and hand back to instructor"
-                >
-                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>check</span>
-                  I confirm — hand back
-                </button>
-              </div>
-            </fieldset>
-          ) : (
-            // STATE 1: Default — instructor view
+          {/* ───────────────────────────────────────────────────────────── */}
+          {/* Acknowledgment / submission area — three branches:            */}
+          {/*   A) mode='self' → typed name input + footer Confirm           */}
+          {/*   B) mode='other' & otherFlow='send' → primary Send button +   */}
+          {/*      tiny "Use in-person hand-off" toggle                      */}
+          {/*   C) mode='other' & otherFlow='in_person' → existing legacy   */}
+          {/*      hand-off UX (with same 3 sub-states)                       */}
+          {/* ───────────────────────────────────────────────────────────── */}
+
+          {mode === 'self' && (
             <fieldset
               style={{
                 border: '2px solid #fbbf24',
@@ -2494,90 +2443,343 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                 <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem', verticalAlign: 'middle', marginRight: 4 }}>edit_note</span>
                 Acknowledgment
               </legend>
-
-              {mode === 'other' && targetUser ? (
-                <>
-                  <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
-                    To complete this checkout, <strong>{expectedName}</strong> must sign by typing their full name.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setHandoffMode(true)}
-                    style={{
-                      width: '100%', padding: '14px', borderRadius: 10,
-                      border: 'none', background: '#228be6', color: 'white',
-                      fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    }}
-                    aria-label={`Hand the device to ${expectedName} to sign`}
-                  >
-                    <span className="material-icons" aria-hidden="true">phone_iphone</span>
-                    Hand to {expectedName} to sign
-                  </button>
-                  <p style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 8, marginBottom: 0 }}>
-                    Tap to lock the form so {expectedName} can type their name. They'll hand it back when done.
-                  </p>
-                </>
-              ) : mode === 'self' ? (
-                <>
-                  <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
-                    By typing your full name below, I agree:
-                  </p>
-                  <blockquote
-                    style={{
-                      margin: '0 0 12px', padding: '10px 14px', background: 'white',
-                      borderRadius: 6, fontSize: '0.85rem', color: '#495057',
-                      fontStyle: 'italic', borderLeft: '3px solid #fbbf24',
-                    }}
-                  >
-                    "I, <strong>{expectedName || '[user]'}</strong>, accept responsibility for asset {asset.asset_id} ({asset.name}{asset.serial_number ? `, SN ${asset.serial_number}` : ''}) until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
-                  </blockquote>
-                  <label className="form-label" htmlFor="co-ack" style={{ color: '#92400e' }}>
-                    Type full name to acknowledge *
-                  </label>
-                  <input
-                    id="co-ack"
-                    type="text"
-                    className="form-input"
-                    placeholder={expectedName || ''}
-                    value={acknowledgmentName}
-                    onChange={e => setAcknowledgmentName(e.target.value)}
-                    aria-describedby="co-ack-hint"
-                    style={{
-                      fontFamily: 'cursive', fontSize: '1rem',
-                      borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
-                    }}
-                  />
-                  <div id="co-ack-hint" style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 6 }}>
-                    {ackMatches ? '✓ Acknowledgment matches expected name.'
-                      : acknowledgmentName ? '⚠ Doesn\'t match — must be exact.'
-                      : `Type "${expectedName}" to confirm.`}
-                  </div>
-                </>
-              ) : (
-                <p style={{ fontSize: '0.85rem', color: '#92400e', margin: 0 }}>
-                  Select a user above to enable acknowledgment.
-                </p>
-              )}
+              <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
+                By typing your full name below, I agree:
+              </p>
+              <blockquote
+                style={{
+                  margin: '0 0 12px', padding: '10px 14px', background: 'white',
+                  borderRadius: 6, fontSize: '0.85rem', color: '#495057',
+                  fontStyle: 'italic', borderLeft: '3px solid #fbbf24',
+                }}
+              >
+                "I, <strong>{expectedName || '[user]'}</strong>, accept responsibility for asset {asset.asset_id} ({asset.name}{asset.serial_number ? `, SN ${asset.serial_number}` : ''}) until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
+              </blockquote>
+              <label className="form-label" htmlFor="co-ack" style={{ color: '#92400e' }}>
+                Type full name to acknowledge *
+              </label>
+              <input
+                id="co-ack"
+                type="text"
+                className="form-input"
+                placeholder={expectedName || ''}
+                value={acknowledgmentName}
+                onChange={e => setAcknowledgmentName(e.target.value)}
+                aria-describedby="co-ack-hint"
+                aria-invalid={!!acknowledgmentName && !ackMatches}
+                style={{
+                  fontFamily: 'cursive', fontSize: '1rem',
+                  borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
+                }}
+              />
+              <div id="co-ack-hint" style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 6 }}>
+                {ackMatches ? '✓ Acknowledgment matches expected name.'
+                  : acknowledgmentName ? '⚠ Doesn\'t match — must be exact.'
+                  : `Type "${expectedName}" to confirm.`}
+              </div>
             </fieldset>
           )}
+
+          {mode === 'other' && otherFlow === 'send' && (
+            !targetUser ? (
+              <div
+                style={{
+                  border: '2px dashed #dee2e6', borderRadius: 8,
+                  padding: 16, textAlign: 'center',
+                  fontSize: '0.85rem', color: '#868e96',
+                }}
+              >
+                Select a user above to enable submission.
+              </div>
+            ) : (
+              <fieldset
+                style={{
+                  border: '2px solid #228be6',
+                  borderRadius: 10,
+                  padding: 18,
+                  background: '#e7f5ff',
+                  margin: 0,
+                }}
+              >
+                <legend
+                  style={{
+                    fontWeight: 700, color: '#1971c2', fontSize: '0.95rem',
+                    padding: '2px 10px', background: 'white', borderRadius: 6,
+                    border: '2px solid #228be6',
+                  }}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.05rem', verticalAlign: 'middle', marginRight: 4 }}>verified_user</span>
+                  Student e-signature
+                </legend>
+                <p style={{ fontSize: '0.9rem', color: '#1971c2', margin: '4px 0 12px', fontWeight: 500 }}>
+                  <strong>{expectedName}</strong> will be asked to sign for this checkout from <strong>their own account</strong>. The asset is reserved for them until they accept (or 24 hours, whichever comes first).
+                </p>
+                <ul style={{ fontSize: '0.82rem', color: '#1971c2', margin: '0 0 12px 18px', padding: 0 }}>
+                  <li>They'll see a notification on their dashboard and bell icon.</li>
+                  <li>You'll be notified if they decline or the request expires.</li>
+                  <li>You can cancel the request anytime from the Asset Checkouts page.</li>
+                </ul>
+                <p style={{ fontSize: '0.78rem', color: '#1971c2', margin: 0, fontStyle: 'italic' }}>
+                  This is the recommended path — the student's own session creates a real audit trail.
+                </p>
+              </fieldset>
+            )
+          )}
+
+          {mode === 'other' && otherFlow === 'in_person' && (
+            studentSignedAt ? (
+              // Sub-state 3: Student has signed — locked confirmation
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  border: '2px solid #40c057',
+                  borderRadius: 8,
+                  padding: 14,
+                  background: '#ebfbee',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, color: '#2b8a3e', marginBottom: 6 }}>
+                  <span className="material-icons" aria-hidden="true">verified</span>
+                  Signed by {acknowledgmentName}
+                </div>
+                <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: '#2f9e44' }}>
+                  Acknowledgment captured {new Date(studentSignedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.
+                  You can now confirm the check out.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { setStudentSignedAt(null); setAcknowledgmentName('') }}
+                  style={{
+                    background: 'none', border: 'none', padding: 0,
+                    color: '#2f9e44', fontSize: '0.78rem', textDecoration: 'underline',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Clear signature and re-do
+                </button>
+              </div>
+            ) : handoffActive ? (
+              // Sub-state 2: Hand-off active — student-facing UI
+              <fieldset
+                style={{
+                  border: '3px solid #228be6',
+                  borderRadius: 10,
+                  padding: 18,
+                  background: '#e7f5ff',
+                  margin: 0,
+                  position: 'relative',
+                }}
+              >
+                <legend
+                  style={{
+                    fontWeight: 700, color: '#1971c2', fontSize: '0.95rem',
+                    padding: '2px 10px', background: 'white', borderRadius: 6,
+                    border: '2px solid #228be6',
+                  }}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.05rem', verticalAlign: 'middle', marginRight: 4 }}>phone_iphone</span>
+                  {expectedName}'s turn
+                </legend>
+                <p style={{ fontSize: '0.95rem', color: '#1971c2', margin: '4px 0 12px', fontWeight: 500 }}>
+                  Hand the device to <strong>{expectedName}</strong>. Please read and type your full name to acknowledge:
+                </p>
+                <blockquote
+                  style={{
+                    margin: '0 0 14px', padding: '12px 16px', background: 'white',
+                    borderRadius: 8, fontSize: '0.95rem', color: '#1a1a2e',
+                    fontStyle: 'italic', borderLeft: '4px solid #228be6',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  "I, <strong>{expectedName}</strong>, accept responsibility for asset {asset.asset_id} ({asset.name}{asset.serial_number ? `, SN ${asset.serial_number}` : ''}) until {dueDateStr ? new Date(dueDateStr + 'T23:59:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'returned'}, and agree to return it in the same condition."
+                </blockquote>
+                <label className="form-label" htmlFor="co-ack-handoff" style={{ color: '#1971c2', fontSize: '0.95rem' }}>
+                  Type your full name *
+                </label>
+                <input
+                  ref={ackInputRef}
+                  id="co-ack-handoff"
+                  type="text"
+                  className="form-input"
+                  placeholder={expectedName}
+                  value={acknowledgmentName}
+                  onChange={e => setAcknowledgmentName(e.target.value)}
+                  aria-describedby="co-ack-handoff-hint"
+                  aria-invalid={!!acknowledgmentName && !ackMatches}
+                  style={{
+                    fontFamily: 'cursive', fontSize: '1.15rem',
+                    padding: '14px 16px',
+                    borderColor: ackMatches ? '#40c057' : (acknowledgmentName ? '#f59e0b' : '#dee2e6'),
+                    borderWidth: 2,
+                  }}
+                />
+                <div id="co-ack-handoff-hint" style={{ fontSize: '0.85rem', color: '#1971c2', marginTop: 8, fontWeight: 500 }}>
+                  {ackMatches ? '✓ Looks good. Tap "I confirm" below.'
+                    : acknowledgmentName ? '⚠ Doesn\'t match — must be exactly "' + expectedName + '"'
+                    : `Type "${expectedName}" exactly.`}
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setHandoffActive(false); setAcknowledgmentName('') }}
+                    style={{
+                      flex: 1, padding: '12px', borderRadius: 10,
+                      border: '1px solid #dee2e6', background: 'white',
+                      color: '#495057', fontWeight: 500, fontSize: '0.9rem',
+                      cursor: 'pointer',
+                    }}
+                    aria-label="Cancel hand-off and return to instructor"
+                  >
+                    Cancel hand-off
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!ackMatches}
+                    onClick={() => {
+                      setStudentSignedAt(new Date().toISOString())
+                      setHandoffActive(false)
+                    }}
+                    style={{
+                      flex: 2, padding: '12px', borderRadius: 10,
+                      border: 'none',
+                      background: ackMatches ? '#2b8a3e' : '#adb5bd',
+                      color: 'white', fontWeight: 600, fontSize: '0.95rem',
+                      cursor: ackMatches ? 'pointer' : 'not-allowed',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    }}
+                    aria-label="Confirm signature and hand back to instructor"
+                  >
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>check</span>
+                    I confirm — hand back
+                  </button>
+                </div>
+              </fieldset>
+            ) : (
+              // Sub-state 1: Pre-handoff — instructor preparing in-person flow
+              <fieldset
+                style={{
+                  border: '2px solid #fbbf24',
+                  borderRadius: 8,
+                  padding: 16,
+                  background: '#fffbeb',
+                  margin: 0,
+                }}
+              >
+                <legend
+                  style={{
+                    fontWeight: 700, color: '#92400e', fontSize: '0.9rem',
+                    padding: '0 8px',
+                  }}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem', verticalAlign: 'middle', marginRight: 4 }}>edit_note</span>
+                  In-person hand-off (legacy)
+                </legend>
+                {targetUser ? (
+                  <>
+                    <p style={{ fontSize: '0.85rem', color: '#92400e', margin: '0 0 10px' }}>
+                      <strong>{expectedName}</strong> will sign on this device. The audit trail will record this as an instructor-attested checkout.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setHandoffActive(true)}
+                      style={{
+                        width: '100%', padding: '14px', borderRadius: 10,
+                        border: 'none', background: '#228be6', color: 'white',
+                        fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                      }}
+                      aria-label={`Hand the device to ${expectedName} to sign`}
+                    >
+                      <span className="material-icons" aria-hidden="true">phone_iphone</span>
+                      Hand to {expectedName} to sign
+                    </button>
+                    <p style={{ fontSize: '0.78rem', color: '#92400e', marginTop: 8, marginBottom: 0 }}>
+                      Tap to lock the form so {expectedName} can type their name. They'll hand it back when done.
+                    </p>
+                  </>
+                ) : (
+                  <p style={{ fontSize: '0.85rem', color: '#92400e', margin: 0 }}>
+                    Select a user above to enable hand-off.
+                  </p>
+                )}
+              </fieldset>
+            )
+          )}
+
+          {/* "Use in-person hand-off" toggle — only when in 'other' mode and a user is selected */}
+          {mode === 'other' && targetUser && !handoffActive && !studentSignedAt && (
+            <div style={{ marginTop: 12, textAlign: 'center' }}>
+              {otherFlow === 'send' ? (
+                <button
+                  type="button"
+                  onClick={() => setOtherFlow('in_person')}
+                  style={{
+                    background: 'none', border: 'none', padding: '4px 8px',
+                    color: '#868e96', fontSize: '0.8rem', textDecoration: 'underline',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Or use in-person hand-off (legacy)
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setOtherFlow('send'); setAcknowledgmentName('') }}
+                  style={{
+                    background: 'none', border: 'none', padding: '4px 8px',
+                    color: '#1971c2', fontSize: '0.8rem', textDecoration: 'underline',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ← Back to e-signature request (recommended)
+                </button>
+              )}
+            </div>
+          )}
         </div>
-        {!handoffMode && (
+
+        {/* Footer — hidden during in-person hand-off so the student is the
+            only one who can act in that sub-state */}
+        {!handoffActive && (
           <div className="modal-footer">
             <button className="btn btn-secondary" onClick={() => !submitting && onClose()} disabled={submitting}>Cancel</button>
-            <button
-              className="btn btn-primary"
-              disabled={!canSubmit}
-              onClick={handleSubmit}
-              title={
-                !canSubmit && mode === 'other' && targetUser && !studentSignedAt
-                  ? `${expectedName} must sign before submitting`
-                  : undefined
-              }
-            >
-              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>check</span>
-              {submitting ? 'Checking out…' : 'Confirm Check Out'}
-            </button>
+            {mode === 'self' && (
+              <button
+                className="btn btn-primary"
+                disabled={!canSubmitSelf}
+                onClick={handleSubmitSelf}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>check</span>
+                {submitting ? 'Checking out…' : 'Confirm Check Out'}
+              </button>
+            )}
+            {mode === 'other' && otherFlow === 'send' && (
+              <button
+                className="btn btn-primary"
+                disabled={!canSubmitSend}
+                onClick={handleSubmitSend}
+                title={!targetUser ? 'Select a user first' : undefined}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>send</span>
+                {submitting ? 'Sending…' : `Send to ${expectedName ? expectedName.split(' ')[0] : 'student'} for e-signature`}
+              </button>
+            )}
+            {mode === 'other' && otherFlow === 'in_person' && (
+              <button
+                className="btn btn-primary"
+                disabled={!canSubmitInPerson}
+                onClick={handleSubmitInPerson}
+                title={
+                  !canSubmitInPerson && targetUser && !studentSignedAt
+                    ? `${expectedName} must sign before submitting`
+                    : undefined
+                }
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>check</span>
+                {submitting ? 'Checking out…' : 'Confirm Check Out'}
+              </button>
+            )}
           </div>
         )}
       </div>
