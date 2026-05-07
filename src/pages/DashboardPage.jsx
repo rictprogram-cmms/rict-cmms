@@ -26,7 +26,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useVolunteerData } from '@/hooks/useVolunteerHours';
 import { useStudentLabReport } from '@/hooks/useWeeklyLabs';
-import { useWOCRatio } from '@/hooks/useWOCRatio';
+import { useWOCRatio, computeStudentScoresForWindows } from '@/hooks/useWOCRatio';
+import { generateUserReport } from '@/hooks/useTimeCards';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 import {
   useUserPendingAcknowledgments,
@@ -335,6 +336,813 @@ function AccountabilityMetrics({ navigate }) {
         })()}
       </div>
 
+    </div>
+  );
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// ─── Grade-Relevant Scores (per-class transparency for students) ────────
+// ═════════════════════════════════════════════════════════════════════════
+//
+// Renders one card per enrolled active class showing:
+//   - Attendance %  (per-class, class window, finals excluded)
+//   - WOC Ratio    (per-class, same scoring as GB Items)
+//   - Volunteer Hours (program-wide, semester window — matches Volunteer Hours page)
+//
+// Cards are HIDDEN until the class has actually started (today >= start_date).
+// Cards FREEZE with a "Final" badge after the class effective end (finals
+// week excluded if configured) — soft freeze via effectiveEnd cap, no DB
+// snapshot needed.
+//
+// All numbers are computed using the SAME functions as the instructor's
+// GB Items report, so the student and instructor see identical values.
+
+function GradeRelevantScores() {
+  const { profile } = useAuth();
+  const navigate = useNavigate();
+  const [cards, setCards] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!profile?.user_id || !profile?.email) { setLoading(false); return; }
+    let cancelled = false;
+
+    const load = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        // 1. Resolve enrolled active classes whose start_date has passed.
+        //    The .or filter excludes future classes (start_date > today)
+        //    so we only show classes the student is currently in.
+        const userClasses = (profile.classes || '').split(',').map(c => c.trim()).filter(Boolean);
+        if (userClasses.length === 0) {
+          if (!cancelled) { setCards([]); setLoading(false); }
+          return;
+        }
+        const todayStr = toLocalDateStr(new Date());
+        const { data: classesData } = await supabase
+          .from('classes')
+          .select('*')
+          .in('course_id', userClasses)
+          .eq('status', 'Active')
+          .or(`start_date.is.null,start_date.lte.${todayStr}`);
+
+        const allActiveClasses = classesData || [];
+        const startedClasses = allActiveClasses.filter(c => !c.start_date || c.start_date <= todayStr);
+
+        if (startedClasses.length === 0) {
+          if (!cancelled) { setCards([]); setLoading(false); }
+          return;
+        }
+
+        // 2. Compute each class's grading window.
+        //    maxEnd  = finals_start − 1 if configured, else end_date, else null (open-ended)
+        //    effEnd  = min(today, maxEnd)         — what the report uses
+        //    isFinal = today > maxEnd             — past the gradable window
+        //              When isFinal, effEnd is locked at maxEnd so scores freeze.
+        const classWindows = startedClasses.map(c => {
+          const start = c.start_date;
+          let maxEnd = c.end_date || null;
+          if (c.finals_start) {
+            const fs = new Date(c.finals_start + 'T00:00:00');
+            fs.setDate(fs.getDate() - 1);
+            maxEnd = toLocalDateStr(fs);
+          }
+          let effEnd = todayStr;
+          if (maxEnd && maxEnd < todayStr) effEnd = maxEnd;
+          const isFinal = !!(maxEnd && todayStr > maxEnd);
+          return {
+            classConfig: c,
+            startDate: start,
+            endDate: effEnd,
+            isFinal,
+          };
+        });
+
+        // 3. Resolve grace period (matches GB Items / TimeCardsPage convention)
+        let gracePeriod = 10;
+        try {
+          const { data: gs } = await supabase
+            .from('settings')
+            .select('setting_value')
+            .eq('setting_key', 'grace_period_minutes')
+            .maybeSingle();
+          if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10;
+        } catch { /* default */ }
+
+        // 4. Per-class attendance — call generateUserReport once per class with
+        //    its own window. Same call shape GB Items uses, so numbers match.
+        const attendanceByCourseId = {};
+        for (const w of classWindows) {
+          if (!w.startDate || !w.endDate) continue;
+          try {
+            const r = await generateUserReport(profile, w.startDate, w.endDate, gracePeriod, allActiveClasses);
+            const cr = (r.classReports || []).find(x => x.courseId === w.classConfig.course_id);
+            if (cr) attendanceByCourseId[w.classConfig.course_id] = cr;
+          } catch (e) {
+            console.warn(`Grade card: attendance fetch failed for ${w.classConfig.course_id}:`, e);
+          }
+        }
+
+        // 5. Per-class WOC scores — single batched fetch covers all windows.
+        let wocByCourseId = {};
+        try {
+          const wocWindows = classWindows
+            .filter(w => w.startDate && w.endDate)
+            .map(w => ({ key: w.classConfig.course_id, startDate: w.startDate, endDate: w.endDate }));
+          if (wocWindows.length > 0) {
+            wocByCourseId = await computeStudentScoresForWindows(profile, wocWindows);
+          }
+        } catch (e) {
+          console.warn('Grade card: WOC computation failed:', e);
+        }
+
+        // 6. Volunteer hours — program-wide semester window with approval_status filter.
+        //    Mirrors useVolunteerHours.js semester resolution and the GB Items query
+        //    so the same number appears on the dashboard, the Volunteer Hours page,
+        //    and the GB Items report.
+        let volSemStart = null, volSemEnd = null;
+        try {
+          const { data: settingsRows } = await supabase
+            .from('settings')
+            .select('setting_key, setting_value')
+            .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end']);
+          const sMap = {};
+          (settingsRows || []).forEach(r => { sMap[r.setting_key] = r.setting_value; });
+          volSemStart = sMap.volunteer_semester_start || null;
+          volSemEnd = sMap.volunteer_semester_end || null;
+          const todayDate = new Date();
+          const endIsStale = volSemEnd && new Date(volSemEnd + 'T23:59:59') < todayDate;
+          if (!volSemStart || !volSemEnd || endIsStale) {
+            if (endIsStale) { volSemStart = null; volSemEnd = null; }
+            const { data: actClasses } = await supabase
+              .from('classes')
+              .select('start_date, end_date')
+              .eq('status', 'Active')
+              .order('start_date', { ascending: true })
+              .limit(20);
+            if (actClasses && actClasses.length > 0) {
+              const starts = actClasses.map(c => c.start_date).filter(Boolean).sort();
+              const ends = actClasses.map(c => c.end_date).filter(Boolean).sort();
+              if (!volSemStart && starts.length > 0) volSemStart = starts[0];
+              if (!volSemEnd && ends.length > 0) volSemEnd = ends[ends.length - 1];
+            }
+          }
+          if (!volSemStart) volSemStart = `${new Date().getFullYear()}-01-01`;
+          if (!volSemEnd) volSemEnd = `${new Date().getFullYear()}-12-31`;
+        } catch (semErr) {
+          console.warn('Grade card: semester window fetch failed, using current year:', semErr);
+          volSemStart = `${new Date().getFullYear()}-01-01`;
+          volSemEnd = `${new Date().getFullYear()}-12-31`;
+        }
+
+        let volunteerHours = 0;
+        try {
+          const { data: volData } = await supabase
+            .from('time_clock')
+            .select('total_hours')
+            .eq('user_email', profile.email)
+            .eq('entry_type', 'Volunteer')
+            .eq('approval_status', 'Approved')
+            .gte('punch_in', volSemStart + 'T00:00:00')
+            .lte('punch_in', volSemEnd + 'T23:59:59');
+          (volData || []).forEach(r => { volunteerHours += parseFloat(r.total_hours) || 0; });
+        } catch (e) {
+          console.warn('Grade card: volunteer hours fetch failed:', e);
+        }
+
+        // 7. Build the cards
+        const generatedAt = new Date().toISOString();
+        const builtCards = classWindows.map(w => {
+          const courseId = w.classConfig.course_id;
+          const cr = attendanceByCourseId[courseId];
+          const wocResult = wocByCourseId[courseId];
+          return {
+            classConfig: w.classConfig,
+            startDate: w.startDate,
+            endDate: w.endDate,
+            isFinal: w.isFinal,
+            asOf: generatedAt,
+            attendanceScore: cr ? cr.attendance.attendanceScore : null,
+            // Phase 2: keep the full weekly breakdown so the "Why?" expansion
+            // can show per-week scores with reasons. Already built by
+            // generateUserReport — no extra cost to retain.
+            attendanceWeeks: cr ? cr.weeklyBreakdown : [],
+            attendanceTotals: cr ? cr.attendance : null,
+            wocScore: wocResult ? wocResult.score : null,
+            // Phase 3: keep the full WOC result (details + activity factor +
+            // deductions + rewards) so the expansion can group by category
+            // and show contributing WOs.
+            wocResult: wocResult || null,
+            volunteerHours: Math.round(volunteerHours * 100) / 100,
+          };
+        });
+
+        if (!cancelled) {
+          setCards(builtCards);
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error('GradeRelevantScores load failed:', e);
+        if (!cancelled) {
+          setError('Could not load your grade-relevant scores. Try refreshing the page.');
+          setLoading(false);
+        }
+      }
+    };
+
+    load();
+
+    return () => { cancelled = true; };
+    // Reload when profile changes (e.g. classes added/removed). We intentionally
+    // do not subscribe to time_clock or work_orders changes here — the cards
+    // show "As of [time]" so a snapshot is the expected mental model. Page
+    // refresh updates them. Live subscriptions would re-run a heavy multi-call
+    // fetch on every clock event; not worth the cost.
+  }, [profile?.user_id, profile?.email, profile?.classes]);
+
+  // Quiet during initial load — matches AccountabilityMetrics' pattern
+  if (loading) return null;
+
+  // No started classes → don't render anything (e.g. summer break, new student)
+  if (!error && cards.length === 0) return null;
+
+  return (
+    <section
+      aria-labelledby="grade-relevant-heading"
+      style={{ marginTop: 24 }}
+    >
+      <header style={{ marginBottom: 12 }}>
+        <h3
+          id="grade-relevant-heading"
+          style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#1a1a2e' }}
+        >
+          My Grade-Relevant Scores
+        </h3>
+        <p style={{ margin: '4px 0 0', fontSize: '0.78rem', color: '#868e96', lineHeight: 1.5 }}>
+          The values your instructor uses for your grade. They update as the class
+          progresses and freeze with a “Final” badge once the class ends.
+        </p>
+      </header>
+
+      {error ? (
+        <div
+          role="alert"
+          style={{
+            padding: '12px 14px',
+            background: '#fff4e6',
+            border: '1px solid #ffd8a8',
+            color: '#a86825',
+            borderRadius: 8,
+            fontSize: '0.85rem',
+          }}
+        >
+          {error}
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+            gap: 12,
+          }}
+        >
+          {cards.map(c => (
+            <GradeCard key={c.classConfig.class_id || c.classConfig.course_id} card={c} navigate={navigate} />
+          ))}
+        </div>
+      )}
+
+      <p
+        style={{
+          margin: '12px 0 0',
+          fontSize: '0.7rem',
+          color: '#868e96',
+          fontStyle: 'italic',
+          lineHeight: 1.5,
+        }}
+      >
+        <strong style={{ fontStyle: 'normal', fontWeight: 600, color: '#495057' }}>Attendance</strong> includes Late, Left Early, and No Show penalties; weeks closed by an All Done are scored 100%.{' '}
+        <strong style={{ fontStyle: 'normal', fontWeight: 600, color: '#495057' }}>WOC Ratio</strong> is computed for this class’s date range and may differ from the all-time score on the WOC Ratio page (used for team rankings, not grades).{' '}
+        <strong style={{ fontStyle: 'normal', fontWeight: 600, color: '#495057' }}>Volunteer Hours</strong> show your program-wide approved hours across the current semester.
+      </p>
+    </section>
+  );
+}
+
+function GradeCard({ card, navigate }) {
+  const {
+    classConfig, isFinal, asOf,
+    attendanceScore, attendanceWeeks,
+    wocScore, wocResult,
+    volunteerHours, startDate, endDate
+  } = card;
+  const courseId = classConfig.course_id;
+  const titleId = `gc-${classConfig.class_id || courseId}-title`;
+
+  const formatShort = (s) => {
+    if (!s) return '';
+    const d = new Date(s + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  // Score color is paired with bold weight so the meaning is conveyed by more
+  // than hue alone (WCAG 2.1 SC 1.4.1 — Use of Color).
+  const scoreColor = (v) =>
+    v == null ? '#868e96' : v >= 90 ? '#2f9e44' : v >= 70 ? '#e67700' : '#c92a2a';
+
+  const finalsExcludedNote = classConfig.finals_start ? ' · finals excluded' : '';
+
+  // The "Why?" expansion only makes sense if at least one of the metrics has
+  // explanatory data attached. If both attendanceWeeks and wocResult.details
+  // are empty (e.g. open-ended class with no completed work yet), don't
+  // render the disclosure at all.
+  const hasAttendanceWhy = Array.isArray(attendanceWeeks) && attendanceWeeks.length > 0;
+  const hasWocWhy = !!wocResult && (
+    (Array.isArray(wocResult.details) && wocResult.details.length > 0) ||
+    (wocResult.activityFactor != null && wocResult.activityFactor < 1)
+  );
+  const showWhy = hasAttendanceWhy || hasWocWhy;
+
+  return (
+    <article
+      aria-labelledby={titleId}
+      style={{
+        background: '#fff',
+        borderRadius: 10,
+        border: `1px solid ${isFinal ? '#ced4da' : '#e9ecef'}`,
+        padding: 14,
+        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}
+    >
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <h4
+            id={titleId}
+            style={{
+              margin: 0,
+              fontSize: '0.95rem',
+              fontWeight: 700,
+              color: '#1a1a2e',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {courseId}
+          </h4>
+          {classConfig.course_name && (
+            <p
+              style={{
+                margin: '2px 0 0',
+                fontSize: '0.72rem',
+                color: '#868e96',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {classConfig.course_name}
+            </p>
+          )}
+          <p style={{ margin: '4px 0 0', fontSize: '0.68rem', color: '#adb5bd' }}>
+            {formatShort(startDate)} – {formatShort(endDate)}{finalsExcludedNote}
+          </p>
+        </div>
+        {isFinal && (
+          <span
+            style={{
+              flexShrink: 0,
+              padding: '2px 8px',
+              background: '#e7f5ff',
+              color: '#1864ab',
+              border: '1px solid #74c0fc',
+              borderRadius: 999,
+              fontSize: '0.62rem',
+              fontWeight: 700,
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+            }}
+            aria-label="Final score, class has ended"
+          >
+            Final
+          </span>
+        )}
+      </header>
+
+      <dl
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: 8,
+          margin: 0,
+        }}
+      >
+        <ScoreCell
+          label="Attendance"
+          value={attendanceScore}
+          suffix="%"
+          color={scoreColor(attendanceScore)}
+        />
+        <ScoreCell
+          label="WOC Ratio"
+          value={wocScore}
+          suffix="%"
+          color={scoreColor(wocScore)}
+        />
+        <ScoreCell
+          label="Volunteer"
+          value={volunteerHours == null ? null : volunteerHours}
+          formatter={(v) => formatHoursMin(v)}
+          color="#495057"
+        />
+      </dl>
+
+      {/* Phase 2/3 expansion. Native <details>/<summary> is keyboard-accessible
+          and screen-reader-friendly without any aria plumbing — a single tab
+          stop, expands on Enter/Space, announces "expanded/collapsed" state
+          automatically. Inside, we use a description list for week scores so
+          screen readers can navigate "Week 4: 80%, 2 Late". */}
+      {showWhy && (
+        <details
+          style={{
+            border: '1px solid #f1f3f5',
+            borderRadius: 6,
+            padding: 0,
+          }}
+        >
+          <summary
+            style={{
+              padding: '6px 10px',
+              fontSize: '0.74rem',
+              fontWeight: 600,
+              color: '#495057',
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            Why these scores?
+          </summary>
+          <div style={{ padding: '8px 10px 10px', borderTop: '1px solid #f1f3f5' }}>
+            {hasAttendanceWhy && (
+              <WhyAttendance weeks={attendanceWeeks} score={attendanceScore} />
+            )}
+            {hasAttendanceWhy && hasWocWhy && (
+              <hr style={{ border: 0, borderTop: '1px dashed #e9ecef', margin: '10px 0' }} />
+            )}
+            {hasWocWhy && (
+              <WhyWOC result={wocResult} score={wocScore} />
+            )}
+          </div>
+        </details>
+      )}
+
+      <footer
+        style={{
+          borderTop: '1px solid #f1f3f5',
+          paddingTop: 8,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ fontSize: '0.66rem', color: '#adb5bd' }}>
+          As of {new Date(asOf).toLocaleString()}
+        </span>
+        <button
+          type="button"
+          onClick={() => navigate('/time-cards')}
+          style={{
+            background: 'transparent',
+            border: '1px solid #dee2e6',
+            borderRadius: 6,
+            padding: '3px 8px',
+            fontSize: '0.7rem',
+            fontWeight: 500,
+            color: '#495057',
+            cursor: 'pointer',
+          }}
+        >
+          View time cards →
+        </button>
+      </footer>
+    </article>
+  );
+}
+
+// ─── Phase 2: Attendance Why? — week-by-week breakdown ─────────────────────────
+//
+// Reads cr.weeklyBreakdown directly. Each week already has its score and a
+// pre-computed `attendance` object with late/early/no-show/walk-in counts.
+// We just have to render a friendly "reason" string per week. Weeks where
+// hours were met and nothing went wrong → "Hours met". Weeks closed by an
+// All Done → "All Done given". Weeks with incidents → enumerate them.
+
+function buildWeekReason(wk) {
+  const a = wk.attendance || {};
+  const reasons = [];
+  if (wk.allDone || (wk.entries || []).some(e => e.entry_type === 'All Done')) {
+    reasons.push('All Done given');
+  }
+  if (a.noShows > 0) reasons.push(`${a.noShows} No Show${a.noShows > 1 ? 's' : ''}`);
+  if (a.lateArrivals > 0) reasons.push(`${a.lateArrivals} Late`);
+  if (a.earlyDepartures > 0) reasons.push(`${a.earlyDepartures} Left Early`);
+  if (a.walkIns > 0) reasons.push(`${a.walkIns} Walk-in${a.walkIns > 1 ? 's' : ''}`);
+  if (a.wrongClass > 0) reasons.push(`${a.wrongClass} Wrong Class`);
+  if (reasons.length === 0) {
+    if (wk.metHours || wk.requiredHoursMet) return 'Hours met';
+    if (wk.requiredHours > 0 && (wk.hours || 0) < wk.requiredHours) {
+      return `${formatHoursMin(wk.hours || 0)} of ${formatHoursMin(wk.requiredHours)}`;
+    }
+    return wk.isFinals ? 'Finals week' : '—';
+  }
+  return reasons.join(', ');
+}
+
+function WhyAttendance({ weeks, score }) {
+  const formatRange = (start, end) => {
+    if (!start || !end) return '';
+    const s = new Date(start + 'T00:00:00');
+    const e = new Date(end + 'T00:00:00');
+    const sM = s.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const eM = e.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${sM}–${eM}`;
+  };
+  const tone = (s) => s == null ? '#868e96' : s >= 90 ? '#2f9e44' : s >= 70 ? '#e67700' : '#c92a2a';
+
+  return (
+    <section aria-labelledby="why-attendance-h">
+      <h5
+        id="why-attendance-h"
+        style={{
+          margin: '0 0 6px',
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          color: '#1a1a2e',
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+        }}
+      >
+        Attendance — {score == null ? '—' : `${score}%`}
+      </h5>
+      <table
+        style={{
+          width: '100%',
+          fontSize: '0.7rem',
+          borderCollapse: 'collapse',
+        }}
+      >
+        <caption className="visually-hidden" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+          Per-week attendance breakdown showing week number, score, and reason.
+        </caption>
+        <thead>
+          <tr style={{ borderBottom: '1px solid #f1f3f5' }}>
+            <th scope="col" style={{ textAlign: 'left', padding: '3px 6px 3px 0', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Wk</th>
+            <th scope="col" style={{ textAlign: 'left', padding: '3px 6px', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Dates</th>
+            <th scope="col" style={{ textAlign: 'right', padding: '3px 6px', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Score</th>
+            <th scope="col" style={{ textAlign: 'left', padding: '3px 0 3px 6px', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {weeks.map(wk => {
+            const wScore = wk.attendance ? wk.attendance.attendanceScore : null;
+            return (
+              <tr key={wk.weekNumber}>
+                <th scope="row" style={{ textAlign: 'left', padding: '3px 6px 3px 0', fontWeight: 600, color: '#495057', whiteSpace: 'nowrap' }}>
+                  W{wk.weekNumber}
+                </th>
+                <td style={{ padding: '3px 6px', color: '#868e96', whiteSpace: 'nowrap' }}>
+                  {formatRange(wk.startDate, wk.endDate)}
+                </td>
+                <td style={{ padding: '3px 6px', textAlign: 'right', fontWeight: 700, color: tone(wScore), whiteSpace: 'nowrap' }}>
+                  {wScore == null ? '—' : `${wScore}%`}
+                </td>
+                <td style={{ padding: '3px 0 3px 6px', color: '#495057' }}>
+                  {buildWeekReason(wk)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// ─── Phase 3: WOC Why? — category-grouped contributing items ──────────────────
+//
+// Reads wocResult.details directly from calculateScore. Groups by detail type
+// and renders one section per group with the contributing WOs. Activity
+// factor is shown as a separate explanation when it scaled the base score
+// down (the most common reason for a low WOC that has nothing to do with
+// specific WOs).
+
+const WOC_TYPE_META = {
+  personal_late: { label: 'Late on assigned work orders',     sign: '−', tone: '#c92a2a' },
+  team_late:     { label: 'Team late penalty (any open WO)',  sign: '−', tone: '#e67700' },
+  stale:         { label: 'Stale work orders (no updates)',   sign: '−', tone: '#c92a2a' },
+  early_share:   { label: 'Early-close bonuses',              sign: '+', tone: '#2f9e44' },
+  closer_ack:    { label: 'Closer acknowledgments',           sign: '+', tone: '#2f9e44' },
+};
+
+function WhyWOC({ result, score }) {
+  const details = Array.isArray(result.details) ? result.details : [];
+
+  // Group by type, summing the per-entry impact.
+  const groups = {};
+  for (const d of details) {
+    if (!groups[d.type]) groups[d.type] = { entries: [], total: 0 };
+    groups[d.type].entries.push(d);
+    // deduction for negatives, reward for positives
+    const impact = (d.deduction || 0) + (d.reward || 0);
+    groups[d.type].total += impact;
+  }
+
+  // Order: personal first (matters most to student), then stale, team, then bonuses.
+  const order = ['personal_late', 'stale', 'team_late', 'early_share', 'closer_ack'];
+  const groupKeys = order.filter(k => groups[k]).concat(
+    Object.keys(groups).filter(k => !order.includes(k))
+  );
+
+  const showActivityNote =
+    result.activityFactor != null &&
+    result.activityFactor < 1 &&
+    result.expectedHours != null;
+
+  return (
+    <section aria-labelledby="why-woc-h">
+      <h5
+        id="why-woc-h"
+        style={{
+          margin: '0 0 6px',
+          fontSize: '0.72rem',
+          fontWeight: 700,
+          color: '#1a1a2e',
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+        }}
+      >
+        WOC Ratio — {score == null ? '—' : `${score}%`}
+      </h5>
+
+      {/* Activity factor — usually the biggest hidden driver of a low WOC. */}
+      {showActivityNote && (
+        <div
+          style={{
+            padding: '6px 8px',
+            background: '#fff9db',
+            border: '1px solid #ffec99',
+            borderRadius: 4,
+            fontSize: '0.68rem',
+            color: '#5c4a00',
+            marginBottom: 8,
+            lineHeight: 1.4,
+          }}
+        >
+          <strong style={{ fontWeight: 700 }}>Activity factor: {Math.round(result.activityFactor * 100)}%.</strong>
+          {' '}You logged {formatHoursMin(result.activityHours || 0)} of {formatHoursMin(result.expectedHours || 0)} expected this period — your base score was scaled accordingly. Log more hours on work orders to lift this back to 100%.
+        </div>
+      )}
+
+      {groupKeys.length === 0 ? (
+        <p style={{ margin: 0, fontSize: '0.7rem', color: '#868e96', fontStyle: 'italic' }}>
+          No specific work orders to flag for this period.
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {groupKeys.map(key => {
+            const meta = WOC_TYPE_META[key] || { label: key, sign: '', tone: '#495057' };
+            const grp = groups[key];
+            const entries = grp.entries;
+            return (
+              <div key={key}>
+                <div
+                  style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 600,
+                    color: meta.tone,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                  }}
+                >
+                  <span>{meta.label}</span>
+                  <span style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    {meta.sign}{round1(Math.abs(grp.total))}% · {entries.length} WO{entries.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <ul
+                  style={{
+                    margin: '3px 0 0',
+                    padding: 0,
+                    listStyle: 'none',
+                  }}
+                >
+                  {entries.map((e, idx) => (
+                    <li
+                      key={`${e.woId}-${idx}`}
+                      style={{
+                        fontSize: '0.68rem',
+                        color: '#495057',
+                        padding: '2px 0 2px 10px',
+                        borderLeft: `2px solid ${meta.tone}33`,
+                        marginLeft: 4,
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      <span style={{ fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace', fontSize: '0.65rem', color: '#1864ab' }}>
+                        {e.woId}
+                      </span>
+                      {e.description ? (
+                        <span style={{ color: '#868e96' }}> — {e.description}</span>
+                      ) : null}
+                      {/* Per-entry context: days late, days stale, % of work for early-share, etc. */}
+                      <WOCDetailExtra entry={e} type={key} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Tiny helper for the per-entry context line. Kept inline as a sub-component
+// so each detail type can have its own format without bloating WhyWOC.
+function WOCDetailExtra({ entry, type }) {
+  let text = '';
+  if (type === 'personal_late' || type === 'team_late') {
+    if (entry.days != null) text = `${entry.days} day${entry.days !== 1 ? 's' : ''} late`;
+  } else if (type === 'stale') {
+    if (entry.daysSinceUpdate != null) {
+      text = `${entry.daysSinceUpdate} days without update`;
+    } else if (entry.days != null) {
+      text = `${entry.days} day${entry.days !== 1 ? 's' : ''} over threshold`;
+    }
+  } else if (type === 'early_share') {
+    const parts = [];
+    if (entry.days != null) parts.push(`${entry.days} day${entry.days !== 1 ? 's' : ''} early`);
+    if (entry.pctOfWork != null) parts.push(`${entry.pctOfWork}% of the work`);
+    if (entry.capped) parts.push('capped');
+    text = parts.join(', ');
+  }
+  if (!text) return null;
+  return (
+    <span style={{ display: 'block', fontSize: '0.62rem', color: '#adb5bd', marginLeft: 0 }}>
+      {text}
+    </span>
+  );
+}
+
+// One-decimal rounding helper used in the WOC group totals.
+function round1(n) {
+  if (n == null || isNaN(n)) return 0;
+  return Math.round(n * 10) / 10;
+}
+
+function ScoreCell({ label, value, suffix, formatter, color }) {
+  let display;
+  if (value == null) {
+    display = '—';
+  } else if (formatter) {
+    display = formatter(value);
+  } else {
+    display = `${value}${suffix || ''}`;
+  }
+  return (
+    <div>
+      <dt
+        style={{
+          fontSize: '0.6rem',
+          color: '#868e96',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          fontWeight: 600,
+        }}
+      >
+        {label}
+      </dt>
+      <dd
+        style={{
+          margin: '2px 0 0',
+          fontSize: '1.15rem',
+          fontWeight: 700,
+          color,
+          lineHeight: 1.2,
+        }}
+      >
+        {display}
+      </dd>
     </div>
   );
 }
@@ -1400,6 +2208,9 @@ export default function DashboardPage() {
 
       {/* ── Student / Work Study: Compact Metrics ── */}
       {isStudentOrWS && <AccountabilityMetrics navigate={navigate} />}
+
+      {/* ── Student / Work Study: Per-Class Grade-Relevant Scores ── */}
+      {isStudentOrWS && <GradeRelevantScores />}
 
       {/* ── Instructor: Overview ── */}
       {isInstructor && <InstructorOverview navigate={navigate} />}
