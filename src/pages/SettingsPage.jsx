@@ -35,15 +35,20 @@ import {
   useSettings, useSettingsActions, useCategories, useCategoryActions,
   useAssetLocations, useAssetLocationActions, useInventoryLocations, useInventoryLocationActions,
   useVendorsList, useVendorActions, useWOStatuses, useWOStatusActions,
-  useClasses, useClassActions
+  useClasses, useClassActions,
+  useWeeklyReminders, useWeeklyReminderActions,
 } from '@/hooks/useSettings'
 import {
   Settings, Save, Plus, Trash2, Edit3, X, Loader2, CheckCircle2,
   Tag, MapPin, Box, Truck, ClipboardList, GraduationCap, Sliders,
   Users, Calendar, Clock, BookOpen, ChevronRight, Search,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
-  LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check
+  LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
+  History, Globe,
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import WeeklyReminderHistoryModal from '@/components/WeeklyReminderHistoryModal'
 import toast from 'react-hot-toast'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -414,7 +419,7 @@ function buildRegistry() {
   })
 
   // Weekly Labs
-  reg.push({ key: 'alldone_weekly_reminder', tab: 'weekly_labs', label: 'Mark All Done — Weekly Reminder', desc: 'Optional message shown in the Mark All Done popup', aliases: 'reminder message weekly tracker swipe' })
+  reg.push({ key: 'weekly_reminders', tab: 'weekly_labs', label: 'Mark All Done — Weekly Reminders', desc: 'Per-class reminder messages with markdown support and history', aliases: 'reminder message weekly tracker swipe markdown class history' })
 
   // Evaluation
   EVAL_SETTINGS.forEach(s => {
@@ -1757,104 +1762,329 @@ function DashboardSettings() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WEEKLY LABS SETTINGS — Mark All Done reminder textarea
+// WEEKLY LABS SETTINGS — Per-class reminders with markdown + history
+//
+// Reminders are stored in the `weekly_reminders` table:
+//   • One global row (class_id IS NULL) shown to ALL students
+//   • Plus one optional row per active class, shown only to students in it
+//
+// Every save appends to `reminder_history` (auto-pruned to last 100 per scope).
+// Markdown rendering uses react-markdown + remark-gfm — see the popup in
+// WeeklyLabsTrackerPage.jsx for the matching student-facing renderer.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function WeeklyLabsSettings() {
-  const { profile } = useAuth()
-  const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
-  const [message, setMessage] = useState('')
-  const [savedMessage, setSavedMessage] = useState('')
-  const [loading, setLoading] = useState(true)
+// ─── Auto-grow textarea hook ────────────────────────────────────────────────
+function useAutoGrowTextarea(value, ref, { min = 200, max = 400 } = {}) {
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    const target = Math.min(Math.max(el.scrollHeight + 2, min), max)
+    el.style.height = `${target}px`
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden'
+  }, [value, ref, min, max])
+}
+
+// ─── Shared markdown preview (matches the modal renderer) ───────────────────
+function ReminderMarkdownPreview({ text, className = '' }) {
+  if (!text || !text.trim()) return null
+  return (
+    <div className={`reminder-markdown ${className}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline text-amber-900 hover:text-amber-950 focus-visible:ring-2 focus-visible:ring-amber-600 rounded"
+            >
+              {children}
+            </a>
+          ),
+          ul: ({ children }) => <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal pl-5 my-1 space-y-0.5">{children}</ol>,
+          p: ({ children }) => <p className="mb-1.5 last:mb-0 leading-snug">{children}</p>,
+          code: ({ children }) => (
+            <code className="px-1 py-0.5 rounded bg-amber-100/60 text-[0.85em] font-mono">{children}</code>
+          ),
+          h1: ({ children }) => <p className="font-bold text-base mb-1.5">{children}</p>,
+          h2: ({ children }) => <p className="font-bold text-sm mb-1">{children}</p>,
+          h3: ({ children }) => <p className="font-semibold text-sm mb-1">{children}</p>,
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+// ─── Editor pane for a single scope (global or one class) ───────────────────
+// Self-contained: owns its message buffer, debounced auto-save, and on-unmount
+// flush. Keyed by scope at the parent so switching tabs remounts cleanly.
+function ReminderEditor({ scope, initialMessage, onSave }) {
+  const [message, setMessage] = useState(initialMessage || '')
+  const [savedMessage, setSavedMessage] = useState(initialMessage || '')
   const [saveState, setSaveState] = useState(null)
   const debounceRef = useRef(null)
+  const textareaRef = useRef(null)
   const messageId = useId()
+  const helpId = useId()
+  const previewId = useId()
 
-  // Fetch current message
+  useAutoGrowTextarea(message, textareaRef, { min: 200, max: 400 })
+
+  // Re-sync when the realtime-fed initialMessage changes from another tab/user.
+  // Only overwrite the local buffer if we're not actively editing (no pending
+  // debounce) AND the incoming value differs from what we last saved.
   useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const { data } = await supabase
-          .from('settings')
-          .select('setting_value')
-          .eq('setting_key', 'alldone_weekly_reminder')
-          .maybeSingle()
-        if (cancelled) return
-        const val = data?.setting_value || ''
-        setMessage(val)
-        setSavedMessage(val)
-      } catch {
-        if (cancelled) return
-        setMessage('')
-        setSavedMessage('')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+    if (debounceRef.current) return
+    if ((initialMessage || '') !== savedMessage) {
+      setMessage(initialMessage || '')
+      setSavedMessage(initialMessage || '')
     }
-    load()
-    return () => { cancelled = true }
-  }, [])
+  }, [initialMessage, savedMessage])
 
-  const persistMessage = useCallback(async (val) => {
+  const persist = useCallback(async (val) => {
     setSaveState('saving')
     try {
-      const trimmed = val.trim()
-      const { data: rows, error } = await supabase
-        .from('settings')
-        .update({
-          setting_value: trimmed,
-          updated_at: new Date().toISOString(),
-          updated_by: userName,
-        })
-        .eq('setting_key', 'alldone_weekly_reminder')
-        .select()
-      if (error) throw error
-      if (!rows || rows.length === 0) {
-        await supabase.from('settings').insert({
-          setting_key: 'alldone_weekly_reminder',
-          setting_value: trimmed,
-          description: 'Optional instructor reminder message shown in the Mark All Done popup on the Weekly Labs Tracker',
-          category: 'Weekly Labs',
-          updated_at: new Date().toISOString(),
-          updated_by: userName,
-        })
-      }
-      setSavedMessage(trimmed)
+      await onSave(scope.classId, val, scope.label)
+      setSavedMessage(val.trim())
       setSaveState('saved')
       setTimeout(() => setSaveState(s => s === 'saved' ? null : s), 2000)
-    } catch (err) {
+    } catch {
       setSaveState(null)
-      toast.error('Failed to save: ' + err.message)
+      // toast already shown by hook
     }
-  }, [userName])
+  }, [onSave, scope.classId, scope.label])
 
   const handleChange = (val) => {
     setMessage(val)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      if (val.trim() !== savedMessage.trim()) persistMessage(val)
+      debounceRef.current = null
+      if (val.trim() !== savedMessage.trim()) persist(val)
     }, 800)
   }
 
-  // Flush on unmount
+  // Flush on unmount (tab switch or page leave)
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current)
+        debounceRef.current = null
         if (message.trim() !== savedMessage.trim()) {
-          persistMessage(message).catch(() => {})
+          persist(message).catch(() => {})
         }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  if (loading) {
+  const isGlobal = scope.classId === null
+
+  return (
+    <div role="tabpanel" aria-labelledby={`scope-tab-${scope.key}`}>
+      <p className="text-xs text-surface-500 leading-relaxed mb-2">
+        {isGlobal ? (
+          <>
+            This message appears in the <strong>Mark All Done</strong> popup for{' '}
+            <strong>every student</strong>, regardless of class. Use it for program-wide reminders.
+          </>
+        ) : (
+          <>
+            This message appears in the <strong>Mark All Done</strong> popup only for students
+            enrolled in <strong>{scope.label}</strong>. Use it for class-specific reminders.
+          </>
+        )}{' '}
+        Supports markdown — <code className="text-[11px] px-1 rounded bg-surface-100">**bold**</code>,
+        {' '}<code className="text-[11px] px-1 rounded bg-surface-100">- bullets</code>, links, etc.
+        Auto-saves as you type.
+      </p>
+
+      {/* Live student-facing preview */}
+      {message.trim() && (
+        <div
+          className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900 mb-3"
+          role="region"
+          aria-label="Student preview"
+          id={previewId}
+        >
+          <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-500" aria-hidden="true" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] uppercase tracking-wide font-bold text-amber-700 mb-1">
+              Student preview
+            </div>
+            <ReminderMarkdownPreview text={message} className="text-sm" />
+          </div>
+        </div>
+      )}
+
+      <label htmlFor={messageId} className="text-xs font-semibold text-surface-500 mb-1.5 block">
+        Reminder Message {isGlobal ? '(global)' : `for ${scope.courseId || scope.label}`}
+      </label>
+      <textarea
+        ref={textareaRef}
+        id={messageId}
+        value={message}
+        onChange={e => handleChange(e.target.value)}
+        placeholder={isGlobal
+          ? "e.g. **Final week!** Please make sure your tools are returned.\n\n- Sign out of your kiosk\n- Return PPE to bin"
+          : `Reminders specific to ${scope.label}…\n\nSupports **bold**, *italic*, [links](https://example.com), and bullet lists.`}
+        rows={8}
+        className="settings-input"
+        maxLength={1500}
+        style={{ minHeight: '200px', resize: 'none', lineHeight: '1.5' }}
+        aria-describedby={`${helpId} ${message.trim() ? previewId : ''}`}
+      />
+      <p id={helpId} className="sr-only">
+        This message will appear in the Mark All Done popup. Markdown formatting is supported.
+        Press Enter twice to create a blank line between messages.
+      </p>
+      <div className="flex justify-between items-center mt-1">
+        <span className="text-[10px] text-surface-400" aria-live="polite">
+          {message.length}/1500 characters
+        </span>
+        <div className="flex items-center gap-3">
+          {message.trim() && (
+            <button
+              type="button"
+              onClick={() => handleChange('')}
+              className="text-[11px] text-surface-400 hover:text-red-500 transition-colors focus-visible:ring-2 focus-visible:ring-red-400 rounded px-1"
+            >
+              Clear message
+            </button>
+          )}
+          <SavedIndicator state={saveState} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Tab strip with proper ARIA for WCAG 2.1 AA ─────────────────────────────
+function ScopeTabStrip({ scopes, activeKey, onChange, reminderByScope }) {
+  const listRef = useRef(null)
+
+  // Arrow / Home / End keyboard navigation per WAI-ARIA Authoring Practices
+  const handleKeyDown = (e, idx) => {
+    let nextIdx = null
+    if (e.key === 'ArrowRight') nextIdx = (idx + 1) % scopes.length
+    else if (e.key === 'ArrowLeft') nextIdx = (idx - 1 + scopes.length) % scopes.length
+    else if (e.key === 'Home') nextIdx = 0
+    else if (e.key === 'End') nextIdx = scopes.length - 1
+    if (nextIdx !== null) {
+      e.preventDefault()
+      onChange(scopes[nextIdx].key)
+      const tabs = listRef.current?.querySelectorAll('[role="tab"]')
+      tabs?.[nextIdx]?.focus()
+    }
+  }
+
+  return (
+    <div
+      ref={listRef}
+      role="tablist"
+      aria-label="Reminder scope"
+      className="flex gap-1 overflow-x-auto pb-2 -mb-px border-b border-surface-200 settings-tab-strip"
+    >
+      {scopes.map((s, idx) => {
+        const active = s.key === activeKey
+        const hasContent = !!reminderByScope[s.key]
+        const isGlobal = s.classId === null
+        return (
+          <button
+            key={s.key}
+            id={`scope-tab-${s.key}`}
+            role="tab"
+            type="button"
+            aria-selected={active}
+            aria-controls={`scope-panel-${s.key}`}
+            tabIndex={active ? 0 : -1}
+            onClick={() => onChange(s.key)}
+            onKeyDown={e => handleKeyDown(e, idx)}
+            className={`relative flex items-center gap-1.5 px-3 py-2 rounded-t-md text-xs font-semibold whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
+              active
+                ? 'bg-indigo-50 text-indigo-700 border-b-2 border-indigo-600 -mb-px'
+                : 'text-surface-600 hover:text-surface-900 hover:bg-surface-50'
+            }`}
+          >
+            {isGlobal ? (
+              <Globe size={12} aria-hidden="true" />
+            ) : (
+              <BookOpen size={12} aria-hidden="true" />
+            )}
+            <span>{s.label}</span>
+            {hasContent && (
+              <span
+                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                  active ? 'bg-indigo-600' : 'bg-amber-500'
+                }`}
+                aria-label="has content"
+                title="This scope has a reminder set"
+              />
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function WeeklyLabsSettings() {
+  const { reminders, loading: remindersLoading } = useWeeklyReminders()
+  const { items: classList, loading: classesLoading } = useClasses()
+  const { setReminder } = useWeeklyReminderActions()
+
+  const [activeKey, setActiveKey] = useState('global')
+  const [historyOpen, setHistoryOpen] = useState(false)
+
+  // Build scopes: global first, then active classes
+  const scopes = useMemo(() => {
+    const list = [{
+      key: 'global',
+      classId: null,
+      label: 'All Classes',
+      courseId: 'Global',
+    }]
+    const active = (classList || [])
+      .filter(c => {
+        const s = (c.status || '').toLowerCase()
+        return s === 'active' || s === ''
+      })
+      .sort((a, b) => (a.course_id || '').localeCompare(b.course_id || ''))
+    active.forEach(c => {
+      const lbl = c.semester ? `${c.course_id} (${c.semester})` : (c.course_id || c.class_id)
+      list.push({
+        key: c.class_id,
+        classId: c.class_id,
+        label: lbl,
+        courseId: c.course_id,
+      })
+    })
+    return list
+  }, [classList])
+
+  // Map scope key → message string (for tab dot indicator + active editor seed)
+  const reminderByScope = useMemo(() => {
+    const m = {}
+    for (const r of reminders) {
+      if (!r.message || !r.message.trim()) continue
+      const key = r.class_id === null || r.class_id === undefined ? 'global' : r.class_id
+      m[key] = r.message
+    }
+    return m
+  }, [reminders])
+
+  const activeScope = scopes.find(s => s.key === activeKey) || scopes[0]
+  const activeInitialMessage = reminderByScope[activeScope.key] || ''
+
+  if (remindersLoading || classesLoading) {
     return (
       <div className="settings-loading">
         <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
-        <p className="text-sm">Loading…</p>
+        <p className="text-sm">Loading reminders…</p>
       </div>
     )
   }
@@ -1863,66 +2093,52 @@ function WeeklyLabsSettings() {
     <div className="space-y-4">
       <SettingCard
         icon={MessageSquare}
-        title="Mark All Done — Weekly Reminder"
+        title="Mark All Done — Weekly Reminders"
+        actions={
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700 px-2.5 py-1.5 rounded-md hover:bg-indigo-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+          >
+            <History size={13} aria-hidden="true" />
+            View history
+          </button>
+        }
         footer={
           <>
             <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
             <span>
-              This message is shared across all instructors and persists until you change or clear it.
-              It appears in the Mark All Done popup for <strong>every student</strong> during the current week.
-              Update it each week as needed, or clear it when there is nothing to remind.
+              Reminders are scoped per class — students see the global reminder plus any
+              reminders set for the classes they're enrolled in. Each must be acknowledged
+              separately in the Mark All Done popup. All changes are recorded in history.
             </span>
           </>
         }
       >
         <div className="settings-card-body--padded space-y-3">
-          <div>
-            <p className="text-xs text-surface-500 leading-relaxed mb-2">
-              This message appears as an amber reminder banner inside the <strong>Mark All Done</strong> popup
-              on the Weekly Labs Tracker page. Use it to remind yourself to ask students about pending tasks
-              before swiping a badge. Leave it blank to show no banner. Auto-saves as you type.
-            </p>
+          <ScopeTabStrip
+            scopes={scopes}
+            activeKey={activeKey}
+            onChange={setActiveKey}
+            reminderByScope={reminderByScope}
+          />
 
-            {/* Live preview */}
-            {message.trim() && (
-              <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 mb-3" role="region" aria-label="Reminder message preview">
-                <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-500" aria-hidden="true" />
-                <span className="leading-snug">{message}</span>
-              </div>
-            )}
-
-            <label htmlFor={messageId} className="text-xs font-semibold text-surface-500 mb-1.5 block">
-              Reminder Message
-            </label>
-            <textarea
-              id={messageId}
-              value={message}
-              onChange={e => handleChange(e.target.value)}
-              placeholder="e.g. Ask students if they have registered for next semester's classes."
-              rows={3}
-              className="settings-input"
-              maxLength={500}
+          <div id={`scope-panel-${activeScope.key}`}>
+            <ReminderEditor
+              key={activeScope.key}
+              scope={activeScope}
+              initialMessage={activeInitialMessage}
+              onSave={setReminder}
             />
-            <div className="flex justify-between items-center mt-1">
-              <span className="text-[10px] text-surface-400">
-                {message.length}/500 characters
-              </span>
-              <div className="flex items-center gap-2">
-                {message.trim() && (
-                  <button
-                    type="button"
-                    onClick={() => handleChange('')}
-                    className="text-[11px] text-surface-400 hover:text-red-500 transition-colors"
-                  >
-                    Clear message
-                  </button>
-                )}
-                <SavedIndicator state={saveState} />
-              </div>
-            </div>
           </div>
         </div>
       </SettingCard>
+
+      <WeeklyReminderHistoryModal
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        classes={classList || []}
+      />
     </div>
   )
 }

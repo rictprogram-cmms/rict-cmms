@@ -11,6 +11,8 @@ import {
   ChevronDown, ChevronUp, BarChart3, ShieldCheck, X,
   AlertTriangle, ClipboardList, Clock, Star, BookOpen,
 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import toast from 'react-hot-toast'
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -237,22 +239,54 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   const [workOrderLogs, setWorkOrderLogs] = useState({})
   const [lateWorkOrderLogs, setLateWorkOrderLogs] = useState({})
   const [loadingWOs, setLoadingWOs] = useState(true)
-  const [weeklyReminder, setWeeklyReminder] = useState('')
-  const [reminderAcknowledged, setReminderAcknowledged] = useState(false)
+  const [weeklyReminders, setWeeklyReminders] = useState([])  // [{id, class_id, class_label, message}]
+  const [acknowledgedIds, setAcknowledgedIds] = useState(() => new Set())
   // Ref-based guard to prevent double-fire from rapid badge swipe events
   const processingRef = useRef(false)
 
-  // Fetch weekly reminder message when modal opens
+  // Fetch weekly reminders when modal opens — global + any class-scoped
+  // reminders for the classes this student is enrolled in for the current week.
   useEffect(() => {
     if (!isOpen) return
+    const enrolledClassIds = (classes || [])
+      .map(c => c?.classId)
+      .filter(Boolean)
+
     supabase
-      .from('settings')
-      .select('setting_value')
-      .eq('setting_key', 'alldone_weekly_reminder')
-      .maybeSingle()
-      .then(({ data }) => setWeeklyReminder(data?.setting_value?.trim() || ''))
-      .catch(() => setWeeklyReminder(''))
-  }, [isOpen])
+      .from('weekly_reminders')
+      .select('*')
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('weekly_reminders fetch error:', error)
+          setWeeklyReminders([])
+          return
+        }
+        const all = data || []
+        // Keep: global reminders OR reminders matching one of the student's classes
+        const filtered = all
+          .filter(r => r.message && r.message.trim())
+          .filter(r => r.class_id == null || enrolledClassIds.includes(r.class_id))
+
+        // Stable display order: global first, then alphabetical by class label
+        const labeled = filtered.map(r => {
+          const cls = r.class_id
+            ? (classes || []).find(c => c?.classId === r.class_id)
+            : null
+          return {
+            ...r,
+            _label: r.class_id ? (cls?.className || r.class_id) : 'All Classes',
+            _isGlobal: r.class_id == null,
+          }
+        }).sort((a, b) => {
+          if (a._isGlobal && !b._isGlobal) return -1
+          if (!a._isGlobal && b._isGlobal) return 1
+          return a._label.localeCompare(b._label)
+        })
+
+        setWeeklyReminders(labeled)
+      })
+      .catch(() => setWeeklyReminders([]))
+  }, [isOpen, classes])
 
   // Fetch work orders when modal opens
   useEffect(() => {
@@ -260,7 +294,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
     setLoadingWOs(true)
     setBadge('')
     setError('')
-    setReminderAcknowledged(false)
+    setAcknowledgedIds(new Set())
     processingRef.current = false
 
     async function fetchWOs() {
@@ -380,7 +414,10 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   const allLateWOsHaveLogs = lateWorkOrders.length === 0 || lateWorkOrders.every(wo => logsThisWeekByLateWO[wo.wo_id])
 
   // Gate: all four conditions must be met before badge swipe is allowed
-  const canVerify = allLabsDone && allWOsHaveLogsThisWeek && allLateWOsHaveLogs && (!weeklyReminder || reminderAcknowledged)
+  // All reminders must be acknowledged individually before badge swipe is allowed
+  const allRemindersAcked = weeklyReminders.length === 0
+    || weeklyReminders.every(r => acknowledgedIds.has(r.id))
+  const canVerify = allLabsDone && allWOsHaveLogsThisWeek && allLateWOsHaveLogs && allRemindersAcked
 
   const doVerify = async (overrideValue) => {
     // Guard: if already processing, skip silently
@@ -881,51 +918,118 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
             </div>
           )}
 
-          {/* Weekly Reminder Message — set by instructors in Settings → Weekly Labs */}
-          {weeklyReminder && (
-            <div className={`mx-4 my-3 rounded-xl border-2 shadow-sm overflow-hidden transition-colors duration-300 ${
-              reminderAcknowledged ? 'border-indigo-300 bg-indigo-50' : 'border-red-400 bg-red-50'
-            }`}>
-              <div className={`flex items-center gap-2 px-4 py-2 transition-colors duration-300 ${
-                reminderAcknowledged ? 'bg-indigo-600' : 'bg-red-600'
-              }`}>
-                <BookOpen size={14} className="text-white flex-shrink-0" />
-                <span className="text-xs font-bold text-white uppercase tracking-wide">
-                  Message from Your Instructor
-                </span>
-                {!reminderAcknowledged && (
-                  <span className="ml-auto text-[10px] font-bold text-white/90 flex items-center gap-1">
-                    <AlertTriangle size={11} /> Must acknowledge to continue
+          {/* Weekly Reminder Messages — one card per scope (global + per-class) */}
+          {weeklyReminders.length > 0 && (
+            <div className="mx-4 my-3 space-y-3" role="region" aria-label="Instructor reminders">
+              {weeklyReminders.length > 1 && (
+                <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-surface-500">
+                  <span>{weeklyReminders.length} messages from your instructor</span>
+                  <span aria-live="polite">
+                    {acknowledgedIds.size}/{weeklyReminders.length} acknowledged
                   </span>
-                )}
-              </div>
-              <div className="px-4 py-3">
-                <p className={`text-sm font-semibold leading-snug mb-3 ${reminderAcknowledged ? 'text-indigo-900' : 'text-red-900'}`}>
-                  {weeklyReminder}
-                </p>
-                <label className={`flex items-center gap-2.5 cursor-pointer select-none group`}>
+                </div>
+              )}
+              {weeklyReminders.map(r => {
+                const acked = acknowledgedIds.has(r.id)
+                const toggle = () => {
+                  setAcknowledgedIds(prev => {
+                    const next = new Set(prev)
+                    if (next.has(r.id)) next.delete(r.id)
+                    else next.add(r.id)
+                    return next
+                  })
+                }
+                return (
                   <div
-                    onClick={() => setReminderAcknowledged(v => !v)}
-                    className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                      reminderAcknowledged
-                        ? 'bg-indigo-600 border-indigo-600'
-                        : 'bg-white border-red-400 group-hover:border-red-500'
+                    key={r.id}
+                    className={`rounded-xl border-2 shadow-sm overflow-hidden transition-colors duration-300 ${
+                      acked ? 'border-indigo-300 bg-indigo-50' : 'border-red-400 bg-red-50'
                     }`}
                   >
-                    {reminderAcknowledged && (
-                      <svg width="11" height="9" viewBox="0 0 11 9" fill="none">
-                        <path d="M1 4L4 7L10 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    )}
+                    <div
+                      className={`flex items-center gap-2 px-4 py-2 transition-colors duration-300 ${
+                        acked ? 'bg-indigo-600' : 'bg-red-600'
+                      }`}
+                    >
+                      <BookOpen size={14} className="text-white flex-shrink-0" aria-hidden="true" />
+                      <span className="text-xs font-bold text-white uppercase tracking-wide truncate">
+                        {r._isGlobal
+                          ? 'Message from Your Instructor'
+                          : `Message for ${r._label}`}
+                      </span>
+                      {!acked && (
+                        <span className="ml-auto text-[10px] font-bold text-white/90 flex items-center gap-1 flex-shrink-0">
+                          <AlertTriangle size={11} aria-hidden="true" /> Must acknowledge
+                        </span>
+                      )}
+                    </div>
+                    <div className="px-4 py-3">
+                      <div
+                        className={`text-sm font-semibold mb-3 reminder-markdown ${
+                          acked ? 'text-indigo-900' : 'text-red-900'
+                        }`}
+                      >
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a: ({ href, children }) => (
+                              <a
+                                href={href}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline hover:opacity-80 focus-visible:ring-2 focus-visible:ring-current rounded"
+                              >
+                                {children}
+                              </a>
+                            ),
+                            ul: ({ children }) => <ul className="list-disc pl-5 my-1 space-y-0.5">{children}</ul>,
+                            ol: ({ children }) => <ol className="list-decimal pl-5 my-1 space-y-0.5">{children}</ol>,
+                            p: ({ children }) => <p className="mb-1.5 last:mb-0 leading-snug">{children}</p>,
+                            code: ({ children }) => (
+                              <code className="px-1 py-0.5 rounded bg-black/5 text-[0.85em] font-mono">{children}</code>
+                            ),
+                            h1: ({ children }) => <p className="font-bold text-base mb-1.5">{children}</p>,
+                            h2: ({ children }) => <p className="font-bold text-sm mb-1">{children}</p>,
+                            h3: ({ children }) => <p className="font-semibold text-sm mb-1">{children}</p>,
+                          }}
+                        >
+                          {r.message}
+                        </ReactMarkdown>
+                      </div>
+                      <label className="flex items-center gap-2.5 cursor-pointer select-none group">
+                        <input
+                          type="checkbox"
+                          checked={acked}
+                          onChange={toggle}
+                          className="sr-only"
+                          aria-label={`Acknowledge: ${r._isGlobal ? 'Message from Your Instructor' : `Message for ${r._label}`}`}
+                        />
+                        <div
+                          aria-hidden="true"
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                            acked
+                              ? 'bg-indigo-600 border-indigo-600'
+                              : 'bg-white border-red-400 group-hover:border-red-500 group-focus-within:ring-2 group-focus-within:ring-red-400'
+                          }`}
+                        >
+                          {acked && (
+                            <svg width="11" height="9" viewBox="0 0 11 9" fill="none">
+                              <path d="M1 4L4 7L10 1" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          )}
+                        </div>
+                        <span
+                          className={`text-xs font-semibold transition-colors ${
+                            acked ? 'text-indigo-800' : 'text-red-800'
+                          }`}
+                        >
+                          I have read and understood {weeklyReminders.length > 1 ? 'this message' : 'the message above'}
+                        </span>
+                      </label>
+                    </div>
                   </div>
-                  <span
-                    onClick={() => setReminderAcknowledged(v => !v)}
-                    className={`text-xs font-semibold transition-colors ${reminderAcknowledged ? 'text-indigo-800' : 'text-red-800'}`}
-                  >
-                    I have read and understood the message above
-                  </span>
-                </label>
-              </div>
+                )
+              })}
             </div>
           )}
 
@@ -937,7 +1041,13 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                 {!allLabsDone && <p className="pl-4">• All labs must be signed off</p>}
                 {anyWOMissingLog && <p className="pl-4">• Work log entry required for each open work order this week</p>}
                 {anyLateWOMissingLog && <p className="pl-4">• Work log entry required for each late work order this week (any student)</p>}
-                {weeklyReminder && !reminderAcknowledged && <p className="pl-4">• Acknowledge the instructor message above</p>}
+                {weeklyReminders.length > 0 && !allRemindersAcked && (
+                  <p className="pl-4">
+                    • Acknowledge {weeklyReminders.length === 1
+                      ? 'the instructor message above'
+                      : `all ${weeklyReminders.length} instructor messages above (${acknowledgedIds.size}/${weeklyReminders.length} done)`}
+                  </p>
+                )}
               </div>
             )}
             <div className="relative">
@@ -1271,7 +1381,12 @@ function StudentView() {
 
   // Open All Done modal
   const openAllDone = () => {
-    const classNames = currentWeekInfos.map(info => info.cls.className)
+    // Pass class OBJECTS (with classId) so the modal can fetch class-scoped reminders.
+    // The previous shape (array of strings) is preserved by the className field on each.
+    const classObjs = currentWeekInfos.map(info => ({
+      className: info.cls.className,
+      classId: info.cls.classId || null,
+    }))
     // Lab statuses only for tracked classes (non-tracked don't need sign-off)
     const labStatuses = trackedWeekInfos.map(info => ({
       className: info.cls.className,
@@ -1288,7 +1403,7 @@ function StudentView() {
       weekDate: currentWeekLabel,
       weekStartDate,
       weekEndDate,
-      classes: classNames,
+      classes: classObjs,
       labStatuses,
     })
   }

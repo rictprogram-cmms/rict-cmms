@@ -410,3 +410,233 @@ export function useWOStatusActions() { return useLookupActions('wo_status', 'sta
 
 export function useClasses() { return useLookupTable('classes', 'class_id', 'course_id') }
 export function useClassActions() { return useLookupActions('classes', 'class_id') }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WEEKLY REMINDERS — per-class messages + append-only history
+//
+// Replaces the legacy `alldone_weekly_reminder` setting. Two tables are involved:
+//   • weekly_reminders   — current state, one global row + one per active class
+//   • reminder_history   — append-only audit (DB trigger prunes to last 100/scope)
+//
+// Patterns used:
+//   • Unique realtime channel names (per-mount suffix)
+//   • IDs via get_next_id RPC with classId-aware delete/upsert (no client-side
+//     fallback needed — these tables are tiny, racey only across instructors)
+//   • Audit log row per save (entity_type='weekly_reminders')
+//   • Email-based RLS: writes gated to Instructor / Super Admin in the policy
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * useWeeklyReminders — subscribes to the entire weekly_reminders table.
+ * Returns an array of rows: at most one with class_id IS NULL (global) and
+ * zero-to-many with a specific class_id. Used by the Settings tabbed UI and by
+ * the Mark All Done modal (which client-side filters to the student's classes).
+ */
+export function useWeeklyReminders() {
+  const [reminders, setReminders] = useState([])
+  const [loading, setLoading] = useState(true)
+  const channelIdRef = useRef(`weekly-reminders-${makeChannelSuffix()}`)
+
+  const fetch = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('weekly_reminders')
+        .select('*')
+      if (error) throw error
+      setReminders(data || [])
+    } catch (err) {
+      console.error('weekly_reminders fetch error:', err)
+      setReminders([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetch() }, [fetch])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel(channelIdRef.current)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_reminders' }, () => { fetch() })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [fetch])
+
+  return { reminders, loading, refresh: fetch }
+}
+
+/**
+ * useWeeklyReminderActions — single `setReminder(classId, message, classLabel)` call:
+ *   • classId === null    → global reminder
+ *   • classId === '<id>'  → reminder for that class
+ *   • empty/whitespace message → DELETES the row (clear the reminder)
+ *   • non-empty message → UPSERT (insert if missing, update if present)
+ *
+ * Always appends a row to reminder_history with old + new messages. Skips
+ * silently if the message is unchanged.
+ */
+export function useWeeklyReminderActions() {
+  const { profile } = useAuth()
+  const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
+  const [saving, setSaving] = useState(false)
+
+  const setReminder = useCallback(async (classId, newMessage, classLabel) => {
+    setSaving(true)
+    const trimmed = (newMessage || '').trim()
+    const label = classLabel || (classId || 'All Classes')
+    try {
+      // 1. Read existing row in this scope (NULL-safe match)
+      const existingQ = classId
+        ? supabase.from('weekly_reminders').select('*').eq('class_id', classId).maybeSingle()
+        : supabase.from('weekly_reminders').select('*').is('class_id', null).maybeSingle()
+      const { data: existing, error: selErr } = await existingQ
+      if (selErr) throw selErr
+      const oldMessage = existing?.message || ''
+
+      // 2. Short-circuit if no change
+      if (oldMessage === trimmed) { setSaving(false); return true }
+
+      // 3. Delete vs upsert based on trimmed length
+      let action = 'Update'
+      if (trimmed === '') {
+        if (!existing) { setSaving(false); return true }
+        action = 'Clear'
+        const delQ = classId
+          ? supabase.from('weekly_reminders').delete().eq('class_id', classId)
+          : supabase.from('weekly_reminders').delete().is('class_id', null)
+        const { error: delErr } = await delQ
+        if (delErr) throw delErr
+      } else if (existing) {
+        const updQ = classId
+          ? supabase.from('weekly_reminders')
+              .update({
+                message: trimmed,
+                updated_at: new Date().toISOString(),
+                updated_by: userName,
+              })
+              .eq('class_id', classId)
+          : supabase.from('weekly_reminders')
+              .update({
+                message: trimmed,
+                updated_at: new Date().toISOString(),
+                updated_by: userName,
+              })
+              .is('class_id', null)
+        const { error: updErr } = await updQ
+        if (updErr) throw updErr
+      } else {
+        action = 'Create'
+        const { data: newId, error: idErr } = await supabase
+          .rpc('get_next_id', { p_type: 'weekly_reminder' })
+        if (idErr || !newId) throw idErr || new Error('Failed to generate reminder ID')
+        const { error: insErr } = await supabase
+          .from('weekly_reminders')
+          .insert({
+            id: newId,
+            class_id: classId || null,
+            message: trimmed,
+            updated_at: new Date().toISOString(),
+            updated_by: userName,
+          })
+        if (insErr) throw insErr
+      }
+
+      // 4. Append history row (best-effort — failure here doesn't break the save)
+      try {
+        const { data: histId } = await supabase
+          .rpc('get_next_id', { p_type: 'reminder_history' })
+        if (histId) {
+          await supabase.from('reminder_history').insert({
+            id: histId,
+            class_id: classId || null,
+            class_label: label,
+            old_message: oldMessage,
+            new_message: trimmed,
+            changed_at: new Date().toISOString(),
+            changed_by: userName,
+          })
+        }
+      } catch (e) {
+        console.warn('reminder_history insert failed:', e.message)
+      }
+
+      // 5. Audit (best-effort)
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile?.email,
+          user_name: userName,
+          action,
+          entity_type: 'weekly_reminders',
+          entity_id: classId || 'GLOBAL',
+          field_changed: 'message',
+          old_value: oldMessage,
+          new_value: trimmed,
+          details: `Weekly reminder for ${label}`,
+        })
+      } catch {}
+
+      return true
+    } catch (err) {
+      const msg = err?.message || 'Save failed'
+      toast.error('Failed to save reminder: ' + msg)
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }, [userName, profile?.email])
+
+  return { saving, setReminder }
+}
+
+/**
+ * useReminderHistory(scopeFilter)
+ *   scopeFilter:
+ *     'all'        → all scopes (default)
+ *     null         → global only (class_id IS NULL)
+ *     '<class_id>' → that class only
+ *
+ * Limited to 100 rows server-side (DB also auto-prunes to 100/scope).
+ * Sorted newest first.
+ */
+export function useReminderHistory(scopeFilter = 'all') {
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const channelIdRef = useRef(`reminder-history-${makeChannelSuffix()}`)
+
+  const fetch = useCallback(async () => {
+    setLoading(true)
+    try {
+      let q = supabase
+        .from('reminder_history')
+        .select('*')
+        .order('changed_at', { ascending: false })
+        .limit(100)
+      if (scopeFilter === null) {
+        q = q.is('class_id', null)
+      } else if (scopeFilter && scopeFilter !== 'all') {
+        q = q.eq('class_id', scopeFilter)
+      }
+      const { data, error } = await q
+      if (error) throw error
+      setHistory(data || [])
+    } catch (err) {
+      console.error('reminder_history fetch error:', err)
+      setHistory([])
+    } finally {
+      setLoading(false)
+    }
+  }, [scopeFilter])
+
+  useEffect(() => { fetch() }, [fetch])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel(channelIdRef.current)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reminder_history' }, () => { fetch() })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [fetch])
+
+  return { history, loading, refresh: fetch }
+}
