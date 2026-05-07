@@ -440,13 +440,25 @@ function calculateScore(user, ctx) {
   // Scales the BASE 100 down for users who haven't logged enough work_log hours
   // in the evaluation period. Rewards & penalties are added on top of the
   // activity-scaled base, so real contribution still moves the score upward.
+  //
+  // When the per-role hours/week setting is 0 (or negative), the instructor
+  // has explicitly disabled activity-factor scaling — factor locks at 1.0
+  // regardless of how many hours were logged. Without this guard, the
+  // `Math.max(2, ...)` floor below would silently expect 2 hours/period even
+  // for a setting of 0, surprising any student who logged < 2 hours.
   const hoursPerWeek = role === 'Work Study'
     ? config.workStudyHoursPerWeek
     : config.studentHoursPerWeek
   const schoolWeeksInRange = schoolDaysInRange / 4   // 4 school days per typical week
-  const expectedHours = Math.max(2, hoursPerWeek * schoolWeeksInRange)
   const activityHours = workLogByUser.get(emailLower) || 0
-  const activityFactor = Math.min(1, activityHours / expectedHours)
+  let expectedHours, activityFactor
+  if (hoursPerWeek <= 0) {
+    expectedHours = 0
+    activityFactor = 1
+  } else {
+    expectedHours = Math.max(2, hoursPerWeek * schoolWeeksInRange)
+    activityFactor = Math.min(1, activityHours / expectedHours)
+  }
 
   // ── 4. Calculate final score ──────────────────────────────────────────────
   const earlyShareDisplay = round1(earlyShare)
@@ -519,6 +531,177 @@ function calcCompletionTime(email, closedWOs, holidays, closedDays, assignmentsM
     avgDays: count > 0 ? Math.round((totalDays / count) * 10) / 10 : 0,
     totalCompleted: count
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORTED: Per-window student scoring (used by Dashboard's grade-relevant cards)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Compute the current student's WOC Ratio score across multiple class windows.
+ *
+ * One data fetch, N window computations — much cheaper than calling useWOCRatio
+ * once per class. The static parts (work_orders, work_log, assignments,
+ * profiles, settings, holidays) are fetched once. The window-dependent parts
+ * (workLogByUser range filter, schoolDaysInRange) are recomputed per window.
+ *
+ * Used by DashboardPage's "My Grade-Relevant Scores" cards to show the same
+ * WOC score the student would receive in GB Items at end-of-class.
+ *
+ * @param {object} profile — { user_id, email, role, first_name, last_name }
+ * @param {Array<{key, startDate, endDate}>} windows — class windows (YYYY-MM-DD strings)
+ * @returns {Promise<Object<string, {score, rawScore, baseScore, activityFactor, ...}>>}
+ *          Map keyed by window.key.
+ */
+export async function computeStudentScoresForWindows(profile, windows) {
+  if (!profile || !Array.isArray(windows) || windows.length === 0) return {}
+
+  const emailLower = (profile.email || '').toLowerCase().trim()
+  const displayNameLower = `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim().toLowerCase()
+  const user = { emailLower, role: profile.role, displayNameLower }
+
+  // 1. Fetch all the static data (mirrors what fetchData does in useWOCRatio).
+  const [openRes, closedRes, closedArchiveRes, settingsRes, assignmentsRes, workLogRes] = await Promise.all([
+    supabase.from('work_orders').select('*').neq('status', 'Closed'),
+    supabase.from('work_orders').select('*').eq('status', 'Closed'),
+    supabase.from('work_orders_closed').select('*'),
+    supabase.from('settings').select('setting_key, setting_value')
+      .in('setting_key', [
+        'custom_closed_days',
+        'woc_activity_hours_per_week_student',
+        'woc_activity_hours_per_week_workstudy',
+        'woc_closer_ack_bonus_pct',
+        'woc_min_closer_hours_for_ack',
+        'woc_stale_threshold_days',
+        'woc_early_pct_per_day',
+        'woc_max_bonus_per_wo'
+      ]),
+    supabase.from('work_order_assignments').select('wo_id, user_email'),
+    supabase.from('work_log').select('wo_id, user_email, hours, timestamp'),
+  ])
+
+  const openWOs = openRes.data || []
+  // Merge closed WOs from both tables, dedup by wo_id (matches useWOCRatio behavior)
+  const closedFromMain = closedRes.data || []
+  const closedFromArchive = closedArchiveRes.data || []
+  const closedMap = new Map()
+  for (const wo of closedFromMain) closedMap.set(wo.wo_id, wo)
+  for (const wo of closedFromArchive) {
+    if (!closedMap.has(wo.wo_id)) closedMap.set(wo.wo_id, wo)
+  }
+  const closedWOs = Array.from(closedMap.values())
+
+  const settingsArr = settingsRes.data || []
+  const settingsMap = new Map(settingsArr.map(r => [r.setting_key, r.setting_value]))
+  const closedDays = parseClosedDays(settingsMap.get('custom_closed_days'))
+
+  const parseNum = (key, fallback) => {
+    const v = settingsMap.get(key)
+    if (v === undefined || v === null || v === '') return fallback
+    const n = parseFloat(v)
+    return isNaN(n) ? fallback : n
+  }
+  const effectiveConfig = {
+    studentHoursPerWeek:   parseNum('woc_activity_hours_per_week_student',   DEFAULT_CONFIG.studentHoursPerWeek),
+    workStudyHoursPerWeek: parseNum('woc_activity_hours_per_week_workstudy', DEFAULT_CONFIG.workStudyHoursPerWeek),
+    closerAckPct:          parseNum('woc_closer_ack_bonus_pct',              DEFAULT_CONFIG.closerAckPct),
+    minCloserHours:        parseNum('woc_min_closer_hours_for_ack',          DEFAULT_CONFIG.minCloserHours),
+    staleThreshold:        parseNum('woc_stale_threshold_days',              DEFAULT_CONFIG.staleThreshold),
+    earlyPctPerDay:        parseNum('woc_early_pct_per_day',                 DEFAULT_CONFIG.earlyPctPerDay),
+    maxBonusPerWo:         parseNum('woc_max_bonus_per_wo',                  DEFAULT_CONFIG.maxBonusPerWo),
+  }
+
+  // assignmentsMap: Map<wo_id, Set<lowercase_email>>
+  const assignmentsMap = new Map()
+  for (const a of (assignmentsRes.data || [])) {
+    const woId = a.wo_id
+    const ae = (a.user_email || '').toLowerCase().trim()
+    if (!assignmentsMap.has(woId)) assignmentsMap.set(woId, new Set())
+    assignmentsMap.get(woId).add(ae)
+  }
+
+  // closedByMap: Map<wo_id, lowercase_displayname>
+  const closedByMap = new Map()
+  for (const wo of closedWOs) {
+    if (wo.closed_by) closedByMap.set(wo.wo_id, String(wo.closed_by).toLowerCase().trim())
+  }
+
+  // workLogByWo: Map<wo_id, {totalHours, byUser: Map<email_lower, hours>}>
+  // (range-independent — used for hours-weighted credit calculations)
+  const workLogByWo = new Map()
+  const allLogs = workLogRes.data || []
+  for (const entry of allLogs) {
+    const woId = entry.wo_id
+    const email = (entry.user_email || '').toLowerCase().trim()
+    const hours = parseFloat(entry.hours) || 0
+    if (!woId || !email) continue
+    if (!workLogByWo.has(woId)) {
+      workLogByWo.set(woId, { totalHours: 0, byUser: new Map() })
+    }
+    const woEntry = workLogByWo.get(woId)
+    woEntry.totalHours += hours
+    woEntry.byUser.set(email, (woEntry.byUser.get(email) || 0) + hours)
+  }
+
+  // Pre-compute holiday list across ALL WO dates (range-independent)
+  const allDates = [
+    ...openWOs.map(w => w.created_at),
+    ...openWOs.map(w => w.due_date),
+    ...closedWOs.map(w => w.created_at),
+    ...closedWOs.map(w => w.closed_date),
+    ...windows.flatMap(w => [w.startDate, w.endDate]),
+  ].filter(Boolean)
+  const holidays = buildHolidayList(allDates)
+
+  // 2. For each window: compute the per-window pieces and call calculateScore
+  const today = toDateOnly(new Date())
+  const result = {}
+
+  for (const w of windows) {
+    const rangeStart = w.startDate ? toDateOnly(new Date(w.startDate + 'T00:00:00')) : null
+    const rangeEnd = w.endDate ? toDateOnly(new Date(w.endDate + 'T00:00:00')) : null
+
+    // workLogByUser is range-filtered (drives the activity factor)
+    const workLogByUser = new Map()
+    for (const entry of allLogs) {
+      const email = (entry.user_email || '').toLowerCase().trim()
+      const hours = parseFloat(entry.hours) || 0
+      if (!email) continue
+      const ts = entry.timestamp ? new Date(entry.timestamp) : null
+      if (ts && !isNaN(ts)) {
+        if (rangeStart && ts < rangeStart) continue
+        if (rangeEnd) {
+          const dayAfterEnd = new Date(rangeEnd)
+          dayAfterEnd.setDate(dayAfterEnd.getDate() + 1)
+          if (ts >= dayAfterEnd) continue
+        }
+        workLogByUser.set(email, (workLogByUser.get(email) || 0) + hours)
+      }
+    }
+
+    // School days in range — uses factorEnd capped at today (matches useWOCRatio)
+    const factorStart = rangeStart
+    const factorEnd = rangeEnd ? (rangeEnd < today ? rangeEnd : today) : today
+    const effectiveFactorStart = factorStart || (() => {
+      // Fallback: 60 days before factorEnd (rarely used since callers always pass a range)
+      const f = new Date(factorEnd)
+      f.setDate(f.getDate() - 60)
+      return f
+    })()
+    const schoolDaysInRange = countSchoolDaysInclusive(effectiveFactorStart, factorEnd, holidays, closedDays)
+
+    const ctx = {
+      openWOs, closedWOs, holidays, closedDays,
+      assignmentsMap, workLogByWo, workLogByUser, closedByMap,
+      config: effectiveConfig,
+      schoolDaysInRange,
+      rangeStart, rangeEnd,
+    }
+
+    result[w.key] = calculateScore(user, ctx)
+  }
+
+  return result
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
