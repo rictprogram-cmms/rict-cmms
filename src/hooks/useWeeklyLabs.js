@@ -573,49 +573,59 @@ export function useLabTrackerActions() {
     try {
       // For each class, mark as all_done + lab_complete + required_hours_met
       // (skip tracker row creation for classes that don't use the weekly lab tracker)
+      // Per-class isolation: if one class fails (RLS hiccup, network blip, exhausted
+      // duplicate-key retries), the others still get written. Without this, a single
+      // failure used to bail the whole loop — leaving partial state in the database
+      // (e.g. RICT1610 written, RICT1630/RICT1600 silently skipped).
+      const failedClasses = []
       for (const cls of classInfos) {
         if (cls.trackingType === 'None') continue
 
-        const existing = await findExistingRecord(userId, userEmail, cls.className, cls.weekNumber)
+        try {
+          const existing = await findExistingRecord(userId, userEmail, cls.className, cls.weekNumber)
 
-        if (existing) {
-          const { error } = await supabase
-            .from('weekly_lab_tracker')
-            .update({
+          if (existing) {
+            const { error } = await supabase
+              .from('weekly_lab_tracker')
+              .update({
+                lab_complete: 'Yes',
+                all_done: 'Yes',
+                required_hours_met: 'Yes',
+                created_by: instructor.email,
+              })
+              .eq('record_id', existing.record_id)
+            if (error) throw error
+          } else {
+            // Generate unique ID per class — no more racy MAX query
+            const recordId = generateRecordId()
+
+            const weekStart = cls.weekStartDate
+              ? new Date(cls.weekStartDate).toISOString().substring(0, 10)
+              : ''
+            const weekEnd = cls.weekEndDate
+              ? new Date(cls.weekEndDate).toISOString().substring(0, 10)
+              : ''
+
+            await insertWithRetry({
+              record_id: recordId,
+              user_id: isValidUUID(userId) ? userId : null,
+              user_name: userName,
+              user_email: userEmail,
+              class_id: cls.classId || '',
+              course_id: cls.className,
+              week_number: cls.weekNumber,
+              week_start_date: weekStart,
+              week_end_date: weekEnd,
               lab_complete: 'Yes',
               all_done: 'Yes',
               required_hours_met: 'Yes',
+              created_at: new Date().toISOString(),
               created_by: instructor.email,
             })
-            .eq('record_id', existing.record_id)
-          if (error) throw error
-        } else {
-          // Generate unique ID per class — no more racy MAX query
-          const recordId = generateRecordId()
-
-          const weekStart = cls.weekStartDate
-            ? new Date(cls.weekStartDate).toISOString().substring(0, 10)
-            : ''
-          const weekEnd = cls.weekEndDate
-            ? new Date(cls.weekEndDate).toISOString().substring(0, 10)
-            : ''
-
-          await insertWithRetry({
-            record_id: recordId,
-            user_id: isValidUUID(userId) ? userId : null,
-            user_name: userName,
-            user_email: userEmail,
-            class_id: cls.classId || '',
-            course_id: cls.className,
-            week_number: cls.weekNumber,
-            week_start_date: weekStart,
-            week_end_date: weekEnd,
-            lab_complete: 'Yes',
-            all_done: 'Yes',
-            required_hours_met: 'Yes',
-            created_at: new Date().toISOString(),
-            created_by: instructor.email,
-          })
+          }
+        } catch (clsErr) {
+          console.error(`markAllDone: failed to write tracker row for ${cls.className} W${cls.weekNumber}:`, clsErr)
+          failedClasses.push({ className: cls.className, weekNumber: cls.weekNumber, error: clsErr.message })
         }
       }
 
@@ -686,7 +696,13 @@ export function useLabTrackerActions() {
 
       // 5. Log to audit
       try {
-        const classNames = classInfos.map(c => c.className).join(', ')
+        const successfulClassNames = classInfos
+          .filter(c => c.trackingType !== 'None' && !failedClasses.some(f => f.className === c.className && f.weekNumber === c.weekNumber))
+          .map(c => c.className)
+          .join(', ')
+        const failedSuffix = failedClasses.length > 0
+          ? ` — Failed: ${failedClasses.map(f => `${f.className} W${f.weekNumber}`).join(', ')}`
+          : ''
         await supabase.from('audit_log').insert({
           log_id: 'LOG' + Date.now(),
           timestamp: new Date().toISOString(),
@@ -698,13 +714,22 @@ export function useLabTrackerActions() {
           field_changed: 'all_done',
           old_value: 'No',
           new_value: 'Yes',
-          details: `Marked All Done for ${userName} — Classes: ${classNames}, Week ${classInfos[0]?.weekNumber}`,
+          details: `Marked All Done for ${userName} — Classes: ${successfulClassNames}, Week ${classInfos[0]?.weekNumber}${failedSuffix}`,
         })
       } catch (auditErr) {
         console.error('Audit log error:', auditErr)
       }
 
-      return { success: true }
+      // Surface partial-failure state to the caller. The caller (handleAllDone in
+      // WeeklyLabsTrackerPage) can decide how to message the user — typically:
+      //   success: true, partial: false → green "All Done confirmed" toast
+      //   success: true, partial: true  → amber "Partially saved — N class(es) failed" toast
+      // Returning success:true even on partial means refresh() still runs and the
+      // student sees the classes that DID save.
+      if (failedClasses.length > 0) {
+        return { success: true, partial: true, failedClasses }
+      }
+      return { success: true, partial: false }
     } catch (err) {
       console.error('Mark All Done error:', err)
       toast.error('Error: ' + err.message)

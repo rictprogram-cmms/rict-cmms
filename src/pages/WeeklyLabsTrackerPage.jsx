@@ -1314,7 +1314,17 @@ function StudentView() {
       instructor
     )
     if (result.success) {
-      toast.success(`All Done — confirmed by ${instructor.first_name} ${instructor.last_name}`)
+      if (result.partial) {
+        const failedList = (result.failedClasses || [])
+          .map(f => `${f.className} W${f.weekNumber}`)
+          .join(', ')
+        toast.error(
+          `All Done partially saved — ${failedList} could not be written. Please retry or contact your instructor.`,
+          { duration: 6000 }
+        )
+      } else {
+        toast.success(`All Done — confirmed by ${instructor.first_name} ${instructor.last_name}`)
+      }
       refresh()
     }
   }
