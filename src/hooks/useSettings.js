@@ -435,16 +435,20 @@ export function useClassActions() { return useLookupActions('classes', 'class_id
 export function useWeeklyReminders() {
   const [reminders, setReminders] = useState([])
   const [loading, setLoading] = useState(true)
+  const hasLoadedRef = useRef(false)
   const channelIdRef = useRef(`weekly-reminders-${makeChannelSuffix()}`)
 
   const fetch = useCallback(async () => {
-    setLoading(true)
+    // Only show loading on initial mount — silent refresh on realtime updates
+    // so the editor doesn't unmount mid-keystroke (was causing flicker on save).
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const { data, error } = await supabase
         .from('weekly_reminders')
         .select('*')
       if (error) throw error
       setReminders(data || [])
+      hasLoadedRef.current = true
     } catch (err) {
       console.error('weekly_reminders fetch error:', err)
       setReminders([])
@@ -602,10 +606,12 @@ export function useWeeklyReminderActions() {
 export function useReminderHistory(scopeFilter = 'all') {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
+  const hasLoadedRef = useRef(false)
   const channelIdRef = useRef(`reminder-history-${makeChannelSuffix()}`)
 
   const fetch = useCallback(async () => {
-    setLoading(true)
+    // Silent refresh after initial load — see same pattern in useWeeklyReminders.
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       let q = supabase
         .from('reminder_history')
@@ -620,6 +626,7 @@ export function useReminderHistory(scopeFilter = 'all') {
       const { data, error } = await q
       if (error) throw error
       setHistory(data || [])
+      hasLoadedRef.current = true
     } catch (err) {
       console.error('reminder_history fetch error:', err)
       setHistory([])

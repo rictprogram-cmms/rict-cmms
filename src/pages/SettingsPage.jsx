@@ -26,7 +26,7 @@
  * File: src/pages/SettingsPage.jsx
  */
 
-import { useState, useMemo, useEffect, useCallback, useRef, useId, Fragment } from 'react'
+import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, useId, Fragment } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
@@ -1774,8 +1774,12 @@ function DashboardSettings() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Auto-grow textarea hook ────────────────────────────────────────────────
+// useLayoutEffect (not useEffect) runs synchronously after DOM mutation but
+// BEFORE the browser paints — so the textarea is never visibly resized in two
+// steps. Without this, fast typing can cause a momentary "collapse to auto"
+// flash between paints.
 function useAutoGrowTextarea(value, ref, { min = 200, max = 400 } = {}) {
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
     el.style.height = 'auto'
