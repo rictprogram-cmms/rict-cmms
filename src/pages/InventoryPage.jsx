@@ -494,7 +494,42 @@ export default function InventoryPage() {
     setShowLabelsModal(true);
   };
 
-  const doPrintLabels = () => {
+  const doPrintLabels = async () => {
+    // ── Fetch label dimensions from settings (with safe fallbacks) ──
+    // label_width_inches / label_height_inches are configurable so users
+    // can swap label stock without touching code. If the settings are
+    // missing, blank, or non-numeric, we fall back to the Zebra ZT230
+    // default of 2" x 1".
+    let labelW = 2
+    let labelH = 1
+    try {
+      const { data: dims } = await supabase
+        .from('settings')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['label_width_inches', 'label_height_inches']);
+      (dims || []).forEach(d => {
+        const v = parseFloat(d.setting_value)
+        if (!isNaN(v) && v > 0) {
+          if (d.setting_key === 'label_width_inches')  labelW = v
+          if (d.setting_key === 'label_height_inches') labelH = v
+        }
+      })
+    } catch (e) {
+      console.warn('[Inventory] Label dim fetch failed, using 2x1 fallback:', e?.message)
+    }
+
+    // ── Auto-proportion inner elements to label size ──
+    // Inner squares (image, QR) scale with label height — that's the dimension
+    // they were originally tuned for. We also cap them at a fraction of label
+    // width so unusual narrow/tall stock (e.g. 1"x1.5") doesn't overflow.
+    // Reference design (2"x1" stock): image=0.45", QR=0.75", body text=8px.
+    const imgSize = Math.min(labelH * 0.45, labelW * 0.25).toFixed(3)
+    const qrSize  = Math.min(labelH * 0.75, labelW * 0.40).toFixed(3)
+    // Fonts scale by the smaller dimension so wide-but-short labels don't
+    // produce comically tall text. minDim==1 reproduces the original sizes.
+    const minDim   = Math.min(labelW, labelH)
+    const fontPx   = (8 * minDim).toFixed(1)
+
     const origin = window.location.origin;
     let labelsHtml = '';
     labelsData.forEach(part => {
@@ -509,11 +544,11 @@ export default function InventoryPage() {
 
     const w = window.open('', '_blank');
     w.document.write(`<html><head><title>Labels</title><link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-      <style>@page{size:2in 1in;margin:0}body{font-family:Arial;margin:0;padding:0}
-      .label-preview{width:2in;height:1in;border:1px solid #ccc;padding:10px 10px 2px 4px;display:flex;gap:4px;font-size:8px;page-break-after:always;box-sizing:border-box}
-      .label-img{width:0.45in;height:0.45in;background:#f0f0f0;overflow:hidden}.label-img img{width:100%;height:100%;object-fit:cover}
-      .label-info{flex:1;overflow:hidden}.label-info .name{font-weight:bold}
-      .label-qr{width:0.75in;height:0.75in;overflow:hidden}.label-qr img{width:100%;height:100%;object-fit:contain}
+      <style>@page{size:${labelW}in ${labelH}in;margin:0}body{font-family:Arial;margin:0;padding:0}
+      .label-preview{width:${labelW}in;height:${labelH}in;border:1px solid #ccc;padding:10px 10px 2px 4px;display:flex;gap:4px;font-size:${fontPx}px;page-break-after:always;box-sizing:border-box}
+      .label-img{width:${imgSize}in;height:${imgSize}in;background:#f0f0f0;overflow:hidden;flex-shrink:0}.label-img img{width:100%;height:100%;object-fit:cover}
+      .label-info{flex:1;overflow:hidden;min-width:0}.label-info .name{font-weight:bold}
+      .label-qr{width:${qrSize}in;height:${qrSize}in;overflow:hidden;flex-shrink:0}.label-qr img{width:100%;height:100%;object-fit:contain}
       </style></head><body>${labelsHtml}</body></html>`);
     w.document.close();
     setTimeout(() => w.print(), 500);

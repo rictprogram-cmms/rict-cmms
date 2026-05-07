@@ -735,7 +735,42 @@ export default function AssetsPage() {
     return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(scanUrl)}`
   }
 
-  function printLabels() {
+  async function printLabels() {
+    // ── Fetch label dimensions from settings (with safe fallbacks) ──
+    // label_width_inches / label_height_inches are configurable so users
+    // can swap label stock without touching code. If the settings are
+    // missing, blank, or non-numeric, we fall back to the Zebra ZT230
+    // default of 2" x 1".
+    let labelW = 2
+    let labelH = 1
+    try {
+      const { data: dims } = await supabase
+        .from('settings')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['label_width_inches', 'label_height_inches']);
+      (dims || []).forEach(d => {
+        const v = parseFloat(d.setting_value)
+        if (!isNaN(v) && v > 0) {
+          if (d.setting_key === 'label_width_inches')  labelW = v
+          if (d.setting_key === 'label_height_inches') labelH = v
+        }
+      })
+    } catch (e) {
+      console.warn('[Assets] Label dim fetch failed, using 2x1 fallback:', e?.message)
+    }
+
+    // ── Auto-proportion inner elements to label size ──
+    // QR is square; scales with label height, capped at a fraction of width
+    // so unusual narrow/tall stock doesn't overflow.
+    // Reference design (2"x1" stock): QR=0.8", asset-num=14px, title=9px, serial=8px.
+    const qrSize    = Math.min(labelH * 0.80, labelW * 0.45).toFixed(3)
+    // Fonts scale by the smaller dimension so wide-but-short labels don't
+    // produce comically tall text. minDim==1 reproduces the original sizes.
+    const minDim    = Math.min(labelW, labelH)
+    const numPx     = (14 * minDim).toFixed(1)
+    const titlePx   = (9  * minDim).toFixed(1)
+    const serialPx  = (8  * minDim).toFixed(1)
+
     const selectedAssets = assets.filter(a => selectedLabelIds.includes(a.asset_id))
     const content = selectedAssets.map(a => {
       const qrUrl = getQRUrl(a.asset_id)
@@ -745,14 +780,14 @@ export default function AssetsPage() {
 
     const printWin = window.open('', '_blank')
     printWin.document.write(`<html><head><title>Asset Labels</title><style>
-      @page { size: 2in 1in; margin: 0; }
+      @page { size: ${labelW}in ${labelH}in; margin: 0; }
       body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
-      .label-preview-item { width: 2in; height: 1in; border: 1px solid #ccc; padding: 10px 10px 2px 4px; display: flex; gap: 6px; page-break-after: always; box-sizing: border-box; }
-      .qr-code { width: 0.8in; height: 0.8in; } .qr-code img { width: 100%; height: 100%; }
-      .label-text { flex: 1; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
-      .asset-num { font-size: 14px; font-weight: bold; margin-bottom: 2px; }
-      .asset-title { font-size: 9px; line-height: 1.2; }
-      .asset-serial { font-size: 8px; color: #555; margin-top: 2px; }
+      .label-preview-item { width: ${labelW}in; height: ${labelH}in; border: 1px solid #ccc; padding: 10px 10px 2px 4px; display: flex; gap: 6px; page-break-after: always; box-sizing: border-box; }
+      .qr-code { width: ${qrSize}in; height: ${qrSize}in; flex-shrink: 0; } .qr-code img { width: 100%; height: 100%; }
+      .label-text { flex: 1; display: flex; flex-direction: column; justify-content: center; overflow: hidden; min-width: 0; }
+      .asset-num { font-size: ${numPx}px; font-weight: bold; margin-bottom: 2px; }
+      .asset-title { font-size: ${titlePx}px; line-height: 1.2; }
+      .asset-serial { font-size: ${serialPx}px; color: #555; margin-top: 2px; }
     </style></head><body>${content}</body></html>`)
     printWin.document.close()
     setTimeout(() => printWin.print(), 500)

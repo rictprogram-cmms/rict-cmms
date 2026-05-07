@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
+import './styles/settings.css'
 
 // ── Register Service Worker for Push Notifications ──
 // sw.js lives in public/ and handles background push events.

@@ -1,6 +1,35 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+/**
+ * RICT CMMS — Settings Page (rewritten for visual consistency + auto-save)
+ *
+ * Major changes from previous version:
+ *   • Unified card pattern (settings.css) — no more inline style={{}} blocks
+ *   • Status pills + left-border accents replace full-width colored banners
+ *   • Auto-save with 800ms debounce + per-field "✓ Saved" indicator
+ *   • Expanded "Show details" disclosures on every setting
+ *   • Find-a-setting search box at top of page (cross-tab jump)
+ *   • Tab bar groups: Operations | Lookups | Academic
+ *   • WCAG 2.1 AA throughout: <label htmlFor>, aria-pressed, aria-live, focus rings
+ *   • Confirmation modals use the shared useDialogA11y hook
+ *
+ * Functional preservation (verified):
+ *   • Lab Access Mode confirm-then-toggle + audit log + PM auto-pause sync
+ *   • Instructor Away Mode toggle + return time + audit log
+ *   • Dashboard defaults (Day View, Temp Access)
+ *   • Weekly Labs reminder textarea
+ *   • WOC Ratio 7-knob editor + reset-to-default
+ *   • General settings auto-grouping by category (with skip list)
+ *   • lab_visible_days custom day picker
+ *   • All 5 CRUD lookup-table sections
+ *   • Classes section: form + week preview + enrollment modal + duplicate modal
+ *   • Realtime sync, audit log, permissions guard
+ *
+ * File: src/pages/SettingsPage.jsx
+ */
+
+import { useState, useMemo, useEffect, useCallback, useRef, useId, Fragment } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import {
   useSettings, useSettingsActions, useCategories, useCategoryActions,
@@ -11,74 +40,836 @@ import {
 import {
   Settings, Save, Plus, Trash2, Edit3, X, Loader2, CheckCircle2,
   Tag, MapPin, Box, Truck, ClipboardList, GraduationCap, Sliders,
-  Users, Calendar, Clock, BookOpen, ChevronDown, ChevronUp, Search,
+  Users, Calendar, Clock, BookOpen, ChevronRight, Search,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
-  LayoutDashboard, FlaskConical, MessageSquare, Target
+  LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SETTING METADATA — every visible setting gets a label, helper text, type, and
+// optional richer "details" block surfaced via a <details> disclosure.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SETTING_META = {
+  // ── Work Orders ──
+  priority_low_days: {
+    label: 'Low Priority — Default Due Days',
+    type: 'number', category: 'Work Orders',
+    desc: 'How many days a Low priority work order is due in by default.',
+    details: {
+      what: 'Sets the default due date offset (days from creation) for new Low priority work orders.',
+      where: 'Used when creating a new Work Order on the Work Orders page or when a request is approved.',
+      effect: 'Larger values give more lead time. Typical values: 7 to 14 days.',
+    },
+  },
+  priority_medium_days: {
+    label: 'Medium Priority — Default Due Days',
+    type: 'number', category: 'Work Orders',
+    desc: 'How many days a Medium priority work order is due in by default.',
+    details: {
+      what: 'Sets the default due date offset (days from creation) for new Medium priority work orders.',
+      where: 'Used when creating a new Work Order on the Work Orders page or when a request is approved.',
+      effect: 'Typical values: 3 to 7 days.',
+    },
+  },
+  priority_high_days: {
+    label: 'High Priority — Default Due Days',
+    type: 'number', category: 'Work Orders',
+    desc: 'How many days a High priority work order is due in by default.',
+    details: {
+      what: 'Sets the default due date offset (days from creation) for new High priority work orders.',
+      where: 'Used when creating a new Work Order on the Work Orders page or when a request is approved.',
+      effect: 'Typical values: 1 to 3 days. High priority should be tight.',
+    },
+  },
+  time_increment: {
+    label: 'Work Log Time Increment (minutes)',
+    type: 'number', category: 'Work Orders',
+    desc: 'Step size for the minutes selector when adding a work log entry.',
+    details: {
+      what: 'Controls the granularity of the minutes dropdown when logging time on a Work Order.',
+      where: 'Work Order detail modal → "Add Work Log" form.',
+      effect: 'Smaller values (5, 10) give finer control. Larger values (15, 30) make logging faster.',
+    },
+  },
+  default_work_time: {
+    label: 'Default Work Log Time (minutes)',
+    type: 'number', category: 'Work Orders',
+    desc: 'Time pre-filled when adding a new work log entry.',
+    details: {
+      what: 'Pre-populates the minutes field when opening the work log form on a Work Order.',
+      where: 'Work Order detail modal → "Add Work Log" form.',
+      effect: 'Set to your most common log duration to reduce typing.',
+    },
+  },
+
+  // ── Notifications ──
+  // Note: notification_email was retired in the audit pass — outbound emails
+  // are addressed per-user (the Edge Function reads `to` from the request
+  // payload, not from a global setting).
+  notif_poll_interval: {
+    label: 'Notification Poll Interval (seconds)',
+    type: 'number', category: 'Notifications',
+    desc: 'How often the bell icon checks for new notifications. 0 disables polling.',
+    details: {
+      what: 'Polling cadence for the in-app notification bell.',
+      where: 'NotificationBell component (top-right of every page).',
+      effect: 'Realtime is primary; polling is a backup. 30 is a good default. 0 turns it off entirely.',
+    },
+  },
+
+  // ── Printing ──
+  label_width_inches: {
+    label: 'Label Width (inches)',
+    type: 'number', category: 'Printing',
+    desc: 'Physical label width for the Zebra ZT230 printer.',
+    details: {
+      what: 'Width dimension passed to the asset and inventory label print templates.',
+      where: 'Asset/inventory label printing routines (Inventory → Print Labels, Assets → Print Labels).',
+      effect: 'Must match the actual labels loaded in the printer or output will be cropped. The QR code, image area, and text sizes inside each label scale proportionally — change the outer dimensions and the inner layout adapts automatically.',
+    },
+  },
+  label_height_inches: {
+    label: 'Label Height (inches)',
+    type: 'number', category: 'Printing',
+    desc: 'Physical label height for the Zebra ZT230 printer.',
+    details: {
+      what: 'Height dimension passed to the asset and inventory label print templates.',
+      where: 'Asset/inventory label printing routines (Inventory → Print Labels, Assets → Print Labels).',
+      effect: 'Must match the actual labels loaded in the printer or output will be cropped. The QR code, image area, and text sizes inside each label scale proportionally — change the outer dimensions and the inner layout adapts automatically.',
+    },
+  },
+
+  // ── Metrics (TV display) ──
+  // Note: metrics_start_hour / metrics_end_hour / metrics_refresh_interval
+  // were retired in the audit pass. They were a holdover from the pre-Supabase
+  // era when the TV Display had to throttle polling. With realtime updates
+  // these are no longer needed — TVDisplayPage.jsx uses fixed intervals plus
+  // a midnight auto-refresh and reacts to realtime changes directly.
+
+  // ── Lab Signup ──
+  lab_visible_days: {
+    label: 'Lab Open Days',
+    type: 'custom', category: 'Lab Signup',
+    desc: 'Days of the week the lab accepts signups.',
+    details: {
+      what: 'Controls which weekdays show up as bookable on the Lab Signup page.',
+      where: 'Lab Signup page (week grid columns).',
+      effect: 'Closed days are hidden entirely from the signup grid. Sun=0, Mon=1, …, Sat=6.',
+    },
+  },
+  lab_weeks_to_display: {
+    label: 'Lab Signup — Weeks to Show',
+    type: 'number', category: 'Lab Signup',
+    desc: 'Number of upcoming weeks displayed on the Lab Signup page.',
+    details: {
+      what: 'How many forward weeks the Lab Signup grid renders.',
+      where: 'Lab Signup page.',
+      effect: '2 is the default. More weeks = more rows and slower load.',
+    },
+  },
+
+  // ── Volunteer ──
+  volunteer_semester_total_hours: {
+    label: 'Volunteer Hours — Semester Total',
+    type: 'number', category: 'Volunteer',
+    desc: 'Total volunteer hours required per student per semester.',
+    details: {
+      what: 'Target total used to compute the volunteer-hours progress bar.',
+      where: 'Volunteer Hours page (per-student progress tracker).',
+      effect: 'Set to the program-wide expectation. Affects display only — does not block submission.',
+    },
+  },
+  volunteer_midpoint_hours: {
+    label: 'Volunteer Hours — Midpoint Target',
+    type: 'number', category: 'Volunteer',
+    desc: 'Hours expected by the midpoint week of the semester.',
+    details: {
+      what: 'Pace target used to flag "behind schedule" students at midterm.',
+      where: 'Volunteer Hours page (midpoint banner).',
+      effect: 'Typically 50% of semester total, but can be skewed early/late depending on program flow.',
+    },
+  },
+  volunteer_midpoint_week: {
+    label: 'Volunteer Hours — Midpoint Week',
+    type: 'number', category: 'Volunteer',
+    desc: 'Week number when the midpoint check applies.',
+    details: {
+      what: 'Week index that triggers the midpoint progress comparison.',
+      where: 'Volunteer Hours page (midpoint banner).',
+      effect: 'For a 16-week semester, week 8 is typical.',
+    },
+  },
+  // Note: volunteer_semester_start / volunteer_semester_end / volunteer_current_semester
+  // were retired in the audit pass. The Volunteer Hours page (and the time-card
+  // grade-book report) now auto-derive the volunteer window from active class
+  // start/end dates, falling back to the current calendar year. No global
+  // semester-window override is exposed here anymore.
+
+  // ── Time Clock ──
+  grace_period_minutes: {
+    label: 'Time Clock — Grace Period (minutes)',
+    type: 'number', category: 'Time Clock',
+    desc: 'Buffer before a student is flagged as late or leaving early.',
+    details: {
+      what: 'Allowed slop on either side of the scheduled punch-in / punch-out time.',
+      where: 'Time Clock kiosk + Attendance Reports.',
+      effect: '5–10 minutes is typical. Higher values reduce nag without really hiding chronic lateness.',
+    },
+  },
+
+  // ── System ──
+  app_version: {
+    label: 'App Version',
+    type: 'text', category: 'System',
+    desc: 'Current application version string.',
+    details: {
+      what: 'Display-only version label.',
+      where: 'Sidebar header.',
+      effect: 'Update on each release; cosmetic only.',
+    },
+  },
+  session_timeout_hours: {
+    label: 'Session Timeout (hours)',
+    type: 'number', category: 'System',
+    desc: 'Hours before users are auto-logged out. 0 disables timeout entirely.',
+    details: {
+      what: 'Idle session lifetime — when exceeded the user is forced to re-authenticate.',
+      where: 'AuthContext (applies to every page).',
+      effect: '0 = no timeout (sessions never expire). 8–12 hours is typical for a workstation.',
+    },
+  },
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD-TAB SETTINGS DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DASHBOARD_SETTINGS = [
+  {
+    key: 'dashboard_day_view_expanded',
+    label: 'Day View — Default State',
+    desc: 'Whether the Day View card starts expanded when the instructor opens the dashboard.',
+    details: {
+      what: 'Initial open/closed state for the Day View attendance card on the dashboard.',
+      where: 'Instructor Dashboard.',
+      effect: 'Once an instructor manually expands or collapses, their per-device choice overrides this default.',
+    },
+  },
+  {
+    key: 'dashboard_temp_access_expanded',
+    label: 'Active Temp Access — Default State',
+    desc: 'Whether the Active Temp Access card starts expanded.',
+    details: {
+      what: 'Initial open/closed state for the Active Temp Access card on the dashboard.',
+      where: 'Instructor Dashboard.',
+      effect: 'Once an instructor manually expands or collapses, their per-device choice overrides this default.',
+    },
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EVALUATION (WOC RATIO) SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const EVAL_SETTINGS = [
+  {
+    key: 'woc_activity_hours_per_week_student',
+    label: 'Student — Hours/Week Threshold',
+    desc: 'Expected work-log hours per school week to reach a 1.00× activity factor (Student role).',
+    default: '1.5',
+    min: '0', step: '0.1', suffix: 'hr/week',
+    details: {
+      what: 'The hours-per-week target that yields a full activity multiplier for students.',
+      where: 'WOC Ratio scoring engine — applied to all Student-role users.',
+      effect: 'Students with fewer logged hours get a proportionally lower activity factor. Higher = harder.',
+    },
+  },
+  {
+    key: 'woc_activity_hours_per_week_workstudy',
+    label: 'Work Study — Hours/Week Threshold',
+    desc: 'Expected work-log hours per school week to reach a 1.00× activity factor (Work Study role).',
+    default: '5.0',
+    min: '0', step: '0.5', suffix: 'hr/week',
+    details: {
+      what: 'The hours-per-week target that yields a full activity multiplier for Work Study users.',
+      where: 'WOC Ratio scoring engine — applied to all Work Study-role users.',
+      effect: 'Higher than the Student threshold because work-study students owe more lab time.',
+    },
+  },
+  {
+    key: 'woc_early_pct_per_day',
+    label: 'Early Completion Rate',
+    desc: 'Percentage points awarded per school day a WO was closed before its due date.',
+    default: '0.5',
+    min: '0', step: '0.1', suffix: '% per day',
+    details: {
+      what: 'Reward rate for closing work orders ahead of schedule, multiplied by the user\u2019s share of the WO\u2019s logged hours.',
+      where: 'WOC Ratio scoring engine — applied per closed WO.',
+      effect: 'Higher values incentivize aggressive early completion. Reward is capped per WO (see Max Bonus).',
+    },
+  },
+  {
+    key: 'woc_max_bonus_per_wo',
+    label: 'Max Bonus Per WO',
+    desc: 'Hard cap on the early-completion bonus from a single WO.',
+    default: '10',
+    min: '0', step: '1', suffix: '%',
+    details: {
+      what: 'Prevents a single early-closed WO from dominating a user\u2019s score.',
+      where: 'WOC Ratio scoring engine.',
+      effect: 'Lower values flatten outlier rewards. 10% is a balanced default.',
+    },
+  },
+  {
+    key: 'woc_closer_ack_bonus_pct',
+    label: 'Closer Acknowledgment Bonus',
+    desc: 'Flat percentage added when a user clicks Close on an early-completed WO they\u2019ve worked on.',
+    default: '2',
+    min: '0', step: '0.5', suffix: '%',
+    details: {
+      what: 'Reward for the user who actually performs the close action on an early-finished WO.',
+      where: 'WOC Ratio scoring engine.',
+      effect: 'Encourages students to take responsibility for closing out finished work.',
+    },
+  },
+  {
+    key: 'woc_min_closer_hours_for_ack',
+    label: 'Minimum Hours for Closer Bonus',
+    desc: 'Hours threshold to qualify for the closer acknowledgment bonus.',
+    default: '0.25',
+    min: '0', step: '0.05', suffix: 'hr',
+    details: {
+      what: 'Ensures someone who only logged a token amount of work cannot claim the closer bonus.',
+      where: 'WOC Ratio scoring engine.',
+      effect: 'Prevents drive-by closes from scoring. 0.25 hr (15 min) is the default minimum.',
+    },
+  },
+  {
+    key: 'woc_stale_threshold_days',
+    label: 'Stale WO Threshold',
+    desc: 'School days an open WO can sit without an update before the stale penalty starts.',
+    default: '4',
+    min: '1', step: '1', suffix: 'days',
+    details: {
+      what: 'Inactivity grace window before \u22121% per day starts accruing on an open WO.',
+      where: 'WOC Ratio scoring engine — applied to open WOs the user is assigned to.',
+      effect: 'Lower values are stricter. The penalty stops once the WO sees an update or is closed.',
+    },
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CATEGORY ICONS (for the General settings auto-grouping)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CATEGORY_ICONS = {
+  'Work Orders':   ClipboardList,
+  'Notifications': AlertCircle,
+  'Printing':      Tag,
+  'Metrics':       Clock,
+  'Lab Signup':    BookOpen,
+  'Volunteer':     Users,
+  'System':        Settings,
+  'Storage':       Box,
+  'General':       Sliders,
+  'Time Clock':    Clock,
+  'Evaluation':    Target,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIND-A-SETTING REGISTRY (search index across all tabs)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TAB_LABELS = {
+  general: 'General',
+  dashboard: 'Dashboard',
+  weekly_labs: 'Weekly Labs',
+  evaluation: 'WOC Ratio',
+  categories: 'Categories',
+  asset_locations: 'Asset Locations',
+  inv_locations: 'Inventory Locations',
+  vendors: 'Vendors',
+  wo_statuses: 'WO Statuses',
+  classes: 'Classes',
+}
+
+function buildRegistry() {
+  const reg = []
+
+  // Critical mode toggles (top of General tab)
+  reg.push({ key: 'lab_access_mode', tab: 'general', label: 'Lab Access Mode', desc: 'In Session / Summer Break — locks out students during breaks', aliases: 'summer break shutdown students lockout closed' })
+  reg.push({ key: 'instructor_away_mode', tab: 'general', label: 'Instructor Away Mode', desc: 'In-meeting toggle — students see "away" notice on help requests', aliases: 'meeting away help return available' })
+  reg.push({ key: 'instructor_return_time', tab: 'general', label: 'Expected Return Time', desc: 'Time shown to students when you are away', aliases: 'meeting return time clock' })
+
+  // SETTING_META → registry
+  Object.entries(SETTING_META).forEach(([key, m]) => {
+    reg.push({ key, tab: 'general', label: m.label, desc: m.desc, aliases: m.category })
+  })
+
+  // Dashboard
+  DASHBOARD_SETTINGS.forEach(s => {
+    reg.push({ key: s.key, tab: 'dashboard', label: s.label, desc: s.desc, aliases: 'dashboard expand collapse default' })
+  })
+
+  // Weekly Labs
+  reg.push({ key: 'alldone_weekly_reminder', tab: 'weekly_labs', label: 'Mark All Done — Weekly Reminder', desc: 'Optional message shown in the Mark All Done popup', aliases: 'reminder message weekly tracker swipe' })
+
+  // Evaluation
+  EVAL_SETTINGS.forEach(s => {
+    reg.push({ key: s.key, tab: 'evaluation', label: s.label, desc: s.desc, aliases: 'woc ratio scoring evaluation' })
+  })
+
+  // Lookup tables — searchable by section name
+  reg.push({ key: 'categories', tab: 'categories', label: 'Categories', desc: 'Inventory and asset categorization', aliases: 'lookup table' })
+  reg.push({ key: 'asset_locations', tab: 'asset_locations', label: 'Asset Locations', desc: 'Locations where assets live', aliases: 'lookup table location' })
+  reg.push({ key: 'inv_locations', tab: 'inv_locations', label: 'Inventory Locations', desc: 'Bin / shelf locations for inventory parts', aliases: 'lookup table bin shelf' })
+  reg.push({ key: 'vendors', tab: 'vendors', label: 'Vendors', desc: 'Approved vendor list for purchase orders', aliases: 'lookup table supplier' })
+  reg.push({ key: 'wo_statuses', tab: 'wo_statuses', label: 'WO Statuses', desc: 'Work order status workflow definitions', aliases: 'lookup table status workflow' })
+  reg.push({ key: 'classes', tab: 'classes', label: 'Classes', desc: 'Course offerings, dates, weekly schedule, enrollment', aliases: 'class course semester student enrollment' })
+
+  return reg
+}
+
+const SETTINGS_REGISTRY = buildRegistry()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHARED HOOKS — auto-save, saved-indicator
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Debounced auto-save with per-key state tracking.
+ *
+ * Returns:
+ *   queueSave(key, value)  — schedule a save (resets the per-key debounce timer)
+ *   flushSave(key)         — save immediately, useful on blur
+ *   saveState              — { [key]: 'saving' | 'saved' } for UI indicators
+ */
+function useAutoSave(saveFn, debounceMs = 800) {
+  const timersRef = useRef({})
+  const pendingValuesRef = useRef({})
+  const [saveState, setSaveState] = useState({})
+
+  const doSave = useCallback(async (key, value) => {
+    setSaveState(prev => ({ ...prev, [key]: 'saving' }))
+    try {
+      const ok = await saveFn(key, value)
+      delete pendingValuesRef.current[key]
+      if (ok !== false) {
+        setSaveState(prev => ({ ...prev, [key]: 'saved' }))
+        setTimeout(() => {
+          setSaveState(prev => {
+            if (prev[key] !== 'saved') return prev
+            const next = { ...prev }; delete next[key]; return next
+          })
+        }, 2000)
+      } else {
+        setSaveState(prev => { const next = { ...prev }; delete next[key]; return next })
+      }
+    } catch {
+      delete pendingValuesRef.current[key]
+      setSaveState(prev => { const next = { ...prev }; delete next[key]; return next })
+      // saveFn already toasted the error
+    }
+  }, [saveFn])
+
+  const queueSave = useCallback((key, value) => {
+    pendingValuesRef.current[key] = value
+    if (timersRef.current[key]) clearTimeout(timersRef.current[key])
+    timersRef.current[key] = setTimeout(() => {
+      delete timersRef.current[key]
+      doSave(key, pendingValuesRef.current[key])
+    }, debounceMs)
+  }, [doSave, debounceMs])
+
+  const flushSave = useCallback((key) => {
+    if (timersRef.current[key]) {
+      clearTimeout(timersRef.current[key])
+      delete timersRef.current[key]
+      const value = pendingValuesRef.current[key]
+      if (value !== undefined) doSave(key, value)
+    }
+  }, [doSave])
+
+  // On unmount: flush all pending so a tab switch mid-edit doesn't lose data.
+  useEffect(() => {
+    const timers = timersRef.current
+    const pending = pendingValuesRef.current
+    return () => {
+      Object.entries(timers).forEach(([key, timer]) => {
+        clearTimeout(timer)
+        const value = pending[key]
+        if (value !== undefined) {
+          // Fire-and-forget — we're unmounting so we can't track UI state
+          saveFn(key, value).catch(() => {})
+        }
+      })
+    }
+  }, [saveFn])
+
+  // Expose pendingValuesRef so callers can guard real-time refresh from
+  // clobbering in-flight edits.
+  return { queueSave, flushSave, saveState, pendingValuesRef }
+}
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHARED UI COMPONENTS — the unified design language
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * SettingCard — the unified card container used by EVERY section.
+ *
+ * Props:
+ *   icon             — Lucide icon component
+ *   title            — heading text
+ *   count            — optional "(12)" count after the title
+ *   accent           — 'green' | 'orange' | 'red' | 'gray' for left-border accent
+ *   pill             — { tone: 'green'|'orange'|'red'|'gray', text: 'IN SESSION' }
+ *   actions          — right-side header actions (buttons, search, etc.)
+ *   footer           — optional footer content (rendered in muted gray panel)
+ *   bodyPadded       — wrap body in default padding (use for cards without rows)
+ *   children         — body content (typically <SettingRow>s or padded content)
+ */
+function SettingCard({ icon: Icon, title, count, accent, pill, actions, footer, bodyPadded, children }) {
+  const cls = [
+    'settings-card',
+    accent ? `settings-card--accent-${accent}` : '',
+  ].filter(Boolean).join(' ')
+
+  return (
+    <section className={cls}>
+      <header className="settings-card-header">
+        {Icon && <Icon size={16} className="settings-card-header-icon" aria-hidden="true" />}
+        <h2 className="settings-card-header-title">
+          {title}
+          {count != null && <span className="settings-card-header-count"> ({count})</span>}
+        </h2>
+        {pill && (
+          <span className={`settings-pill settings-pill--${pill.tone}`} aria-live="polite">
+            {pill.text}
+          </span>
+        )}
+        {actions && <div className="settings-card-header-actions">{actions}</div>}
+      </header>
+      <div className={`settings-card-body ${bodyPadded ? 'settings-card-body--padded' : ''}`}>
+        {children}
+      </div>
+      {footer && <div className="settings-card-footer">{footer}</div>}
+    </section>
+  )
+}
+
+/**
+ * SettingRow — a single setting line: label + helper + optional details + control.
+ *
+ * Props:
+ *   id          — DOM id used for find-a-setting jump-to (e.g. `setting-foo`)
+ *   label       — visible label text
+ *   labelFor    — htmlFor target (id of the control)
+ *   helper      — short helper text shown under the label
+ *   details     — { what, where, effect } for the disclosure
+ *   defaultHint — italic note (e.g. "Using default — no override saved")
+ *   children    — the control(s) on the right side
+ */
+function SettingRow({ id, label, labelFor, helper, details, defaultHint, children }) {
+  return (
+    <div id={id} className="settings-row">
+      <div className="settings-row-label-block">
+        {labelFor ? (
+          <label htmlFor={labelFor} className="settings-row-label">{label}</label>
+        ) : (
+          <div className="settings-row-label">{label}</div>
+        )}
+        {helper && <div className="settings-row-helper">{helper}</div>}
+        {details && <DetailsDisclosure details={details} />}
+        {defaultHint && <div className="settings-row-helper-default">{defaultHint}</div>}
+      </div>
+      <div className="settings-row-control">{children}</div>
+    </div>
+  )
+}
+
+/**
+ * DetailsDisclosure — collapsible "Show details" block under a SettingRow label.
+ * Uses native <details>/<summary> for full keyboard + screen-reader support.
+ */
+function DetailsDisclosure({ details }) {
+  if (!details) return null
+  const { what, where, effect } = details
+  return (
+    <details className="settings-disclosure">
+      <summary className="settings-disclosure-summary">
+        <ChevronRight size={11} className="settings-disclosure-summary-icon" aria-hidden="true" />
+        Show details
+      </summary>
+      <div className="settings-disclosure-content">
+        {what   && <p><strong>What it does:</strong> {what}</p>}
+        {where  && <p><strong>Where it shows up:</strong> {where}</p>}
+        {effect && <p><strong>Effect:</strong> {effect}</p>}
+      </div>
+    </details>
+  )
+}
+
+/**
+ * SegmentedToggle — accessible 2- or 3-way segmented switch.
+ *
+ * Props:
+ *   value     — currently-active option value
+ *   options   — [{ value, label, icon, tone? }, ...]
+ *   onChange  — (newValue) => void
+ *   disabled  — bool
+ *   variant   — 'green' | 'orange' | 'red' | 'gray' for the pressed state color
+ *   ariaLabel — optional label for the role="group"
+ */
+function SegmentedToggle({ value, options, onChange, disabled, variant, ariaLabel }) {
+  const cls = ['settings-segmented', variant ? `settings-segmented--${variant}` : ''].filter(Boolean).join(' ')
+  return (
+    <div className={cls} role="group" aria-label={ariaLabel || 'Toggle'}>
+      {options.map(opt => {
+        const Icon = opt.icon
+        const pressed = value === opt.value
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            className="settings-segmented-btn"
+            aria-pressed={pressed}
+            disabled={disabled}
+            onClick={() => { if (!pressed) onChange(opt.value) }}
+          >
+            {Icon && <Icon size={14} aria-hidden="true" />}
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * SavedIndicator — small "✓ Saved" / "Saving…" pulse next to a control.
+ * Uses aria-live="polite" so screen readers announce save success.
+ */
+function SavedIndicator({ state }) {
+  const isSaving = state === 'saving'
+  const isSaved = state === 'saved'
+  const cls = [
+    'settings-saved-indicator',
+    isSaved ? 'settings-saved-indicator--visible' : '',
+    isSaving ? 'settings-saved-indicator--saving' : '',
+  ].filter(Boolean).join(' ')
+  return (
+    <span className={cls} aria-live="polite">
+      {isSaving && <><Loader2 size={11} className="animate-spin" aria-hidden="true" /> Saving…</>}
+      {isSaved && <><Check size={12} aria-hidden="true" /> Saved</>}
+    </span>
+  )
+}
+
+/**
+ * DebouncedInput — text/number/date/email input with built-in auto-save.
+ * Saves on debounce timer and on blur.
+ */
+function DebouncedInput({ id, type = 'text', value, onChange, onBlur, suffix, className, ...rest }) {
+  return (
+    <>
+      <input
+        id={id}
+        type={type}
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        onBlur={onBlur}
+        className={`settings-input ${className || ''}`}
+        {...rest}
+      />
+      {suffix && <span className="settings-input-suffix">{suffix}</span>}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIND-A-SETTING SEARCH BAR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function FindASetting({ onJump }) {
+  const [query, setQuery] = useState('')
+  const inputId = useId()
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return SETTINGS_REGISTRY.filter(s => {
+      const haystack = `${s.label} ${s.desc} ${s.aliases || ''} ${TAB_LABELS[s.tab] || ''}`.toLowerCase()
+      return haystack.includes(q)
+    }).slice(0, 12)
+  }, [query])
+
+  const handleJump = (m) => {
+    setQuery('')
+    onJump(m.tab, m.key)
+  }
+
+  return (
+    <div className="settings-search">
+      <Search size={16} className="settings-search-icon" aria-hidden="true" />
+      <label htmlFor={inputId} className="dash-sr-only">Find a setting</label>
+      <input
+        id={inputId}
+        type="search"
+        className="settings-search-input"
+        placeholder="Find a setting…"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        aria-controls="settings-search-results"
+        aria-expanded={query.trim().length > 0}
+      />
+      {query && (
+        <button
+          type="button"
+          className="settings-search-clear"
+          onClick={() => setQuery('')}
+          aria-label="Clear search"
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      )}
+
+      {query.trim() && (
+        <div id="settings-search-results" className="settings-search-results" role="listbox">
+          {matches.length === 0 ? (
+            <div className="settings-search-empty">No settings match "{query}"</div>
+          ) : (
+            matches.map(m => (
+              <button
+                key={`${m.tab}-${m.key}`}
+                type="button"
+                className="settings-search-result"
+                role="option"
+                aria-selected="false"
+                onClick={() => handleJump(m)}
+              >
+                <div className="settings-search-result-row">
+                  <span className="settings-search-result-tab">{TAB_LABELS[m.tab] || m.tab}</span>
+                  <span className="settings-search-result-label">{m.label}</span>
+                </div>
+                {m.desc && <div className="settings-search-result-desc">{m.desc}</div>}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function SettingsPage() {
-  const { profile } = useAuth()
   const { hasPerm, permsLoading } = usePermissions('Settings')
   const [tab, setTab] = useState('general')
 
-  const tabs = [
-    { id: 'general', label: 'General', icon: Sliders },
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'weekly_labs', label: 'Weekly Labs', icon: FlaskConical },
-    { id: 'evaluation', label: 'WOC Ratio', icon: Target },
-    { id: 'categories', label: 'Categories', icon: Tag },
-    { id: 'asset_locations', label: 'Asset Locations', icon: MapPin },
-    { id: 'inv_locations', label: 'Inventory Locations', icon: Box },
-    { id: 'vendors', label: 'Vendors', icon: Truck },
-    { id: 'wo_statuses', label: 'WO Statuses', icon: ClipboardList },
-    { id: 'classes', label: 'Classes', icon: GraduationCap },
+  // Tab definitions, grouped for visual dividers
+  const TAB_GROUPS = [
+    {
+      label: 'Operations',
+      items: [
+        { id: 'general', label: 'General', icon: Sliders },
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'weekly_labs', label: 'Weekly Labs', icon: FlaskConical },
+        { id: 'evaluation', label: 'WOC Ratio', icon: Target },
+      ],
+    },
+    {
+      label: 'Lookups',
+      items: [
+        { id: 'categories', label: 'Categories', icon: Tag },
+        { id: 'asset_locations', label: 'Asset Locations', icon: MapPin },
+        { id: 'inv_locations', label: 'Inventory Locations', icon: Box },
+        { id: 'vendors', label: 'Vendors', icon: Truck },
+        { id: 'wo_statuses', label: 'WO Statuses', icon: ClipboardList },
+      ],
+    },
+    {
+      label: 'Academic',
+      items: [
+        { id: 'classes', label: 'Classes', icon: GraduationCap },
+      ],
+    },
   ]
+
+  // Find-a-setting jump: switch tab, scroll to row, briefly highlight.
+  const jumpToSetting = useCallback((targetTab, key) => {
+    setTab(targetTab)
+    setTimeout(() => {
+      const el = document.getElementById(`setting-${key}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.classList.add('settings-row--highlight')
+        setTimeout(() => el.classList.remove('settings-row--highlight'), 2000)
+      }
+    }, 150)
+  }, [])
 
   if (permsLoading) {
     return (
-      <div className="p-4 lg:p-6 max-w-7xl mx-auto text-center py-20">
-        <Loader2 size={24} className="mx-auto mb-3 text-surface-400 animate-spin" />
-        <p className="text-surface-500 text-sm">Loading...</p>
+      <div className="settings-root p-4 lg:p-6">
+        <div className="settings-loading">
+          <Loader2 size={24} className="mx-auto mb-3 animate-spin" aria-hidden="true" />
+          <p className="text-sm">Loading…</p>
+        </div>
       </div>
     )
   }
 
   if (!hasPerm('view_page')) {
     return (
-      <div className="p-4 lg:p-6 max-w-7xl mx-auto text-center py-20">
-        <Settings size={40} className="mx-auto mb-3 text-surface-300" />
-        <p className="text-surface-500 text-sm">You do not have permission to access Settings.</p>
+      <div className="settings-root p-4 lg:p-6">
+        <div className="settings-empty">
+          <Settings size={40} className="settings-empty-icon mx-auto" aria-hidden="true" />
+          <p className="settings-empty-text">You do not have permission to access Settings.</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-4">
-      <h1 className="text-lg font-bold text-surface-900 flex items-center gap-2">
-        <Settings size={20} className="text-brand-600" /> Settings
-      </h1>
-
-      {/* Tab Nav */}
-      <div className="flex gap-1 bg-surface-100 rounded-xl p-1 overflow-x-auto">
-        {tabs.map(t => {
-          const Icon = t.icon
-          return (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                tab === t.id ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'
-              }`}>
-              <Icon size={14} /> {t.label}
-            </button>
-          )
-        })}
+    <div className="settings-root p-4 lg:p-6 space-y-4">
+      {/* ── Page header + find-a-setting search ── */}
+      <div className="space-y-3">
+        <h1 className="settings-page-title">
+          <Settings size={20} className="settings-page-title-icon" aria-hidden="true" /> Settings
+        </h1>
+        <FindASetting onJump={jumpToSetting} />
       </div>
 
-      {/* Content */}
+      {/* ── Tab bar ── */}
+      <nav className="settings-tabs" aria-label="Settings sections">
+        {TAB_GROUPS.map((group, gIdx) => (
+          <Fragment key={group.label}>
+            {gIdx > 0 && <div className="settings-tabs-divider" aria-hidden="true" />}
+            {group.items.map(t => {
+              const Icon = t.icon
+              const active = tab === t.id
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`settings-tab ${active ? 'settings-tab--active' : ''}`}
+                  aria-current={active ? 'page' : undefined}
+                  onClick={() => setTab(t.id)}
+                >
+                  <Icon size={14} aria-hidden="true" /> {t.label}
+                </button>
+              )
+            })}
+          </Fragment>
+        ))}
+      </nav>
+
+      {/* ── Active tab content ── */}
       {tab === 'general' && <GeneralSettings />}
       {tab === 'dashboard' && <DashboardSettings />}
       {tab === 'weekly_labs' && <WeeklyLabsSettings />}
@@ -94,70 +885,19 @@ export default function SettingsPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GENERAL SETTINGS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const SETTING_META = {
-  // Work Orders
-  priority_low_days: { label: 'Low Priority Due Days', type: 'number', desc: 'Default days until due for Low priority work orders' },
-  priority_medium_days: { label: 'Medium Priority Due Days', type: 'number', desc: 'Default days until due for Medium priority work orders' },
-  priority_high_days: { label: 'High Priority Due Days', type: 'number', desc: 'Default days until due for High priority work orders' },
-  time_increment: { label: 'Time Increment (minutes)', type: 'number', desc: 'Step size for the minutes selector in work log entries' },
-  default_work_time: { label: 'Default Work Time (min)', type: 'number', desc: 'Default time pre-filled when adding a work log entry' },
-  // Notifications
-  notification_email: { label: 'Notification Email', type: 'text', desc: 'Email address for system notifications' },
-  notif_poll_interval: { label: 'Poll Interval (seconds)', type: 'number', desc: 'Notification bell polling interval (15/30/60, 0=off)' },
-  // Printing
-  label_width_inches: { label: 'Label Width (inches)', type: 'number', desc: 'Label width for Zebra ZT230 printer' },
-  label_height_inches: { label: 'Label Height (inches)', type: 'number', desc: 'Label height for Zebra ZT230 printer' },
-  // Metrics
-  metrics_start_hour: { label: 'Metrics Start Hour', type: 'number', desc: 'Start hour for metrics display (0-23)' },
-  metrics_end_hour: { label: 'Metrics End Hour', type: 'number', desc: 'End hour for metrics display (0-23)' },
-  metrics_refresh_interval: { label: 'TV Refresh Interval (min)', type: 'number', desc: 'Minutes between auto-refreshes on the TV Display page' },
-  // Lab Signup
-  lab_visible_days: { label: 'Lab Open Days', type: 'custom', desc: 'Select which days the lab is open for signups' },
-  lab_weeks_to_display: { label: 'Weeks to Display', type: 'number', desc: 'Number of weeks to display on Lab Signup page' },
-  // Volunteer
-  volunteer_semester_total_hours: { label: 'Semester Total Hours', type: 'number', desc: 'Total volunteer hours required per semester' },
-  volunteer_midpoint_hours: { label: 'Midpoint Hours', type: 'number', desc: 'Hours required by midpoint week' },
-  volunteer_midpoint_week: { label: 'Midpoint Week', type: 'number', desc: 'Week number for midpoint check' },
-  volunteer_current_semester: { label: 'Current Semester', type: 'text', desc: 'Current semester for volunteer tracking' },
-  volunteer_semester_start: { label: 'Semester Start Date', type: 'date', desc: 'Start date of the current volunteer tracking semester' },
-  volunteer_semester_end: { label: 'Semester End Date', type: 'date', desc: 'End date of the current volunteer tracking semester' },
-  // Time Clock
-  grace_period_minutes: { label: 'Grace Period (minutes)', type: 'number', desc: 'Minutes of grace before marking a student as late or leaving early' },
-  // System
-  app_version: { label: 'App Version', type: 'text', desc: 'Current application version' },
-  session_timeout_hours: { label: 'Session Timeout (hours)', type: 'number', desc: 'Hours until users are automatically logged out. Set to 0 to disable (sessions never expire).' },
-}
-
-const CATEGORY_ICONS = {
-  'Work Orders': ClipboardList,
-  'Notifications': AlertCircle,
-  'Printing': Tag,
-  'Metrics': Clock,
-  'Lab Signup': BookOpen,
-  'Volunteer': Users,
-  'System': Settings,
-  'Storage': Box,
-  'General': Sliders,
-  'Time Clock': Clock,
-  'Evaluation': Target,
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // LAB ACCESS MODE CARD
+// Critical operational toggle — has confirmation modal + audit log + PM auto-pause sync
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function LabAccessModeCard() {
   const { profile } = useAuth()
-  const [mode, setMode] = useState(null)       // 'in_session' | 'summer_break' | null (loading)
+  const [mode, setMode] = useState(null)         // 'in_session' | 'summer_break' | null
   const [saving, setSaving] = useState(false)
-  const [confirm, setConfirm] = useState(null) // 'summer_break' | 'in_session' — pending confirm
+  const [confirm, setConfirm] = useState(null)   // 'summer_break' | 'in_session' (pending confirm)
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
 
-  // Fetch current value
-  const fetchMode = async () => {
+  // ── Fetch current value ──
+  const fetchMode = useCallback(async () => {
     try {
       const { data } = await supabase
         .from('settings')
@@ -168,18 +908,17 @@ function LabAccessModeCard() {
     } catch {
       setMode('in_session')
     }
-  }
+  }, [])
 
-  useEffect(() => { fetchMode() }, [])
+  useEffect(() => { fetchMode() }, [fetchMode])
 
-  // Realtime: stay in sync if another instructor changes it
+  // ── Realtime sync ──
   useEffect(() => {
+    const channelId = `lab-access-mode-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     const channel = supabase
-      .channel('lab-access-mode-settings')
+      .channel(channelId)
       .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'settings',
+        event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.lab_access_mode',
       }, (payload) => {
         setMode(payload.new?.setting_value || 'in_session')
@@ -193,7 +932,7 @@ function LabAccessModeCard() {
     setConfirm(null)
     const oldMode = mode
     try {
-      // Update the setting
+      // Update lab_access_mode
       const { data: rows, error } = await supabase
         .from('settings')
         .update({
@@ -206,7 +945,6 @@ function LabAccessModeCard() {
 
       if (error) throw error
       if (!rows || rows.length === 0) {
-        // Row doesn't exist yet — insert it
         await supabase.from('settings').insert({
           setting_key: 'lab_access_mode',
           setting_value: newMode,
@@ -219,10 +957,8 @@ function LabAccessModeCard() {
 
       setMode(newMode)
 
-      // ── Also pause/unpause PM generation to match ─────────────────────
+      // ── Sync PM generation pause ─────────────────────────────────────────
       // Summer Break → pause PMs. In Session → unpause PMs.
-      // Note: if PMs were manually paused before summer break was enabled,
-      // restoring In Session will unpause them. Re-pause from the PM page if needed.
       try {
         const pmPausedValue = newMode === 'summer_break' ? 'true' : 'false'
         const { data: pmRows } = await supabase
@@ -235,7 +971,6 @@ function LabAccessModeCard() {
           .eq('setting_key', 'pm_generation_paused')
           .select()
 
-        // Insert if not found
         if (!pmRows || pmRows.length === 0) {
           await supabase.from('settings').insert({
             setting_key: 'pm_generation_paused',
@@ -250,7 +985,7 @@ function LabAccessModeCard() {
         console.warn('[LabAccessMode] PM pause sync failed (non-fatal):', pmErr.message)
       }
 
-      // ── Audit log — this is a high-impact change ──────────────────────
+      // ── Audit log ────────────────────────────────────────────────────────
       try {
         await supabase.from('audit_log').insert({
           user_email: profile?.email || 'unknown',
@@ -280,215 +1015,150 @@ function LabAccessModeCard() {
   }
 
   const isSummerBreak = mode === 'summer_break'
+  const isLoading = mode === null
+
+  // Card visual state
+  const accent = isSummerBreak ? 'orange' : 'green'
+  const pill = isSummerBreak
+    ? { tone: 'orange', text: 'Summer Break' }
+    : { tone: 'green', text: 'In Session' }
 
   return (
     <>
-      {/* ── Confirmation Modal ── */}
-      {confirm && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 3000, padding: 20,
-        }}
-          onClick={(e) => e.target === e.currentTarget && setConfirm(null)}
-        >
-          <div style={{
-            background: 'white', borderRadius: 14, width: '100%', maxWidth: 440,
-            overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
-          }}>
-            {/* Header */}
-            <div style={{
-              padding: '18px 20px',
-              borderBottom: '1px solid #e9ecef',
-              display: 'flex', alignItems: 'center', gap: 12,
-              background: confirm === 'summer_break' ? '#fff8f0' : '#f0faf4',
-            }}>
-              <div style={{
-                width: 40, height: 40, borderRadius: '50%',
-                background: confirm === 'summer_break' ? '#ffd8a8' : '#b2f2bb',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                {confirm === 'summer_break'
-                  ? <MoonStar size={20} style={{ color: '#e8590c' }} />
-                  : <Sun size={20} style={{ color: '#2f9e44' }} />}
-              </div>
-              <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-                {confirm === 'summer_break' ? 'Enable Summer Break Mode?' : 'Restore In-Session Access?'}
-              </h4>
-            </div>
-
-            {/* Body */}
-            <div style={{ padding: '20px' }}>
-              {confirm === 'summer_break' ? (
-                <>
-                  <div style={{
-                    background: '#fff3bf', border: '1px solid #fcc419',
-                    borderRadius: 10, padding: '12px 14px', marginBottom: 16,
-                    display: 'flex', gap: 10, alignItems: 'flex-start',
-                  }}>
-                    <AlertTriangle size={18} style={{ color: '#e67700', flexShrink: 0, marginTop: 1 }} />
-                    <p style={{ margin: 0, fontSize: '0.88rem', color: '#5c3d00', lineHeight: 1.5 }}>
-                      This will <strong>immediately</strong> lock out all Students and Work Study users.
-                      They will see a "Lab Closed" screen and cannot access any part of the system.
-                      The Time Clock kiosk will also be disabled.
-                    </p>
-                  </div>
-                  <p style={{ fontSize: '0.88rem', color: '#495057', margin: 0 }}>
-                    <strong>Instructors are not affected.</strong> You can restore access at any time
-                    by switching back to In Session.
-                  </p>
-                </>
-              ) : (
-                <p style={{ fontSize: '0.88rem', color: '#495057', margin: 0, lineHeight: 1.6 }}>
-                  This will restore full access to all Students and Work Study users immediately.
-                  The Time Clock kiosk will also be re-enabled.
-                </p>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div style={{
-              padding: '14px 20px', borderTop: '1px solid #e9ecef',
-              display: 'flex', justifyContent: 'flex-end', gap: 10,
-            }}>
-              <button
-                onClick={() => setConfirm(null)}
-                style={{
-                  background: '#f1f3f5', color: '#495057', border: 'none',
-                  borderRadius: 8, padding: '9px 18px', fontSize: '0.88rem', cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => applyMode(confirm)}
-                style={{
-                  background: confirm === 'summer_break' ? '#e8590c' : '#2f9e44',
-                  color: 'white', border: 'none',
-                  borderRadius: 8, padding: '9px 22px', fontSize: '0.88rem',
-                  fontWeight: 600, cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: 8,
-                }}
-              >
-                {confirm === 'summer_break' ? <MoonStar size={14} /> : <Sun size={14} />}
-                {confirm === 'summer_break' ? 'Enable Summer Break' : 'Restore Access'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Card ── */}
-      <div style={{
-        borderRadius: 14,
-        border: isSummerBreak ? '2px solid #f76707' : '2px solid #40c057',
-        overflow: 'hidden',
-        background: isSummerBreak
-          ? 'linear-gradient(135deg, #fff8f2 0%, #fff3e8 100%)'
-          : 'linear-gradient(135deg, #f4fef6 0%, #ebfbee 100%)',
-        transition: 'border-color 0.3s, background 0.3s',
-      }}>
-        {/* Status banner */}
-        <div style={{
-          padding: '10px 20px',
-          background: isSummerBreak
-            ? 'linear-gradient(90deg, #f76707, #e8590c)'
-            : 'linear-gradient(90deg, #2f9e44, #40c057)',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {isSummerBreak
-              ? <MoonStar size={16} style={{ color: 'white' }} />
-              : <Sun size={16} style={{ color: 'white' }} />}
-            <span style={{ color: 'white', fontWeight: 700, fontSize: '0.85rem', letterSpacing: '0.03em' }}>
-              {isSummerBreak ? 'SUMMER BREAK MODE — STUDENTS LOCKED OUT' : 'IN SESSION — STUDENTS HAVE FULL ACCESS'}
+      <SettingCard
+        icon={isSummerBreak ? MoonStar : Sun}
+        title="Lab Access Mode"
+        accent={accent}
+        pill={isLoading ? { tone: 'gray', text: 'Loading…' } : pill}
+        footer={
+          <>
+            <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
+            <span>
+              Changes take effect immediately for all logged-in users and the Time Clock kiosk.
+              Use this for spring break, maintenance windows, or any other period when student access should be suspended.
             </span>
-          </div>
-          {mode === null && <Loader2 size={14} style={{ color: 'rgba(255,255,255,0.7)', animation: 'spin 1s linear infinite' }} />}
-        </div>
+          </>
+        }
+      >
+        <SettingRow
+          id="setting-lab_access_mode"
+          label="Student & Work Study access"
+          helper={
+            isSummerBreak
+              ? 'Students and Work Study users are locked out. The Time Clock kiosk is also disabled. Instructors retain full access.'
+              : 'All users can access the system normally. Switch to Summer Break to lock out students during semester breaks.'
+          }
+          details={{
+            what: 'Single switch that controls whether non-instructor users can log in at all.',
+            where: 'Affects every page, the Time Clock kiosk, and the Lab Status display. Also auto-pauses PM work order generation when set to Summer Break.',
+            effect: 'Switching to Summer Break shows a "Lab Closed" screen to students. Switching back to In Session restores all access immediately.',
+          }}
+        >
+          <SegmentedToggle
+            value={mode}
+            ariaLabel="Lab access mode"
+            disabled={saving || isLoading}
+            variant={isSummerBreak ? 'orange' : 'green'}
+            options={[
+              { value: 'in_session', label: 'In Session', icon: Sun },
+              { value: 'summer_break', label: 'Summer Break', icon: MoonStar },
+            ]}
+            onChange={(v) => setConfirm(v)}
+          />
+          {saving && (
+            <span className="settings-saved-indicator settings-saved-indicator--saving">
+              <Loader2 size={11} className="animate-spin" aria-hidden="true" /> Saving…
+            </span>
+          )}
+        </SettingRow>
+      </SettingCard>
 
-        {/* Body */}
-        <div style={{ padding: '18px 20px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-            {/* Description */}
-            <div style={{ flex: 1 }}>
-              <h3 style={{
-                margin: '0 0 6px',
-                fontSize: '0.95rem', fontWeight: 700,
-                color: isSummerBreak ? '#7c2d12' : '#1a4731',
-                display: 'flex', alignItems: 'center', gap: 8,
-              }}>
-                Lab Access Mode
-              </h3>
-              <p style={{
-                margin: 0, fontSize: '0.83rem',
-                color: isSummerBreak ? '#9a3412' : '#2d6a4f',
-                lineHeight: 1.55,
-              }}>
-                {isSummerBreak
-                  ? 'Students and Work Study users are blocked from logging in. The Time Clock kiosk is also disabled. Instructors retain full access.'
-                  : 'All users can access the system normally. Switch to Summer Break to lock out students during semester breaks.'}
-              </p>
-            </div>
-
-            {/* Toggle buttons */}
-            <div style={{ flexShrink: 0 }}>
-              <div style={{
-                display: 'inline-flex',
-                borderRadius: 10,
-                overflow: 'hidden',
-                border: '1px solid rgba(0,0,0,0.12)',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-              }}>
-                <button
-                  onClick={() => !isSummerBreak ? null : setConfirm('in_session')}
-                  disabled={saving || mode === null}
-                  style={{
-                    padding: '9px 18px',
-                    fontSize: '0.83rem', fontWeight: 600,
-                    border: 'none', cursor: (!isSummerBreak || saving) ? 'default' : 'pointer',
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    background: !isSummerBreak ? '#2f9e44' : '#f1f3f5',
-                    color: !isSummerBreak ? 'white' : '#868e96',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  <Sun size={14} /> In Session
-                </button>
-                <button
-                  onClick={() => isSummerBreak ? null : setConfirm('summer_break')}
-                  disabled={saving || mode === null}
-                  style={{
-                    padding: '9px 18px',
-                    fontSize: '0.83rem', fontWeight: 600,
-                    border: 'none', cursor: (isSummerBreak || saving) ? 'default' : 'pointer',
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    background: isSummerBreak ? '#e8590c' : '#f1f3f5',
-                    color: isSummerBreak ? 'white' : '#868e96',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  {saving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <MoonStar size={14} />}
-                  Summer Break
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Future-mode hint */}
-          <p style={{
-            margin: '12px 0 0',
-            fontSize: '0.77rem',
-            color: isSummerBreak ? 'rgba(120,53,15,0.6)' : 'rgba(30,80,50,0.5)',
-            borderTop: `1px solid ${isSummerBreak ? 'rgba(234,88,12,0.15)' : 'rgba(64,192,87,0.2)'}`,
-            paddingTop: 10,
-          }}>
-            Changes take effect immediately for all logged-in users and the Time Clock kiosk.
-            This toggle can also be used for spring break, maintenance windows, or any other period when student access should be suspended.
-          </p>
-        </div>
-      </div>
+      {/* ── Confirmation modal ── */}
+      <LabAccessConfirmModal
+        confirm={confirm}
+        saving={saving}
+        onCancel={() => setConfirm(null)}
+        onConfirm={() => applyMode(confirm)}
+      />
     </>
+  )
+}
+
+function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
+  const isOpen = !!confirm
+  const dialogRef = useDialogA11y(isOpen, onCancel)
+  const titleId = useId()
+
+  if (!isOpen) return null
+  const isWarn = confirm === 'summer_break'
+
+  return (
+    <div
+      className="settings-modal-overlay"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="settings-modal"
+      >
+        <header className={`settings-modal-header ${isWarn ? 'settings-modal-header--warn' : 'settings-modal-header--ok'}`}>
+          <span className="settings-modal-header-icon-wrap">
+            {isWarn ? <MoonStar size={20} aria-hidden="true" /> : <Sun size={20} aria-hidden="true" />}
+          </span>
+          <h3 id={titleId} className="settings-modal-title">
+            {isWarn ? 'Enable Summer Break Mode?' : 'Restore In-Session Access?'}
+          </h3>
+        </header>
+
+        <div className="settings-modal-body">
+          {isWarn ? (
+            <>
+              <div className="settings-modal-warning">
+                <AlertTriangle size={18} className="settings-modal-warning-icon" aria-hidden="true" />
+                <p className="settings-modal-warning-text">
+                  This will <strong>immediately</strong> lock out all Students and Work Study users.
+                  They will see a "Lab Closed" screen and cannot access any part of the system.
+                  The Time Clock kiosk will also be disabled.
+                </p>
+              </div>
+              <p className="settings-modal-text">
+                <strong>Instructors are not affected.</strong> You can restore access at any time
+                by switching back to In Session.
+              </p>
+            </>
+          ) : (
+            <p className="settings-modal-text">
+              This will restore full access to all Students and Work Study users immediately.
+              The Time Clock kiosk will also be re-enabled.
+            </p>
+          )}
+        </div>
+
+        <footer className="settings-modal-footer">
+          <button
+            type="button"
+            className="settings-modal-btn settings-modal-btn--secondary"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={`settings-modal-btn ${isWarn ? 'settings-modal-btn--warn' : 'settings-modal-btn--ok'}`}
+            onClick={onConfirm}
+            disabled={saving}
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                    : (isWarn ? <MoonStar size={14} aria-hidden="true" /> : <Sun size={14} aria-hidden="true" />)}
+            {isWarn ? 'Enable Summer Break' : 'Restore Access'}
+          </button>
+        </footer>
+      </div>
+    </div>
   )
 }
 
@@ -498,14 +1168,17 @@ function LabAccessModeCard() {
 
 function InstructorAwayCard() {
   const { profile } = useAuth()
-  const [awayMode, setAwayMode] = useState(null)       // null = loading, true/false
-  const [returnTime, setReturnTime] = useState('')      // e.g. '2:30 PM'
+  const [awayMode, setAwayMode] = useState(null)         // null = loading
+  const [returnTime, setReturnTime] = useState('')
   const [savedReturnTime, setSavedReturnTime] = useState('')
   const [saving, setSaving] = useState(false)
+  const [returnTimeSaveState, setReturnTimeSaveState] = useState(null)  // 'saving' | 'saved'
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
+  const returnTimeId = useId()
+  const returnTimeDebounceRef = useRef(null)
 
   // ── Fetch current values ──
-  const fetchAway = async () => {
+  const fetchAway = useCallback(async () => {
     try {
       const { data } = await supabase
         .from('settings')
@@ -520,14 +1193,15 @@ function InstructorAwayCard() {
     } catch {
       setAwayMode(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { fetchAway() }, [])
+  useEffect(() => { fetchAway() }, [fetchAway])
 
   // ── Realtime sync ──
   useEffect(() => {
+    const channelId = `instructor-away-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     const channel = supabase
-      .channel('instructor-away-settings')
+      .channel(channelId)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_away_mode',
@@ -546,7 +1220,7 @@ function InstructorAwayCard() {
     return () => { supabase.removeChannel(channel) }
   }, [])
 
-  // ── Upsert a setting ──
+  // ── Upsert helper ──
   const upsertSetting = async (key, value, description) => {
     const { data: rows, error } = await supabase
       .from('settings')
@@ -570,7 +1244,7 @@ function InstructorAwayCard() {
     }
   }
 
-  // ── Toggle away mode ──
+  // ── Toggle away mode (immediate save) ──
   const toggleAway = async (newVal) => {
     setSaving(true)
     try {
@@ -579,20 +1253,17 @@ function InstructorAwayCard() {
         String(newVal),
         'When true, students are told instructor is in a meeting when requesting help'
       )
-      // If turning on AND there's a return time entered, save it too
+      // Sync return-time field on toggle
       if (newVal && returnTime.trim()) {
         await upsertSetting(
-          'instructor_return_time',
-          returnTime.trim(),
+          'instructor_return_time', returnTime.trim(),
           'Return time shown to students when instructor is away in a meeting'
         )
         setSavedReturnTime(returnTime.trim())
       }
-      // If turning off, clear the return time
       if (!newVal) {
         await upsertSetting(
-          'instructor_return_time',
-          '',
+          'instructor_return_time', '',
           'Return time shown to students when instructor is away in a meeting'
         )
         setReturnTime('')
@@ -629,201 +1300,333 @@ function InstructorAwayCard() {
     }
   }
 
-  // ── Save return time only (while already in away mode) ──
-  const saveReturnTime = async () => {
-    if (!returnTime.trim()) return
-    setSaving(true)
+  // ── Auto-save return-time (debounced) ──
+  const saveReturnTime = async (val) => {
+    setReturnTimeSaveState('saving')
     try {
       await upsertSetting(
-        'instructor_return_time',
-        returnTime.trim(),
+        'instructor_return_time', val,
         'Return time shown to students when instructor is away in a meeting'
       )
-      setSavedReturnTime(returnTime.trim())
-      toast.success('Return time updated to ' + returnTime.trim())
+      setSavedReturnTime(val)
+      setReturnTimeSaveState('saved')
+      setTimeout(() => setReturnTimeSaveState(s => s === 'saved' ? null : s), 2000)
     } catch (err) {
+      setReturnTimeSaveState(null)
       toast.error('Failed to save return time: ' + err.message)
-    } finally {
-      setSaving(false)
     }
   }
 
+  const handleReturnTimeChange = (val) => {
+    setReturnTime(val)
+    if (returnTimeDebounceRef.current) clearTimeout(returnTimeDebounceRef.current)
+    returnTimeDebounceRef.current = setTimeout(() => {
+      const trimmed = val.trim()
+      if (trimmed !== savedReturnTime) saveReturnTime(trimmed)
+    }, 800)
+  }
+
+  // Flush on unmount
+  useEffect(() => {
+    return () => {
+      if (returnTimeDebounceRef.current) {
+        clearTimeout(returnTimeDebounceRef.current)
+        const trimmed = returnTime.trim()
+        if (trimmed !== savedReturnTime) {
+          saveReturnTime(trimmed).catch(() => {})
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const isAway = awayMode === true
   const isLoading = awayMode === null
-  const timeIsDirty = awayMode && returnTime.trim() !== savedReturnTime
+
+  const accent = isAway ? 'red' : 'gray'
+  const pill = isAway
+    ? { tone: 'red', text: savedReturnTime ? `Away · back ${savedReturnTime}` : 'Away — In a meeting' }
+    : { tone: 'gray', text: 'Available — In Lab' }
 
   return (
-    <div style={{
-      borderRadius: 14,
-      border: isAway ? '2px solid #dc2626' : '2px solid #d1d5db',
-      overflow: 'hidden',
-      background: isAway
-        ? 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)'
-        : 'linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)',
-      transition: 'border-color 0.3s, background 0.3s',
-    }}>
-      {/* Status banner */}
-      <div style={{
-        padding: '10px 20px',
-        background: isAway
-          ? 'linear-gradient(90deg, #dc2626, #b91c1c)'
-          : 'linear-gradient(90deg, #6b7280, #4b5563)',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Clock size={16} style={{ color: 'white' }} />
-          <span style={{ color: 'white', fontWeight: 700, fontSize: '0.85rem', letterSpacing: '0.03em' }}>
+    <SettingCard
+      icon={Clock}
+      title="Instructor Away Mode"
+      accent={accent}
+      pill={isLoading ? { tone: 'gray', text: 'Loading…' } : pill}
+      footer={
+        <>
+          <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
+          <span>
             {isAway
-              ? `AWAY — IN A MEETING${savedReturnTime ? ` · RETURNING AT ${savedReturnTime.toUpperCase()}` : ''}`
-              : 'AVAILABLE — IN LAB'}
+              ? 'This will NOT auto-disable. Remember to toggle back to Available when you return from your meeting.'
+              : 'Changes take effect immediately for all student help requests and the Lab Status kiosk.'}
           </span>
-        </div>
-        {isLoading && <Loader2 size={14} style={{ color: 'rgba(255,255,255,0.7)', animation: 'spin 1s linear infinite' }} />}
+        </>
+      }
+    >
+      <SettingRow
+        id="setting-instructor_away_mode"
+        label="Availability for student help"
+        helper={
+          isAway
+            ? 'Students requesting help see a meeting notice. The Lab Status kiosk shows a red AWAY indicator. Toggle off when you return.'
+            : 'Enable this when you step into a meeting. Students will be informed via the help button and Lab Status page.'
+        }
+        details={{
+          what: 'Communicates your availability to students. Does not block any feature.',
+          where: 'Help button on student-facing pages and the Lab Status kiosk display.',
+          effect: 'When Away, students see a soft notice asking them to wait or come back at the return time. Instructors are not affected.',
+        }}
+      >
+        <SegmentedToggle
+          value={isAway ? 'away' : 'available'}
+          ariaLabel="Instructor availability"
+          disabled={saving || isLoading}
+          variant={isAway ? 'red' : 'green'}
+          options={[
+            { value: 'available', label: 'Available', icon: CheckCircle2 },
+            { value: 'away', label: 'Away', icon: Clock },
+          ]}
+          onChange={(v) => toggleAway(v === 'away')}
+        />
+        {saving && (
+          <span className="settings-saved-indicator settings-saved-indicator--saving">
+            <Loader2 size={11} className="animate-spin" aria-hidden="true" /> Saving…
+          </span>
+        )}
+      </SettingRow>
+
+      <SettingRow
+        id="setting-instructor_return_time"
+        label="Expected Return Time"
+        labelFor={returnTimeId}
+        helper="Optional. Free-form text shown alongside the away notice (e.g. &quot;2:30 PM&quot;). Auto-saves as you type."
+      >
+        <DebouncedInput
+          id={returnTimeId}
+          type="text"
+          value={returnTime}
+          onChange={handleReturnTimeChange}
+          placeholder="e.g. 2:30 PM"
+          maxLength={20}
+          className="settings-input--time"
+          aria-label="Expected return time"
+        />
+        <SavedIndicator state={returnTimeSaveState} />
+      </SettingRow>
+    </SettingCard>
+  )
+}
+// ═══════════════════════════════════════════════════════════════════════════════
+// GENERAL SETTINGS — auto-grouped by category, auto-saved on change
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function GeneralSettings() {
+  const { settings, loading, refresh } = useSettings()
+  const actions = useSettingsActions()
+  const [edits, setEdits] = useState({})
+
+  // Wrap updateSetting for the auto-save hook (silent toasts)
+  const saveFn = useCallback(async (key, value) => {
+    const meta = SETTING_META[key]
+    return await actions.updateSetting(key, value, {
+      silent: true,
+      category: meta?.category,
+      description: meta?.desc,
+    })
+  }, [actions])
+
+  const { queueSave, flushSave, saveState, pendingValuesRef } = useAutoSave(saveFn)
+
+  // Sync edits from server, but DON'T clobber pending in-flight edits.
+  useEffect(() => {
+    setEdits(prev => {
+      const next = {}
+      settings.forEach(s => {
+        // If this key has a pending save, keep the local value
+        if (pendingValuesRef.current[s.setting_key] !== undefined) {
+          next[s.setting_key] = prev[s.setting_key] ?? String(s.setting_value ?? '')
+          return
+        }
+        let val = s.setting_value ?? ''
+        if (SETTING_META[s.setting_key]?.type === 'date' && val) {
+          val = String(val).substring(0, 10)
+        }
+        next[s.setting_key] = String(val)
+      })
+      return next
+    })
+  }, [settings, pendingValuesRef])
+
+  const handleChange = (key, value) => {
+    setEdits(prev => ({ ...prev, [key]: value }))
+    queueSave(key, value)
+  }
+
+  // Group settings by category, applying the existing skip list
+  // Some settings live in 'System' category but have their own dedicated UI
+  // cards above (LabAccessModeCard, InstructorAwayCard) — skip those keys
+  // so they don't render as raw rows in the System group.
+  const SETTINGS_HANDLED_BY_DEDICATED_CARDS = new Set([
+    'lab_access_mode',         // → LabAccessModeCard (top of tab)
+    'instructor_away_mode',    // → InstructorAwayCard (top of tab)
+    'instructor_return_time',  // → InstructorAwayCard (top of tab)
+  ])
+  const groups = useMemo(() => {
+    const g = {}
+    settings.forEach(s => {
+      // Per-key skip — handled by a dedicated card above
+      if (SETTINGS_HANDLED_BY_DEDICATED_CARDS.has(s.setting_key)) return
+      const cat = s.category || 'General'
+      // Skip categories managed elsewhere
+      if (cat === 'Storage') return            // Retired Google Drive folder IDs
+      if (cat === 'Evaluation') return         // Managed on the WOC Ratio page
+      if (cat === 'PM') return                 // Auto-synced by Lab Access Mode
+      if (cat === 'Weekly Labs') return        // Managed on the Weekly Labs tab
+      if (cat === 'SOPs') return               // Managed on the SOPs page (Manage SOP Template modal)
+      if (cat === 'program_cost') return       // Managed on the Program Cost page
+      if (cat === 'program_revisions') return  // Managed via the Course Revision gear icon
+      if (cat === 'course_proposals') return   // Managed via the New Course Proposal gear icon
+      if (cat === 'course_revisions') return   // Managed via the Course Revision gear icon
+      if (cat === 'Dashboard') return          // Managed on the Dashboard tab
+      if (!g[cat]) g[cat] = []
+      g[cat].push(s)
+    })
+    return g
+  }, [settings])
+
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading settings…</p>
       </div>
+    )
+  }
 
-      {/* Body */}
-      <div style={{ padding: '18px 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-          {/* Description */}
-          <div style={{ flex: 1 }}>
-            <h3 style={{
-              margin: '0 0 6px',
-              fontSize: '0.95rem', fontWeight: 700,
-              color: isAway ? '#991b1b' : '#374151',
-              display: 'flex', alignItems: 'center', gap: 8,
-            }}>
-              Instructor Away Mode
-            </h3>
-            <p style={{
-              margin: 0, fontSize: '0.83rem',
-              color: isAway ? '#b91c1c' : '#6b7280',
-              lineHeight: 1.55,
-            }}>
-              {isAway
-                ? 'Students requesting help will be notified that you are in a meeting. The Lab Status kiosk shows a red AWAY indicator. Toggle off when you return.'
-                : 'Enable this when you step into a meeting. Students will be informed via the help button and Lab Status page. Remember to toggle off when you return — it will not auto-disable.'}
-            </p>
-          </div>
+  return (
+    <div className="space-y-4">
+      {/* Critical mode toggles always at top */}
+      <LabAccessModeCard />
+      <InstructorAwayCard />
 
-          {/* Toggle button */}
-          <div style={{ flexShrink: 0 }}>
-            <div style={{
-              display: 'inline-flex',
-              borderRadius: 10,
-              overflow: 'hidden',
-              border: '1px solid rgba(0,0,0,0.12)',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-            }}>
-              <button
-                onClick={() => isAway && toggleAway(false)}
-                disabled={saving || isLoading}
-                style={{
-                  padding: '9px 18px',
-                  fontSize: '0.83rem', fontWeight: 600,
-                  border: 'none', cursor: (!isAway || saving) ? 'default' : 'pointer',
-                  background: !isAway ? '#16a34a' : '#f1f3f5',
-                  color: !isAway ? 'white' : '#868e96',
-                  transition: 'all 0.2s',
-                  display: 'flex', alignItems: 'center', gap: 7,
-                }}
-              >
-                <CheckCircle2 size={14} /> Available
-              </button>
-              <button
-                onClick={() => !isAway && toggleAway(true)}
-                disabled={saving || isLoading}
-                style={{
-                  padding: '9px 18px',
-                  fontSize: '0.83rem', fontWeight: 600,
-                  border: 'none', cursor: (isAway || saving) ? 'default' : 'pointer',
-                  background: isAway ? '#dc2626' : '#f1f3f5',
-                  color: isAway ? 'white' : '#868e96',
-                  transition: 'all 0.2s',
-                  display: 'flex', alignItems: 'center', gap: 7,
-                }}
-              >
-                {saving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Clock size={14} />}
-                Away
-              </button>
-            </div>
-          </div>
+      {/* Auto-grouped category cards */}
+      {Object.entries(groups).map(([category, items]) => {
+        const CatIcon = CATEGORY_ICONS[category] || Sliders
+        return (
+          <SettingCard key={category} icon={CatIcon} title={category}>
+            {items.map(s => (
+              <GeneralSettingRow
+                key={s.setting_key}
+                setting={s}
+                value={edits[s.setting_key]}
+                onChange={(v) => handleChange(s.setting_key, v)}
+                onBlur={() => flushSave(s.setting_key)}
+                saveState={saveState[s.setting_key]}
+              />
+            ))}
+          </SettingCard>
+        )
+      })}
+
+      {settings.length === 0 && (
+        <div className="settings-empty">
+          <AlertCircle size={32} className="settings-empty-icon mx-auto" aria-hidden="true" />
+          <p className="settings-empty-text">No settings configured yet. Run the migration SQL to seed default settings.</p>
         </div>
-
-        {/* Return time input — always visible for convenience, but highlighted when Away */}
-        <div style={{
-          marginTop: 14,
-          padding: '12px 16px',
-          background: isAway ? 'rgba(220,38,38,0.06)' : '#f9fafb',
-          border: `1px solid ${isAway ? 'rgba(220,38,38,0.2)' : '#e5e7eb'}`,
-          borderRadius: 10,
-          display: 'flex', alignItems: 'center', gap: 12,
-        }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: '0.8rem', fontWeight: 600, color: isAway ? '#991b1b' : '#6b7280', display: 'block', marginBottom: 4 }}>
-              Expected Return Time
-            </label>
-            <input
-              type="text"
-              value={returnTime}
-              onChange={e => setReturnTime(e.target.value)}
-              placeholder="e.g. 2:30 PM"
-              maxLength={20}
-              style={{
-                width: '100%', maxWidth: 180, padding: '7px 12px',
-                border: `1px solid ${isAway ? '#fca5a5' : '#d1d5db'}`,
-                borderRadius: 8, fontSize: '0.88rem',
-                background: 'white', color: '#1f2937',
-                outline: 'none',
-              }}
-            />
-          </div>
-          {isAway && timeIsDirty && (
-            <button
-              onClick={saveReturnTime}
-              disabled={saving}
-              style={{
-                padding: '8px 16px', borderRadius: 8,
-                background: '#dc2626', color: 'white',
-                border: 'none', fontSize: '0.82rem', fontWeight: 600,
-                cursor: saving ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', gap: 6,
-              }}
-            >
-              {saving ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={12} />}
-              Update Time
-            </button>
-          )}
-        </div>
-
-        {/* Hint */}
-        <p style={{
-          margin: '12px 0 0',
-          fontSize: '0.77rem',
-          color: isAway ? 'rgba(153,27,27,0.6)' : 'rgba(107,114,128,0.6)',
-          borderTop: `1px solid ${isAway ? 'rgba(220,38,38,0.12)' : '#e5e7eb'}`,
-          paddingTop: 10,
-        }}>
-          {isAway
-            ? 'This will NOT auto-disable. Remember to toggle back to Available when you return from your meeting.'
-            : 'Changes take effect immediately for all student help requests and the Lab Status kiosk.'}
-        </p>
-      </div>
+      )}
     </div>
   )
 }
 
+// One row inside the General-tab category cards
+function GeneralSettingRow({ setting, value, onChange, onBlur, saveState }) {
+  const meta = SETTING_META[setting.setting_key] || {}
+  const inputType = meta.type || 'text'
+  const label = meta.label || setting.setting_key
+  const helper = meta.desc || setting.description || ''
+  const inputId = `setting-input-${setting.setting_key}`
+
+  // ── Custom day-of-week picker for lab_visible_days ──
+  if (setting.setting_key === 'lab_visible_days') {
+    const DAY_LABELS = ['S', 'M', 'T', 'W', 'Th', 'F', 'S']
+    const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    const currentDays = (value || '').split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d))
+
+    const toggleDay = (dayNum) => {
+      const next = currentDays.includes(dayNum)
+        ? currentDays.filter(d => d !== dayNum)
+        : [...currentDays, dayNum].sort((a, b) => a - b)
+      onChange(next.join(','))
+    }
+
+    return (
+      <SettingRow
+        id={`setting-${setting.setting_key}`}
+        label={label}
+        helper={helper}
+        details={meta.details}
+      >
+        <div className="settings-day-picker" role="group" aria-label="Lab open days">
+          {DAY_LABELS.map((dayLabel, idx) => (
+            <button
+              key={idx}
+              type="button"
+              className="settings-day-btn"
+              aria-pressed={currentDays.includes(idx)}
+              aria-label={DAY_NAMES[idx]}
+              onClick={() => toggleDay(idx)}
+            >
+              {dayLabel}
+            </button>
+          ))}
+        </div>
+        <SavedIndicator state={saveState} />
+      </SettingRow>
+    )
+  }
+
+  // ── Standard text/number/date/email input ──
+  const inputClass =
+    inputType === 'number' ? 'settings-input--num' :
+    inputType === 'date'   ? 'settings-input--date' :
+    inputType === 'email'  ? 'settings-input--email' :
+                             'settings-input--text'
+
+  return (
+    <SettingRow
+      id={`setting-${setting.setting_key}`}
+      label={label}
+      labelFor={inputId}
+      helper={helper}
+      details={meta.details}
+    >
+      <DebouncedInput
+        id={inputId}
+        type={inputType}
+        value={value ?? ''}
+        onChange={onChange}
+        onBlur={onBlur}
+        className={inputClass}
+      />
+      <SavedIndicator state={saveState} />
+    </SettingRow>
+  )
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// DASHBOARD SETTINGS
+// DASHBOARD SETTINGS — instructor dashboard defaults
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function DashboardSettings() {
   const { profile } = useAuth()
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
-
-  // null = loading, true/false = loaded value
-  const [dayViewDefault, setDayViewDefault] = useState(null)
-  const [tempAccessDefault, setTempAccessDefault] = useState(null)
-  const [saving, setSaving] = useState('')   // '' | 'day_view' | 'temp_access'
+  const [values, setValues] = useState({
+    dashboard_day_view_expanded: null,
+    dashboard_temp_access_expanded: null,
+  })
+  const [saveState, setSaveState] = useState({})  // key -> 'saving' | 'saved'
 
   // ── Fetch current values ──
   const fetchDefaults = useCallback(async () => {
@@ -836,33 +1639,38 @@ function DashboardSettings() {
         const row = (data || []).find(r => r.setting_key === key)
         return row ? row.setting_value === 'true' : fallback
       }
-      setDayViewDefault(get('dashboard_day_view_expanded', true))
-      setTempAccessDefault(get('dashboard_temp_access_expanded', false))
+      setValues({
+        dashboard_day_view_expanded: get('dashboard_day_view_expanded', true),
+        dashboard_temp_access_expanded: get('dashboard_temp_access_expanded', false),
+      })
     } catch {
-      setDayViewDefault(true)
-      setTempAccessDefault(false)
+      setValues({
+        dashboard_day_view_expanded: true,
+        dashboard_temp_access_expanded: false,
+      })
     }
   }, [])
 
   useEffect(() => { fetchDefaults() }, [fetchDefaults])
 
-  // Realtime sync if another session changes it
+  // Realtime sync
   useEffect(() => {
-    const ch = supabase.channel('dash-settings-sync')
+    const channelId = `dash-settings-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const ch = supabase.channel(channelId)
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.dashboard_day_view_expanded',
-      }, (p) => { if (p.new?.setting_value !== undefined) setDayViewDefault(p.new.setting_value === 'true') })
+      }, (p) => { if (p.new?.setting_value !== undefined) setValues(v => ({ ...v, dashboard_day_view_expanded: p.new.setting_value === 'true' })) })
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.dashboard_temp_access_expanded',
-      }, (p) => { if (p.new?.setting_value !== undefined) setTempAccessDefault(p.new.setting_value === 'true') })
+      }, (p) => { if (p.new?.setting_value !== undefined) setValues(v => ({ ...v, dashboard_temp_access_expanded: p.new.setting_value === 'true' })) })
       .subscribe()
     return () => supabase.removeChannel(ch)
   }, [])
 
-  const applyToggle = async (key, newVal, savingKey, setter) => {
-    setSaving(savingKey)
+  const applyToggle = async (key, newVal) => {
+    setSaveState(prev => ({ ...prev, [key]: 'saving' }))
     try {
       const { data: rows, error } = await supabase
         .from('settings')
@@ -871,10 +1679,9 @@ function DashboardSettings() {
         .select()
       if (error) throw error
       if (!rows || rows.length === 0) {
-        // Row doesn't exist yet — insert it
         const descs = {
-          dashboard_day_view_expanded:   'Whether the Day View card is expanded by default on the instructor dashboard',
-          dashboard_temp_access_expanded:'Whether the Active Temp Access card is expanded by default on the instructor dashboard',
+          dashboard_day_view_expanded:    'Whether the Day View card is expanded by default on the instructor dashboard',
+          dashboard_temp_access_expanded: 'Whether the Active Temp Access card is expanded by default on the instructor dashboard',
         }
         await supabase.from('settings').insert({
           setting_key: key,
@@ -885,114 +1692,72 @@ function DashboardSettings() {
           updated_by: userName,
         })
       }
-      setter(newVal)
-      toast.success('Dashboard default updated')
+      setValues(v => ({ ...v, [key]: newVal }))
+      setSaveState(prev => ({ ...prev, [key]: 'saved' }))
+      setTimeout(() => setSaveState(prev => {
+        if (prev[key] !== 'saved') return prev
+        const next = { ...prev }; delete next[key]; return next
+      }), 2000)
     } catch (err) {
+      setSaveState(prev => { const next = { ...prev }; delete next[key]; return next })
       toast.error('Failed to save: ' + err.message)
-    } finally {
-      setSaving('')
     }
   }
 
-  const isLoading = dayViewDefault === null || tempAccessDefault === null
+  const isLoading = values.dashboard_day_view_expanded === null || values.dashboard_temp_access_expanded === null
 
-  // A reusable toggle row
-  const ToggleRow = ({ label, desc, value, onToggle, savingKey }) => {
-    const isSavingThis = saving === savingKey
+  if (isLoading) {
     return (
-      <div className="px-5 py-4 flex items-center justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-surface-800">{label}</div>
-          <div className="text-xs text-surface-400 mt-0.5">{desc}</div>
-        </div>
-        <div style={{ display: 'inline-flex', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.12)', boxShadow: '0 1px 3px rgba(0,0,0,0.07)', flexShrink: 0 }}>
-          <button
-            onClick={() => !value && onToggle(true)}
-            disabled={isSavingThis || value === null}
-            style={{
-              padding: '7px 16px', fontSize: '0.8rem', fontWeight: 600,
-              border: 'none', cursor: value ? 'default' : 'pointer',
-              background: value ? '#228be6' : '#f1f3f5',
-              color: value ? 'white' : '#868e96',
-              transition: 'all 0.15s',
-              display: 'flex', alignItems: 'center', gap: 6,
-            }}
-          >
-            {isSavingThis && value ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-            Expanded
-          </button>
-          <button
-            onClick={() => value && onToggle(false)}
-            disabled={isSavingThis || value === null}
-            style={{
-              padding: '7px 16px', fontSize: '0.8rem', fontWeight: 600,
-              border: 'none', cursor: !value ? 'default' : 'pointer',
-              background: !value ? '#495057' : '#f1f3f5',
-              color: !value ? 'white' : '#868e96',
-              transition: 'all 0.15s',
-              display: 'flex', alignItems: 'center', gap: 6,
-            }}
-          >
-            {isSavingThis && !value ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-            Collapsed
-          </button>
-        </div>
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading dashboard settings…</p>
       </div>
     )
   }
 
   return (
     <div className="space-y-4">
-      {/* ── Instructor Dashboard Defaults ── */}
-      <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
-        <div className="px-5 py-3 border-b border-surface-100 flex items-center gap-2">
-          <LayoutDashboard size={15} className="text-brand-500" />
-          <h3 className="text-sm font-semibold text-surface-900">Instructor Dashboard — Default Layout</h3>
-        </div>
-
-        {isLoading ? (
-          <div className="py-10 text-center text-surface-400">
-            <Loader2 size={20} className="mx-auto mb-2 animate-spin" />
-            <p className="text-xs">Loading dashboard settings…</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-surface-100">
-            <ToggleRow
-              label="Day View — Default State"
-              desc="Whether the Day View card starts expanded or collapsed when the instructor opens the dashboard."
-              value={dayViewDefault}
-              savingKey="day_view"
-              onToggle={(v) => applyToggle('dashboard_day_view_expanded', v, 'day_view', setDayViewDefault)}
+      <SettingCard
+        icon={LayoutDashboard}
+        title="Instructor Dashboard — Default Layout"
+        footer={
+          <>
+            <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
+            <span>
+              These settings control the <strong>initial</strong> state on first load. Once an instructor manually
+              expands or collapses a card, their preference is saved in their browser and takes priority over this
+              setting for that device. Clearing browser data or using a new device will reset back to these defaults.
+            </span>
+          </>
+        }
+      >
+        {DASHBOARD_SETTINGS.map(s => (
+          <SettingRow
+            key={s.key}
+            id={`setting-${s.key}`}
+            label={s.label}
+            helper={s.desc}
+            details={s.details}
+          >
+            <SegmentedToggle
+              value={values[s.key] ? 'expanded' : 'collapsed'}
+              ariaLabel={s.label}
+              options={[
+                { value: 'expanded', label: 'Expanded' },
+                { value: 'collapsed', label: 'Collapsed' },
+              ]}
+              onChange={(v) => applyToggle(s.key, v === 'expanded')}
             />
-            <ToggleRow
-              label="Active Temp Access — Default State"
-              desc="Whether the Active Temp Access card starts expanded or collapsed when the instructor opens the dashboard."
-              value={tempAccessDefault}
-              savingKey="temp_access"
-              onToggle={(v) => applyToggle('dashboard_temp_access_expanded', v, 'temp_access', setTempAccessDefault)}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* ── Note about localStorage ── */}
-      <div className="bg-surface-50 border border-surface-200 rounded-xl px-5 py-4 flex gap-3">
-        <AlertCircle size={16} className="text-surface-400 shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-medium text-surface-700">How these defaults work</p>
-          <p className="text-xs text-surface-500 mt-1 leading-relaxed">
-            These settings control the <strong>initial</strong> state on first load. Once an instructor manually
-            expands or collapses a card, their preference is saved in their browser and takes priority over this
-            setting for that device. Clearing browser data or using a new device will reset back to these defaults.
-          </p>
-        </div>
-      </div>
+            <SavedIndicator state={saveState[s.key]} />
+          </SettingRow>
+        ))}
+      </SettingCard>
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WEEKLY LABS SETTINGS
+// WEEKLY LABS SETTINGS — Mark All Done reminder textarea
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function WeeklyLabsSettings() {
@@ -1001,10 +1766,13 @@ function WeeklyLabsSettings() {
   const [message, setMessage] = useState('')
   const [savedMessage, setSavedMessage] = useState('')
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const [saveState, setSaveState] = useState(null)
+  const debounceRef = useRef(null)
+  const messageId = useId()
 
-  // Fetch current reminder message
+  // Fetch current message
   useEffect(() => {
+    let cancelled = false
     async function load() {
       try {
         const { data } = await supabase
@@ -1012,439 +1780,202 @@ function WeeklyLabsSettings() {
           .select('setting_value')
           .eq('setting_key', 'alldone_weekly_reminder')
           .maybeSingle()
+        if (cancelled) return
         const val = data?.setting_value || ''
         setMessage(val)
         setSavedMessage(val)
       } catch {
+        if (cancelled) return
         setMessage('')
         setSavedMessage('')
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     load()
+    return () => { cancelled = true }
   }, [])
 
-  const isDirty = message !== savedMessage
-
-  const handleSave = async () => {
-    setSaving(true)
+  const persistMessage = useCallback(async (val) => {
+    setSaveState('saving')
     try {
+      const trimmed = val.trim()
       const { data: rows, error } = await supabase
         .from('settings')
         .update({
-          setting_value: message.trim(),
+          setting_value: trimmed,
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
         .eq('setting_key', 'alldone_weekly_reminder')
         .select()
-
       if (error) throw error
-
       if (!rows || rows.length === 0) {
-        // Row doesn't exist yet — insert it
         await supabase.from('settings').insert({
           setting_key: 'alldone_weekly_reminder',
-          setting_value: message.trim(),
+          setting_value: trimmed,
           description: 'Optional instructor reminder message shown in the Mark All Done popup on the Weekly Labs Tracker',
           category: 'Weekly Labs',
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
       }
-
-      setSavedMessage(message.trim())
-      setMessage(message.trim())
-      toast.success(message.trim() ? 'Reminder message saved' : 'Reminder message cleared')
+      setSavedMessage(trimmed)
+      setSaveState('saved')
+      setTimeout(() => setSaveState(s => s === 'saved' ? null : s), 2000)
     } catch (err) {
+      setSaveState(null)
       toast.error('Failed to save: ' + err.message)
-    } finally {
-      setSaving(false)
     }
+  }, [userName])
+
+  const handleChange = (val) => {
+    setMessage(val)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      if (val.trim() !== savedMessage.trim()) persistMessage(val)
+    }, 800)
   }
 
-  const handleClear = () => {
-    setMessage('')
+  // Flush on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        if (message.trim() !== savedMessage.trim()) {
+          persistMessage(message).catch(() => {})
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading…</p>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-4">
-      {/* All Done Reminder Card */}
-      <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
-        <div className="px-5 py-3 border-b border-surface-100 flex items-center gap-2">
-          <MessageSquare size={15} className="text-brand-500" />
-          <h3 className="text-sm font-semibold text-surface-900">Mark All Done — Weekly Reminder</h3>
-        </div>
-
-        {loading ? (
-          <div className="py-10 text-center text-surface-400">
-            <Loader2 size={20} className="mx-auto mb-2 animate-spin" />
-            <p className="text-xs">Loading…</p>
-          </div>
-        ) : (
-          <div className="px-5 py-4 space-y-4">
-            <p className="text-xs text-surface-500 leading-relaxed">
-              This message will appear as an amber reminder banner inside the <strong>Mark All Done</strong> popup
+      <SettingCard
+        icon={MessageSquare}
+        title="Mark All Done — Weekly Reminder"
+        footer={
+          <>
+            <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
+            <span>
+              This message is shared across all instructors and persists until you change or clear it.
+              It appears in the Mark All Done popup for <strong>every student</strong> during the current week.
+              Update it each week as needed, or clear it when there is nothing to remind.
+            </span>
+          </>
+        }
+      >
+        <div className="settings-card-body--padded space-y-3">
+          <div>
+            <p className="text-xs text-surface-500 leading-relaxed mb-2">
+              This message appears as an amber reminder banner inside the <strong>Mark All Done</strong> popup
               on the Weekly Labs Tracker page. Use it to remind yourself to ask students about pending tasks
-              before swiping your badge. Leave it blank to show no banner.
+              before swiping a badge. Leave it blank to show no banner. Auto-saves as you type.
             </p>
 
-            {/* Preview — only shown when there is a message */}
+            {/* Live preview */}
             {message.trim() && (
-              <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
-                <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-500" />
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800 mb-3" role="region" aria-label="Reminder message preview">
+                <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-amber-500" aria-hidden="true" />
                 <span className="leading-snug">{message}</span>
               </div>
             )}
 
-            <div>
-              <label className="text-xs font-semibold text-surface-500 mb-1.5 block">
-                Reminder Message
-              </label>
-              <textarea
-                value={message}
-                onChange={e => setMessage(e.target.value)}
-                placeholder="e.g. Ask students if they have registered for next semester's classes."
-                rows={3}
-                className="input text-sm resize-y w-full"
-                maxLength={500}
-              />
-              <div className="flex justify-between mt-1">
-                <span className="text-[10px] text-surface-400">
-                  {message.length}/500 characters
-                </span>
+            <label htmlFor={messageId} className="text-xs font-semibold text-surface-500 mb-1.5 block">
+              Reminder Message
+            </label>
+            <textarea
+              id={messageId}
+              value={message}
+              onChange={e => handleChange(e.target.value)}
+              placeholder="e.g. Ask students if they have registered for next semester's classes."
+              rows={3}
+              className="settings-input"
+              maxLength={500}
+            />
+            <div className="flex justify-between items-center mt-1">
+              <span className="text-[10px] text-surface-400">
+                {message.length}/500 characters
+              </span>
+              <div className="flex items-center gap-2">
                 {message.trim() && (
                   <button
-                    onClick={handleClear}
-                    className="text-[10px] text-surface-400 hover:text-red-500 transition-colors"
+                    type="button"
+                    onClick={() => handleChange('')}
+                    className="text-[11px] text-surface-400 hover:text-red-500 transition-colors"
                   >
                     Clear message
                   </button>
                 )}
+                <SavedIndicator state={saveState} />
               </div>
             </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={handleSave}
-                disabled={saving || !isDirty}
-                className="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-1.5 transition-colors"
-              >
-                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                {saving ? 'Saving…' : 'Save Message'}
-              </button>
-              {isDirty && (
-                <button
-                  onClick={() => setMessage(savedMessage)}
-                  className="px-4 py-2 rounded-lg bg-surface-100 text-xs font-medium text-surface-600 hover:bg-surface-200 transition-colors flex items-center gap-1.5"
-                >
-                  <RotateCcw size={12} /> Discard
-                </button>
-              )}
-            </div>
           </div>
-        )}
-      </div>
-
-      {/* Info note */}
-      <div className="bg-surface-50 border border-surface-200 rounded-xl px-5 py-4 flex gap-3">
-        <AlertCircle size={16} className="text-surface-400 shrink-0 mt-0.5" />
-        <div>
-          <p className="text-sm font-medium text-surface-700">How this works</p>
-          <p className="text-xs text-surface-500 mt-1 leading-relaxed">
-            The message is shared across all instructors and persists until you change or clear it.
-            It appears in the Mark All Done popup for <strong>every student</strong> during the current week.
-            Update it each week as needed, or clear it when there is nothing to remind.
-          </p>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function GeneralSettings() {
-  const { settings, loading, refresh } = useSettings()
-  const actions = useSettingsActions()
-  const [edits, setEdits] = useState({})
-  const [dirty, setDirty] = useState({})
-
-  useEffect(() => {
-    const map = {}
-    settings.forEach(s => {
-      let val = s.setting_value ?? ''
-      // Format dates for date inputs
-      if (SETTING_META[s.setting_key]?.type === 'date' && val) {
-        val = String(val).substring(0, 10)
-      }
-      map[s.setting_key] = String(val)
-    })
-    setEdits(map)
-    setDirty({})
-  }, [settings])
-
-  const handleChange = (key, value) => {
-    setEdits(prev => ({ ...prev, [key]: value }))
-    const original = settings.find(s => s.setting_key === key)
-    setDirty(prev => ({ ...prev, [key]: String(value) !== String(original?.setting_value ?? '') }))
-  }
-
-  const saveSetting = async (key) => {
-    await actions.updateSetting(key, edits[key] || '')
-    setDirty(prev => ({ ...prev, [key]: false }))
-    refresh()
-  }
-
-  const saveAll = async () => {
-    const dirtyKeys = Object.keys(dirty).filter(k => dirty[k])
-    for (const key of dirtyKeys) {
-      await actions.updateSetting(key, edits[key] || '')
-    }
-    setDirty({})
-    refresh()
-  }
-
-  // Group settings by category
-  const groups = {}
-  settings.forEach(s => {
-    const cat = s.category || 'General'
-    // Skip settings managed elsewhere or no longer relevant
-    if (cat === 'Storage') return    // Google Drive folder IDs - not relevant in Supabase
-    if (cat === 'Evaluation') return // Managed on the Evaluation tab (and the WOC Ratio page itself)
-    if (cat === 'PM') return         // Managed on the Preventive Maintenance page
-    if (cat === 'Weekly Labs') return // Weeks derived from class start/end dates
-    if (cat === 'program_cost') return      // Managed via Program Cost page (tuition rates, delivery modes)
-    if (cat === 'program_revisions') return // Managed via Course Revision tile gear icon
-    if (cat === 'course_proposals') return  // Managed via New Course Proposal tile gear icon
-    if (cat === 'course_revisions') return  // Managed via Course Revision tile gear icon
-    if (cat === 'Dashboard') return  // Managed on the Dashboard Settings tab
-    if (!groups[cat]) groups[cat] = []
-    groups[cat].push(s)
-  })
-
-  const hasDirty = Object.values(dirty).some(Boolean)
-
-  if (loading) return <div className="text-center py-12 text-surface-400">Loading settings...</div>
-
-  return (
-    <div className="space-y-4">
-      {/* ── Lab Access Mode — always first ── */}
-      <LabAccessModeCard />
-
-      {/* ── Instructor Away (Meeting) Mode ── */}
-      <InstructorAwayCard />
-
-      {/* Save All bar */}
-      {hasDirty && (
-        <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2.5 flex items-center justify-between">
-          <span className="text-sm text-brand-700 font-medium">
-            You have unsaved changes ({Object.values(dirty).filter(Boolean).length} settings modified)
-          </span>
-          <button onClick={saveAll} disabled={actions.saving}
-            className="px-4 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1.5 hover:bg-brand-700">
-            {actions.saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save All
-          </button>
-        </div>
-      )}
-
-      {Object.entries(groups).map(([category, items]) => {
-        const CatIcon = CATEGORY_ICONS[category] || Sliders
-        return (
-          <div key={category} className="bg-white rounded-xl border border-surface-200">
-            <div className="px-4 py-3 border-b border-surface-100 flex items-center gap-2">
-              <CatIcon size={15} className="text-brand-500" />
-              <h3 className="text-sm font-semibold text-surface-900">{category}</h3>
-            </div>
-            <div className="divide-y divide-surface-100">
-              {items.map(s => {
-                const meta = SETTING_META[s.setting_key]
-                const inputType = meta?.type || 'text'
-                const label = meta?.label || s.setting_key
-                const desc = meta?.desc || s.description || ''
-                const isDirty = dirty[s.setting_key]
-
-                // Custom day-of-week checkbox control for lab_visible_days
-                if (s.setting_key === 'lab_visible_days') {
-                  const DAY_LABELS = ['S', 'M', 'T', 'W', 'Th', 'F', 'S']
-                  const currentDays = (edits[s.setting_key] || '').split(',').map(d => parseInt(d.trim())).filter(d => !isNaN(d))
-
-                  const toggleDay = (dayNum) => {
-                    const next = currentDays.includes(dayNum)
-                      ? currentDays.filter(d => d !== dayNum)
-                      : [...currentDays, dayNum].sort((a, b) => a - b)
-                    handleChange(s.setting_key, next.join(','))
-                  }
-
-                  return (
-                    <div key={s.setting_key} className={`px-4 py-3 flex items-center gap-3 ${isDirty ? 'bg-yellow-50' : ''}`}>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-surface-700">{label}</div>
-                        {desc && <div className="text-xs text-surface-400 mt-0.5">Select days the lab is open</div>}
-                      </div>
-                      <div className="flex gap-1">
-                        {DAY_LABELS.map((dayLabel, idx) => {
-                          const isActive = currentDays.includes(idx)
-                          return (
-                            <button
-                              key={idx}
-                              onClick={() => toggleDay(idx)}
-                              className={`w-8 h-8 rounded-lg text-xs font-bold transition-all ${
-                                isActive
-                                  ? 'bg-brand-600 text-white shadow-sm'
-                                  : 'bg-surface-100 text-surface-400 hover:bg-surface-200'
-                              }`}
-                            >
-                              {dayLabel}
-                            </button>
-                          )
-                        })}
-                      </div>
-                      <button onClick={() => saveSetting(s.setting_key)}
-                        disabled={actions.saving || !isDirty}
-                        className={`p-2 rounded-lg transition-colors ${isDirty ? 'hover:bg-brand-50 text-brand-600' : 'text-surface-300'}`}
-                        title="Save this setting">
-                        <Save size={14} />
-                      </button>
-                    </div>
-                  )
-                }
-
-                return (
-                  <div key={s.setting_key} className={`px-4 py-3 flex items-center gap-3 ${isDirty ? 'bg-yellow-50' : ''}`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-surface-700">{label}</div>
-                      {desc && <div className="text-xs text-surface-400 mt-0.5">{desc}</div>}
-                    </div>
-                    <input
-                      type={inputType}
-                      value={edits[s.setting_key] ?? ''}
-                      onChange={e => handleChange(s.setting_key, e.target.value)}
-                      className={`input text-sm ${inputType === 'number' ? 'w-24' : inputType === 'date' ? 'w-40' : 'w-48'}`}
-                    />
-                    <button onClick={() => saveSetting(s.setting_key)}
-                      disabled={actions.saving || !isDirty}
-                      className={`p-2 rounded-lg transition-colors ${isDirty ? 'hover:bg-brand-50 text-brand-600' : 'text-surface-300'}`}
-                      title="Save this setting">
-                      <Save size={14} />
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )
-      })}
-
-      {settings.length === 0 && (
-        <div className="text-center py-12 text-surface-400">
-          <AlertCircle size={32} className="mx-auto mb-2 opacity-40" />
-          <p className="text-sm">No settings configured yet. Run the migration SQL to seed default settings.</p>
-        </div>
-      )}
+      </SettingCard>
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// EVALUATION SETTINGS (WOC Ratio scoring)
+// EVALUATION (WOC RATIO) SETTINGS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * The seven knobs that drive the WOC Ratio scoring engine. Each entry has the
- * defaults baked into useWOCRatio.js, so even without rows in the settings
- * table the scoring works. Saving here just persists overrides.
- */
-const EVAL_SETTINGS = [
-  {
-    key: 'woc_activity_hours_per_week_student',
-    label: 'Student: Hours/Week Threshold',
-    desc: 'Expected work-log hours per school week to reach a 1.00× activity factor (Student role).',
-    default: '1.5',
-    min: '0', step: '0.1',
-    suffix: 'hr/week',
-  },
-  {
-    key: 'woc_activity_hours_per_week_workstudy',
-    label: 'Work Study: Hours/Week Threshold',
-    desc: 'Expected work-log hours per school week to reach a 1.00× activity factor (Work Study role).',
-    default: '5.0',
-    min: '0', step: '0.5',
-    suffix: 'hr/week',
-  },
-  {
-    key: 'woc_early_pct_per_day',
-    label: 'Early Completion Rate',
-    desc: 'Percentage points awarded per school day a WO was closed before its due date. Multiplied by your share of work-log hours on that WO.',
-    default: '0.5',
-    min: '0', step: '0.1',
-    suffix: '% per day',
-  },
-  {
-    key: 'woc_max_bonus_per_wo',
-    label: 'Max Bonus Per WO',
-    desc: 'Hard cap on the early-completion bonus from any single WO. Prevents one massive early-close from dominating the score.',
-    default: '10',
-    min: '0', step: '1',
-    suffix: '%',
-  },
-  {
-    key: 'woc_closer_ack_bonus_pct',
-    label: 'Closer Acknowledgment Bonus',
-    desc: 'Flat percentage added when a user clicks Close on an early-completed WO they\u2019ve worked on.',
-    default: '2',
-    min: '0', step: '0.5',
-    suffix: '%',
-  },
-  {
-    key: 'woc_min_closer_hours_for_ack',
-    label: 'Minimum Hours for Closer Bonus',
-    desc: 'Minimum hours a user must have logged on a WO to qualify for the closer acknowledgment bonus.',
-    default: '0.25',
-    min: '0', step: '0.05',
-    suffix: 'hr',
-  },
-  {
-    key: 'woc_stale_threshold_days',
-    label: 'Stale Threshold',
-    desc: 'School days an open WO can go without an update before the stale penalty starts (\u22121% per day past the threshold).',
-    default: '4',
-    min: '1', step: '1',
-    suffix: 'days',
-  },
-]
 
 function EvaluationSettings() {
-  const { settings, loading, refresh } = useSettings()
+  const { settings, loading } = useSettings()
   const actions = useSettingsActions()
   const [edits, setEdits] = useState({})
-  const [dirty, setDirty] = useState({})
 
-  // Build a quick lookup of the current settings by key.
   const settingsMap = useMemo(() => {
     const m = {}
     settings.forEach(s => { m[s.setting_key] = s.setting_value })
     return m
   }, [settings])
 
-  // Initialize / reset edit state whenever fresh settings come in.
-  // Missing rows fall back to the documented defaults so the UI is fully
-  // populated even before any rows have been seeded.
-  useEffect(() => {
-    const next = {}
-    EVAL_SETTINGS.forEach(es => {
-      const live = settingsMap[es.key]
-      next[es.key] = (live !== undefined && live !== null && live !== '')
-        ? String(live)
-        : es.default
+  const saveFn = useCallback(async (key, value) => {
+    const meta = EVAL_SETTINGS.find(e => e.key === key)
+    if (!meta) return false
+    const valueToSave = (value === '' || value === undefined) ? meta.default : String(value)
+    return await actions.updateSetting(key, valueToSave, {
+      silent: true,
+      category: 'Evaluation',
+      description: meta.desc,
     })
-    setEdits(next)
-    setDirty({})
-  }, [settingsMap])
+  }, [actions])
+
+  const { queueSave, flushSave, saveState, pendingValuesRef } = useAutoSave(saveFn)
+
+  // Sync edits from server, defaulting missing rows to documented defaults
+  useEffect(() => {
+    setEdits(prev => {
+      const next = {}
+      EVAL_SETTINGS.forEach(es => {
+        if (pendingValuesRef.current[es.key] !== undefined) {
+          next[es.key] = prev[es.key] ?? es.default
+          return
+        }
+        const live = settingsMap[es.key]
+        next[es.key] = (live !== undefined && live !== null && live !== '')
+          ? String(live)
+          : es.default
+      })
+      return next
+    })
+  }, [settingsMap, pendingValuesRef])
 
   const handleChange = (key, value) => {
     setEdits(prev => ({ ...prev, [key]: value }))
-    const original = settingsMap[key] ?? EVAL_SETTINGS.find(e => e.key === key)?.default ?? ''
-    setDirty(prev => ({ ...prev, [key]: String(value) !== String(original) }))
+    queueSave(key, value)
   }
 
   const handleResetDefault = (key) => {
@@ -1453,166 +1984,92 @@ function EvaluationSettings() {
     handleChange(key, meta.default)
   }
 
-  const persist = async (key) => {
-    const meta = EVAL_SETTINGS.find(e => e.key === key)
-    if (!meta) return
-    const valueToSave = (edits[key] === '' || edits[key] === undefined)
-      ? meta.default
-      : String(edits[key])
-    await actions.updateSetting(key, valueToSave, {
-      category: 'Evaluation',
-      description: meta.desc
-    })
-    setDirty(prev => ({ ...prev, [key]: false }))
-    refresh()
-  }
-
-  const persistAll = async () => {
-    const dirtyKeys = Object.keys(dirty).filter(k => dirty[k])
-    for (const key of dirtyKeys) {
-      const meta = EVAL_SETTINGS.find(e => e.key === key)
-      if (!meta) continue
-      const valueToSave = (edits[key] === '' || edits[key] === undefined)
-        ? meta.default
-        : String(edits[key])
-      await actions.updateSetting(key, valueToSave, {
-        category: 'Evaluation',
-        description: meta.desc
-      })
-    }
-    setDirty({})
-    refresh()
-  }
-
-  const hasDirty = Object.values(dirty).some(Boolean)
-  const dirtyCount = Object.values(dirty).filter(Boolean).length
-
   if (loading) {
-    return <div className="text-center py-12 text-surface-400">Loading evaluation settings...</div>
+    return (
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading evaluation settings…</p>
+      </div>
+    )
   }
 
   return (
     <div className="space-y-4">
-      {/* Intro / context card */}
-      <div className="bg-white rounded-xl border border-surface-200 p-4">
-        <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0" aria-hidden="true">
-            <Target size={18} className="text-amber-600" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-sm font-semibold text-surface-900 mb-1">WOC Ratio Scoring</h2>
-            <p className="text-xs text-surface-500 leading-relaxed">
-              These seven knobs tune the student evaluation score. Changes take effect immediately
-              on the WOC Ratio page. Custom closed days and US holiday handling are managed separately
-              on the WOC Ratio page itself.
-            </p>
-          </div>
+      {/* Intro context card */}
+      <div className="settings-note">
+        <Target size={16} className="settings-note-icon" aria-hidden="true" />
+        <div className="settings-note-body">
+          <p className="settings-note-title">WOC Ratio Scoring</p>
+          <p className="settings-note-text">
+            These seven knobs tune the student evaluation score. Changes auto-save and take effect immediately
+            on the WOC Ratio page. Custom closed days and US holiday handling are managed separately
+            on the WOC Ratio page itself.
+          </p>
         </div>
       </div>
-
-      {/* Save All bar (only when something is dirty) */}
-      {hasDirty && (
-        <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2.5 flex items-center justify-between">
-          <span className="text-sm text-brand-700 font-medium">
-            You have unsaved changes ({dirtyCount} setting{dirtyCount === 1 ? '' : 's'} modified)
-          </span>
-          <button
-            onClick={persistAll}
-            disabled={actions.saving}
-            className="px-4 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1.5 hover:bg-brand-700"
-          >
-            {actions.saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Save size={12} aria-hidden="true" />} Save All
-          </button>
-        </div>
-      )}
 
       {/* Settings list */}
-      <div className="bg-white rounded-xl border border-surface-200">
-        <div className="px-4 py-3 border-b border-surface-100 flex items-center gap-2">
-          <Sliders size={15} className="text-brand-500" aria-hidden="true" />
-          <h3 className="text-sm font-semibold text-surface-900">Scoring Parameters</h3>
-        </div>
-        <div className="divide-y divide-surface-100">
-          {EVAL_SETTINGS.map(es => {
-            const isDirty = !!dirty[es.key]
-            const isUnset = settingsMap[es.key] === undefined || settingsMap[es.key] === null || settingsMap[es.key] === ''
-            const inputId = `eval-${es.key}`
-            return (
-              <div
-                key={es.key}
-                className={`px-4 py-3 flex items-center gap-3 ${isDirty ? 'bg-yellow-50' : ''}`}
+      <SettingCard icon={Sliders} title="Scoring Parameters">
+        {EVAL_SETTINGS.map(es => {
+          const isUnset = settingsMap[es.key] === undefined || settingsMap[es.key] === null || settingsMap[es.key] === ''
+          const inputId = `eval-${es.key}`
+          const isAtDefault = String(edits[es.key]) === String(es.default)
+          return (
+            <SettingRow
+              key={es.key}
+              id={`setting-${es.key}`}
+              label={es.label}
+              labelFor={inputId}
+              helper={es.desc}
+              details={es.details}
+              defaultHint={isUnset ? `Using default (${es.default}${es.suffix ? ' ' + es.suffix : ''}) — no override saved.` : null}
+            >
+              <DebouncedInput
+                id={inputId}
+                type="number"
+                inputMode="decimal"
+                min={es.min}
+                step={es.step}
+                value={edits[es.key] ?? ''}
+                onChange={(v) => handleChange(es.key, v)}
+                onBlur={() => flushSave(es.key)}
+                className="settings-input--num"
+                aria-describedby={`${inputId}-suffix`}
+                suffix={es.suffix && <span id={`${inputId}-suffix`}>{es.suffix}</span>}
+              />
+              <button
+                type="button"
+                onClick={() => handleResetDefault(es.key)}
+                disabled={isAtDefault}
+                className="settings-icon-btn"
+                title={`Reset to default (${es.default})`}
+                aria-label={`Reset ${es.label} to default value of ${es.default}`}
               >
-                <div className="flex-1 min-w-0">
-                  <label htmlFor={inputId} className="text-sm font-medium text-surface-700 block">
-                    {es.label}
-                  </label>
-                  {es.desc && <div className="text-xs text-surface-400 mt-0.5">{es.desc}</div>}
-                  {isUnset && (
-                    <div className="text-[11px] text-surface-400 mt-1 italic">
-                      Using default — no override saved.
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <input
-                    id={inputId}
-                    type="number"
-                    inputMode="decimal"
-                    min={es.min}
-                    step={es.step}
-                    value={edits[es.key] ?? ''}
-                    onChange={e => handleChange(es.key, e.target.value)}
-                    className="input text-sm w-24 text-right"
-                    aria-describedby={`${inputId}-suffix`}
-                  />
-                  {es.suffix && (
-                    <span id={`${inputId}-suffix`} className="text-xs text-surface-400 w-16">
-                      {es.suffix}
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={() => handleResetDefault(es.key)}
-                  disabled={actions.saving || edits[es.key] === es.default}
-                  className={`p-2 rounded-lg transition-colors ${
-                    edits[es.key] === es.default ? 'text-surface-300' : 'hover:bg-surface-100 text-surface-500'
-                  }`}
-                  title={`Reset to default (${es.default})`}
-                  aria-label={`Reset ${es.label} to default value of ${es.default}`}
-                >
-                  <RotateCcw size={14} aria-hidden="true" />
-                </button>
-                <button
-                  onClick={() => persist(es.key)}
-                  disabled={actions.saving || !isDirty}
-                  className={`p-2 rounded-lg transition-colors ${
-                    isDirty ? 'hover:bg-brand-50 text-brand-600' : 'text-surface-300'
-                  }`}
-                  title="Save this setting"
-                  aria-label={`Save ${es.label}`}
-                >
-                  <Save size={14} aria-hidden="true" />
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      </div>
+                <RotateCcw size={14} aria-hidden="true" />
+              </button>
+              <SavedIndicator state={saveState[es.key]} />
+            </SettingRow>
+          )
+        })}
+      </SettingCard>
 
-      {/* Footer note about closed-day management */}
-      <div className="bg-surface-50 border border-surface-200 rounded-xl px-4 py-3 flex items-start gap-3">
-        <Calendar size={15} className="text-surface-400 mt-0.5 flex-shrink-0" aria-hidden="true" />
-        <p className="text-xs text-surface-500 leading-relaxed">
-          Custom school closed days are managed on the <strong>WOC Ratio</strong> page under the{' '}
-          <em>Closed Days</em> tab. They affect the school-day count used by every penalty and reward here.
-        </p>
+      {/* Footer note about closed days */}
+      <div className="settings-note">
+        <Calendar size={15} className="settings-note-icon" aria-hidden="true" />
+        <div className="settings-note-body">
+          <p className="settings-note-text">
+            Custom school closed days are managed on the <strong>WOC Ratio</strong> page under the{' '}
+            <em>Closed Days</em> tab. They affect the school-day count used by every penalty and reward here.
+          </p>
+        </div>
       </div>
     </div>
   )
 }
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // GENERIC CRUD TABLE SECTION
+// Used by: Categories, Asset Locations, Inventory Locations, Vendors, WO Statuses
+// Functionally preserved from previous version; wrapped in SettingCard for visual consistency.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn, columns, defaultItem, searchable }) {
@@ -1630,27 +2087,15 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
     )
   }, [items, search, searchable, columns])
 
-  const startAdd = () => {
-    setForm({ ...defaultItem })
-    setEditing('new')
-  }
-  const startEdit = (item) => {
-    setForm({ ...item })
-    setEditing(item)
-  }
-  const cancel = () => {
-    setEditing(null)
-    setForm({})
-  }
+  const startAdd = () => { setForm({ ...defaultItem }); setEditing('new') }
+  const startEdit = (item) => { setForm({ ...item }); setEditing(item) }
+  const cancel = () => { setEditing(null); setForm({}) }
 
   const handleSave = async () => {
     try {
-      // Ensure color fields always have a value (prevent empty colors)
       const validated = { ...form }
       columns.forEach(col => {
-        if (col.type === 'color' && !validated[col.key]) {
-          validated[col.key] = '#228be6'
-        }
+        if (col.type === 'color' && !validated[col.key]) validated[col.key] = '#228be6'
       })
 
       if (editing === 'new') {
@@ -1673,29 +2118,43 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
     } catch {}
   }
 
-  if (loading) return <div className="text-center py-12 text-surface-400">Loading...</div>
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading…</p>
+      </div>
+    )
+  }
+
+  // Header right-side actions: search + Add
+  const headerActions = (
+    <>
+      {searchable && items.length > 8 && (
+        <div className="relative">
+          <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search…"
+            className="input text-xs pl-7 w-32"
+            aria-label={`Search ${title}`}
+          />
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={startAdd}
+        className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 px-2 py-1 rounded"
+      >
+        <Plus size={12} aria-hidden="true" /> Add
+      </button>
+    </>
+  )
 
   return (
-    <div className="bg-white rounded-xl border border-surface-200">
-      <div className="px-4 py-3 border-b border-surface-100 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-surface-900 flex items-center gap-2">
-          {Icon && <Icon size={15} className="text-brand-500" />}
-          {title} ({items.length})
-        </h3>
-        <div className="flex items-center gap-2">
-          {searchable && items.length > 8 && (
-            <div className="relative">
-              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" />
-              <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search..." className="input text-xs pl-7 w-32" />
-            </div>
-          )}
-          <button onClick={startAdd} className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1">
-            <Plus size={12} /> Add
-          </button>
-        </div>
-      </div>
-
+    <SettingCard icon={Icon} title={title} count={items.length} actions={headerActions}>
       {/* Add/Edit Form */}
       {editing && (
         <div className="px-4 py-3 bg-brand-50 border-b border-brand-100 space-y-2">
@@ -1705,32 +2164,62 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
           <div className="flex flex-wrap gap-2">
             {columns.filter(col => col.key !== idColumn || editing === 'new').map(col => (
               <div key={col.key} className={`${col.wide ? 'flex-[2]' : 'flex-1'} min-w-[120px]`}>
-                <label className="text-[10px] text-surface-500 font-medium">{col.label}</label>
+                <label className="text-[10px] text-surface-500 font-medium block mb-0.5">{col.label}</label>
                 {col.type === 'select' ? (
-                  <select value={form[col.key] || ''} onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))} className="input text-sm">
+                  <select
+                    value={form[col.key] || ''}
+                    onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
+                    className="input text-sm"
+                  >
                     {col.options.map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                 ) : col.type === 'color' ? (
                   <div className="flex gap-1 items-center">
-                    <input type="color" value={form[col.key] || '#228be6'}
+                    <input
+                      type="color"
+                      value={form[col.key] || '#228be6'}
                       onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
-                      className="w-8 h-8 rounded cursor-pointer border-0" />
-                    <input type="text" value={form[col.key] || ''} onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
-                      className="input text-sm flex-1" placeholder="#228be6" />
+                      className="w-8 h-8 rounded cursor-pointer border-0"
+                      aria-label={`${col.label} color picker`}
+                    />
+                    <input
+                      type="text"
+                      value={form[col.key] || ''}
+                      onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
+                      className="input text-sm flex-1"
+                      placeholder="#228be6"
+                      aria-label={`${col.label} hex value`}
+                    />
                   </div>
                 ) : (
-                  <input type={col.type || 'text'} value={form[col.key] || ''}
+                  <input
+                    type={col.type || 'text'}
+                    value={form[col.key] || ''}
                     onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
-                    className="input text-sm" placeholder={col.placeholder || ''} readOnly={col.key === idColumn} />
+                    className="input text-sm"
+                    placeholder={col.placeholder || ''}
+                    readOnly={col.key === idColumn}
+                  />
                 )}
               </div>
             ))}
           </div>
           <div className="flex gap-2">
-            <button onClick={handleSave} disabled={actions.saving} className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1">
-              {actions.saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Save
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={actions.saving}
+              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 hover:bg-brand-700 disabled:opacity-50"
+            >
+              {actions.saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />} Save
             </button>
-            <button onClick={cancel} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs">Cancel</button>
+            <button
+              type="button"
+              onClick={cancel}
+              className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs hover:bg-surface-200"
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -1758,7 +2247,7 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
                     <td key={col.key} className="px-4 py-2 text-surface-700">
                       {col.type === 'color' ? (
                         <span className="inline-flex items-center gap-1.5">
-                          <span className="w-4 h-4 rounded" style={{ backgroundColor: item[col.key] || '#ccc' }} />
+                          <span className="w-4 h-4 rounded" style={{ backgroundColor: item[col.key] || '#ccc' }} aria-hidden="true" />
                           {String(item[col.key] ?? '')}
                         </span>
                       ) : col.key === 'status' ? (
@@ -1776,8 +2265,24 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
                   ))}
                   <td className="px-4 py-2">
                     <div className="flex gap-1">
-                      <button onClick={() => startEdit(item)} className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600"><Edit3 size={13} /></button>
-                      <button onClick={() => handleDelete(item[idColumn])} className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500"><Trash2 size={13} /></button>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(item)}
+                        className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600"
+                        aria-label={`Edit ${item[idColumn] || 'item'}`}
+                        title="Edit"
+                      >
+                        <Edit3 size={13} aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(item[idColumn])}
+                        className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500"
+                        aria-label={`Delete ${item[idColumn] || 'item'}`}
+                        title="Delete"
+                      >
+                        <Trash2 size={13} aria-hidden="true" />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -1786,47 +2291,75 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
           </table>
         </div>
       )}
-    </div>
+    </SettingCard>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION WRAPPERS
+// LOOKUP-TABLE SECTION WRAPPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function CategoriesSection() {
-  return <CrudSection title="Categories" icon={Tag} useItemsHook={useCategories} useActionsHook={useCategoryActions}
-    idColumn="category_id" columns={[
+  return <CrudSection
+    title="Categories"
+    icon={Tag}
+    useItemsHook={useCategories}
+    useActionsHook={useCategoryActions}
+    idColumn="category_id"
+    columns={[
       { key: 'category_id', label: 'ID' },
       { key: 'category_name', label: 'Name', wide: true },
       { key: 'description', label: 'Description', wide: true },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'] }
-    ]} defaultItem={{ category_name: '', description: '', status: 'Active' }} />
+    ]}
+    defaultItem={{ category_name: '', description: '', status: 'Active' }}
+  />
 }
 
 function AssetLocationsSection() {
-  return <CrudSection title="Asset Locations" icon={MapPin} useItemsHook={useAssetLocations} useActionsHook={useAssetLocationActions}
-    idColumn="location_id" columns={[
+  return <CrudSection
+    title="Asset Locations"
+    icon={MapPin}
+    useItemsHook={useAssetLocations}
+    useActionsHook={useAssetLocationActions}
+    idColumn="location_id"
+    columns={[
       { key: 'location_id', label: 'ID' },
       { key: 'location_name', label: 'Name', wide: true },
       { key: 'description', label: 'Description', wide: true },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'] }
-    ]} defaultItem={{ location_name: '', description: '', status: 'Active' }} />
+    ]}
+    defaultItem={{ location_name: '', description: '', status: 'Active' }}
+  />
 }
 
 function InventoryLocationsSection() {
-  return <CrudSection title="Inventory Locations" icon={Box} useItemsHook={useInventoryLocations} useActionsHook={useInventoryLocationActions}
-    idColumn="location_id" searchable columns={[
+  return <CrudSection
+    title="Inventory Locations"
+    icon={Box}
+    useItemsHook={useInventoryLocations}
+    useActionsHook={useInventoryLocationActions}
+    idColumn="location_id"
+    searchable
+    columns={[
       { key: 'location_id', label: 'ID' },
       { key: 'location_name', label: 'Name', wide: true },
       { key: 'description', label: 'Description', wide: true },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'] }
-    ]} defaultItem={{ location_name: '', description: '', status: 'Active' }} />
+    ]}
+    defaultItem={{ location_name: '', description: '', status: 'Active' }}
+  />
 }
 
 function VendorsSection() {
-  return <CrudSection title="Vendors" icon={Truck} useItemsHook={useVendorsList} useActionsHook={useVendorActions}
-    idColumn="vendor_id" searchable columns={[
+  return <CrudSection
+    title="Vendors"
+    icon={Truck}
+    useItemsHook={useVendorsList}
+    useActionsHook={useVendorActions}
+    idColumn="vendor_id"
+    searchable
+    columns={[
       { key: 'vendor_id', label: 'ID' },
       { key: 'vendor_name', label: 'Name', wide: true },
       { key: 'contact_name', label: 'Contact' },
@@ -1834,12 +2367,19 @@ function VendorsSection() {
       { key: 'email', label: 'Email' },
       { key: 'website', label: 'Website' },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'] }
-    ]} defaultItem={{ vendor_name: '', contact_name: '', phone: '', email: '', website: '', status: 'Active' }} />
+    ]}
+    defaultItem={{ vendor_name: '', contact_name: '', phone: '', email: '', website: '', status: 'Active' }}
+  />
 }
 
 function WOStatusesSection() {
-  return <CrudSection title="Work Order Statuses" icon={ClipboardList} useItemsHook={useWOStatuses} useActionsHook={useWOStatusActions}
-    idColumn="status_id" columns={[
+  return <CrudSection
+    title="Work Order Statuses"
+    icon={ClipboardList}
+    useItemsHook={useWOStatuses}
+    useActionsHook={useWOStatusActions}
+    idColumn="status_id"
+    columns={[
       { key: 'status_id', label: 'ID' },
       { key: 'status_name', label: 'Name' },
       { key: 'description', label: 'Description', wide: true },
@@ -1847,11 +2387,13 @@ function WOStatusesSection() {
       { key: 'display_order', label: 'Order', type: 'number' },
       { key: 'is_closed_status', label: 'Is Closed', type: 'select', options: ['Yes', 'No'] },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'] }
-    ]} defaultItem={{ status_name: '', description: '', color: '#228be6', display_order: 0, is_closed_status: 'No', status: 'Active' }} />
+    ]}
+    defaultItem={{ status_name: '', description: '', color: '#228be6', display_order: 0, is_closed_status: 'No', status: 'Active' }}
+  />
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WEEK CALCULATION HELPER
+// WEEK CALCULATION HELPERS (for Classes section)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsEnd) {
@@ -1877,9 +2419,8 @@ function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsE
   while (current <= end) {
     const wkMon = new Date(current)
     const wkThu = new Date(current)
-    wkThu.setDate(wkThu.getDate() + 3) // Thursday
+    wkThu.setDate(wkThu.getDate() + 3)
 
-    // Determine type
     let type = 'normal'
     if (sbS && sbE && wkMon >= sbS && wkMon <= sbE) {
       type = 'spring_break'
@@ -1915,9 +2456,9 @@ function countClassWeeks(cls) {
   )
   return weeks.filter(w => w.type === 'normal').length
 }
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// CLASSES SECTION (Custom - has dates, enrollment, required hours, week preview)
+// CLASSES SECTION (custom — has dates, enrollment, required hours, week preview)
+// Internal logic preserved from previous version; outer shell updated to SettingCard.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ClassesSection() {
@@ -1933,6 +2474,7 @@ function ClassesSection() {
 
   // Load enrollment data so we can search by student name/email
   useEffect(() => {
+    let cancelled = false
     async function loadEnrollment() {
       try {
         const { data } = await supabase
@@ -1940,6 +2482,7 @@ function ClassesSection() {
           .select('first_name, last_name, email, classes')
           .in('role', ['Student', 'Work Study'])
           .eq('status', 'Active')
+        if (cancelled) return
         const map = {}
         ;(data || []).forEach(s => {
           const courses = (s.classes || '').split(',').map(c => c.trim()).filter(Boolean)
@@ -1957,14 +2500,13 @@ function ClassesSection() {
       }
     }
     loadEnrollment()
+    return () => { cancelled = true }
   }, [])
 
   // Convert empty date strings to null for Supabase
   const cleanDates = (data) => {
     const dateFields = ['start_date', 'end_date', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']
-    dateFields.forEach(f => {
-      if (!data[f] || data[f] === '') data[f] = null
-    })
+    dateFields.forEach(f => { if (!data[f] || data[f] === '') data[f] = null })
     return data
   }
 
@@ -2024,7 +2566,7 @@ function ClassesSection() {
     } catch {}
   }
 
-  // Calculate week preview for the form
+  // Week preview for the form
   const weekPreview = useMemo(() => {
     if (!form.start_date || !form.end_date) return []
     return calculateWeeks(
@@ -2059,56 +2601,67 @@ function ClassesSection() {
   }, [classes, showInactive, search, enrollmentMap])
 
   const inactiveCount = classes.filter(c => c.status === 'Inactive').length
-  const activeCount = classes.filter(c => c.status === 'Active').length
 
-  if (loading) return <div className="text-center py-12 text-surface-400">Loading classes...</div>
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading classes…</p>
+      </div>
+    )
+  }
+
+  // Header right-side actions
+  const headerActions = (
+    <>
+      <div className="relative">
+        <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search classes or students…"
+          className="input text-xs pl-7 w-48"
+          aria-label="Search classes or students"
+        />
+      </div>
+      {inactiveCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowInactive(v => !v)}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+            showInactive
+              ? 'bg-surface-100 text-surface-700 border-surface-200'
+              : 'bg-white text-surface-400 border-surface-200 hover:text-surface-600'
+          }`}
+          title={showInactive ? 'Hide inactive classes' : `Show ${inactiveCount} inactive class${inactiveCount !== 1 ? 'es' : ''}`}
+        >
+          {showInactive ? <EyeOff size={12} aria-hidden="true" /> : <Eye size={12} aria-hidden="true" />}
+          {showInactive ? 'Hide Inactive' : `+${inactiveCount} Inactive`}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={startAdd}
+        className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 px-2 py-1 rounded"
+      >
+        <Plus size={12} aria-hidden="true" /> Add Class
+      </button>
+    </>
+  )
+
+  const titleCount = displayedClasses.length === classes.length
+    ? classes.length
+    : `${displayedClasses.length} of ${classes.length}`
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-surface-200">
-        {/* Header */}
-        <div className="px-4 py-3 border-b border-surface-100 flex flex-wrap items-center gap-2">
-          <h3 className="text-sm font-semibold text-surface-900 flex items-center gap-2 mr-auto">
-            <GraduationCap size={15} className="text-brand-500" />
-            Classes
-            <span className="text-surface-400 font-normal">
-              ({displayedClasses.length}{!showInactive && inactiveCount > 0 ? ` of ${classes.length}` : ''})
-            </span>
-          </h3>
-
-          {/* Search */}
-          <div className="relative">
-            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search classes or students…"
-              className="input text-xs pl-7 w-48"
-            />
-          </div>
-
-          {/* Inactive toggle */}
-          {inactiveCount > 0 && (
-            <button
-              onClick={() => setShowInactive(v => !v)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                showInactive
-                  ? 'bg-surface-100 text-surface-700 border-surface-200'
-                  : 'bg-white text-surface-400 border-surface-200 hover:text-surface-600'
-              }`}
-              title={showInactive ? 'Hide inactive classes' : `Show ${inactiveCount} inactive class${inactiveCount !== 1 ? 'es' : ''}`}
-            >
-              {showInactive ? <EyeOff size={12} /> : <Eye size={12} />}
-              {showInactive ? 'Hide Inactive' : `+${inactiveCount} Inactive`}
-            </button>
-          )}
-
-          <button onClick={startAdd} className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1">
-            <Plus size={12} /> Add Class
-          </button>
-        </div>
-
+      <SettingCard
+        icon={GraduationCap}
+        title="Classes"
+        count={titleCount}
+        actions={headerActions}
+      >
         {/* Add/Edit Form */}
         {editing && (
           <div className="px-4 py-4 bg-brand-50 border-b border-brand-100 space-y-3">
@@ -2129,7 +2682,8 @@ function ClassesSection() {
               </div>
               <div>
                 <label className="text-[10px] text-surface-500 font-medium">Required Hours/wk</label>
-                <input type="number" value={form.required_hours} onChange={e => setForm(f => ({ ...f, required_hours: parseFloat(e.target.value) || 0 }))}
+                <input type="number" value={form.required_hours}
+                  onChange={e => setForm(f => ({ ...f, required_hours: parseFloat(e.target.value) || 0 }))}
                   className="input text-sm" />
               </div>
               <div>
@@ -2184,10 +2738,9 @@ function ClassesSection() {
               </div>
             </div>
 
-            {/* Date hint */}
             {form.start_date && form.end_date && form.tracking_type !== 'None' && (
               <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
-                <Calendar size={13} />
+                <Calendar size={13} aria-hidden="true" />
                 Start/End dates determine the weekly lab tracker weeks. Weeks run Monday–Thursday.
               </div>
             )}
@@ -2211,11 +2764,10 @@ function ClassesSection() {
               </div>
             </div>
 
-            {/* Week Preview */}
             {weekPreview.length > 0 && (
               <div className="bg-white border border-surface-200 rounded-lg p-3">
                 <div className="text-xs font-semibold text-surface-700 flex items-center gap-1.5 mb-2">
-                  <Calendar size={13} className="text-brand-500" />
+                  <Calendar size={13} className="text-brand-500" aria-hidden="true" />
                   Week Preview ({normalWeekCount} weeks)
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -2226,27 +2778,38 @@ function ClassesSection() {
                       'bg-emerald-50 border-emerald-200 text-emerald-700'
                     }`}>
                       <div className="font-bold">{w.num}</div>
-                      <div className="opacity-75">{w.start}-{w.end}</div>
+                      <div className="opacity-75">{w.start}–{w.end}</div>
                     </div>
                   ))}
                 </div>
                 <div className="flex gap-3 mt-2 text-[10px] text-surface-500">
-                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-200" /> Class Week</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-200" aria-hidden="true" /> Class Week</span>
                   {weekPreview.some(w => w.type === 'spring_break') && (
-                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-200" /> Spring Break</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-blue-200" aria-hidden="true" /> Spring Break</span>
                   )}
                   {weekPreview.some(w => w.type === 'finals') && (
-                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-200" /> Finals</span>
+                    <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-red-200" aria-hidden="true" /> Finals</span>
                   )}
                 </div>
               </div>
             )}
 
             <div className="flex gap-2">
-              <button onClick={handleSave} disabled={actions.saving} className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1">
-                {actions.saving ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Save
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={actions.saving}
+                className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 hover:bg-brand-700 disabled:opacity-50"
+              >
+                {actions.saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />} Save
               </button>
-              <button onClick={() => { setEditing(null); setForm({}) }} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs">Cancel</button>
+              <button
+                type="button"
+                onClick={() => { setEditing(null); setForm({}) }}
+                className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs hover:bg-surface-200"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}
@@ -2312,7 +2875,7 @@ function ClassesSection() {
                             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 cursor-default"
                             title={enrolledStudents.map(s => s.name).join('\n')}
                           >
-                            <Users size={10} /> {enrolledCount}
+                            <Users size={10} aria-hidden="true" /> {enrolledCount}
                           </span>
                         ) : (
                           <span className="text-xs text-surface-300">—</span>
@@ -2337,21 +2900,25 @@ function ClassesSection() {
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex gap-1">
-                          <button onClick={() => setEnrollmentClass(cls)} title="Manage Enrollment"
+                          <button type="button" onClick={() => setEnrollmentClass(cls)}
+                            title="Manage Enrollment" aria-label={`Manage enrollment for ${cls.course_id}`}
                             className="p-1 rounded hover:bg-blue-50 text-surface-400 hover:text-blue-600">
-                            <Users size={13} />
+                            <Users size={13} aria-hidden="true" />
                           </button>
-                          <button onClick={() => setDuplicateClass(cls)} title="Duplicate Class (new semester)"
+                          <button type="button" onClick={() => setDuplicateClass(cls)}
+                            title="Duplicate Class (new semester)" aria-label={`Duplicate ${cls.course_id} for new semester`}
                             className="p-1 rounded hover:bg-violet-50 text-surface-400 hover:text-violet-600">
-                            <Copy size={13} />
+                            <Copy size={13} aria-hidden="true" />
                           </button>
-                          <button onClick={() => startEdit(cls)} title="Edit Class"
+                          <button type="button" onClick={() => startEdit(cls)}
+                            title="Edit Class" aria-label={`Edit ${cls.course_id}`}
                             className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600">
-                            <Edit3 size={13} />
+                            <Edit3 size={13} aria-hidden="true" />
                           </button>
-                          <button onClick={() => handleDelete(cls.class_id)} title="Delete Class"
+                          <button type="button" onClick={() => handleDelete(cls.class_id)}
+                            title="Delete Class" aria-label={`Delete ${cls.course_id}`}
                             className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500">
-                            <Trash2 size={13} />
+                            <Trash2 size={13} aria-hidden="true" />
                           </button>
                         </div>
                       </td>
@@ -2362,7 +2929,7 @@ function ClassesSection() {
             </table>
           </div>
         )}
-      </div>
+      </SettingCard>
 
       {/* Enrollment Modal */}
       {enrollmentClass && (
@@ -2383,7 +2950,7 @@ function ClassesSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DUPLICATE CLASS MODAL
+// DUPLICATE CLASS MODAL (preserved as-is)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
@@ -2398,6 +2965,12 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
   })
   const [saving, setSaving] = useState(false)
 
+  const cleanDates = (data) => {
+    const dateFields = ['start_date', 'end_date', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']
+    dateFields.forEach(f => { if (!data[f] || data[f] === '') data[f] = null })
+    return data
+  }
+
   const weekPreview = useMemo(() => {
     if (!form.start_date || !form.end_date) return []
     return calculateWeeks(
@@ -2409,26 +2982,22 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
   const normalWeekCount = weekPreview.filter(w => w.type === 'normal').length
 
-  const cleanDates = (data) => {
-    const dateFields = ['start_date', 'end_date', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']
-    dateFields.forEach(f => { if (!data[f] || data[f] === '') data[f] = null })
-    return data
-  }
-
   const handleSave = async () => {
-    if (!form.semester.trim()) { toast.error('Please enter a semester.'); return }
-    if (!form.start_date || !form.end_date) { toast.error('Start and End dates are required.'); return }
+    if (!form.semester.trim() || !form.start_date || !form.end_date) {
+      toast.error('Semester, start date, and end date are required')
+      return
+    }
     setSaving(true)
     try {
-      const newClass = cleanDates({
+      const dup = cleanDates({
         course_id: cls.course_id,
         course_name: cls.course_name,
         required_hours: cls.required_hours,
         instructor: cls.instructor,
+        status: 'Active',
         tracking_type: cls.tracking_type || 'Weekly',
         requires_volunteer_hours: cls.requires_volunteer_hours || false,
-        status: 'Active',
-        semester: form.semester,
+        semester: form.semester.trim(),
         start_date: form.start_date,
         end_date: form.end_date,
         spring_break_start: form.spring_break_start,
@@ -2436,10 +3005,11 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         finals_start: form.finals_start,
         finals_end: form.finals_end,
       })
-      await actions.addItem(newClass)
+      await actions.addItem(dup)
+      toast.success(`Class duplicated for ${form.semester.trim()}!`)
       onSaved()
-    } catch {
-      // error already toasted by addItem
+    } catch (err) {
+      toast.error(err.message || 'Failed to duplicate class')
     } finally {
       setSaving(false)
     }
@@ -2447,50 +3017,31 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        {/* Header */}
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-bold text-surface-900 flex items-center gap-2">
-              <Copy size={14} className="text-violet-500" /> Duplicate Class
+              <Copy size={14} className="text-violet-500" aria-hidden="true" /> Duplicate Class
             </h3>
-            <p className="text-xs text-surface-500 mt-0.5">
-              Copying <span className="font-medium">{cls.course_id}</span> — {cls.course_name}
-            </p>
+            <p className="text-xs text-surface-500 mt-0.5">{cls.course_id} — {cls.course_name}</p>
           </div>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+          <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close">
+            <X size={16} aria-hidden="true" />
+          </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {/* Info banner */}
-          <div className="flex items-start gap-2 text-xs bg-violet-50 text-violet-700 border border-violet-200 rounded-lg px-3 py-2.5">
-            <Users size={13} className="mt-0.5 shrink-0" />
-            <span>A new class will be created with the same course details, hours, and instructor. <strong>Enrolled students will not be copied</strong> — you can enroll them separately.</span>
+        <div className="px-5 py-4 space-y-3 overflow-y-auto">
+          <div className="bg-violet-50 border border-violet-200 rounded-lg px-3 py-2 text-xs text-violet-700 flex items-start gap-2">
+            <AlertCircle size={14} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span>This will create a copy of <strong>{cls.course_id}</strong> with new dates for the semester below. Enrollment will not be carried over.</span>
           </div>
 
-          {/* Carried-over fields preview */}
-          <div className="bg-surface-50 rounded-lg px-3 py-2.5 space-y-1">
-            <div className="text-[10px] font-semibold text-surface-500 uppercase tracking-wide mb-1.5">Carried Over From Original</div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-surface-600">
-              <span><span className="text-surface-400">Course ID:</span> {cls.course_id || '—'}</span>
-              <span><span className="text-surface-400">Name:</span> {cls.course_name || '—'}</span>
-              <span><span className="text-surface-400">Hours/wk:</span> {cls.required_hours || 0}</span>
-              <span><span className="text-surface-400">Instructor:</span> {cls.instructor || '—'}</span>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] text-surface-500 font-medium">New Semester *</label>
+              <input value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
+                className="input text-sm" placeholder="Fall 2026" />
             </div>
-          </div>
-
-          {/* New fields */}
-          <div>
-            <label className="text-[10px] text-surface-500 font-medium">Semester *</label>
-            <input
-              value={form.semester}
-              onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
-              className="input text-sm"
-              placeholder="Fall 2026"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-surface-500 font-medium">Start Date *</label>
               <input type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
@@ -2501,7 +3052,7 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <div>
               <label className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
               <input type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
@@ -2520,12 +3071,11 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
             </div>
           </div>
 
-          {/* Week preview */}
           {weekPreview.length > 0 && (
             <div className="bg-white border border-surface-200 rounded-lg p-3">
               <div className="text-xs font-semibold text-surface-700 flex items-center gap-1.5 mb-2">
-                <Calendar size={13} className="text-brand-500" />
-                Week Preview ({normalWeekCount} class weeks)
+                <Calendar size={13} className="text-brand-500" aria-hidden="true" />
+                Week Preview ({normalWeekCount} weeks)
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {weekPreview.map((w, i) => (
@@ -2544,11 +3094,15 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         </div>
 
         <div className="px-5 py-3 border-t border-surface-100 flex gap-2">
-          <button onClick={handleSave} disabled={saving} className="btn-primary text-sm gap-1.5 flex-1">
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+          <button type="button" onClick={handleSave} disabled={saving}
+            className="btn-primary text-sm gap-1.5 flex-1">
+            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
             {saving ? 'Creating…' : 'Create Duplicate'}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+          <button type="button" onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">
+            Cancel
+          </button>
         </div>
       </div>
     </div>
@@ -2556,7 +3110,7 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ENROLLMENT MODAL
+// ENROLLMENT MODAL (preserved as-is)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function EnrollmentModal({ cls, onClose }) {
@@ -2566,8 +3120,8 @@ function EnrollmentModal({ cls, onClose }) {
   const [search, setSearch] = useState('')
   const [enrolled, setEnrolled] = useState({})
 
-  // Load students and determine enrollment
   useEffect(() => {
+    let cancelled = false
     async function load() {
       setLoading(true)
       try {
@@ -2577,27 +3131,26 @@ function EnrollmentModal({ cls, onClose }) {
           .eq('status', 'Active')
           .in('role', ['Student', 'Work Study'])
           .order('last_name')
+        if (cancelled) return
 
         const courseId = cls.course_id || ''
         const studentList = (data || []).filter(s => s.time_clock_only !== 'Yes')
         setStudents(studentList)
 
-        // Determine who is currently enrolled
         const enrolledMap = {}
         studentList.forEach(s => {
           const classes = (s.classes || '').split(',').map(c => c.trim())
-          if (classes.includes(courseId)) {
-            enrolledMap[s.id] = true
-          }
+          if (classes.includes(courseId)) enrolledMap[s.id] = true
         })
         setEnrolled(enrolledMap)
       } catch (err) {
-        console.error('Error loading students:', err)
+        if (!cancelled) console.error('Error loading students:', err)
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     load()
+    return () => { cancelled = true }
   }, [cls])
 
   const toggle = (id) => {
@@ -2612,14 +3165,12 @@ function EnrollmentModal({ cls, onClose }) {
     setSaving(true)
     try {
       const courseId = cls.course_id || ''
-      // For each student, update their classes field
       for (const student of students) {
         const currentClasses = (student.classes || '').split(',').map(c => c.trim()).filter(Boolean)
         const isEnrolled = !!enrolled[student.id]
         const wasEnrolled = currentClasses.includes(courseId)
 
         if (isEnrolled && !wasEnrolled) {
-          // Add class
           const updated = [...currentClasses, courseId].join(', ')
           const { data: eRows, error: eErr } = await supabase.from('profiles').update({ classes: updated }).eq('id', student.id).select()
           if (eErr) throw eErr
@@ -2627,7 +3178,6 @@ function EnrollmentModal({ cls, onClose }) {
             toast.error(`Failed to enroll ${student.first_name} — check permissions.`)
           }
         } else if (!isEnrolled && wasEnrolled) {
-          // Remove class
           const updated = currentClasses.filter(c => c !== courseId).join(', ')
           const { data: eRows, error: eErr } = await supabase.from('profiles').update({ classes: updated }).eq('id', student.id).select()
           if (eErr) throw eErr
@@ -2658,14 +3208,17 @@ function EnrollmentModal({ cls, onClose }) {
             <h3 className="text-sm font-bold text-surface-900">Manage Enrollment</h3>
             <p className="text-xs text-surface-500">{cls.course_id} — {cls.course_name}</p>
           </div>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+          <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close">
+            <X size={16} aria-hidden="true" />
+          </button>
         </div>
 
         <div className="px-5 py-3 space-y-2">
           <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search students..." className="input pl-9 text-sm" />
+              placeholder="Search students..." className="input pl-9 text-sm"
+              aria-label="Search students" />
           </div>
           <div className="text-xs text-brand-600 font-medium bg-brand-50 px-3 py-1.5 rounded-lg">
             {enrolledCount} student{enrolledCount !== 1 ? 's' : ''} enrolled
@@ -2697,11 +3250,15 @@ function EnrollmentModal({ cls, onClose }) {
         </div>
 
         <div className="px-5 py-3 border-t border-surface-100 flex gap-2">
-          <button onClick={handleSave} disabled={saving} className="btn-primary text-sm gap-1.5 flex-1">
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          <button type="button" onClick={handleSave} disabled={saving}
+            className="btn-primary text-sm gap-1.5 flex-1">
+            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
             {saving ? 'Saving...' : 'Save Enrollment'}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+          <button type="button" onClick={onClose}
+            className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">
+            Cancel
+          </button>
         </div>
       </div>
     </div>

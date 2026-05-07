@@ -55,7 +55,17 @@ export function useSettingsActions() {
   const [saving, setSaving] = useState(false)
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
 
+  /**
+   * Update (or insert) a setting.
+   *
+   * Options:
+   *   - category, description: included on INSERT for brand-new settings so they
+   *     show up in the right group in the UI. Backward compatible.
+   *   - silent: when true, suppress the success toast. Errors still toast.
+   *     Used by auto-save flows so we don't toast on every keystroke.
+   */
   const updateSetting = async (key, value, meta = {}) => {
+    const { silent = false, category, description } = meta
     setSaving(true)
     try {
       const { data: existing } = await supabase
@@ -73,30 +83,29 @@ export function useSettingsActions() {
         if (error) throw error
         if (!rows || rows.length === 0) {
           toast.error('Setting update failed — you may not have permission.')
-          return
+          return false
         }
       } else {
-        // Brand-new setting: optionally tag it with category/description so it
-        // shows up in the right place in the UI. Backward compatible — old
-        // callers that didn't pass meta still get the original behavior.
+        // Brand-new setting: tag with category/description if provided.
         const insertPayload = {
           setting_key: key,
           setting_value: value,
           updated_at: new Date().toISOString(),
           updated_by: userName
         }
-        if (meta.category)    insertPayload.category    = meta.category
-        if (meta.description) insertPayload.description = meta.description
+        if (category)    insertPayload.category    = category
+        if (description) insertPayload.description = description
 
         const { data: rows, error } = await supabase.from('settings')
           .insert(insertPayload).select()
         if (error) throw error
         if (!rows || rows.length === 0) {
           toast.error('Setting create failed — you may not have permission.')
-          return
+          return false
         }
       }
-      toast.success('Setting updated')
+      if (!silent) toast.success('Setting updated')
+      return true
     } catch (err) {
       toast.error(err.message)
       throw err
