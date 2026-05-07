@@ -125,7 +125,12 @@ export function useBugActions() {
     }
   }
 
-  const updateRequest = async (requestId, updates) => {
+  // updateRequest accepts an optional `options` arg for close-time control:
+  //   options.bumpVersion: 'auto' (default) | 'none' — only used when the
+  //   status is being changed to 'Closed'. 'none' skips the version bump and
+  //   logs the entry under the current version (useful for closing duplicates
+  //   or trivial fixes you don't want to inflate the release sequence).
+  const updateRequest = async (requestId, updates, options = {}) => {
     setSaving(true)
     try {
       const now = new Date().toISOString()
@@ -147,12 +152,18 @@ export function useBugActions() {
         .eq('request_id', requestId)
       if (error) throw error
 
-      // If status changed to Closed, add changelog entry and bump version
+      // If status changed to Closed, add changelog entry.
+      // Defer to caller for whether to bump the version (defaults to auto-bump
+      // to preserve historical behavior for callers that don't pass options).
       if (updates.status === 'Closed') {
-        await addChangelogEntry(requestId, updates.type, updates.title, userName)
+        const closeBumpMode = options.bumpVersion === undefined ? true : options.bumpVersion
+        await addChangelogEntry(requestId, updates.type, updates.title, userName, null, closeBumpMode)
       }
 
       // Audit log
+      const auditDetails = updates.status === 'Closed' && options.bumpVersion === 'none'
+        ? `Closed without version bump${updates.title ? ' - ' + updates.title : ''}`
+        : `Updated request${updates.status ? ' - Status: ' + updates.status : ''}`
       await supabase.from('audit_log').insert({
         log_id: `AUD${Date.now()}`,
         timestamp: now,
@@ -161,7 +172,7 @@ export function useBugActions() {
         action: 'Update',
         entity_type: 'Bug Request',
         entity_id: requestId,
-        details: `Updated request${updates.status ? ' - Status: ' + updates.status : ''}`
+        details: auditDetails
       })
 
       toast.success('Request updated!')
@@ -270,10 +281,83 @@ export function useBugActions() {
     }
   }
 
+  // ─── Manual Changelog Entry (super admin only) ──────────────────────────
+  // For changes made directly without a corresponding bug/feature request.
+  // bumpVersion accepts:
+  //   - 'auto' | true (default): bump per type rules
+  //   - 'major'                : major bump (e.g. 3.3.3 → 4.0.0)
+  //   - 'none' | false         : log under current version (no bump)
+  const addManualChangelogEntry = async ({ type, title, description, bumpVersion = 'auto' }) => {
+    if (!isSuperAdmin) {
+      toast.error('Only the super admin can add manual changelog entries')
+      return { success: false }
+    }
+    const cleanTitle = (title || '').trim()
+    if (!cleanTitle) {
+      toast.error('Title is required')
+      return { success: false }
+    }
+    const cleanType = type === 'Feature Request' ? 'Feature Request' : 'Bug'
+    const cleanDescription = (description || '').trim()
+
+    // Normalize mode for messages/audit
+    let mode = 'auto'
+    if (bumpVersion === false || bumpVersion === 'none') mode = 'none'
+    else if (bumpVersion === 'major') mode = 'major'
+
+    setSaving(true)
+    try {
+      // request_id = null marks this as a manual entry
+      const newVersion = await addChangelogEntry(
+        null,
+        cleanType,
+        cleanTitle,
+        userName,
+        cleanDescription || null,
+        bumpVersion
+      )
+
+      if (!newVersion) {
+        toast.error('Failed to add changelog entry')
+        return { success: false }
+      }
+
+      // Audit log
+      const modeLabel = mode === 'major' ? 'major bump' : mode === 'none' ? 'no bump' : 'version bumped'
+      await supabase.from('audit_log').insert({
+        log_id: `AUD${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        user_email: userEmail,
+        user_name: userName,
+        action: 'Create',
+        entity_type: 'Changelog Entry',
+        entity_id: `v${newVersion}`,
+        details: `Manual changelog entry (${cleanType}, ${modeLabel}): ${cleanTitle}`
+      })
+
+      // Toast
+      const toastMsg = mode === 'major'
+        ? `Major version bumped to v${newVersion} 🚀`
+        : mode === 'none'
+          ? `Changelog entry added under v${newVersion} (no bump)`
+          : `Changelog entry added — v${newVersion}`
+      toast.success(toastMsg)
+
+      return { success: true, version: newVersion, mode }
+    } catch (err) {
+      console.error('Manual changelog entry error:', err)
+      toast.error(err.message || 'Failed to add changelog entry')
+      return { success: false }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return {
     saving, isSuperAdmin, hasPerm,
     createRequest, updateRequest, deleteRequest,
-    approveRequest, rejectRequest
+    approveRequest, rejectRequest,
+    addManualChangelogEntry
   }
 }
 
@@ -291,9 +375,18 @@ export function useChangelog() {
         .select('*')
         .order('version', { ascending: false })
       if (error) throw error
-      // Deduplicate by version+request_id (migration may have created dupes)
+      // Deduplicate ONLY bug-backed entries (request_id present).
+      //
+      // The original dedup guarded against duplicate rows that the data
+      // migration created for the same (version, request_id) pair. Manual
+      // entries have request_id=null and are intentionally distinct —
+      // multiple "no-bump" entries can legitimately share a version, and
+      // since release_date is stored as a DATE (no time component), they
+      // can also share a release_date. Including manual entries in the
+      // dedup caused the later entry to silently hide the earlier one.
       const seen = new Set()
       const deduped = (data || []).filter(e => {
+        if (!e.request_id) return true // never dedup manual entries
         const key = `${e.version}|${e.request_id}`
         if (seen.has(key)) return false
         seen.add(key)
@@ -441,8 +534,26 @@ export function useAutoClose() {
 // ─── Helper: Add Changelog Entry ──────────────────────────────────────────────
 // Bug → increment patch (3rd digit): 2.1.8 → 2.1.9
 // Feature Request → increment minor (2nd digit) and reset patch: 2.1.8 → 2.2.0
+// Major → increment major (1st digit) and reset minor + patch: 2.1.8 → 3.0.0
+//
+// requestId may be null for manual entries added by super admin.
+// description is optional (only stored if non-empty AND the column exists in DB).
+// bumpVersion controls how the version is computed for this entry. Accepts:
+//   - true | 'auto' (default): increment per type rules above (Bug/Feature)
+//   - 'major'                : increment major, reset minor + patch to 0
+//   - false | 'none'         : log under the CURRENT version (no increment)
+// Used for trivial manual entries (typos, doc tweaks) or duplicate closes
+// that the super admin wants tracked but shouldn't pollute the version
+// sequence. Auto-close always bumps via 'auto'; bug-close defers to caller.
+// Returns the new version string on success, or null on failure.
 
-async function addChangelogEntry(requestId, type, title, releasedBy) {
+async function addChangelogEntry(requestId, type, title, releasedBy, description = null, bumpVersion = true) {
+  // Normalize to one of: 'auto' | 'major' | 'none'
+  let mode = 'auto'
+  if (bumpVersion === false || bumpVersion === 'none') mode = 'none'
+  else if (bumpVersion === 'major') mode = 'major'
+  else mode = 'auto'
+
   try {
     // Get current version from settings first, fall back to changelog
     let currentVersion = null
@@ -470,60 +581,100 @@ async function addChangelogEntry(requestId, type, title, releasedBy) {
       }
     }
 
-    // Calculate new version based on type
-    let newVersion = '2.0.1'
-    if (currentVersion) {
-      const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
-      const major = parts[0] || 2
-      let minor = parts[1] || 0
-      let patch = parts[2] || 0
-
-      if (type === 'Feature Request') {
-        // Feature Request → increment minor, reset patch to 0
-        minor += 1
-        patch = 0
+    // Calculate the version this entry will be filed under, based on `mode`.
+    // - 'auto':  increment per type rules; fall back to "2.0.1" if no
+    //            current version is known.
+    // - 'major': increment major, reset minor + patch to 0.
+    // - 'none':  file under the current version unchanged. If no current
+    //            version is set anywhere, default to "0.0.1" so the row
+    //            still has a valid version string (extremely unlikely).
+    let newVersion
+    if (mode === 'none') {
+      newVersion = currentVersion || '0.0.1'
+    } else if (mode === 'major') {
+      if (currentVersion) {
+        const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
+        const major = (parts[0] || 0) + 1
+        newVersion = `${major}.0.0`
       } else {
-        // Bug (default) → increment patch
-        patch += 1
+        newVersion = '1.0.0'
       }
+    } else {
+      // 'auto'
+      newVersion = '2.0.1'
+      if (currentVersion) {
+        const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
+        const major = parts[0] || 2
+        let minor = parts[1] || 0
+        let patch = parts[2] || 0
 
-      newVersion = `${major}.${minor}.${patch}`
+        if (type === 'Feature Request') {
+          // Feature Request → increment minor, reset patch to 0
+          minor += 1
+          patch = 0
+        } else {
+          // Bug (default) → increment patch
+          patch += 1
+        }
+
+        newVersion = `${major}.${minor}.${patch}`
+      }
     }
 
     // Insert changelog entry
-    const { error: changelogError } = await supabase.from('changelog').insert({
+    const insertPayload = {
       version: newVersion,
       release_date: new Date().toISOString(),
       request_id: requestId,
       type: type || 'Bug',
       title: title || '',
       released_by: releasedBy || ''
-    })
+    }
+    // Only include description if provided AND non-empty.
+    // This keeps the existing bug-close path safe even if the description
+    // column hasn't been added to the DB yet.
+    if (description && String(description).trim()) {
+      insertPayload.description = String(description).trim()
+    }
+
+    const { error: changelogError } = await supabase.from('changelog').insert(insertPayload)
 
     if (changelogError) {
       console.error('Changelog insert error:', changelogError)
-      return
+      return null
     }
 
-    // Update app_version in settings so sidebar + settings page reflect the change
-    const { error: settingsError } = await supabase
-      .from('settings')
-      .update({
-        setting_value: newVersion,
-        updated_at: new Date().toISOString(),
-        updated_by: releasedBy || 'System'
-      })
-      .eq('setting_key', 'app_version')
+    // When bumping (auto OR major), update app_version in settings so sidebar
+    // + settings page reflect the change. When 'none', skip both the settings
+    // update and the version-updated event so the displayed version stays put.
+    if (mode !== 'none') {
+      const { error: settingsError } = await supabase
+        .from('settings')
+        .update({
+          setting_value: newVersion,
+          updated_at: new Date().toISOString(),
+          updated_by: releasedBy || 'System'
+        })
+        .eq('setting_key', 'app_version')
 
-    if (settingsError) {
-      console.error('Settings version update error:', settingsError)
+      if (settingsError) {
+        console.error('Settings version update error:', settingsError)
+      }
+
+      // Dispatch a custom event so AppLayout (and any other listener) can update immediately
+      window.dispatchEvent(new CustomEvent('app-version-updated', { detail: { version: newVersion } }))
     }
 
-    // Dispatch a custom event so AppLayout (and any other listener) can update immediately
-    window.dispatchEvent(new CustomEvent('app-version-updated', { detail: { version: newVersion } }))
-
-    console.log(`Version bumped: ${currentVersion || 'none'} → ${newVersion} (${type})`)
+    if (mode === 'major') {
+      console.log(`MAJOR version bump: ${currentVersion || 'none'} → ${newVersion} (${type})`)
+    } else if (mode === 'auto') {
+      console.log(`Version bumped: ${currentVersion || 'none'} → ${newVersion} (${type})`)
+    } else {
+      console.log(`Changelog entry logged at v${newVersion} without bumping (${type})`)
+    }
+    return newVersion
   } catch (err) {
     console.error('Changelog entry error:', err)
+    return null
   }
 }

@@ -11,6 +11,8 @@
  * - Approve/Reject workflow for Pending items (super admin only)
  * - Delete with confirmation (permission gated)
  * - Changelog section grouped by version with clickable detail modals
+ * - Manual changelog entries (super admin only) — for changes made
+ *   without a corresponding bug or feature request
  * - Closed items hidden from main table (shown in changelog)
  * - Full permission gating via hasPerm() from permissions table
  * - Auto-close: Completed items are automatically closed after 15 days,
@@ -115,6 +117,9 @@ export default function BugTrackerPage() {
   const [showChangelogDetail, setShowChangelogDetail] = useState(false)
   const [changelogDetailItem, setChangelogDetailItem] = useState(null)
   const [changelogBugData, setChangelogBugData] = useState(null)
+
+  // Add-changelog-entry modal (super admin only)
+  const [showAddChangelogModal, setShowAddChangelogModal] = useState(false)
 
   // Active requests = exclude Closed (those appear in changelog)
   const activeRequests = useMemo(() =>
@@ -346,11 +351,22 @@ export default function BugTrackerPage() {
         <div className="px-4 py-3 border-b border-surface-100 flex items-center gap-2">
           <History size={16} className="text-brand-600" />
           <h3 className="text-sm font-semibold text-surface-900">Changelog</h3>
-          {changelogEntries.length > 0 && (
-            <span className="bg-surface-100 text-surface-600 text-[11px] font-semibold px-2 py-0.5 rounded-full ml-auto">
-              {changelogEntries.length} entries
-            </span>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {changelogEntries.length > 0 && (
+              <span className="bg-surface-100 text-surface-600 text-[11px] font-semibold px-2 py-0.5 rounded-full">
+                {changelogEntries.length} entries
+              </span>
+            )}
+            {actions.isSuperAdmin && (
+              <button
+                onClick={() => setShowAddChangelogModal(true)}
+                aria-label="Add manual changelog entry"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                <Plus size={13} aria-hidden="true" /> Add Entry
+              </button>
+            )}
+          </div>
         </div>
         {changelogLoading ? (
           <div className="flex items-center justify-center py-12 text-surface-400 gap-2 text-sm">
@@ -404,6 +420,13 @@ export default function BugTrackerPage() {
           bugData={changelogBugData}
           loading={lookupLoading}
           onClose={() => { setShowChangelogDetail(false); setChangelogDetailItem(null); setChangelogBugData(null) }}
+        />
+      )}
+      {showAddChangelogModal && (
+        <AddChangelogModal
+          onClose={() => setShowAddChangelogModal(false)}
+          onSaved={() => { refreshChangelog() }}
+          actions={actions}
         />
       )}
     </div>
@@ -461,7 +484,18 @@ function ChangelogTable({ entries, onItemClick }) {
     const versions = Object.keys(map).sort((a, b) =>
       b.localeCompare(a, undefined, { numeric: true })
     )
-    return versions.map(v => ({ version: v, items: map[v] }))
+    // Within each version, sort by release_date descending (newest first).
+    // Falls back to title for stable ordering when release_dates collide
+    // (release_date is stored as DATE, so multiple same-day entries tie).
+    return versions.map(v => ({
+      version: v,
+      items: [...map[v]].sort((a, b) => {
+        const da = a.release_date || ''
+        const db = b.release_date || ''
+        if (da !== db) return db.localeCompare(da)
+        return (a.title || '').localeCompare(b.title || '')
+      })
+    }))
   }, [entries])
 
   // Track collapsed version groups
@@ -516,14 +550,25 @@ function ChangelogTable({ entries, onItemClick }) {
                   >
                     <td className="px-4 py-2.5"></td>
                     <td className="px-4 py-2.5 text-surface-600 text-xs">{formatDate(item.release_date)}</td>
-                    <td className="px-4 py-2.5 text-brand-600 font-medium text-xs group-hover:underline">
-                      {item.request_id}
+                    <td className="px-4 py-2.5 text-xs">
+                      {item.request_id ? (
+                        <span className="text-brand-600 font-medium group-hover:underline">
+                          {item.request_id}
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-700 border border-purple-200"
+                          title="Manual changelog entry (no linked request)"
+                        >
+                          Manual
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5"><Badge text={item.type} styleMap={TYPE_STYLES} /></td>
                     <td className="px-4 py-2.5 text-surface-700">{item.title}</td>
                     <td className="px-4 py-2.5 text-surface-500 text-xs">{item.released_by}</td>
                     <td className="px-4 py-2.5 text-surface-300 group-hover:text-brand-500">
-                      <ExternalLink size={13} />
+                      <ExternalLink size={13} aria-hidden="true" />
                     </td>
                   </tr>
                 ))}
@@ -541,23 +586,41 @@ function ChangelogTable({ entries, onItemClick }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
+  const isManual = !changelogItem.request_id
+
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="changelog-detail-title"
+        className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center text-white shrink-0">
-              <FileText size={16} />
+              <FileText size={16} aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-semibold text-surface-900 truncate">
-                {changelogItem.request_id}: {changelogItem.title}
+              <h3 id="changelog-detail-title" className="font-semibold text-surface-900 truncate">
+                {isManual
+                  ? changelogItem.title
+                  : `${changelogItem.request_id}: ${changelogItem.title}`}
               </h3>
-              <div className="text-[11px] text-surface-400">Changelog Entry — v{changelogItem.version}</div>
+              <div className="text-[11px] text-surface-400">
+                {isManual ? 'Manual Entry' : 'Changelog Entry'} — v{changelogItem.version}
+              </div>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 shrink-0"><X size={18} /></button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
@@ -578,10 +641,39 @@ function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
             </div>
           </div>
 
-          {/* Bug Request Details (loaded from DB) */}
-          {loading ? (
+          {/* Bug Request Details (loaded from DB) — manual entries skip lookup */}
+          {isManual ? (
+            <div>
+              <h4 className="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-2">
+                Manual Entry Details
+              </h4>
+              <div className="p-3 bg-purple-50 border border-purple-100 rounded-lg flex items-start gap-2 mb-3">
+                <AlertCircle size={14} className="text-purple-600 shrink-0 mt-0.5" aria-hidden="true" />
+                <p className="text-xs text-purple-800">
+                  This entry was added directly to the changelog by the super admin
+                  and is not linked to a bug or feature request.
+                </p>
+              </div>
+              {changelogItem.description ? (
+                <div>
+                  <h4 className="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1">
+                    Description
+                  </h4>
+                  <div className="p-3 bg-surface-50 rounded-lg">
+                    <p className="text-sm text-surface-700 whitespace-pre-wrap">
+                      {changelogItem.description}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-surface-500 italic">
+                  No additional description provided.
+                </p>
+              )}
+            </div>
+          ) : loading ? (
             <div className="flex items-center justify-center py-6 text-surface-400 gap-2 text-sm">
-              <Loader2 size={14} className="animate-spin" /> Loading request details…
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading request details…
             </div>
           ) : bugData ? (
             <div>
@@ -670,6 +762,7 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
     description: item?.description || '',
     status: item?.status || 'Open',
     resolution_notes: item?.resolution_notes || '',
+    bumpVersionOnClose: true, // only used when status → Closed (super admin only)
   })
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
@@ -678,6 +771,11 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
     if (!form.title.trim()) return
     try {
       if (isEdit) {
+        // Pass bumpVersion option only when status is being set to Closed.
+        // When status isn't Closed, options is ignored (preserves old behavior).
+        const options = form.status === 'Closed'
+          ? { bumpVersion: form.bumpVersionOnClose ? 'auto' : 'none' }
+          : {}
         await actions.updateRequest(item.request_id, {
           type: form.type,
           priority: form.priority,
@@ -685,7 +783,7 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
           description: form.description.trim(),
           status: form.status,
           resolution_notes: form.resolution_notes.trim(),
-        })
+        }, options)
       } else {
         await actions.createRequest({
           type: form.type,
@@ -771,6 +869,33 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
                 rows={3} placeholder="Notes about how the issue was resolved…"
                 className="input text-sm resize-none" />
             </Field>
+          )}
+
+          {/* Bump version on close — only when status is being set to Closed.
+              Only super admin can set Closed, so this implicitly gates on role. */}
+          {isEdit && form.status === 'Closed' && (
+            <div className="flex items-start gap-2 p-3 rounded-lg border border-amber-200 bg-amber-50">
+              <input
+                type="checkbox"
+                id="close-bump-version"
+                checked={form.bumpVersionOnClose}
+                onChange={e => set('bumpVersionOnClose', e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded border-amber-300 text-brand-600 focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 cursor-pointer"
+              />
+              <div className="flex-1 min-w-0">
+                <label
+                  htmlFor="close-bump-version"
+                  className="block text-sm font-medium text-surface-800 cursor-pointer"
+                >
+                  Bump version when closing
+                </label>
+                <p className="text-[11px] text-surface-600 mt-0.5">
+                  Uncheck for duplicates or trivial closes — the changelog
+                  entry will be logged under the current version without
+                  incrementing it.
+                </p>
+              </div>
+            </div>
           )}
         </div>
 
@@ -915,10 +1040,10 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50' }) {
   )
 }
 
-function Field({ label, children }) {
+function Field({ label, htmlFor, children }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
+      <label htmlFor={htmlFor} className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
       {children}
     </div>
   )
@@ -930,5 +1055,240 @@ function MetaItem({ label, children }) {
       <div className="text-[10px] text-surface-400 font-medium mb-0.5">{label}</div>
       {children}
     </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADD CHANGELOG MODAL (super admin only — manual entries)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function AddChangelogModal({ onClose, onSaved, actions }) {
+  const [form, setForm] = useState({
+    type: 'Bug',
+    title: '',
+    description: '',
+    versionMode: 'auto', // 'auto' | 'major' | 'none'
+  })
+  const titleInputRef = React.useRef(null)
+
+  // Auto-focus the title input on open
+  useEffect(() => {
+    titleInputRef.current?.focus()
+  }, [])
+
+  // ESC closes the modal (WCAG 2.1.2 — keyboard accessible)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
+
+  const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
+
+  const handleSave = async () => {
+    if (!form.title.trim()) return
+    const result = await actions.addManualChangelogEntry({
+      type: form.type,
+      title: form.title.trim(),
+      description: form.description.trim(),
+      bumpVersion: form.versionMode,
+    })
+    if (result?.success) {
+      onSaved?.()
+      onClose()
+    }
+  }
+
+  // Helper text shown beneath the type dropdown explains version impact.
+  let versionHelper
+  if (form.versionMode === 'none') {
+    versionHelper = 'Will be logged under the current version (no bump)'
+  } else if (form.versionMode === 'major') {
+    versionHelper = 'Will bump the MAJOR version (e.g. 3.3.3 → 4.0.0)'
+  } else if (form.type === 'Feature Request') {
+    versionHelper = 'Will bump the minor version (e.g. 3.3.x → 3.4.0)'
+  } else {
+    versionHelper = 'Will bump the patch version (e.g. 3.3.3 → 3.3.4)'
+  }
+
+  return (
+    <ModalOverlay onClose={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-changelog-title"
+        aria-describedby="add-changelog-description"
+        className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center text-white shrink-0">
+              <History size={16} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h3 id="add-changelog-title" className="font-semibold text-surface-900">
+                Add Changelog Entry
+              </h3>
+              <div className="text-[11px] text-surface-400">Manual entry — super admin only</div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
+          {/* Info banner */}
+          <div
+            id="add-changelog-description"
+            className="p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-start gap-2"
+          >
+            <AlertCircle size={14} className="text-blue-600 shrink-0 mt-0.5" aria-hidden="true" />
+            <p className="text-xs text-blue-800">
+              Use this to log changes you made directly without a corresponding bug or
+              feature request. The version will auto-bump based on the type you select.
+            </p>
+          </div>
+
+          {/* Type */}
+          <Field label="Type *" htmlFor="changelog-type">
+            <select
+              id="changelog-type"
+              value={form.type}
+              onChange={e => set('type', e.target.value)}
+              className="input text-sm"
+            >
+              {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <p className="text-[11px] text-surface-500 mt-1" aria-live="polite">
+              {versionHelper}
+            </p>
+          </Field>
+
+          {/* Title */}
+          <Field label="Title *" htmlFor="changelog-title-input">
+            <input
+              ref={titleInputRef}
+              id="changelog-title-input"
+              type="text"
+              value={form.title}
+              onChange={e => set('title', e.target.value)}
+              placeholder="Brief summary of what changed"
+              className="input text-sm"
+              maxLength={200}
+              required
+              aria-required="true"
+            />
+          </Field>
+
+          {/* Description */}
+          <Field label="Description (optional)" htmlFor="changelog-description-input">
+            <textarea
+              id="changelog-description-input"
+              value={form.description}
+              onChange={e => set('description', e.target.value)}
+              rows={4}
+              placeholder="Additional details about the change…"
+              className="input text-sm resize-none"
+            />
+          </Field>
+
+          {/* Version handling — 3 options */}
+          <fieldset className="rounded-lg border border-surface-200 bg-surface-50 p-3">
+            <legend className="px-1 text-xs font-medium text-surface-600">Version handling</legend>
+            <div className="space-y-1">
+              <label
+                htmlFor="vmode-auto"
+                className="flex items-start gap-2 cursor-pointer p-1.5 rounded hover:bg-white"
+              >
+                <input
+                  type="radio"
+                  id="vmode-auto"
+                  name="changelog-version-mode"
+                  value="auto"
+                  checked={form.versionMode === 'auto'}
+                  onChange={() => set('versionMode', 'auto')}
+                  className="mt-0.5 w-4 h-4 text-brand-600 focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 cursor-pointer"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-surface-800">Auto-bump (per type)</div>
+                  <div className="text-[11px] text-surface-500">
+                    Bug bumps patch (e.g. 3.3.3 → 3.3.4); Feature Request bumps minor (e.g. 3.3.x → 3.4.0)
+                  </div>
+                </div>
+              </label>
+              <label
+                htmlFor="vmode-major"
+                className="flex items-start gap-2 cursor-pointer p-1.5 rounded hover:bg-white"
+              >
+                <input
+                  type="radio"
+                  id="vmode-major"
+                  name="changelog-version-mode"
+                  value="major"
+                  checked={form.versionMode === 'major'}
+                  onChange={() => set('versionMode', 'major')}
+                  className="mt-0.5 w-4 h-4 text-brand-600 focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 cursor-pointer"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-surface-800">Major version bump</div>
+                  <div className="text-[11px] text-surface-500">
+                    e.g. 3.3.3 → 4.0.0 — for milestones, big releases, or breaking changes
+                  </div>
+                </div>
+              </label>
+              <label
+                htmlFor="vmode-none"
+                className="flex items-start gap-2 cursor-pointer p-1.5 rounded hover:bg-white"
+              >
+                <input
+                  type="radio"
+                  id="vmode-none"
+                  name="changelog-version-mode"
+                  value="none"
+                  checked={form.versionMode === 'none'}
+                  onChange={() => set('versionMode', 'none')}
+                  className="mt-0.5 w-4 h-4 text-brand-600 focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 cursor-pointer"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-surface-800">No bump</div>
+                  <div className="text-[11px] text-surface-500">
+                    Log under the current version — for typos, small tweaks, or duplicates
+                  </div>
+                </div>
+              </label>
+            </div>
+          </fieldset>
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-surface-400 border border-surface-200"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={actions.saving || !form.title.trim()}
+            className={`px-4 py-2 rounded-lg text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 flex items-center gap-1.5 ${
+              form.versionMode === 'major'
+                ? 'bg-amber-600 hover:bg-amber-700 focus:ring-amber-500'
+                : 'bg-brand-600 hover:bg-brand-700 focus:ring-brand-500'
+            }`}
+          >
+            {actions.saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            {form.versionMode === 'major' ? 'Add & Major Bump' : 'Add Entry'}
+          </button>
+        </div>
+      </div>
+    </ModalOverlay>
   )
 }
