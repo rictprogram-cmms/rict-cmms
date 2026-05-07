@@ -656,41 +656,89 @@ export function useLabTrackerActions() {
         }
       }
 
-      // 4. Update time clock: if student is currently punched in, mark as 'All Done'
+      // 4. Time clock: insert an All Done MARKER row if the student is currently punched in.
+      //
+      // Previous behavior (pre-May-2026): the active Punched-In row was mutated to
+      //   status='Punched Out' + entry_type='All Done', forcibly closing the student
+      //   out. Per instructor request, students who stick around to help after All Done
+      //   should remain clocked in — so we no longer touch the active punch. Instead
+      //   we INSERT a separate zero-duration marker row carrying the 'All Done' flag.
+      //
+      // Why a marker row at all? Downstream code (useTimeCards.js, DashboardPage.jsx)
+      // detects All Done by scanning time_clock for entry_type='All Done'. That signal:
+      //   • suppresses Left-Early flags for the day (useTimeCards.js daySpans.hasAllDone)
+      //   • gives on-time credit on the Dashboard
+      //   • closes out sibling classes for the week (userAllDoneDates / weekClosedByCourse)
+      // Removing the time_clock signal entirely would break all three. The marker keeps
+      // those behaviors intact while leaving the active punch untouched. The student's
+      // original punch_in row will close out normally when they swipe out themselves —
+      // and any volunteer/work-study attribution on that punch is preserved (the old
+      // approach overwrote entry_type on the active row, discarding it).
       const { data: activeEntry } = await supabase
         .from('time_clock')
-        .select('record_id, punch_in')
+        .select('record_id, user_id, class_id, course_id, week_start')
         .eq('user_email', userEmail)
         .eq('status', 'Punched In')
         .maybeSingle()
 
       if (activeEntry) {
-        const now = new Date()
-        // Compute diff using fake-UTC milliseconds for both sides so the
-        // subtraction is apples-to-apples with the stored punch_in value.
-        // punchIn is stored as fake-UTC (local time labeled +00), so
-        // new Date(activeEntry.punch_in).getTime() gives the correct base ms.
-        const nowFakeUtcMs = Date.UTC(
-          now.getFullYear(), now.getMonth(), now.getDate(),
-          now.getHours(), now.getMinutes(), now.getSeconds()
-        )
-        const punchIn = new Date(activeEntry.punch_in)
-        const diffMs = nowFakeUtcMs - punchIn.getTime()
-        const totalHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100
+        try {
+          // Generate next TC###### id by querying the current MAX, mirroring the
+          // pattern used in TimeClockPage.jsx so both write paths agree on format.
+          const { data: lastTcRecord } = await supabase
+            .from('time_clock')
+            .select('record_id')
+            .order('record_id', { ascending: false })
+            .limit(1)
+            .single()
 
-        const { error: tcError } = await supabase
-          .from('time_clock')
-          .update({
-            punch_out: localToUtcIso(now),
-            total_hours: totalHours,
-            status: 'Punched Out',
-            entry_type: 'All Done',
-            description: `All Done — released by ${instructor.first_name} ${instructor.last_name}`,
-          })
-          .eq('record_id', activeEntry.record_id)
+          let nextNum = 1
+          if (lastTcRecord?.record_id) {
+            const num = parseInt(String(lastTcRecord.record_id).replace('TC', ''))
+            if (!isNaN(num)) nextNum = num + 1
+          }
+          const markerRecordId = 'TC' + String(nextNum).padStart(6, '0')
 
-        if (tcError) {
-          console.error('Error updating time clock:', tcError)
+          // Monday-of-this-week (YYYY-MM-DD) — same convention as TimeClockPage getWeekStart()
+          const wkStartFallback = (() => {
+            const n = new Date()
+            const day = n.getDay()
+            const diff = n.getDate() - day + (day === 0 ? -6 : 1)
+            const monday = new Date(n)
+            monday.setDate(diff)
+            monday.setHours(0, 0, 0, 0)
+            return `${monday.getFullYear()}-${String(monday.getMonth()+1).padStart(2,'0')}-${String(monday.getDate()).padStart(2,'0')}`
+          })()
+
+          const nowIso = localToUtcIso(new Date())
+
+          const { error: tcError } = await supabase
+            .from('time_clock')
+            .insert({
+              record_id: markerRecordId,
+              user_id: activeEntry.user_id,
+              user_name: userName,
+              user_email: userEmail,
+              class_id: activeEntry.class_id || '',
+              course_id: activeEntry.course_id || '',
+              // Zero-duration marker: punch_in === punch_out. Downstream daySpans
+              // logic short-circuits on entry_type==='All Done' before reading the
+              // time fields, so the equal timestamps don't pollute first/last spans.
+              punch_in: nowIso,
+              punch_out: nowIso,
+              total_hours: 0,
+              status: 'Punched Out',
+              week_start: activeEntry.week_start || wkStartFallback,
+              entry_type: 'All Done',
+              description: `All Done — released by ${instructor.first_name} ${instructor.last_name}`,
+              approval_status: 'Approved',
+            })
+
+          if (tcError) {
+            console.error('Error inserting All Done marker:', tcError)
+          }
+        } catch (markerErr) {
+          console.error('Failed to insert All Done marker row:', markerErr)
         }
       }
 
