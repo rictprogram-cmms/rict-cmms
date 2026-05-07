@@ -4,6 +4,9 @@
  * Features:
  * - Individual Time Card tab (student sees own, instructor picks any)
  * - Class Weekly Report tab (instructor only)
+ * - GB Items tab (instructor only) — end-of-class gradebook export:
+ *     Attendance %, WOC Ratio, Volunteer Hours per student over the
+ *     class start_date → end_date window (finals week excluded)
  * - Week navigation + date range picker
  * - Class summary cards (hours vs required)
  * - Attendance analysis:
@@ -28,13 +31,15 @@ import {
   useUsersForReports, useClassesList, useTimeCardData,
   useClassWeeklyReport, useTimeEntryActions, getWeekRange, toDateStr
 } from '@/hooks/useTimeCards'
+import { useWOCRatio } from '@/hooks/useWOCRatio'
 import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
 import {
   ChevronLeft, ChevronRight, Printer, Plus, Edit3, Trash2,
   Loader2, Clock, User, Users, AlertTriangle, CheckCircle2,
   X, Timer, Send, Shield, LogIn, LogOut, Footprints,
   FileText, Calendar, ArrowLeft, BookOpen, BadgeCheck,
-  ChevronDown, ChevronUp, FilePenLine, MessageCircle
+  ChevronDown, ChevronUp, FilePenLine, MessageCircle,
+  Download, GraduationCap
 } from 'lucide-react'
 import PendingTimeRequestsPanel from '@/components/PendingTimeRequestsPanel'
 
@@ -352,6 +357,19 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
     return { ...r, flags }
   })
 
+  // Build a Set of date strings (YYYY-MM-DD) where the user got an All Done swipe
+  // in ANY class. Used below so that an All Done logged under one course (e.g. RICT1610)
+  // also closes out every other enrolled class for that same week — matching the
+  // Dashboard behavior in useTimeCards.js (getDashboardAttendance / weekClosedByCourse).
+  // Without this, sibling classes show 0% for the week even though the instructor
+  // closed everything out via the All Done badge.
+  const userAllDoneDates = new Set()
+  enrichedRecords.forEach(r => {
+    if (r.entry_type !== 'All Done') return
+    const d = extractDateFromTimestamp(r.punch_in)
+    if (d) userAllDoneDates.add(d)
+  })
+
   // 6. Build per-class reports with week-by-week breakdown
   const classMap = {}
   enrichedRecords.forEach(r => {
@@ -422,13 +440,26 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
 
       const labStatus = labByWeek[wk.weekNumber] || { labComplete: false, allDone: false, requiredHoursMet: false }
 
+      // Cross-class All Done propagation: if the user got an All Done swipe
+      // (under any course) on a date that falls within this class week's
+      // [startDate, endDate] range, treat this week as closed for THIS class too.
+      // Note: we use date-range overlap (not Monday-of-week keys) because each
+      // class can define its own week boundaries via buildClassWeeks (e.g. RICT1630
+      // weeks run Sun–Wed, not Mon–Sun), and an ISO Monday key wouldn't always
+      // land in the right class week.
+      const hasUserAllDoneThisWeek = wkStartStr && wkEndStr
+        ? Array.from(userAllDoneDates).some(d => d >= wkStartStr && d <= wkEndStr)
+        : false
+
       // Per-week score:
       //   Base = 100% if hours met OR All Done given (lab_complete / required_hours_met
-      //          from weekly_lab_tracker also count as a closure signal).
+      //          from weekly_lab_tracker also count as a closure signal). An All Done
+      //          swipe in ANY enrolled class closes out every class for that week.
       //   Base = (hours / required) × 100 otherwise — so 0 hours = 0%, partial proportional.
       //   Then apply −10/Late, −10/Early, −20/NoShow. Floor at 0.
       const wkClosed = labStatus.allDone || labStatus.requiredHoursMet ||
-        weekEntries.some(e => e.entry_type === 'All Done')
+        weekEntries.some(e => e.entry_type === 'All Done') ||
+        hasUserAllDoneThisWeek
       const wkRequired = data.requiredHoursPerWeek || 0
       let wkBase = 100
       if (!wkClosed && wkRequired > 0 && weekHours < wkRequired) {
@@ -444,8 +475,11 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         requiredHours: data.requiredHoursPerWeek,
         metHours: weekHours >= data.requiredHoursPerWeek,
         labComplete: labStatus.labComplete,
-        allDone: labStatus.allDone,
-        requiredHoursMet: labStatus.requiredHoursMet,
+        // Propagate allDone / requiredHoursMet across classes so the Done column
+        // and "weeksDone" / "weeksWithHours" summary tallies reflect the closure.
+        // labComplete stays per-class (lab sign-off is a per-class concept).
+        allDone: labStatus.allDone || hasUserAllDoneThisWeek,
+        requiredHoursMet: labStatus.requiredHoursMet || hasUserAllDoneThisWeek,
         attendance: {
           lateArrivals: lateCount, earlyDepartures: earlyCount,
           noShows: noShowCount, walkIns: walkInCount, wrongClass: wrongClassCount,
@@ -554,6 +588,50 @@ export default function TimeCardsPage() {
   // Toggle to show/hide inactive (historical) classes in dropdowns
   const [showInactiveClasses, setShowInactiveClasses] = useState(false)
 
+  // ── GB Items (instructor end-of-class gradebook export) ─────────────────────
+  // State for the GB Items tab. Date window comes from class.start_date →
+  // (finals_start − 1 day) when finals exist, otherwise class.end_date.
+  const [gbSelectedClass, setGbSelectedClass] = useState('')
+  const [gbReportData, setGbReportData] = useState(null)
+  const [gbReportLoading, setGbReportLoading] = useState(false)
+  const [gbReportError, setGbReportError] = useState('')
+  const [gbProgress, setGbProgress] = useState({ current: 0, total: 0 })
+  const [gbShowInactive, setGbShowInactive] = useState(false)
+
+  const gbClassConfig = useMemo(() => {
+    if (!gbSelectedClass) return null
+    return (classes || []).find(
+      c => c.course_id === gbSelectedClass || c.class_id === gbSelectedClass
+    ) || null
+  }, [gbSelectedClass, classes])
+
+  const gbDateRange = useMemo(() => {
+    if (!gbClassConfig) return { start: null, end: null }
+    const start = gbClassConfig.start_date || null
+    let end = gbClassConfig.end_date || null
+    // Exclude finals week: end = day before finals_start (when configured)
+    if (gbClassConfig.finals_start) {
+      const fs = new Date(gbClassConfig.finals_start + 'T00:00:00')
+      fs.setDate(fs.getDate() - 1)
+      const y = fs.getFullYear()
+      const m = String(fs.getMonth() + 1).padStart(2, '0')
+      const d = String(fs.getDate()).padStart(2, '0')
+      end = `${y}-${m}-${d}`
+    }
+    return { start, end }
+  }, [gbClassConfig])
+
+  // WOC scores keyed to the class window. Only fetches all-user scores when
+  // the GB tab is active AND a class is selected (canViewAll gates the
+  // ranked-users computation in useWOCRatio). Dates are passed regardless so
+  // the activity factor reflects the class window for the current user too.
+  const wocCanViewAll = isInstructor && tab === 'gbitems' && !!gbSelectedClass
+  const wocReport = useWOCRatio({
+    canViewAll: wocCanViewAll,
+    startDate: tab === 'gbitems' ? gbDateRange.start : null,
+    endDate: tab === 'gbitems' ? gbDateRange.end : null,
+  })
+
   useEffect(() => {
     if (profile && !isInstructor && profile.user_id) setSelectedUserId(profile.user_id)
   }, [profile, isInstructor])
@@ -567,6 +645,266 @@ export default function TimeCardsPage() {
     if (selectedClass && startDate && endDate && tab === 'classweekly')
       classReport.fetchReport(selectedClass, startDate, endDate)
   }, [selectedClass, startDate, endDate, tab])
+
+  // Auto-load GB Items when the user picks a class on the GB tab.
+  // Heavy load runs ONLY when the class window changes — not when WOC scores
+  // arrive. WOC scores are patched in by the separate effect below to avoid
+  // re-running the per-student attendance loop and flashing the loading
+  // spinner a second time.
+  useEffect(() => {
+    if (tab !== 'gbitems') return
+    if (!gbSelectedClass || !gbClassConfig) {
+      setGbReportData(null)
+      setGbReportError('')
+      return
+    }
+    if (!gbDateRange.start || !gbDateRange.end) {
+      setGbReportError('This class is missing a start date or end date — set them in Class Settings to generate the report.')
+      setGbReportData(null)
+      return
+    }
+    loadGBReport()
+    // loadGBReport is defined below; its stable identity isn't needed because
+    // we only call it from this effect and the WOC patcher.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gbSelectedClass, gbClassConfig, gbDateRange.start, gbDateRange.end, tab])
+
+  // Light patch: when WOC scores finish loading (or refresh), splice them into
+  // the existing GB rows in place. No network calls, no spinner, no full
+  // reload. The `changed` guard prevents an infinite loop — once scores are
+  // patched in, the next run sees no diff and exits without setState.
+  useEffect(() => {
+    if (!gbReportData || !wocReport.allScores) return
+    const wocByEmail = new Map(
+      wocReport.allScores.map(s => [(s.email || '').toLowerCase().trim(), s])
+    )
+    let changed = false
+    const updated = gbReportData.students.map(s => {
+      const woc = wocByEmail.get((s.email || '').toLowerCase().trim())
+      const newScore = woc ? woc.score : null
+      if (newScore !== s.wocScore) {
+        changed = true
+        return { ...s, wocScore: newScore }
+      }
+      return s
+    })
+    if (changed) {
+      setGbReportData({ ...gbReportData, students: updated })
+    }
+  }, [wocReport.allScores, gbReportData])
+
+  const loadGBReport = async () => {
+    if (!gbClassConfig) return
+    const startDate = gbDateRange.start
+    const endDate = gbDateRange.end
+    if (!startDate || !endDate) return
+
+    setGbReportLoading(true)
+    setGbReportError('')
+    setGbProgress({ current: 0, total: 0 })
+
+    try {
+      const courseId = gbClassConfig.course_id
+      const classId = gbClassConfig.class_id
+
+      // 1. Profiles + enrolled students (matches ReportModal pattern: profile
+      //    enrollment for active classes, plus time_clock enrollment for
+      //    inactive classes where students may have been moved to new classes).
+      const { data: profilesData, error: profilesErr } = await supabase
+        .from('profiles')
+        .select('user_id, first_name, last_name, email, classes, role, id, time_clock_only')
+        .eq('status', 'Active')
+      if (profilesErr) throw profilesErr
+
+      const enrolledByProfile = new Set(
+        (profilesData || [])
+          .filter(p => {
+            if (p.role === 'Instructor') return false
+            if (p.time_clock_only === 'Yes') return false
+            const cls = (p.classes || '').split(',').map(c => c.trim())
+            return cls.includes(courseId) || cls.includes(classId)
+          })
+          .map(p => p.user_id)
+      )
+
+      let enrolledByTimeClock = new Set()
+      if (gbClassConfig.status !== 'Active') {
+        const { data: tcCheck } = await supabase
+          .from('time_clock')
+          .select('user_id')
+          .or(`course_id.eq.${courseId},class_id.eq.${classId}`)
+          .gte('punch_in', startDate)
+          .lte('punch_in', endDate + 'T23:59:59')
+        ;(tcCheck || []).forEach(r => { if (r.user_id) enrolledByTimeClock.add(r.user_id) })
+      }
+
+      const allEnrolledIds = new Set([...enrolledByProfile, ...enrolledByTimeClock])
+      const enrolledStudents = (profilesData || [])
+        .filter(p => allEnrolledIds.has(p.user_id))
+        .sort((a, b) => {
+          const nameA = `${a.last_name} ${a.first_name}`.toLowerCase()
+          const nameB = `${b.last_name} ${b.first_name}`.toLowerCase()
+          return nameA.localeCompare(nameB)
+        })
+
+      if (enrolledStudents.length === 0) {
+        setGbReportData({
+          classConfig: gbClassConfig,
+          dateRange: { start: startDate, end: endDate },
+          students: [],
+          generatedAt: new Date().toISOString(),
+        })
+        return
+      }
+
+      setGbProgress({ current: 0, total: enrolledStudents.length })
+
+      // 2. Grace period
+      let gracePeriod = 10
+      try {
+        const { data: gs } = await supabase
+          .from('settings')
+          .select('setting_value')
+          .eq('setting_key', 'grace_period_minutes')
+          .maybeSingle()
+        if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10
+      } catch {}
+
+      // 3. All classes (needed by generateUserReport for cross-class context)
+      const { data: classesData } = await supabase.from('classes').select('*')
+
+      // 4. Volunteer hours per student. IMPORTANT: volunteer hours are graded
+      //    PROGRAM-WIDE (semester window), not class-window. Matches the logic
+      //    in useVolunteerHours.js so this report agrees with the Volunteer
+      //    Hours page the student sees. Window resolution:
+      //      a) Explicit settings volunteer_semester_start / _end if present
+      //         and not stale (configured end >= today)
+      //      b) Otherwise: earliest active class start_date → latest active
+      //         class end_date
+      //      c) Final fallback: current calendar year
+      //    Filter by approval_status='Approved' so unapproved entries don't
+      //    count (matches the page).
+      let volSemStart = null
+      let volSemEnd = null
+      try {
+        const { data: settingsRows } = await supabase
+          .from('settings')
+          .select('setting_key, setting_value')
+          .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end'])
+        const sMap = {}
+        ;(settingsRows || []).forEach(r => { sMap[r.setting_key] = r.setting_value })
+        volSemStart = sMap.volunteer_semester_start || null
+        volSemEnd = sMap.volunteer_semester_end || null
+        // Stale check: if configured end is before today, fall through to fallback
+        const todayDate = new Date()
+        const endIsStale = volSemEnd && new Date(volSemEnd + 'T23:59:59') < todayDate
+        if (!volSemStart || !volSemEnd || endIsStale) {
+          if (endIsStale) { volSemStart = null; volSemEnd = null }
+          const { data: actClasses } = await supabase
+            .from('classes')
+            .select('start_date, end_date')
+            .eq('status', 'Active')
+            .order('start_date', { ascending: true })
+            .limit(20)
+          if (actClasses && actClasses.length > 0) {
+            const starts = actClasses.map(c => c.start_date).filter(Boolean).sort()
+            const ends = actClasses.map(c => c.end_date).filter(Boolean).sort()
+            if (!volSemStart && starts.length > 0) volSemStart = starts[0]
+            if (!volSemEnd && ends.length > 0) volSemEnd = ends[ends.length - 1]
+          }
+        }
+        if (!volSemStart) volSemStart = `${new Date().getFullYear()}-01-01`
+        if (!volSemEnd) volSemEnd = `${new Date().getFullYear()}-12-31`
+      } catch (semErr) {
+        console.warn('GB report: volunteer semester window fetch failed, using class window as fallback:', semErr)
+        volSemStart = startDate
+        volSemEnd = endDate
+      }
+
+      const emails = enrolledStudents.map(s => s.email).filter(Boolean)
+      const volunteerByEmail = {}
+      if (emails.length > 0) {
+        try {
+          const { data: volData } = await supabase
+            .from('time_clock')
+            .select('user_email, total_hours, approval_status, punch_in')
+            .in('user_email', emails)
+            .eq('entry_type', 'Volunteer')
+            .eq('approval_status', 'Approved')
+            .gte('punch_in', volSemStart + 'T00:00:00')
+            .lte('punch_in', volSemEnd + 'T23:59:59')
+          ;(volData || []).forEach(r => {
+            const e = (r.user_email || '').toLowerCase().trim()
+            if (!e) return
+            volunteerByEmail[e] = (volunteerByEmail[e] || 0) + (parseFloat(r.total_hours) || 0)
+          })
+        } catch (volErr) {
+          console.warn('GB report: volunteer hours fetch failed:', volErr)
+        }
+      }
+
+      // 5. WOC scores — already loaded by useWOCRatio above. Build email→score map.
+      const wocByEmail = new Map(
+        (wocReport.allScores || []).map(s => [(s.email || '').toLowerCase().trim(), s])
+      )
+
+      // 6. Per-student attendance via generateUserReport (reuses the same
+      //    cross-class All Done propagation logic the rest of the report uses).
+      const studentRows = []
+      for (let i = 0; i < enrolledStudents.length; i++) {
+        const s = enrolledStudents[i]
+        setGbProgress({ current: i + 1, total: enrolledStudents.length })
+        try {
+          const r = await generateUserReport(s, startDate, endDate, gracePeriod, classesData)
+          const cr = (r.classReports || []).find(x => x.courseId === courseId)
+          const attendanceScore = cr ? cr.attendance.attendanceScore : null
+          const totalHours = cr ? cr.totalHours : 0
+          const requiredTotal = cr ? cr.totalRequiredHours : 0
+          const woc = wocByEmail.get((s.email || '').toLowerCase().trim())
+          studentRows.push({
+            userId: s.user_id,
+            name: `${s.first_name} ${s.last_name}`.trim(),
+            email: s.email || '',
+            role: s.role || '',
+            attendanceScore,
+            totalHours: Math.round(totalHours * 100) / 100,
+            requiredTotal: Math.round(requiredTotal * 100) / 100,
+            wocScore: woc ? woc.score : null,
+            volunteerHours: Math.round(((volunteerByEmail[(s.email || '').toLowerCase().trim()] || 0)) * 100) / 100,
+          })
+        } catch (rowErr) {
+          console.warn(`GB report: failed for ${s.first_name} ${s.last_name}:`, rowErr)
+          studentRows.push({
+            userId: s.user_id,
+            name: `${s.first_name} ${s.last_name}`.trim(),
+            email: s.email || '',
+            role: s.role || '',
+            attendanceScore: null,
+            totalHours: 0,
+            requiredTotal: 0,
+            wocScore: null,
+            volunteerHours: 0,
+            error: rowErr.message,
+          })
+        }
+      }
+
+      setGbReportData({
+        classConfig: gbClassConfig,
+        dateRange: { start: startDate, end: endDate },
+        volunteerWindow: { start: volSemStart, end: volSemEnd },
+        students: studentRows,
+        generatedAt: new Date().toISOString(),
+      })
+    } catch (err) {
+      console.error('GB report error:', err)
+      setGbReportError('Failed to load GB Items: ' + (err.message || 'Unknown error'))
+      setGbReportData(null)
+    } finally {
+      setGbReportLoading(false)
+      setGbProgress({ current: 0, total: 0 })
+    }
+  }
 
   const nav = (offset) => {
     const d = new Date(startDate + 'T00:00:00')
@@ -616,11 +954,13 @@ export default function TimeCardsPage() {
 
       {/* Tabs */}
       {isInstructor && (
-        <div className="flex gap-2 print:hidden">
+        <div className="flex gap-2 print:hidden flex-wrap">
           <TabBtn active={tab === 'timecard'} icon={<User size={16} />}
             label="Individual Time Card" onClick={() => setTab('timecard')} />
           <TabBtn active={tab === 'classweekly'} icon={<Users size={16} />}
             label="Class Weekly Report" onClick={() => setTab('classweekly')} />
+          <TabBtn active={tab === 'gbitems'} icon={<GraduationCap size={16} />}
+            label="GB Items" onClick={() => setTab('gbitems')} />
           <TabBtn active={tab === 'pending'} icon={<Clock size={16} />}
             label="Pending Requests" onClick={() => setTab('pending')} />
         </div>
@@ -781,6 +1121,98 @@ export default function TimeCardsPage() {
       {/* ─── Pending Time Entry Requests (Instructor) ─────────── */}
       {tab === 'pending' && isInstructor && (
         <PendingTimeRequestsPanel actions={actions} />
+      )}
+
+      {/* ─── GB Items (Instructor end-of-class gradebook export) ─────── */}
+      {tab === 'gbitems' && isInstructor && (
+        <>
+          <div className="bg-white rounded-xl border border-surface-200 shadow-sm p-4 print:hidden">
+            <label htmlFor="gb-class-select" className="block text-xs font-medium text-surface-600 mb-1">
+              Select Class:
+            </label>
+            <div className="flex items-center gap-3 flex-wrap">
+              <select
+                id="gb-class-select"
+                value={gbSelectedClass}
+                onChange={e => setGbSelectedClass(e.target.value)}
+                className="input text-sm flex-1 min-w-[260px] max-w-md"
+                aria-describedby="gb-class-help"
+              >
+                <option value="">Select a class…</option>
+                {classes
+                  .filter(c => gbShowInactive || c.status === 'Active')
+                  .map(c => (
+                    <option key={c.class_id} value={c.course_id}>
+                      {c.course_id}{c.course_name ? ` — ${c.course_name}` : ''}
+                      {c.status !== 'Active' ? ` (${c.semester || 'Inactive'})` : ''}
+                    </option>
+                  ))}
+              </select>
+              <label className="flex items-center gap-1.5 text-xs text-surface-500 cursor-pointer select-none whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={gbShowInactive}
+                  onChange={e => setGbShowInactive(e.target.checked)}
+                  className="rounded border-surface-300 text-brand-600"
+                />
+                Show inactive
+              </label>
+              {gbReportData && gbReportData.students.length > 0 && (
+                <>
+                  <button
+                    onClick={() => exportGBToCsv(gbReportData)}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                  >
+                    <Download size={14} aria-hidden="true" /> Export CSV
+                  </button>
+                  <button
+                    onClick={() => window.print()}
+                    className="flex items-center gap-1.5 px-3 py-2 border border-surface-200 bg-white hover:bg-surface-50 text-surface-600 text-xs font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1"
+                  >
+                    <Printer size={14} aria-hidden="true" /> Print
+                  </button>
+                </>
+              )}
+            </div>
+            <p id="gb-class-help" className="text-[11px] text-surface-400 mt-2">
+              Report covers the class start date through end date (finals week excluded when configured).
+            </p>
+          </div>
+
+          <div className="bg-white rounded-xl border border-surface-200 shadow-sm overflow-hidden">
+            <div className="p-6">
+              {gbReportError ? (
+                <div className="flex items-start gap-2 p-4 bg-amber-50 border border-amber-200 rounded-lg" role="alert">
+                  <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                  <p className="text-sm text-amber-800">{gbReportError}</p>
+                </div>
+              ) : !gbSelectedClass ? (
+                <div className="text-center py-12 text-surface-400 text-sm">
+                  Select a class to view Gradebook Items.
+                </div>
+              ) : gbReportLoading ? (
+                <div
+                  className="flex flex-col items-center justify-center py-16 text-surface-500 gap-2 text-sm"
+                  role="status"
+                  aria-live="polite"
+                  aria-busy="true"
+                >
+                  <Loader2 size={20} className="animate-spin text-brand-600" aria-hidden="true" />
+                  <span>
+                    Loading GB Items…
+                    {gbProgress.total > 0 && ` (${gbProgress.current} of ${gbProgress.total})`}
+                  </span>
+                </div>
+              ) : gbReportData ? (
+                <GBItemsContent reportData={gbReportData} />
+              ) : (
+                <div className="text-center py-12 text-surface-400 text-sm">
+                  No data available for this class.
+                </div>
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {/* ─── Modals ────────────────────────────────────────────────────── */}
@@ -2395,6 +2827,208 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50' }) {
 
 function Field({ label, children }) {
   return <div><label className="block text-xs font-medium text-surface-600 mb-1">{label}</label>{children}</div>
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GB ITEMS — Gradebook export view (Attendance %, WOC Ratio, Volunteer Hours)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function GBItemsContent({ reportData }) {
+  const { classConfig, dateRange, volunteerWindow, students, generatedAt } = reportData
+
+  const formatDateLocal = (s) => {
+    if (!s) return '—'
+    const d = new Date(s + 'T00:00:00')
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+  const finalsExcluded = !!classConfig.finals_start
+
+  // Volunteer window may differ from class window because volunteer hours are
+  // graded program-wide (not per-class). Show that explicitly when it differs.
+  const volWindowDiffers = volunteerWindow && (
+    volunteerWindow.start !== dateRange.start || volunteerWindow.end !== dateRange.end
+  )
+
+  // Stat tone helper: contrast-safe class trio matched to the existing palette.
+  // Color is paired with bold weight so the meaning is conveyed by more than
+  // hue alone (WCAG 2.1 SC 1.4.1).
+  const scoreTone = (v) => {
+    if (v == null) return 'text-surface-400'
+    if (v >= 90) return 'text-green-700 font-semibold'
+    if (v >= 70) return 'text-amber-700 font-semibold'
+    return 'text-red-700 font-semibold'
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="mb-4 pb-4 border-b border-surface-200 flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-surface-900">
+            {classConfig.course_id} — Gradebook Items
+          </h2>
+          {classConfig.course_name && (
+            <p className="text-xs text-surface-500">{classConfig.course_name}</p>
+          )}
+          <p className="text-xs text-surface-500 mt-1">
+            {formatDateLocal(dateRange.start)} — {formatDateLocal(dateRange.end)}
+            {finalsExcluded && (
+              <span className="ml-2 text-surface-400">(finals week excluded)</span>
+            )}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-[11px] text-surface-400">Generated</p>
+          <p className="text-xs text-surface-600">
+            {generatedAt ? new Date(generatedAt).toLocaleString() : '—'}
+          </p>
+        </div>
+      </div>
+
+      {students.length === 0 ? (
+        <div className="text-center py-12 text-surface-400 text-sm">
+          No students enrolled in this class.
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">
+                Gradebook Items for {classConfig.course_id}: Attendance percentage,
+                WOC Ratio score, and Volunteer hours per student over the class window
+                {finalsExcluded ? ' (finals week excluded)' : ''}.
+              </caption>
+              <thead className="bg-surface-50 border-b-2 border-surface-200">
+                <tr>
+                  <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-surface-600 uppercase tracking-wider">
+                    Student
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-left text-xs font-semibold text-surface-600 uppercase tracking-wider">
+                    Role
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right text-xs font-semibold text-surface-600 uppercase tracking-wider">
+                    Attendance %
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right text-xs font-semibold text-surface-600 uppercase tracking-wider">
+                    WOC Ratio
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right text-xs font-semibold text-surface-600 uppercase tracking-wider">
+                    Volunteer Hours
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-100">
+                {students.map(s => (
+                  <tr key={s.userId} className={s.error ? 'bg-red-50' : ''}>
+                    <th scope="row" className="px-4 py-2 font-medium text-surface-900 text-left">
+                      {s.name}
+                      {s.error && (
+                        <span className="ml-2 text-[10px] text-red-600" title={s.error}>
+                          (load error)
+                        </span>
+                      )}
+                    </th>
+                    <td className="px-4 py-2 text-surface-500 text-xs">{s.role}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      {s.attendanceScore == null ? (
+                        <span className="text-surface-400">—</span>
+                      ) : (
+                        <span className={scoreTone(s.attendanceScore)}>
+                          {s.attendanceScore}%
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      {s.wocScore == null ? (
+                        <span className="text-surface-400">—</span>
+                      ) : (
+                        <span className={scoreTone(s.wocScore)}>
+                          {s.wocScore}%
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums text-surface-700">
+                      {s.volunteerHours > 0 ? formatHours(s.volunteerHours) : <span className="text-surface-400">0h</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-[11px] text-surface-500 mt-4 italic leading-relaxed">
+            <strong className="not-italic font-semibold text-surface-600">Attendance %</strong> uses the same on-time score as the per-class report
+            (factors in Late, Left Early, and No Show penalties; weeks closed by
+            an All Done are scored as 100% across every enrolled class), computed over the class window.
+            <br />
+            <strong className="not-italic font-semibold text-surface-600">WOC Ratio</strong> uses the standard scoring shown on the WOC Ratio page,
+            applied to the class window.
+            <br />
+            <strong className="not-italic font-semibold text-surface-600">Volunteer Hours</strong> sums approved (approval_status = Approved) volunteer
+            time-clock entries across the volunteer semester window
+            {volWindowDiffers && volunteerWindow && (
+              <>
+                {' '}({formatDateLocal(volunteerWindow.start)} — {formatDateLocal(volunteerWindow.end)})
+              </>
+            )}
+            {' '}— this is intentionally wider than the class window because volunteer
+            hours are graded program-wide, matching the Volunteer Hours page.
+            <br />
+            A “—” means the metric was not applicable for that student over
+            this window (e.g. no time entries).
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+// CSV download for the GB Items report. RFC-4180 quoting: any cell containing
+// a comma, quote, or newline gets wrapped in quotes with internal quotes
+// doubled. Excel-friendly.
+function exportGBToCsv(reportData) {
+  const { classConfig, students, dateRange, volunteerWindow, generatedAt } = reportData
+  const rows = [
+    ['RICT CMMS — Gradebook Items'],
+    ['Class', classConfig.course_id],
+    ['Course Name', classConfig.course_name || ''],
+    ['Semester', classConfig.semester || ''],
+    ['Start Date', dateRange.start || ''],
+    ['End Date', dateRange.end || ''],
+    ['Finals Excluded', classConfig.finals_start ? 'Yes' : 'No'],
+    ['Volunteer Hours Window', volunteerWindow ? `${volunteerWindow.start} to ${volunteerWindow.end}` : '(class window)'],
+    ['Generated', generatedAt || ''],
+    [],
+    ['Student', 'Email', 'Role', 'Attendance %', 'WOC Ratio %', 'Volunteer Hours'],
+    ...students.map(s => [
+      s.name,
+      s.email || '',
+      s.role || '',
+      s.attendanceScore == null ? '' : s.attendanceScore,
+      s.wocScore == null ? '' : s.wocScore,
+      s.volunteerHours == null ? 0 : (Math.round(s.volunteerHours * 100) / 100),
+    ])
+  ]
+
+  const csv = rows.map(row =>
+    row.map(cell => {
+      const str = cell == null ? '' : String(cell)
+      return /[",\n\r]/.test(str)
+        ? '"' + str.replace(/"/g, '""') + '"'
+        : str
+    }).join(',')
+  ).join('\r\n')
+
+  // Prepend BOM so Excel treats it as UTF-8 (avoids garbled non-ASCII names)
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `GB_Items_${classConfig.course_id}_${dateRange.start || 'unknown'}_to_${dateRange.end || 'unknown'}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 100)
 }
 
 function TabBtn({ active, icon, label, onClick }) {
