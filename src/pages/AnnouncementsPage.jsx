@@ -6,10 +6,59 @@ import toast from 'react-hot-toast'
 import {
   Megaphone, Search, Send, Trash2, RotateCcw, X, Loader2,
   CheckCircle2, Mail, MailOpen, Clock, Users, ChevronDown, ChevronUp,
-  Bell, RefreshCw, Plus, FileText, Save, Edit3, Eye, Archive, Undo2, Pin, Inbox,
-  ShieldAlert
+  Bell, RefreshCw, Plus, FileText, Save, Edit3, Eye, EyeOff, Archive, Undo2, Pin, Inbox,
+  ShieldAlert, Info
 } from 'lucide-react'
 import StudentHoldsTab from '@/components/holds/StudentHoldsTab'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utility / service accounts that must NEVER appear in the messaging picker —
+// even for instructors and even though they may have a valid Active profile.
+// Compared case-insensitively. Add more entries here if additional service
+// accounts are introduced. Today: the super-admin utility account, per the
+// "never shown in instructor-facing UI" convention.
+// ─────────────────────────────────────────────────────────────────────────────
+const HIDDEN_PICKER_EMAILS = new Set([
+  'rictprogram@gmail.com',
+])
+function isHiddenPickerEmail(email) {
+  if (!email) return false
+  return HIDDEN_PICKER_EMAILS.has(String(email).toLowerCase())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// notification_type values that represent SYSTEM-GENERATED audit rows (not
+// human-composed messages). When the instructor toggles "hide audit rows" on
+// the Sent Messages tab, rows with these types are filtered out.
+//
+// These rows have sender_email = whoever triggered the action (e.g. a student
+// self-assigning to a WO), but semantically they aren't "messages" — they're
+// audit notifications the system writes for the recipient. Listing them here
+// (rather than allow-listing message types) means new BROADCAST types added
+// in the future show up automatically; new SYSTEM types must be opted-in.
+// ─────────────────────────────────────────────────────────────────────────────
+const SYSTEM_NOTIFICATION_TYPES = new Set([
+  'wo_assignment',
+  'wo_unassignment',
+])
+function isSystemNotificationType(t) {
+  return !!t && SYSTEM_NOTIFICATION_TYPES.has(t)
+}
+
+// localStorage key for the "show audit rows" toggle on the instructor's
+// Sent Messages tab. Per-browser preference; doesn't sync across devices.
+const SENT_SHOW_SYSTEM_KEY = 'rict-cmms.sent.show-system-rows'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Policy disclaimer shown to students/work study at compose time. Lives here
+// (rather than inline in JSX) so wording can be tweaked in one spot. Update
+// this string and the modal will pick it up automatically — no other changes
+// required.
+// ─────────────────────────────────────────────────────────────────────────────
+const STUDENT_USAGE_NOTE = {
+  heading: 'For CMMS communication only.',
+  body: 'Use this for work orders, lab questions, parts, and shop-floor topics. For grades, attendance, accommodations, or other academic matters, please contact your instructor through your official email or D2L message.',
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIRM MODAL (replaces native confirm())
@@ -62,14 +111,22 @@ export default function AnnouncementsPage() {
   const canViewSent = hasPerm('view_sent')
   const canManageTemplates = hasPerm('manage_templates')
   const canManageHolds = hasPerm('manage_holds')
-  const showAdminTabs = canViewSent || canManageTemplates
+  const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin'
+  // Non-instructors with compose permission still get a Sent tab — but it's
+  // filtered to only their own sent messages (handled inside SentHistoryTab).
+  // Instructors with view_sent see ALL sent messages (existing behavior).
+  const canViewOwnSent = canCompose && !canViewSent
+  const showSentTab = canViewSent || canViewOwnSent
   const [tab, setTab] = useState('inbox')
   const [showCompose, setShowCompose] = useState(false)
+  const [replyTo, setReplyTo] = useState(null) // { sender_email, sender_name, subject } when replying
   const [refreshKey, setRefreshKey] = useState(0)
   const [tabInitDone, setTabInitDone] = useState(false)
   const triggerRefresh = () => setRefreshKey(k => k + 1)
 
-  // Set default tab to 'sent' once permissions confirm admin-level access
+  // Default tab logic:
+  //   Instructors → 'sent' (so they land on the broadcast history they manage)
+  //   Students/Work Study → stay on 'inbox' (their primary use-case is reading messages)
   useEffect(() => {
     if (!tabInitDone && canViewSent) {
       setTab('sent')
@@ -77,10 +134,25 @@ export default function AnnouncementsPage() {
     }
   }, [canViewSent, tabInitDone])
 
+  // Open compose modal with reply context pre-filled. Called from InboxTab.
+  const openReply = (msg) => {
+    setReplyTo({
+      sender_email: msg.sender_email,
+      sender_name: msg.sender_name,
+      subject: msg.subject,
+    })
+    setShowCompose(true)
+  }
+
+  const closeCompose = () => {
+    setShowCompose(false)
+    setReplyTo(null)
+  }
+
   const tabs = [
     { id: 'inbox', label: 'My Inbox', icon: Bell },
-    ...(canViewSent ? [
-      { id: 'sent', label: 'Sent Messages', icon: Send },
+    ...(showSentTab ? [
+      { id: 'sent', label: canViewOwnSent ? 'My Sent' : 'Sent Messages', icon: Send },
     ] : []),
     ...(canManageTemplates ? [
       { id: 'templates', label: 'Templates', icon: FileText },
@@ -98,36 +170,53 @@ export default function AnnouncementsPage() {
           <Megaphone size={20} className="text-brand-600" /> Announcements
         </h1>
         {canCompose && (
-          <button onClick={() => setShowCompose(true)}
-            className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 flex items-center gap-1.5 shadow-sm">
-            <Plus size={14} /> New Message
+          <button onClick={() => { setReplyTo(null); setShowCompose(true) }}
+            className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 flex items-center gap-1.5 shadow-sm"
+            aria-label={isInstructor ? 'Compose new announcement' : 'Send a message to your instructor(s)'}>
+            <Plus size={14} /> {isInstructor ? 'New Message' : 'Message Instructor'}
           </button>
         )}
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-surface-100 rounded-xl p-1">
+      <div className="flex gap-1 bg-surface-100 rounded-xl p-1" role="tablist" aria-label="Announcement views">
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
+            role="tab"
+            aria-selected={tab === t.id}
             className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
               tab === t.id ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'
             }`}>
-            <t.icon size={14} /> {t.label}
+            <t.icon size={14} aria-hidden="true" /> {t.label}
           </button>
         ))}
       </div>
 
       {/* Tab Content */}
-      {tab === 'inbox' && <InboxTab refreshKey={refreshKey} />}
-      {tab === 'sent' && canViewSent && <SentHistoryTab refreshKey={refreshKey} />}
+      {tab === 'inbox' && (
+        <InboxTab
+          refreshKey={refreshKey}
+          canReply={canCompose}
+          onReply={openReply}
+        />
+      )}
+      {tab === 'sent' && showSentTab && (
+        <SentHistoryTab
+          refreshKey={refreshKey}
+          viewMode={canViewOwnSent ? 'own' : 'all'}
+        />
+      )}
       {tab === 'templates' && canManageTemplates && <TemplatesTab />}
       {tab === 'holds' && canManageHolds && <StudentHoldsTab />}
 
       {/* Compose Modal */}
       {showCompose && (
         <ComposeModal
-          onClose={() => setShowCompose(false)}
-          onSent={() => { setShowCompose(false); triggerRefresh() }}
+          isInstructor={isInstructor}
+          canManageTemplates={canManageTemplates}
+          replyTo={replyTo}
+          onClose={closeCompose}
+          onSent={() => { closeCompose(); triggerRefresh() }}
         />
       )}
     </div>
@@ -138,7 +227,7 @@ export default function AnnouncementsPage() {
 // INBOX TAB  (All users)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function InboxTab({ refreshKey }) {
+function InboxTab({ refreshKey, canReply = false, onReply }) {
   const { profile } = useAuth()
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
@@ -392,26 +481,42 @@ function InboxTab({ refreshKey }) {
                 <div className="text-sm text-surface-700 whitespace-pre-wrap mt-3 leading-relaxed">
                   {msg.body}
                 </div>
-                <div className="flex items-center justify-between mt-3">
-                  {msg.expires_at && (
+                <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
+                  {msg.expires_at ? (
                     <div className="text-[10px] text-surface-400 flex items-center gap-1">
-                      <Clock size={10} /> Expires {new Date(msg.expires_at).toLocaleDateString()}
+                      <Clock size={10} aria-hidden="true" /> Expires {new Date(msg.expires_at).toLocaleDateString()}
                     </div>
-                  )}
-                  {!msg.expires_at && <div />}
-                  {/* Archive / Restore button (pinned messages cannot be archived) */}
-                  {subTab === 'inbox' && !isPinned && (
-                    <button onClick={(e) => { e.stopPropagation(); archiveMessage(msg) }}
-                      className="text-xs text-surface-500 hover:text-surface-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-surface-100 transition-colors">
-                      <Archive size={12} /> Archive
-                    </button>
-                  )}
-                  {subTab === 'archived' && (
-                    <button onClick={(e) => { e.stopPropagation(); restoreMessage(msg) }}
-                      className="text-xs text-brand-600 hover:text-brand-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-brand-50 transition-colors">
-                      <Undo2 size={12} /> Restore
-                    </button>
-                  )}
+                  ) : <div />}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {/* Reply button — only when user can compose AND there's a real
+                        sender to reply to (skips system-generated rows like wo_assignment
+                        which often have a generic sender_email or no reply context, and
+                        skips hidden utility accounts that aren't valid recipients). */}
+                    {canReply
+                      && msg.sender_email
+                      && msg.sender_email.toLowerCase() !== profile?.email?.toLowerCase()
+                      && !isHiddenPickerEmail(msg.sender_email) && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onReply && onReply(msg) }}
+                        className="text-xs text-brand-600 hover:text-brand-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-brand-50 transition-colors font-medium"
+                        aria-label={`Reply to ${msg.sender_name || msg.sender_email}`}>
+                        <Send size={12} aria-hidden="true" /> Reply
+                      </button>
+                    )}
+                    {/* Archive / Restore button (pinned messages cannot be archived) */}
+                    {subTab === 'inbox' && !isPinned && (
+                      <button onClick={(e) => { e.stopPropagation(); archiveMessage(msg) }}
+                        className="text-xs text-surface-500 hover:text-surface-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-surface-100 transition-colors">
+                        <Archive size={12} aria-hidden="true" /> Archive
+                      </button>
+                    )}
+                    {subTab === 'archived' && (
+                      <button onClick={(e) => { e.stopPropagation(); restoreMessage(msg) }}
+                        className="text-xs text-brand-600 hover:text-brand-700 flex items-center gap-1 px-2 py-1 rounded hover:bg-brand-50 transition-colors">
+                        <Undo2 size={12} aria-hidden="true" /> Restore
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -426,14 +531,48 @@ function InboxTab({ refreshKey }) {
 // COMPOSE MODAL  (Instructors)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPOSE MODAL  (All roles — but UX adapts to sender's role)
+//
+// Behavior:
+//   • Instructors: full picker (any role), templates, save-as-template
+//   • Students/Work Study: picker filtered to Active Instructors only,
+//     no role bulk-selectors except "All Instructors", templates hidden,
+//     save-as-template hidden, info banner shown
+//   • Reply mode (replyTo set): pre-fills "Re: …" subject and pre-selects the
+//     original sender as the only recipient. The sender is added to the picker
+//     even if they would normally be filtered out (e.g., a student reply to an
+//     instructor — the instructor is in the visible list anyway; an instructor
+//     reply to a student — the student is added on the fly).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Safely build a "Re: ..." subject without doubling the prefix on multi-hop replies
+function buildReplySubject(originalSubject) {
+  const s = (originalSubject || '').trim()
+  if (!s) return 'Re: '
+  if (/^re\s*:/i.test(s)) return s // already prefixed
+  return `Re: ${s}`
+}
+
+function ComposeModal({ onClose, onSent, initialSubject, initialBody, isInstructor = true, canManageTemplates = true, replyTo = null }) {
   const { profile } = useAuth()
   const [users, setUsers] = useState([])
   const [templates, setTemplates] = useState([])
-  const [subject, setSubject] = useState(initialSubject || '')
+  const [subject, setSubject] = useState(
+    replyTo ? buildReplySubject(replyTo.subject) : (initialSubject || '')
+  )
   const [body, setBody] = useState(initialBody || '')
   const [expiresDate, setExpiresDate] = useState('')
-  const [selectedEmails, setSelectedEmails] = useState({})
+  const [selectedEmails, setSelectedEmails] = useState(() => {
+    // When replying, pre-select the original sender so the student/instructor
+    // doesn't have to find them in the list — UNLESS the sender is a hidden
+    // utility account, in which case we drop the pre-selection (and the user
+    // loader below will also exclude them from the picker entirely).
+    if (replyTo?.sender_email && !isHiddenPickerEmail(replyTo.sender_email)) {
+      return { [replyTo.sender_email.toLowerCase()]: true }
+    }
+    return {}
+  })
   const [sending, setSending] = useState(false)
   const [search, setSearch] = useState('')
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
@@ -442,19 +581,63 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
   // Load users and templates
   useEffect(() => {
     const load = async () => {
-      const [uRes, tRes] = await Promise.all([
+      // Non-instructors don't load templates (they can't use them in this modal),
+      // saves a round-trip and respects manage_templates permissions.
+      const queries = [
         supabase.from('profiles').select('email, first_name, last_name, role, status, time_clock_only').order('first_name'),
-        supabase.from('message_templates').select('*').order('template_name'),
-      ])
-      // Filter out archived/inactive and TCO users
-      const active = (uRes.data || []).filter(u =>
-        u.status === 'Active' && u.time_clock_only !== 'Yes'
+      ]
+      if (isInstructor) {
+        queries.push(supabase.from('message_templates').select('*').order('template_name'))
+      }
+      const results = await Promise.all(queries)
+      const uRes = results[0]
+      const tRes = isInstructor ? results[1] : { data: [] }
+
+      // Filter out archived/inactive, TCO users, and any utility/service
+      // accounts (e.g. the super-admin account). The hidden-email check is
+      // applied universally — instructors should never see the service account
+      // in the picker either, per the "never shown in instructor-facing UI"
+      // convention.
+      let active = (uRes.data || []).filter(u =>
+        u.status === 'Active' &&
+        u.time_clock_only !== 'Yes' &&
+        !isHiddenPickerEmail(u.email)
       )
+
+      // Non-instructors can ONLY message instructors — privacy + scope.
+      // We also include Super Admin profiles whose role is "Instructor" — the
+      // utility super-admin account is never shown here per app convention
+      // (filtered by status/time_clock_only at the profile level).
+      if (!isInstructor) {
+        active = active.filter(u => u.role === 'Instructor' || u.role === 'Super Admin')
+      }
+
+      // Reply mode: ensure the reply target is in the visible list even if it
+      // would normally be filtered out (e.g., instructor replying to a student
+      // when the modal happens to be a "to instructors only" mode — defensive).
+      // Skip injection entirely if the original sender is a hidden utility
+      // account — those must stay invisible regardless of context.
+      if (replyTo?.sender_email && !isHiddenPickerEmail(replyTo.sender_email)) {
+        const target = replyTo.sender_email.toLowerCase()
+        const present = active.some(u => u.email?.toLowerCase() === target)
+        if (!present) {
+          // Synthesize a minimal entry so the checkbox renders. Pull display
+          // info from the original message so the user sees a name, not just
+          // an email. Role tag falls back to 'Recipient' if unknown.
+          active = [{
+            email: replyTo.sender_email,
+            first_name: (replyTo.sender_name || '').split(' ')[0] || '',
+            last_name: (replyTo.sender_name || '').split(' ').slice(1).join(' '),
+            role: 'Recipient',
+          }, ...active]
+        }
+      }
+
       setUsers(active)
       setTemplates(tRes.data || [])
     }
     load()
-  }, [])
+  }, [isInstructor, replyTo?.sender_email, replyTo?.sender_name])
 
   const filteredUsers = useMemo(() => {
     if (!search) return users
@@ -525,6 +708,15 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
     try {
       const senderName = `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
       const now = new Date().toISOString()
+
+      // Tag student/work-study sends so the instructor's NotificationBell can
+      // render them with a distinct "STUDENT MESSAGE" label and color, and so
+      // they're filterable later if we ever want analytics.
+      // NOTE: leaving this null for instructor sends preserves existing push
+      // routing in the send-push Edge Function (it routes 'announcement'/null
+      // to the specific recipient; other types blast all instructors).
+      const notification_type = isInstructor ? null : 'student_message'
+
       const rows = emails.map(email => ({
         recipient_email: email.toLowerCase(),
         sender_email: profile.email,
@@ -534,6 +726,7 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
         created_at: now,
         read: false,
         expires_at: expiresDate ? new Date(expiresDate).toISOString() : null,
+        notification_type,
       }))
 
       const { data: insRows, error } = await supabase.from('announcements').insert(rows).select()
@@ -546,13 +739,17 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
 
       // Audit log
       try {
+        const auditAction = replyTo ? 'Reply' : 'Create'
+        const auditDetails = isInstructor
+          ? `Sent to ${emails.length} recipient(s): ${subject.trim()}`
+          : `Student message sent to ${emails.length} instructor(s): ${subject.trim()}`
         await supabase.from('audit_log').insert({
           user_email: profile.email,
           user_name: senderName,
-          action: 'Create',
+          action: auditAction,
           entity_type: 'Announcement',
           entity_id: subject.trim().slice(0, 50),
-          details: `Sent to ${emails.length} recipient(s): ${subject.trim()}`,
+          details: auditDetails,
         })
       } catch {}
 
@@ -567,21 +764,57 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+      role="dialog" aria-modal="true" aria-labelledby="compose-modal-title">
       <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-200">
-          <h2 className="text-base font-bold text-surface-900 flex items-center gap-2">
-            <Send size={18} className="text-brand-600" /> Compose Message
+          <h2 id="compose-modal-title" className="text-base font-bold text-surface-900 flex items-center gap-2">
+            <Send size={18} className="text-brand-600" aria-hidden="true" />
+            {replyTo
+              ? `Reply to ${replyTo.sender_name || replyTo.sender_email}`
+              : (isInstructor ? 'Compose Message' : 'Message Your Instructor')}
           </h2>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400">
-            <X size={16} />
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"
+            aria-label="Close compose dialog">
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {/* Template selector */}
-          {templates.length > 0 && (
+          {/* Policy disclaimer — non-instructors only.
+              Amber tone differentiates it from the green "messaging instructors" banner:
+              amber = "scope/policy reminder", green = "informational confirmation". */}
+          {!isInstructor && (
+            <div role="note"
+              className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-900 flex items-start gap-2">
+              <Info size={14} className="text-amber-600 mt-0.5 flex-shrink-0" aria-hidden="true" />
+              <div>
+                <p className="font-semibold">{STUDENT_USAGE_NOTE.heading}</p>
+                <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                  {STUDENT_USAGE_NOTE.body}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Info banner for non-instructors */}
+          {!isInstructor && (
+            <div role="note"
+              className="rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-emerald-800 flex items-start gap-2">
+              <Mail size={14} className="text-emerald-600 mt-0.5 flex-shrink-0" aria-hidden="true" />
+              <div>
+                <p className="font-semibold">Your message goes to your instructor(s) only.</p>
+                <p className="text-[11px] text-emerald-700 mt-0.5">
+                  They'll be notified by bell {replyTo ? '' : 'and push notification '}as soon as you send. Pick one or
+                  use "All Instructors" to message everyone.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Template selector — instructors only */}
+          {isInstructor && templates.length > 0 && (
             <div>
               <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
                 Load Template
@@ -590,7 +823,7 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
                 {templates.map(t => (
                   <button key={t.id} onClick={() => applyTemplate(t)}
                     className="px-2.5 py-1 rounded-lg bg-surface-100 text-xs text-surface-700 hover:bg-brand-50 hover:text-brand-700 transition-colors">
-                    <FileText size={11} className="inline mr-1" />{t.template_name}
+                    <FileText size={11} className="inline mr-1" aria-hidden="true" />{t.template_name}
                   </button>
                 ))}
               </div>
@@ -599,52 +832,65 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
 
           {/* Subject */}
           <div>
-            <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">Subject *</label>
-            <input type="text" value={subject} onChange={e => setSubject(e.target.value)}
+            <label htmlFor="compose-subject" className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">Subject *</label>
+            <input id="compose-subject" type="text" value={subject} onChange={e => setSubject(e.target.value)}
               placeholder="Message subject…" className="input text-sm" />
           </div>
 
           {/* Body */}
           <div>
-            <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">Message *</label>
-            <textarea value={body} onChange={e => setBody(e.target.value)}
+            <label htmlFor="compose-body" className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">Message *</label>
+            <textarea id="compose-body" value={body} onChange={e => setBody(e.target.value)}
               placeholder="Type your message…" rows={5}
               className="input text-sm resize-y min-h-[100px]" />
           </div>
 
-          {/* Expires */}
-          <div>
-            <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
-              Expires (optional)
-            </label>
-            <input type="date" value={expiresDate} onChange={e => setExpiresDate(e.target.value)}
-              className="input text-sm w-48" />
-          </div>
+          {/* Expires — instructors only (broadcast lifecycle); not relevant for student→instructor messages */}
+          {isInstructor && (
+            <div>
+              <label htmlFor="compose-expires" className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
+                Expires (optional)
+              </label>
+              <input id="compose-expires" type="date" value={expiresDate} onChange={e => setExpiresDate(e.target.value)}
+                className="input text-sm w-48" />
+            </div>
+          )}
 
           {/* Recipients */}
           <div>
             <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
-              Recipients * <span className="text-surface-400 normal-case">({selectedCount} selected)</span>
+              {isInstructor ? 'Recipients' : 'Send to (Instructors)'} * <span className="text-surface-400 normal-case">({selectedCount} selected)</span>
             </label>
 
-            {/* Quick select buttons */}
+            {/* Quick select buttons — role-aware. Non-instructors only see
+                "All Instructors" / "Clear All" since their picker is already
+                limited to instructors. */}
             <div className="flex flex-wrap gap-1.5 mb-2">
-              <button onClick={selectAll}
-                className="px-2 py-0.5 rounded bg-surface-100 text-[10px] font-medium text-surface-600 hover:bg-surface-200">
-                Select All
-              </button>
-              <button onClick={() => selectByRole('Student')}
-                className="px-2 py-0.5 rounded bg-blue-50 text-[10px] font-medium text-blue-700 hover:bg-blue-100">
-                All Students
-              </button>
-              <button onClick={() => selectByRole('Work Study')}
-                className="px-2 py-0.5 rounded bg-emerald-50 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100">
-                All Work Study
-              </button>
-              <button onClick={() => selectByRole('Instructor')}
-                className="px-2 py-0.5 rounded bg-purple-50 text-[10px] font-medium text-purple-700 hover:bg-purple-100">
-                All Instructors
-              </button>
+              {isInstructor ? (
+                <>
+                  <button onClick={selectAll}
+                    className="px-2 py-0.5 rounded bg-surface-100 text-[10px] font-medium text-surface-600 hover:bg-surface-200">
+                    Select All
+                  </button>
+                  <button onClick={() => selectByRole('Student')}
+                    className="px-2 py-0.5 rounded bg-blue-50 text-[10px] font-medium text-blue-700 hover:bg-blue-100">
+                    All Students
+                  </button>
+                  <button onClick={() => selectByRole('Work Study')}
+                    className="px-2 py-0.5 rounded bg-emerald-50 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100">
+                    All Work Study
+                  </button>
+                  <button onClick={() => selectByRole('Instructor')}
+                    className="px-2 py-0.5 rounded bg-purple-50 text-[10px] font-medium text-purple-700 hover:bg-purple-100">
+                    All Instructors
+                  </button>
+                </>
+              ) : (
+                <button onClick={selectAll}
+                  className="px-2 py-0.5 rounded bg-purple-50 text-[10px] font-medium text-purple-700 hover:bg-purple-100">
+                  All Instructors
+                </button>
+              )}
               {selectedCount > 0 && (
                 <button onClick={clearAll}
                   className="px-2 py-0.5 rounded bg-red-50 text-[10px] font-medium text-red-600 hover:bg-red-100">
@@ -661,10 +907,19 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
             </div>
 
             {/* User checklist */}
-            <div className="border border-surface-200 rounded-xl max-h-48 overflow-y-auto divide-y divide-surface-100">
+            <div className="border border-surface-200 rounded-xl max-h-48 overflow-y-auto divide-y divide-surface-100"
+              role="group" aria-label={isInstructor ? 'Recipient list' : 'Instructor list'}>
               {filteredUsers.map(u => {
                 const name = `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email
                 const isChecked = !!selectedEmails[u.email]
+                // Treat Super Admin as Instructor visually so the utility super-admin
+                // (if it ever shows up) doesn't get a generic blue tag.
+                const displayRole = u.role === 'Super Admin' ? 'Instructor' : u.role
+                const tagClass =
+                  displayRole === 'Instructor' ? 'bg-purple-100 text-purple-700' :
+                  displayRole === 'Work Study' ? 'bg-emerald-100 text-emerald-700' :
+                  displayRole === 'Recipient'  ? 'bg-surface-100 text-surface-700' :
+                  'bg-blue-100 text-blue-700'
                 return (
                   <label key={u.email}
                     className={`flex items-center gap-2.5 px-3 py-2 cursor-pointer hover:bg-surface-50 transition-colors ${
@@ -672,36 +927,36 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
                     }`}>
                     <input type="checkbox" checked={isChecked}
                       onChange={() => toggleEmail(u.email)}
+                      aria-label={`Send to ${name}`}
                       className="rounded border-surface-300 text-brand-600 focus:ring-brand-500" />
                     <div className="flex-1 min-w-0">
                       <span className="text-xs font-medium text-surface-800">{name}</span>
                       <span className="text-[10px] text-surface-400 ml-2">{u.email}</span>
                     </div>
-                    <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${
-                      u.role === 'Instructor' ? 'bg-purple-100 text-purple-700' :
-                      u.role === 'Work Study' ? 'bg-emerald-100 text-emerald-700' :
-                      'bg-blue-100 text-blue-700'
-                    }`}>{u.role}</span>
+                    <span className={`text-[9px] font-medium px-1.5 py-0.5 rounded-full ${tagClass}`}>{displayRole}</span>
                   </label>
                 )
               })}
               {filteredUsers.length === 0 && (
-                <div className="text-center py-6 text-xs text-surface-400">No users found</div>
+                <div className="text-center py-6 text-xs text-surface-400">
+                  {isInstructor ? 'No users found' : 'No instructors available'}
+                </div>
               )}
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-surface-200 flex items-center gap-2">
-          {/* Save as template */}
-          {showSaveTemplate ? (
+        <div className="px-5 py-3 border-t border-surface-200 flex items-center gap-2 flex-wrap">
+          {/* Save as template — only for instructors who can manage templates */}
+          {isInstructor && canManageTemplates && showSaveTemplate ? (
             <div className="flex items-center gap-2 flex-1">
               <input type="text" value={templateName} onChange={e => setTemplateName(e.target.value)}
-                placeholder="Template name…" className="input text-xs py-1.5 flex-1" autoFocus />
+                placeholder="Template name…" className="input text-xs py-1.5 flex-1" autoFocus
+                aria-label="Template name" />
               <button onClick={handleSaveTemplate}
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700">
-                <Save size={11} className="inline mr-1" /> Save
+                <Save size={11} className="inline mr-1" aria-hidden="true" /> Save
               </button>
               <button onClick={() => setShowSaveTemplate(false)}
                 className="px-2 py-1.5 rounded-lg bg-surface-100 text-xs text-surface-600">
@@ -710,10 +965,12 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
             </div>
           ) : (
             <>
-              <button onClick={() => setShowSaveTemplate(true)}
-                className="px-3 py-1.5 rounded-lg bg-surface-100 text-xs text-surface-600 hover:bg-surface-200 flex items-center gap-1">
-                <FileText size={12} /> Save as Template
-              </button>
+              {isInstructor && canManageTemplates && (
+                <button onClick={() => setShowSaveTemplate(true)}
+                  className="px-3 py-1.5 rounded-lg bg-surface-100 text-xs text-surface-600 hover:bg-surface-200 flex items-center gap-1">
+                  <FileText size={12} aria-hidden="true" /> Save as Template
+                </button>
+              )}
               <div className="flex-1" />
             </>
           )}
@@ -724,7 +981,7 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
           </button>
           <button onClick={handleSend} disabled={sending || selectedCount === 0}
             className="px-4 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-1.5 shadow-sm">
-            {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+            {sending ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Send size={13} aria-hidden="true" />}
             Send to {selectedCount} Recipient{selectedCount !== 1 ? 's' : ''}
           </button>
         </div>
@@ -734,10 +991,12 @@ function ComposeModal({ onClose, onSent, initialSubject, initialBody }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SENT HISTORY TAB  (Instructors)
+// SENT HISTORY TAB
+//   viewMode='all' → instructor's full broadcast history (existing behavior)
+//   viewMode='own' → student/work-study sees only messages they sent
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function SentHistoryTab({ refreshKey }) {
+function SentHistoryTab({ refreshKey, viewMode = 'all' }) {
   const { profile } = useAuth()
   const [announcements, setAnnouncements] = useState([])
   const [loading, setLoading] = useState(true)
@@ -746,13 +1005,53 @@ function SentHistoryTab({ refreshKey }) {
   const [processing, setProcessing] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
 
+  const ownOnly = viewMode === 'own'
+  const myEmail = profile?.email?.toLowerCase()
+
+  // Instructor toggle: include system audit rows (WO assignments, etc.) in
+  // the Sent Messages list? Default: hide. Persists per-browser via
+  // localStorage. Students/work-study never see this toggle — their view is
+  // already strictly filtered to their own composed messages.
+  const [showSystemRows, setShowSystemRows] = useState(() => {
+    try {
+      return localStorage.getItem(SENT_SHOW_SYSTEM_KEY) === 'true'
+    } catch {
+      return false
+    }
+  })
+  // Track how many rows were hidden so we can reflect that in the toggle
+  // label — instructors see "Show 3 audit rows" instead of an unqualified
+  // "Show audit rows" when there's actually something to surface.
+  const [hiddenCount, setHiddenCount] = useState(0)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SENT_SHOW_SYSTEM_KEY, showSystemRows ? 'true' : 'false')
+    } catch {}
+  }, [showSystemRows])
+
   const loadHistory = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('announcements')
         .select('*')
         .order('created_at', { ascending: false })
+
+      // Non-instructor view ('My Sent'): show only messages the user
+      // deliberately composed via the new messaging feature, not system-
+      // generated audit rows like WO assignments — those get sender_email =
+      // the actor's email (e.g. a student who self-assigns to a WO), but
+      // semantically the student didn't "send a message," they clicked a
+      // button. Allow-list filter (notification_type='student_message') keeps
+      // future system types out automatically without maintenance.
+      if (ownOnly && myEmail) {
+        query = query
+          .eq('sender_email', myEmail)
+          .eq('notification_type', 'student_message')
+      }
+
+      const { data, error } = await query
 
       if (error) throw error
 
@@ -768,8 +1067,19 @@ function SentHistoryTab({ refreshKey }) {
       // Group by message batch: same subject + sender + created within same minute
       const grouped = {}
       const order = []
+      let hidden = 0  // count rows skipped by the "hide audit" toggle
 
       ;(data || []).forEach(row => {
+        // Instructor toggle: drop system audit rows when "Show audit rows" is
+        // off. Students never reach this branch — their query layer already
+        // restricted to notification_type='student_message'.
+        // The toggle is irrelevant in 'own' mode, but checking ownOnly here
+        // keeps the code explicit and self-documenting.
+        if (!ownOnly && !showSystemRows && isSystemNotificationType(row.notification_type)) {
+          hidden++
+          return
+        }
+
         const ts = new Date(row.created_at)
         const groupKey = [
           row.subject, row.sender_email,
@@ -806,20 +1116,24 @@ function SentHistoryTab({ refreshKey }) {
       })
 
       setAnnouncements(order.map(k => grouped[k]))
+      setHiddenCount(hidden)
     } catch (err) {
       console.error('Error loading history:', err)
       if (!silent) toast.error('Failed to load sent messages')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [ownOnly, myEmail, showSystemRows])
 
   useEffect(() => { loadHistory() }, [loadHistory, refreshKey])
 
-  // Realtime: auto-refresh when any announcement changes (read status, new, deleted)
+  // Realtime: auto-refresh when any announcement changes (read status, new, deleted).
+  // Channel name carries a random suffix to prevent conflicts when multiple components
+  // mount simultaneously (per project convention, e.g. inbox-realtime is also unique-per-mount).
   useEffect(() => {
+    const channelName = `sent-realtime-${ownOnly ? 'own' : 'all'}-${Math.random().toString(36).slice(2, 9)}`
     const channel = supabase
-      .channel('sent-realtime')
+      .channel(channelName)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'announcements' },
@@ -827,7 +1141,7 @@ function SentHistoryTab({ refreshKey }) {
       )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [loadHistory])
+  }, [loadHistory, ownOnly])
 
   const filtered = useMemo(() => {
     if (!search) return announcements
@@ -931,16 +1245,53 @@ function SentHistoryTab({ refreshKey }) {
   return (
     <>
     <div className="space-y-3">
-      {/* Search + Refresh */}
+      {/* Search + Toggle + Refresh */}
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
           <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search messages…" className="input pl-9 text-sm" />
+            placeholder="Search messages…" className="input pl-9 text-sm"
+            aria-label="Search sent messages" />
         </div>
+
+        {/* Audit-row toggle — instructor view only.
+            ON  = show all rows including system audit notifications (WO assignments, etc.)
+            OFF = hide audit rows, show only human-composed messages (default).
+            Choice persists per-browser via localStorage. */}
+        {!ownOnly && (
+          <button
+            onClick={() => setShowSystemRows(v => !v)}
+            title={showSystemRows
+              ? 'Hide system-generated rows (WO assignments, etc.)'
+              : 'Show system-generated rows (WO assignments, etc.)'}
+            aria-pressed={showSystemRows}
+            aria-label={showSystemRows
+              ? 'Hide system audit rows'
+              : `Show system audit rows${hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ''}`}
+            className={`px-2.5 py-2 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
+              showSystemRows
+                ? 'bg-brand-100 text-brand-700 hover:bg-brand-200'
+                : 'bg-surface-100 text-surface-600 hover:bg-surface-200'
+            }`}>
+            {showSystemRows
+              ? <EyeOff size={13} aria-hidden="true" />
+              : <Eye size={13} aria-hidden="true" />}
+            <span className="hidden sm:inline">
+              {showSystemRows ? 'Hide audit' : 'Show audit'}
+            </span>
+            {!showSystemRows && hiddenCount > 0 && (
+              <span className="inline-flex items-center justify-center min-w-[18px] px-1 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold leading-none"
+                aria-hidden="true">
+                {hiddenCount}
+              </span>
+            )}
+          </button>
+        )}
+
         <button onClick={loadHistory} title="Refresh"
+          aria-label="Refresh sent messages"
           className="p-2.5 rounded-lg bg-surface-100 hover:bg-surface-200 text-surface-500">
-          <RefreshCw size={14} />
+          <RefreshCw size={14} aria-hidden="true" />
         </button>
       </div>
 
@@ -954,9 +1305,13 @@ function SentHistoryTab({ refreshKey }) {
       {/* Messages list */}
       {filtered.length === 0 ? (
         <div className="text-center py-12">
-          <Send size={32} className="mx-auto mb-2 text-surface-300" />
-          <p className="text-sm text-surface-500">{search ? 'No matching messages' : 'No messages sent yet'}</p>
-          <p className="text-xs text-surface-400 mt-1">Click "New Message" to compose and send</p>
+          <Send size={32} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
+          <p className="text-sm text-surface-500">
+            {search ? 'No matching messages' : (ownOnly ? "You haven't sent any messages yet" : 'No messages sent yet')}
+          </p>
+          <p className="text-xs text-surface-400 mt-1">
+            {ownOnly ? 'Click "Message Instructor" to send your first message' : 'Click "New Message" to compose and send'}
+          </p>
         </div>
       ) : (
         filtered.map(ann => {
@@ -1032,23 +1387,30 @@ function SentHistoryTab({ refreshKey }) {
                     </div>
                   </div>
 
-                  {/* Actions */}
+                  {/* Actions — instructors get Resend; students only get Delete on
+                      their own messages (so they can retract a typo, but can't
+                      blast an instructor with repeated copies) */}
                   <div className="px-4 py-2.5 bg-surface-50 border-t border-surface-100 flex flex-wrap gap-2">
-                    <button onClick={() => handleResend(ann, 'all')} disabled={isProcessing}
-                      className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 disabled:opacity-50 flex items-center gap-1">
-                      {isProcessing ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-                      Resend to All
-                    </button>
-                    {ann.readCount < ann.totalRecipients && (
-                      <button onClick={() => handleResend(ann, 'unread')} disabled={isProcessing}
-                        className="px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1">
-                        <RotateCcw size={11} /> Resend to Unread ({ann.totalRecipients - ann.readCount})
-                      </button>
+                    {!ownOnly && (
+                      <>
+                        <button onClick={() => handleResend(ann, 'all')} disabled={isProcessing}
+                          className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 disabled:opacity-50 flex items-center gap-1">
+                          {isProcessing ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <RotateCcw size={11} aria-hidden="true" />}
+                          Resend to All
+                        </button>
+                        {ann.readCount < ann.totalRecipients && (
+                          <button onClick={() => handleResend(ann, 'unread')} disabled={isProcessing}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1">
+                            <RotateCcw size={11} aria-hidden="true" /> Resend to Unread ({ann.totalRecipients - ann.readCount})
+                          </button>
+                        )}
+                      </>
                     )}
                     <div className="flex-1" />
                     <button onClick={() => handleDelete(ann)} disabled={isProcessing}
-                      className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 disabled:opacity-50 flex items-center gap-1">
-                      <Trash2 size={11} /> Delete
+                      className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 disabled:opacity-50 flex items-center gap-1"
+                      aria-label={`Delete message: ${ann.subject || 'no subject'}`}>
+                      <Trash2 size={11} aria-hidden="true" /> Delete
                     </button>
                   </div>
                 </div>

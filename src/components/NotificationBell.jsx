@@ -606,15 +606,38 @@ export default function NotificationBell() {
       .limit(20);
     (data || []).forEach(a => {
       const isWOAssign = a.notification_type === 'wo_assignment';
+      const isStudentMsg = a.notification_type === 'student_message';
+      // Type / icon / color matrix:
+      //   wo_assignment  → orange clipboard ('assignment_ind')
+      //   student_message → green chat bubble ('forum') — visually distinct from
+      //                     the system-blue "ANNOUNCEMENT" so instructors can
+      //                     see at a glance that a student is reaching out
+      //   announcement (default) → blue megaphone ('campaign')
+      let type = 'announcement';
+      let icon = 'campaign';
+      let color = '#0ea5e9';
+      let title = a.subject || 'New Announcement';
+      let subtitle = `From ${a.sender_name || 'Instructor'}`;
+      if (isWOAssign) {
+        type = 'wo_assignment';
+        icon = 'assignment_ind';
+        color = '#f59f00';
+        title = a.subject || 'Work Order Assigned';
+        subtitle = a.body || `Assigned by ${a.sender_name || 'Instructor'}`;
+      } else if (isStudentMsg) {
+        type = 'student_message';
+        icon = 'forum';
+        color = '#10b981';
+        title = a.subject || 'Message from Student';
+        subtitle = `From ${a.sender_name || 'Student'}`;
+      }
       _items.push({
         id: `ann-${a.id}`,
-        type: isWOAssign ? 'wo_assignment' : 'announcement',
-        icon: isWOAssign ? 'assignment_ind' : 'campaign',
-        color: isWOAssign ? '#f59f00' : '#0ea5e9',
-        title: a.subject || (isWOAssign ? 'Work Order Assigned' : 'New Announcement'),
-        subtitle: isWOAssign
-          ? a.body || `Assigned by ${a.sender_name || 'Instructor'}`
-          : `From ${a.sender_name || 'Instructor'}`,
+        type,
+        icon,
+        color,
+        title,
+        subtitle,
         date: a.created_at,
         raw: a
       });
@@ -1409,6 +1432,7 @@ export default function NotificationBell() {
     lab: 'LAB CHANGE', temp: 'TEMP ROLE ACCESS', temp_perm: 'TEMP PERMISSIONS',
     // volunteer_punch removed — time clock punches are auto-approved
     announcement: 'ANNOUNCEMENT',
+    student_message: 'STUDENT MESSAGE',
     wo_assignment: 'WORK ORDER ASSIGNED',
     help: 'NEEDS HELP',
     netchg: 'NETWORK CHANGE',
@@ -1450,6 +1474,7 @@ export default function NotificationBell() {
       case 'temp_perm': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
       // volunteer_punch removed — time clock punches are auto-approved at punch time
       case 'announcement': return (<button className="nbtn nbtn-view" onClick={() => viewAnnouncement(item)}><span className="material-icons" aria-hidden="true">visibility</span>View</button>);
+      case 'student_message': return (<button className="nbtn nbtn-view" style={{ background: '#10b981' }} onClick={() => viewAnnouncement(item)} aria-label={`View student message: ${item.title}`}><span className="material-icons" aria-hidden="true">forum</span>View &amp; Reply</button>);
       case 'wo_assignment': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
       case 'help': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       case 'netchg': return (<button className="nbtn nbtn-view" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
