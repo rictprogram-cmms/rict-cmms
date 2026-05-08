@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1071,20 +1072,9 @@ export function useStudentVolunteerDetail(studentEmail) {
       // Format student name as "First L." to match TimeClockPage convention
       const studentDisplayName = `${studentProfile.first_name || ''} ${(studentProfile.last_name || '').charAt(0)}.`.trim()
 
-      // Generate next TC record_id (matches existing pattern in useTimeCards.addEntry)
-      const { data: latest } = await supabase
-        .from('time_clock')
-        .select('record_id')
-        .like('record_id', 'TC%')
-        .order('record_id', { ascending: false })
-        .limit(1)
-
-      let nextNum = 1
-      if (latest && latest.length > 0) {
-        const num = parseInt(latest[0].record_id.replace(/\D/g, ''))
-        if (!isNaN(num)) nextNum = num + 1
-      }
-      const recordId = `TC${String(nextNum).padStart(6, '0')}`
+      // Generate next TC record_id via shared collision-safe helper
+      // (handles drift, RPC fallback, and counter sync — see generateSafeTcId).
+      const recordId = await generateSafeTcId()
 
       // Build fake-UTC timestamps (project convention: local time stored with +00 offset)
       const punchIn = buildFakeUtcTimestamp(date, startTime)

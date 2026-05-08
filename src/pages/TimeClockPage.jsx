@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { generateSafeTcId } from '@/utils/generateSafeTcId'
 
 // ─── Standalone Supabase client (no auth needed for public page) ─────────────
 
@@ -1318,19 +1319,10 @@ export default function TimeClockPage() {
     setLoading(true)
 
     try {
-      const { data: lastRecord } = await supabase
-        .from('time_clock')
-        .select('record_id')
-        .order('record_id', { ascending: false })
-        .limit(1)
-        .single()
-
-      let nextNum = 1
-      if (lastRecord?.record_id) {
-        const num = parseInt(lastRecord.record_id.replace('TC', ''))
-        if (!isNaN(num)) nextNum = num + 1
-      }
-      const recordId = 'TC' + String(nextNum).padStart(6, '0')
+      // Shared collision-safe TC ID generation. Pass the kiosk's standalone
+      // supabase client (auth-less) so the helper uses the same anon context
+      // as the rest of this page.
+      const recordId = await generateSafeTcId(supabase)
 
       const userName = `${user.first_name || ''} ${(user.last_name || '').charAt(0)}.`.trim()
       const entryType = cls.isVolunteer ? 'Volunteer' : cls.isWorkStudy ? 'Work Study' : cls.isClubActivity ? 'Club Activity' : 'Class'

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
+import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1498,19 +1499,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       const poDate = punchOut ? new Date(punchOut) : null
       const totalHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
 
-      const { data: latest } = await supabase
-        .from('time_clock')
-        .select('record_id')
-        .like('record_id', 'TC%')
-        .order('record_id', { ascending: false })
-        .limit(1)
-
-      let nextNum = 1
-      if (latest && latest.length > 0) {
-        const num = parseInt(latest[0].record_id.replace(/\D/g, ''))
-        if (!isNaN(num)) nextNum = num + 1
-      }
-      const recordId = `TC${String(nextNum).padStart(6, '0')}`
+      // Shared collision-safe TC ID generation (RPC + drift sync + retry).
+      const recordId = await generateSafeTcId()
 
       // Use UTC methods since timestamps are in local-as-UTC convention
       const day = piDate.getUTCDay()
@@ -1790,20 +1780,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         const poDate = poStr ? new Date(poStr) : null
         const totalHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
 
-        // Generate next TC record_id
-        const { data: latest } = await supabase
-          .from('time_clock')
-          .select('record_id')
-          .like('record_id', 'TC%')
-          .order('record_id', { ascending: false })
-          .limit(1)
-
-        let nextNum = 1
-        if (latest && latest.length > 0) {
-          const num = parseInt(latest[0].record_id.replace(/\D/g, ''))
-          if (!isNaN(num)) nextNum = num + 1
-        }
-        const recordId = `TC${String(nextNum).padStart(6, '0')}`
+        // Generate next TC record_id via shared collision-safe helper.
+        const recordId = await generateSafeTcId()
 
         // Compute week_start (Monday) using UTC (local-as-UTC convention)
         const day = piDate.getUTCDay()

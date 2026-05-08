@@ -15,6 +15,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 import { formatCountdown } from '@/hooks/useAssetCheckouts';
+import { generateSafeTcId } from '@/utils/generateSafeTcId';
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
 import '@/styles/notification-bell.css';
 
@@ -1028,19 +1029,9 @@ export default function NotificationBell() {
         if (profileData?.user_id) userId = profileData.user_id;
       }
 
-      // 2. Generate time clock record ID
-      const { data: latest } = await supabase
-        .from('time_clock')
-        .select('record_id')
-        .like('record_id', 'TC%')
-        .order('record_id', { ascending: false })
-        .limit(1);
-      let nextNum = 1;
-      if (latest && latest.length > 0) {
-        const num = parseInt(latest[0].record_id.replace(/\D/g, ''));
-        if (!isNaN(num)) nextNum = num + 1;
-      }
-      const recordId = `TC${String(nextNum).padStart(6, '0')}`;
+      // 2. Generate time clock record ID via shared collision-safe helper
+      // (RPC + drift sync + retry — see generateSafeTcId).
+      const recordId = await generateSafeTcId();
 
       // 3. Build punch_in/punch_out from requested_date + start/end times.
       // Append 'Z' to match the app's local-as-UTC convention (same fix as approveTimeEdit).

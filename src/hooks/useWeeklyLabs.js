@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import toast from 'react-hot-toast'
 
 // ─── Timestamp Helper ────────────────────────────────────────────────────────
@@ -683,21 +684,9 @@ export function useLabTrackerActions() {
 
       if (activeEntry) {
         try {
-          // Generate next TC###### id by querying the current MAX, mirroring the
-          // pattern used in TimeClockPage.jsx so both write paths agree on format.
-          const { data: lastTcRecord } = await supabase
-            .from('time_clock')
-            .select('record_id')
-            .order('record_id', { ascending: false })
-            .limit(1)
-            .single()
-
-          let nextNum = 1
-          if (lastTcRecord?.record_id) {
-            const num = parseInt(String(lastTcRecord.record_id).replace('TC', ''))
-            if (!isNaN(num)) nextNum = num + 1
-          }
-          const markerRecordId = 'TC' + String(nextNum).padStart(6, '0')
+          // Generate next TC###### id via shared collision-safe helper so
+          // every write path agrees on format and counter sync.
+          const markerRecordId = await generateSafeTcId()
 
           // Monday-of-this-week (YYYY-MM-DD) — same convention as TimeClockPage getWeekStart()
           const wkStartFallback = (() => {
