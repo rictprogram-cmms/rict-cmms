@@ -12,20 +12,23 @@
  *   - Summary cards: total students, complete, on track, at risk, behind
  *   - Table of all Work Study students with progress bars and status
  *   - Click to expand individual student entries
+ *   - "Add Entry" button → instructor can manually add a Volunteer or Club Activity entry (no approval needed)
  *   - Edit button on each entry → instructor can directly update times (no approval needed)
+ *   - Delete button on each entry → instructor can remove an entry with audit trail
  *   - Report button → printable report (all students OR individual)
  */
 
-import React, { useState, useMemo, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useId } from 'react'
 import {
   Heart, Plus, Clock, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronUp,
   RefreshCw, Send, X, Loader2, Calendar, Timer, Award, Target, TrendingUp,
   Filter, Search, Info, CircleAlert, Printer, FileText, ArrowLeft, Users, User,
-  Edit3, FilePenLine, Save
+  Edit3, FilePenLine, Save, Trash2
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useVolunteerData, useVolunteerOverview, useStudentVolunteerDetail } from '@/hooks/useVolunteerHours'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1205,15 +1208,20 @@ function secondHalfStatusLabel(status) {
 function StudentDetailPanel({ studentEmail, studentName }) {
   const {
     entries, pendingEntries, pendingEdits,
-    loading, saving, instructorEditTimeClock, instructorEditRequest, refresh,
+    loading, saving,
+    instructorEditTimeClock, instructorEditRequest,
+    instructorAddEntry, instructorDeleteTimeClock, instructorDeleteRequest,
+    refresh,
   } = useStudentVolunteerDetail(studentEmail)
 
   const [editTarget, setEditTarget] = useState(null) // { type: 'timeclock' | 'request', entry }
+  const [showAddModal, setShowAddModal] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null) // { type, raw, summary }
 
   if (loading) {
     return (
       <div className="px-8 py-6 flex items-center gap-2 text-surface-400">
-        <Loader2 size={14} className="animate-spin" /> Loading entries...
+        <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading entries...
       </div>
     )
   }
@@ -1221,41 +1229,49 @@ function StudentDetailPanel({ studentEmail, studentName }) {
   // Merge all entries for display
   const allEntries = []
 
-  entries.forEach(e => allEntries.push({
-    id: e.record_id,
-    type: 'timeclock',
-    raw: e,
-    date: e.punch_in,
-    hours: parseFloat(e.total_hours) || 0,
-    status: e.approval_status || 'Approved',
-    source: 'Time Clock',
-    timeIn: fmtTimeFromISO(e.punch_in),
-    timeOut: fmtTimeFromISO(e.punch_out),
-    description: e.description || '',
-    approvedBy: e.approved_by || '',
-    dateInput: isoToDateInput(e.punch_in),
-    startTimeInput: isoToTimeInput(e.punch_in),
-    endTimeInput: isoToTimeInput(e.punch_out),
-    hasPendingEdit: pendingEdits.some(ed => ed.time_clock_record_id === e.record_id && ed.status === 'Pending'),
-  }))
+  entries.forEach(e => {
+    const isClub = e.entry_type === 'Club Activity'
+    allEntries.push({
+      id: e.record_id,
+      type: 'timeclock',
+      raw: e,
+      date: e.punch_in,
+      hours: parseFloat(e.total_hours) || 0,
+      status: e.approval_status || 'Approved',
+      source: isClub ? 'Club Activity' : 'Time Clock',
+      timeIn: fmtTimeFromISO(e.punch_in),
+      timeOut: fmtTimeFromISO(e.punch_out),
+      description: e.description || '',
+      approvedBy: e.approved_by || '',
+      dateInput: isoToDateInput(e.punch_in),
+      startTimeInput: isoToTimeInput(e.punch_in),
+      endTimeInput: isoToTimeInput(e.punch_out),
+      hasPendingEdit: pendingEdits.some(ed => ed.time_clock_record_id === e.record_id && ed.status === 'Pending'),
+      isClubActivity: isClub,
+    })
+  })
 
-  pendingEntries.forEach(e => allEntries.push({
-    id: e.request_id,
-    type: 'request',
-    raw: e,
-    date: e.requested_date || e.created_at,
-    hours: parseFloat(e.total_hours) || 0,
-    status: e.status || 'Pending',
-    source: 'Manual Entry',
-    timeIn: fmtTime(e.start_time),
-    timeOut: fmtTime(e.end_time),
-    description: e.reason || '',
-    approvedBy: e.reviewed_by || '',
-    dateInput: e.requested_date || '',
-    startTimeInput: (e.start_time || '').substring(0, 5),
-    endTimeInput: (e.end_time || '').substring(0, 5),
-    hasPendingEdit: false,
-  }))
+  pendingEntries.forEach(e => {
+    const isClub = e.entry_type === 'Club Activity' || e.class_id === 'CLUB_ACTIVITY'
+    allEntries.push({
+      id: e.request_id,
+      type: 'request',
+      raw: e,
+      date: e.requested_date || e.created_at,
+      hours: parseFloat(e.total_hours) || 0,
+      status: e.status || 'Pending',
+      source: isClub ? 'Club Activity' : 'Manual Entry',
+      timeIn: fmtTime(e.start_time),
+      timeOut: fmtTime(e.end_time),
+      description: e.reason || '',
+      approvedBy: e.reviewed_by || '',
+      dateInput: e.requested_date || '',
+      startTimeInput: (e.start_time || '').substring(0, 5),
+      endTimeInput: (e.end_time || '').substring(0, 5),
+      hasPendingEdit: false,
+      isClubActivity: isClub,
+    })
+  })
 
   // Also show approved manual entries in detail panel
   // (useStudentVolunteerDetail now returns all statuses)
@@ -1271,17 +1287,43 @@ function StudentDetailPanel({ studentEmail, studentName }) {
     if (result?.success) setEditTarget(null)
   }
 
+  const handleAddSubmit = async (formData) => {
+    const result = await instructorAddEntry(formData)
+    if (result?.success) setShowAddModal(false)
+  }
+
+  const handleDeleteConfirm = async (reason) => {
+    if (!deleteTarget) return
+    let result
+    if (deleteTarget.type === 'timeclock') {
+      result = await instructorDeleteTimeClock(deleteTarget.raw, reason)
+    } else {
+      result = await instructorDeleteRequest(deleteTarget.raw, reason)
+    }
+    if (result?.success) setDeleteTarget(null)
+  }
+
   return (
     <div className="px-8 py-4">
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-xs font-semibold text-surface-500 uppercase">
-          {studentName} — Volunteer Entries
-        </h4>
-        {pendingEdits.filter(ed => ed.status === 'Pending').length > 0 && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200 font-medium">
-            {pendingEdits.filter(ed => ed.status === 'Pending').length} pending edit request{pendingEdits.filter(ed => ed.status === 'Pending').length > 1 ? 's' : ''}
-          </span>
-        )}
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h4 className="text-xs font-semibold text-surface-500 uppercase">
+            {studentName} — Volunteer Entries
+          </h4>
+          {pendingEdits.filter(ed => ed.status === 'Pending').length > 0 && (
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200 font-medium">
+              {pendingEdits.filter(ed => ed.status === 'Pending').length} pending edit request{pendingEdits.filter(ed => ed.status === 'Pending').length > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowAddModal(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-1 transition-colors print:hidden"
+          aria-label={`Add a new volunteer or club activity entry for ${studentName}`}
+        >
+          <Plus size={14} aria-hidden="true" /> Add Entry
+        </button>
       </div>
 
       {allEntries.length === 0 ? (
@@ -1290,14 +1332,14 @@ function StudentDetailPanel({ studentEmail, studentName }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="text-left">
-              <th className="px-3 py-1.5 text-surface-400 font-medium">Date</th>
-              <th className="px-3 py-1.5 text-surface-400 font-medium">Time</th>
-              <th className="px-3 py-1.5 text-surface-400 font-medium text-right">Hours</th>
-              <th className="px-3 py-1.5 text-surface-400 font-medium">Source</th>
-              <th className="px-3 py-1.5 text-surface-400 font-medium">Status</th>
-              <th className="px-3 py-1.5 text-surface-400 font-medium">Description</th>
-              <th className="px-3 py-1.5 text-surface-400 font-medium">Approved By</th>
-              <th className="px-3 py-1.5 w-12 print:hidden"></th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium">Date</th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium">Time</th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium text-right">Hours</th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium">Source</th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium">Status</th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium">Description</th>
+              <th scope="col" className="px-3 py-1.5 text-surface-400 font-medium">Approved By</th>
+              <th scope="col" className="px-3 py-1.5 w-20 print:hidden"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-surface-100">
@@ -1308,7 +1350,9 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                 <td className="px-3 py-1.5 text-right font-medium text-surface-800">{fmtHoursMin(e.hours)}</td>
                 <td className="px-3 py-1.5">
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                    e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' : 'bg-purple-50 text-purple-700'
+                    e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' :
+                    e.source === 'Club Activity' ? 'bg-orange-50 text-orange-700' :
+                    'bg-purple-50 text-purple-700'
                   }`}>
                     {e.source}
                   </span>
@@ -1323,16 +1367,29 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                     )}
                   </div>
                 </td>
-                <td className="px-3 py-1.5 text-surface-500 max-w-[160px] truncate">{e.description || '—'}</td>
+                <td className="px-3 py-1.5 text-surface-500 max-w-[160px] truncate" title={e.description}>{e.description || '—'}</td>
                 <td className="px-3 py-1.5 text-surface-500">{e.approvedBy || '—'}</td>
                 <td className="px-3 py-1.5 print:hidden">
-                  <button
-                    onClick={() => setEditTarget(e)}
-                    className="p-1 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                    title="Edit this entry directly"
-                  >
-                    <Edit3 size={12} />
-                  </button>
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEditTarget(e)}
+                      className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 transition-colors"
+                      aria-label={`Edit ${e.source} entry from ${fmtDate(e.date)}`}
+                      title="Edit this entry directly"
+                    >
+                      <Edit3 size={12} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(e)}
+                      className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors"
+                      aria-label={`Delete ${e.source} entry from ${fmtDate(e.date)}`}
+                      title="Delete this entry"
+                    >
+                      <Trash2 size={12} aria-hidden="true" />
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -1349,12 +1406,12 @@ function StudentDetailPanel({ studentEmail, studentName }) {
           <table className="w-full text-xs">
             <thead>
               <tr className="text-left">
-                <th className="px-3 py-1 text-surface-400 font-medium">Requested Date</th>
-                <th className="px-3 py-1 text-surface-400 font-medium">New Time</th>
-                <th className="px-3 py-1 text-surface-400 font-medium text-right">New Hours</th>
-                <th className="px-3 py-1 text-surface-400 font-medium">Original Record</th>
-                <th className="px-3 py-1 text-surface-400 font-medium">Reason</th>
-                <th className="px-3 py-1 w-12 print:hidden"></th>
+                <th scope="col" className="px-3 py-1 text-surface-400 font-medium">Requested Date</th>
+                <th scope="col" className="px-3 py-1 text-surface-400 font-medium">New Time</th>
+                <th scope="col" className="px-3 py-1 text-surface-400 font-medium text-right">New Hours</th>
+                <th scope="col" className="px-3 py-1 text-surface-400 font-medium">Original Record</th>
+                <th scope="col" className="px-3 py-1 text-surface-400 font-medium">Reason</th>
+                <th scope="col" className="px-3 py-1 w-20 print:hidden"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-orange-100">
@@ -1368,22 +1425,45 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                     {fmtHoursMin(ed.total_hours)}
                   </td>
                   <td className="px-3 py-1.5 text-surface-400 text-[10px]">{ed.time_clock_record_id || '—'}</td>
-                  <td className="px-3 py-1.5 text-surface-500 max-w-[180px] truncate">{ed.reason || '—'}</td>
+                  <td className="px-3 py-1.5 text-surface-500 max-w-[180px] truncate" title={ed.reason}>{ed.reason || '—'}</td>
                   <td className="px-3 py-1.5 print:hidden">
-                    <button
-                      onClick={() => setEditTarget({
-                        id: ed.request_id,
-                        type: 'request',
-                        raw: ed,
-                        dateInput: ed.requested_date || '',
-                        startTimeInput: (ed.start_time || '').substring(0, 5),
-                        endTimeInput: (ed.end_time || '').substring(0, 5),
-                      })}
-                      className="p-1 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                      title="Edit this request"
-                    >
-                      <Edit3 size={12} />
-                    </button>
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditTarget({
+                          id: ed.request_id,
+                          type: 'request',
+                          raw: ed,
+                          dateInput: ed.requested_date || '',
+                          startTimeInput: (ed.start_time || '').substring(0, 5),
+                          endTimeInput: (ed.end_time || '').substring(0, 5),
+                          hours: parseFloat(ed.total_hours) || 0,
+                        })}
+                        className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 transition-colors"
+                        aria-label={`Edit pending edit request ${ed.request_id}`}
+                        title="Edit this request"
+                      >
+                        <Edit3 size={12} aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget({
+                          id: ed.request_id,
+                          type: 'request',
+                          raw: ed,
+                          source: 'Edit Request',
+                          date: ed.requested_date,
+                          hours: parseFloat(ed.total_hours) || 0,
+                          timeIn: fmtTime(ed.start_time),
+                          timeOut: fmtTime(ed.end_time),
+                        })}
+                        className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors"
+                        aria-label={`Delete pending edit request ${ed.request_id}`}
+                        title="Delete this request"
+                      >
+                        <Trash2 size={12} aria-hidden="true" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1401,6 +1481,28 @@ function StudentDetailPanel({ studentEmail, studentName }) {
           onClose={() => setEditTarget(null)}
         />
       )}
+
+      {/* Instructor Add Entry Modal */}
+      {showAddModal && (
+        <InstructorAddVolunteerModal
+          studentName={studentName}
+          studentEmail={studentEmail}
+          saving={saving}
+          onSave={handleAddSubmit}
+          onClose={() => setShowAddModal(false)}
+        />
+      )}
+
+      {/* Instructor Delete Confirm Modal */}
+      {deleteTarget && (
+        <InstructorDeleteVolunteerModal
+          entry={deleteTarget}
+          studentName={studentName}
+          saving={saving}
+          onConfirm={handleDeleteConfirm}
+          onClose={() => setDeleteTarget(null)}
+        />
+      )}
     </div>
   )
 }
@@ -1409,7 +1511,24 @@ function StudentDetailPanel({ studentEmail, studentName }) {
 // ─── Instructor Direct Edit Modal ────────────────────────────────────────────
 // Instructor edits a volunteer entry directly — no approval required.
 
+// ─── Instructor Direct Edit Modal ────────────────────────────────────────────
+// Instructor edits a volunteer entry directly — no approval required.
+//
+// WCAG 2.1 AA compliant:
+//   - useDialogA11y handles Escape, focus trap, focus return
+//   - role="dialog" + aria-modal + aria-labelledby + aria-describedby
+//   - Required fields marked with * AND aria-required
+//   - Live preview uses aria-live so screen readers announce hour changes
+//   - 28×32 px minimum touch targets on action buttons
+//   - focus-visible outlines on all interactive elements
+//   - aria-hidden on decorative icons
+
 function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
+  const titleId = useId()
+  const descId = useId()
+  const previewId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
+
   const [form, setForm] = useState({
     date:      entry.dateInput || '',
     startTime: entry.startTimeInput || '',
@@ -1430,8 +1549,10 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
     form.startTime !== (entry.startTimeInput || '') ||
     form.endTime !== (entry.endTimeInput || '')
 
+  const isValid = !!form.date && !!form.startTime && !!form.endTime && previewHours > 0
+
   const handleSave = () => {
-    if (!form.date || !form.startTime || !form.endTime || previewHours <= 0) return
+    if (!isValid || !hasChanges || saving) return
     onSave(entry.type, entry.id, entry.raw, form.date, form.startTime, form.endTime)
   }
 
@@ -1439,15 +1560,31 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-white rounded-xl w-full max-w-md shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-surface-900 flex items-center gap-2">
-              <Edit3 size={16} className="text-brand-500" /> Edit Volunteer Entry
+            <h3 id={titleId} className="font-semibold text-surface-900 flex items-center gap-2">
+              <Edit3 size={16} className="text-brand-500" aria-hidden="true" /> Edit Volunteer Entry
             </h3>
-            <p className="text-xs text-surface-400 mt-0.5">{sourceLabel} — No approval required</p>
+            <p id={descId} className="text-xs text-surface-400 mt-0.5">{sourceLabel} — No approval required</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            aria-label="Close dialog without saving"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
         </div>
 
         <div className="px-5 py-4 space-y-4">
@@ -1455,7 +1592,7 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
           <div className="bg-surface-50 rounded-lg px-3 py-2.5 text-xs text-surface-500">
             <span className="font-medium text-surface-700">ID:</span> {entry.id}
             {entry.hours > 0 && (
-              <span className="ml-3"><span className="font-medium text-surface-700">Current:</span> {originalHours}h</span>
+              <span className="ml-3"><span className="font-medium text-surface-700">Current:</span> {originalHours}</span>
             )}
           </div>
 
@@ -1465,6 +1602,7 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
               value={form.date}
               onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
               className="input text-sm"
+              aria-required="true"
             />
           </Field>
 
@@ -1475,6 +1613,7 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
                 value={form.startTime}
                 onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
                 className={`input text-sm ${form.startTime !== entry.startTimeInput ? 'ring-2 ring-brand-300 border-brand-400' : ''}`}
+                aria-required="true"
               />
             </Field>
             <Field label="Punch Out *">
@@ -1483,39 +1622,430 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
                 value={form.endTime}
                 onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
                 className={`input text-sm ${form.endTime !== entry.endTimeInput ? 'ring-2 ring-brand-300 border-brand-400' : ''}`}
+                aria-required="true"
               />
             </Field>
           </div>
 
-          {previewHours > 0 && hasChanges && (
-            <div className="flex items-center gap-2 text-sm bg-brand-50 rounded-lg px-3 py-2">
-              <Clock size={14} className="text-brand-500" />
-              {entry.hours > 0 && (
-                <>
-                  <span className="text-surface-500">{originalHours}</span>
-                  <span className="text-brand-500 font-medium">→</span>
-                </>
-              )}
-              <span className="font-medium text-brand-700">{fmtHoursMin(previewHours)}</span>
-            </div>
-          )}
+          {/* Live preview region (announced to screen readers) */}
+          <div id={previewId} aria-live="polite" className="min-h-[32px]">
+            {previewHours > 0 && hasChanges && (
+              <div className="flex items-center gap-2 text-sm bg-brand-50 rounded-lg px-3 py-2">
+                <Clock size={14} className="text-brand-500" aria-hidden="true" />
+                {entry.hours > 0 && (
+                  <>
+                    <span className="text-surface-500">{originalHours}</span>
+                    <span className="text-brand-500 font-medium" aria-hidden="true">→</span>
+                    <span className="sr-only">changes to</span>
+                  </>
+                )}
+                <span className="font-medium text-brand-700">{fmtHoursMin(previewHours)}</span>
+              </div>
+            )}
 
-          {!hasChanges && (
-            <div className="text-xs text-surface-400 text-center py-1">No changes made yet</div>
-          )}
+            {!hasChanges && (
+              <div className="text-xs text-surface-400 text-center py-1">No changes made yet</div>
+            )}
+
+            {form.startTime && form.endTime && previewHours <= 0 && (
+              <div className="flex items-center gap-2 text-sm bg-red-50 rounded-lg px-3 py-2 text-red-700">
+                <AlertTriangle size={14} aria-hidden="true" />
+                <span>End time must be after start time</span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 min-h-[32px] rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+          >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSave}
-            disabled={saving || !hasChanges || previewHours <= 0}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5"
+            disabled={saving || !hasChanges || !isValid}
+            aria-disabled={saving || !hasChanges || !isValid}
+            aria-describedby={previewId}
+            className="px-4 py-2 min-h-[32px] rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-1"
           >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            <Save size={14} /> Save Changes
+            {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Save size={14} aria-hidden="true" /> Save Changes
+          </button>
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+
+// ─── Instructor Add Entry Modal ─────────────────────────────────────────────
+// Instructor manually adds a new Volunteer or Club Activity entry directly into
+// time_clock as already-approved. No approval workflow needed since the instructor
+// is the one creating it.
+//
+// WCAG 2.1 AA compliant:
+//   - useDialogA11y handles Escape, focus trap, focus return
+//   - role="dialog" + aria-modal + aria-labelledby + aria-describedby
+//   - Required fields marked with * AND aria-required
+//   - Submit button has aria-disabled when form is invalid
+//   - Live preview uses aria-live so screen readers announce hour changes
+//   - 28×32 px minimum touch targets on action buttons
+//   - focus-visible outlines on all interactive elements
+
+function InstructorAddVolunteerModal({ studentName, studentEmail, saving, onSave, onClose }) {
+  const titleId = useId()
+  const descId = useId()
+  const previewId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
+
+  const [form, setForm] = useState({
+    entryType: 'Volunteer',          // 'Volunteer' | 'Club Activity'
+    date:      toDateStr(new Date()),
+    startTime: '',
+    endTime:   '',
+    reason:    '',
+  })
+
+  const isClub = form.entryType === 'Club Activity'
+
+  // Raw hours (from start/end) and credited hours (raw × 0.25 for Club, otherwise raw)
+  const { rawHours, creditedHours } = useMemo(() => {
+    if (!form.startTime || !form.endTime) return { rawHours: 0, creditedHours: 0 }
+    const pi = new Date(`2000-01-01T${form.startTime}:00`)
+    const po = new Date(`2000-01-01T${form.endTime}:00`)
+    const hrs = (po - pi) / 3600000
+    if (hrs <= 0) return { rawHours: 0, creditedHours: 0 }
+    const raw = roundToMinute(hrs)
+    const credited = isClub ? roundToMinute(raw * 0.25) : raw
+    return { rawHours: raw, creditedHours: credited }
+  }, [form.startTime, form.endTime, isClub])
+
+  const reasonTrim = form.reason.trim()
+  const isValid = !!form.date && !!form.startTime && !!form.endTime && rawHours > 0 && creditedHours > 0 && !!reasonTrim
+
+  const handleSave = () => {
+    if (!isValid || saving) return
+    onSave({
+      entryType: form.entryType,
+      date:      form.date,
+      startTime: form.startTime,
+      endTime:   form.endTime,
+      reason:    reasonTrim,
+    })
+  }
+
+  const headerColor = isClub ? 'text-orange-500' : 'text-purple-500'
+  const submitColor = isClub
+    ? 'bg-orange-600 hover:bg-orange-700 focus-visible:ring-orange-400'
+    : 'bg-purple-600 hover:bg-purple-700 focus-visible:ring-purple-400'
+
+  return (
+    <ModalOverlay onClose={onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-white rounded-xl w-full max-w-md shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+          <div>
+            <h3 id={titleId} className="font-semibold text-surface-900 flex items-center gap-2">
+              <Plus size={16} className={headerColor} aria-hidden="true" /> Add Volunteer Entry
+            </h3>
+            <p id={descId} className="text-xs text-surface-400 mt-0.5">
+              For {studentName} — Saved as approved (no workflow)
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            aria-label="Close dialog"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Entry type selector */}
+          <fieldset>
+            <legend className="block text-xs font-medium text-surface-500 mb-1.5">Entry Type *</legend>
+            <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Entry type">
+              <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-offset-1 ${
+                !isClub
+                  ? 'border-purple-300 bg-purple-50 focus-within:ring-purple-400'
+                  : 'border-surface-200 hover:bg-surface-50 focus-within:ring-surface-400'
+              }`}>
+                <input
+                  type="radio"
+                  name="entryType"
+                  value="Volunteer"
+                  checked={!isClub}
+                  onChange={() => setForm(f => ({ ...f, entryType: 'Volunteer' }))}
+                  className="sr-only"
+                  aria-required="true"
+                />
+                <Heart size={14} className={!isClub ? 'text-purple-600' : 'text-surface-400'} aria-hidden="true" />
+                <span className={`text-sm font-medium ${!isClub ? 'text-purple-700' : 'text-surface-600'}`}>Volunteer</span>
+              </label>
+              <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-offset-1 ${
+                isClub
+                  ? 'border-orange-300 bg-orange-50 focus-within:ring-orange-400'
+                  : 'border-surface-200 hover:bg-surface-50 focus-within:ring-surface-400'
+              }`}>
+                <input
+                  type="radio"
+                  name="entryType"
+                  value="Club Activity"
+                  checked={isClub}
+                  onChange={() => setForm(f => ({ ...f, entryType: 'Club Activity' }))}
+                  className="sr-only"
+                  aria-required="true"
+                />
+                <Users size={14} className={isClub ? 'text-orange-600' : 'text-surface-400'} aria-hidden="true" />
+                <span className={`text-sm font-medium ${isClub ? 'text-orange-700' : 'text-surface-600'}`}>Club Activity</span>
+              </label>
+            </div>
+            {isClub && (
+              <p className="text-[11px] text-orange-600 mt-1.5 flex items-start gap-1">
+                <Info size={11} className="mt-0.5 flex-shrink-0" aria-hidden="true" />
+                <span>Club Activity earns 0.25h credited per hour worked.</span>
+              </p>
+            )}
+          </fieldset>
+
+          {/* Date */}
+          <Field label="Date *">
+            <input
+              type="date"
+              value={form.date}
+              onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
+              className="input text-sm"
+              aria-required="true"
+              max={toDateStr(new Date())}
+            />
+          </Field>
+
+          {/* Times */}
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Start Time *">
+              <input
+                type="time"
+                value={form.startTime}
+                onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
+                className="input text-sm"
+                aria-required="true"
+              />
+            </Field>
+            <Field label="End Time *">
+              <input
+                type="time"
+                value={form.endTime}
+                onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
+                className="input text-sm"
+                aria-required="true"
+              />
+            </Field>
+          </div>
+
+          {/* Reason (required) */}
+          <Field label="Reason *">
+            <textarea
+              value={form.reason}
+              onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
+              placeholder={isClub
+                ? "e.g., Robotics club open house event"
+                : "e.g., Helped with lab clean-up after hours"}
+              rows={3}
+              className="input text-sm resize-none"
+              aria-required="true"
+            />
+          </Field>
+
+          {/* Live preview (announced to screen readers) */}
+          <div
+            id={previewId}
+            aria-live="polite"
+            className="min-h-[40px]"
+          >
+            {rawHours > 0 && creditedHours > 0 && (
+              <div className={`flex items-center gap-2 text-sm rounded-lg px-3 py-2 ${
+                isClub ? 'bg-orange-50' : 'bg-purple-50'
+              }`}>
+                <Clock size={14} className={isClub ? 'text-orange-500' : 'text-purple-500'} aria-hidden="true" />
+                {isClub ? (
+                  <span className="text-surface-700">
+                    <span className="text-surface-500">{fmtHoursMin(rawHours)} actual</span>
+                    {' '}
+                    <span className="text-orange-500 font-medium">→</span>
+                    {' '}
+                    <span className="font-semibold text-orange-700">{fmtHoursMin(creditedHours)} credited</span>
+                  </span>
+                ) : (
+                  <span className="font-semibold text-purple-700">
+                    {fmtHoursMin(creditedHours)} will be credited
+                  </span>
+                )}
+              </div>
+            )}
+            {form.startTime && form.endTime && rawHours <= 0 && (
+              <div className="flex items-center gap-2 text-sm bg-red-50 rounded-lg px-3 py-2 text-red-700">
+                <AlertTriangle size={14} aria-hidden="true" />
+                <span>End time must be after start time</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 min-h-[32px] rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!isValid || saving}
+            aria-disabled={!isValid || saving}
+            aria-describedby={previewId}
+            className={`px-4 py-2 min-h-[32px] rounded-lg text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${submitColor}`}
+          >
+            {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Plus size={14} aria-hidden="true" /> Add Entry
+          </button>
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
+
+
+// ─── Instructor Delete Confirm Modal ────────────────────────────────────────
+// Confirmation dialog for deleting a volunteer entry. Shows full entry summary
+// so the instructor can verify what's about to be deleted before confirming.
+// Reason field is optional but logged to audit_log when provided.
+//
+// WCAG 2.1 AA compliant:
+//   - useDialogA11y handles Escape, focus trap, focus return
+//   - role="alertdialog" (destructive action)
+//   - aria-labelledby + aria-describedby
+//   - Initial focus lands on Cancel (safer default for destructive actions)
+
+function InstructorDeleteVolunteerModal({ entry, studentName, saving, onConfirm, onClose }) {
+  const titleId = useId()
+  const descId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
+
+  const [reason, setReason] = useState('')
+
+  const handleConfirm = () => {
+    if (saving) return
+    onConfirm(reason.trim())
+  }
+
+  // Build a human-readable description of what will be deleted.
+  const dateLabel = entry.date ? fmtDate(entry.date) : '—'
+  const timeLabel = (entry.timeIn || entry.timeOut) ? `${entry.timeIn || ''} – ${entry.timeOut || ''}` : ''
+  const hoursLabel = entry.hours > 0 ? fmtHoursMin(entry.hours) : ''
+  const sourceLabel = entry.source || (entry.type === 'timeclock' ? 'Time Clock' : 'Manual Entry')
+
+  return (
+    <ModalOverlay onClose={onClose}>
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-white rounded-xl w-full max-w-md shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+          <div>
+            <h3 id={titleId} className="font-semibold text-surface-900 flex items-center gap-2">
+              <AlertTriangle size={16} className="text-red-500" aria-hidden="true" /> Delete Volunteer Entry
+            </h3>
+            <p id={descId} className="text-xs text-surface-400 mt-0.5">
+              This action cannot be undone.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            aria-label="Close dialog without deleting"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          {/* Entry summary */}
+          <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 text-sm text-red-900">
+            <p className="font-medium mb-1">You are about to delete:</p>
+            <dl className="grid grid-cols-[auto,1fr] gap-x-2 gap-y-0.5 text-xs">
+              <dt className="text-red-700 font-medium">Student:</dt>
+              <dd>{studentName}</dd>
+              <dt className="text-red-700 font-medium">ID:</dt>
+              <dd className="font-mono">{entry.id}</dd>
+              <dt className="text-red-700 font-medium">Source:</dt>
+              <dd>{sourceLabel}</dd>
+              <dt className="text-red-700 font-medium">Date:</dt>
+              <dd>{dateLabel}</dd>
+              {timeLabel && (<>
+                <dt className="text-red-700 font-medium">Time:</dt>
+                <dd>{timeLabel}</dd>
+              </>)}
+              {hoursLabel && (<>
+                <dt className="text-red-700 font-medium">Hours:</dt>
+                <dd className="font-medium">{hoursLabel}</dd>
+              </>)}
+            </dl>
+          </div>
+
+          {/* Optional reason (logged to audit trail) */}
+          <Field label="Reason (optional, recorded in audit log)">
+            <textarea
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="e.g., Duplicate entry, entered by mistake"
+              rows={2}
+              className="input text-sm resize-none"
+            />
+          </Field>
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 min-h-[32px] rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={saving}
+            aria-disabled={saving}
+            className="px-4 py-2 min-h-[32px] rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1"
+          >
+            {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Trash2 size={14} aria-hidden="true" /> Delete Entry
           </button>
         </div>
       </div>

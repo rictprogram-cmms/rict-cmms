@@ -681,22 +681,23 @@ export function useVolunteerOverview() {
       // 1b. Fetch qualifying classes (requires_volunteer_hours = true)
       const qClasses = await fetchQualifyingClasses(settings.semesterStart, settings.midpointWeek)
 
-      // 2. Fetch ALL volunteer time_clock entries for the semester
+      // 2. Fetch ALL volunteer + club activity time_clock entries for the semester.
+      // Club Activity total_hours is already credited (0.25x actual), so summing both entry_types is correct.
       const { data: tcData, error: tcErr } = await supabase
         .from('time_clock')
-        .select('record_id, user_email, total_hours, punch_in, punch_out, approval_status, status')
-        .eq('entry_type', 'Volunteer')
+        .select('record_id, user_email, total_hours, punch_in, punch_out, approval_status, status, entry_type')
+        .in('entry_type', ['Volunteer', 'Club Activity'])
         .gte('punch_in', semStart + 'T00:00:00')
         .lte('punch_in', semEnd + 'T23:59:59')
 
       if (tcErr) throw tcErr
 
-      // 3. Fetch pending volunteer time_entry_requests
+      // 3. Fetch pending volunteer + club activity time_entry_requests
       const { data: reqData } = await supabase
         .from('time_entry_requests')
-        .select('request_id, user_email, total_hours, status')
+        .select('request_id, user_email, total_hours, status, entry_type, class_id')
         .eq('status', 'Pending')
-        .or('entry_type.eq.Volunteer,class_id.eq.VOLUNTEER')
+        .or('entry_type.eq.Volunteer,entry_type.eq.Club Activity,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY')
 
       // Build lookup maps
       const approvedByEmail = {}
@@ -872,12 +873,13 @@ export function useStudentVolunteerDetail(studentEmail) {
       const semStart = settings.semesterStart || `${new Date().getFullYear()}-01-01`
       const semEnd = settings.semesterEnd || toDateStr(new Date())
 
-      // All volunteer time_clock entries (approved + pending)
+      // All volunteer + club activity time_clock entries (approved + pending)
+      // Club Activity total_hours is already the credited (0.25x) amount, so summing is correct.
       const { data: tcData } = await supabase
         .from('time_clock')
         .select('*')
         .eq('user_email', studentEmail)
-        .eq('entry_type', 'Volunteer')
+        .in('entry_type', ['Volunteer', 'Club Activity'])
         .gte('punch_in', semStart + 'T00:00:00')
         .lte('punch_in', semEnd + 'T23:59:59')
         .order('punch_in', { ascending: false })
@@ -885,11 +887,12 @@ export function useStudentVolunteerDetail(studentEmail) {
       setEntries(tcData || [])
 
       // All time_entry_requests for this student (Pending, Approved, Rejected)
+      // Includes Volunteer, Club Activity, and Edit-request entries.
       const { data: reqData } = await supabase
         .from('time_entry_requests')
         .select('*')
         .eq('user_email', studentEmail)
-        .or('entry_type.eq.Volunteer,class_id.eq.VOLUNTEER')
+        .or('entry_type.eq.Volunteer,entry_type.eq.Club Activity,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY')
         .order('created_at', { ascending: false })
 
       const editReqs = (reqData || []).filter(r => r.entry_type === 'Edit')
@@ -1022,6 +1025,242 @@ export function useStudentVolunteerDetail(studentEmail) {
     }
   }
 
+  // ── Instructor: directly add a new volunteer or club activity entry ──
+  // Inserts directly into time_clock as an already-approved row (no approval workflow).
+  // For Club Activity, applies the 0.25× crediting multiplier — total_hours stored is the
+  // *credited* amount, matching the convention used elsewhere (student club submissions).
+  const instructorAddEntry = async ({ entryType, date, startTime, endTime, reason }) => {
+    if (!profile) { toast.error('Not authorized'); return { success: false } }
+    if (!studentEmail) { toast.error('No student selected'); return { success: false } }
+    if (!entryType || !['Volunteer', 'Club Activity'].includes(entryType)) {
+      toast.error('Invalid entry type'); return { success: false }
+    }
+    if (!date || !startTime || !endTime) {
+      toast.error('Date and times are required'); return { success: false }
+    }
+    if (!reason || !reason.trim()) {
+      toast.error('Reason is required'); return { success: false }
+    }
+
+    setSaving(true)
+    try {
+      // Validate times
+      const start = new Date(`${date}T${startTime}`)
+      const end = new Date(`${date}T${endTime}`)
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) throw new Error('Invalid date/time')
+      if (end <= start) throw new Error('End time must be after start time')
+
+      const rawHours = roundToMinute((end - start) / 3600000)
+      if (rawHours <= 0) throw new Error('Duration too short')
+
+      const isClub = entryType === 'Club Activity'
+      // Club Activity stores credited (0.25×) hours as total_hours — same convention as student club submissions
+      const totalHours = isClub ? roundToMinute(rawHours * 0.25) : rawHours
+      if (totalHours <= 0) throw new Error('Duration too short to earn credit')
+
+      // Look up student profile for user_id and display name
+      const { data: studentProfile, error: profErr } = await supabase
+        .from('profiles')
+        .select('user_id, first_name, last_name, email')
+        .eq('email', studentEmail)
+        .maybeSingle()
+
+      if (profErr) throw profErr
+      if (!studentProfile) throw new Error('Student profile not found')
+
+      // Format student name as "First L." to match TimeClockPage convention
+      const studentDisplayName = `${studentProfile.first_name || ''} ${(studentProfile.last_name || '').charAt(0)}.`.trim()
+
+      // Generate next TC record_id (matches existing pattern in useTimeCards.addEntry)
+      const { data: latest } = await supabase
+        .from('time_clock')
+        .select('record_id')
+        .like('record_id', 'TC%')
+        .order('record_id', { ascending: false })
+        .limit(1)
+
+      let nextNum = 1
+      if (latest && latest.length > 0) {
+        const num = parseInt(latest[0].record_id.replace(/\D/g, ''))
+        if (!isNaN(num)) nextNum = num + 1
+      }
+      const recordId = `TC${String(nextNum).padStart(6, '0')}`
+
+      // Build fake-UTC timestamps (project convention: local time stored with +00 offset)
+      const punchIn = buildFakeUtcTimestamp(date, startTime)
+      const punchOut = buildFakeUtcTimestamp(date, endTime)
+
+      // Compute Monday of week using local date components (avoids UTC-midnight shift)
+      const [yr, mo, dy] = date.split('-').map(n => parseInt(n, 10))
+      const localDate = new Date(yr, mo - 1, dy)
+      const dow = localDate.getDay()
+      const mondayOffset = dow === 0 ? -6 : 1 - dow
+      const monday = new Date(localDate)
+      monday.setDate(localDate.getDate() + mondayOffset)
+      const weekStart = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`
+
+      const instructorName = `${profile.first_name} ${profile.last_name}`.trim()
+      const description = isClub
+        ? `[Club Activity — ${rawHours}h actual → ${totalHours}h credited] Manually added by instructor — ${reason.trim()}`
+        : `Manually added by instructor — ${reason.trim()}`
+
+      const { data: inserted, error } = await supabase.from('time_clock').insert({
+        record_id: recordId,
+        user_id: studentProfile.user_id,
+        user_name: studentDisplayName,
+        user_email: studentProfile.email,
+        class_id: isClub ? 'CLUB_ACTIVITY' : 'VOLUNTEER',
+        course_id: isClub ? 'Club Activity' : 'Volunteer',
+        punch_in: punchIn,
+        punch_out: punchOut,
+        total_hours: totalHours,
+        status: 'Punched Out',
+        week_start: weekStart,
+        entry_type: entryType,
+        description,
+        approval_status: 'Approved',
+        approved_by: instructorName,
+        approved_date: new Date().toISOString(),
+      }).select()
+
+      if (error) throw error
+      if (!inserted || inserted.length === 0) throw new Error('Insert failed — no rows added (RLS?)')
+
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: instructorName,
+          action: 'Instructor Add Volunteer Entry',
+          entity_type: 'Time Clock',
+          entity_id: recordId,
+          details: `Added ${entryType} entry for ${studentEmail}: ${date} ${startTime}–${endTime}` +
+            (isClub ? ` (${rawHours}h actual → ${totalHours}h credited)` : ` (${totalHours}h)`) +
+            ` — ${reason.trim()}`,
+        })
+      } catch {}
+
+      toast.success(`${entryType} entry added`)
+      await fetchDetail()
+      return { success: true, recordId, totalHours, rawHours }
+    } catch (err) {
+      console.error('Instructor add entry error:', err)
+      toast.error(err.message || 'Failed to add entry')
+      return { success: false, error: err.message }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ── Instructor: delete a time_clock volunteer/club activity entry ──
+  // Hard delete with thorough audit_log entry capturing all original data.
+  const instructorDeleteTimeClock = async (entry, reason = '') => {
+    if (!profile) { toast.error('Not authorized'); return { success: false } }
+    if (!entry?.record_id) { toast.error('Invalid entry'); return { success: false } }
+    setSaving(true)
+    try {
+      // Capture full snapshot for the audit trail BEFORE deleting
+      const snapshot = {
+        record_id: entry.record_id,
+        user_email: entry.user_email,
+        user_name: entry.user_name,
+        entry_type: entry.entry_type,
+        punch_in: entry.punch_in,
+        punch_out: entry.punch_out,
+        total_hours: entry.total_hours,
+        approval_status: entry.approval_status,
+        description: entry.description,
+      }
+
+      const { error, count } = await supabase
+        .from('time_clock')
+        .delete({ count: 'exact' })
+        .eq('record_id', entry.record_id)
+
+      if (error) throw error
+      if (count === 0) throw new Error('Delete failed — no rows affected (RLS?)')
+
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: `${profile.first_name} ${profile.last_name}`,
+          action: 'Instructor Delete Volunteer Entry',
+          entity_type: 'Time Clock',
+          entity_id: entry.record_id,
+          old_value: JSON.stringify(snapshot),
+          new_value: null,
+          details: `Deleted ${entry.entry_type || 'Volunteer'} entry ${entry.record_id} for ${studentEmail}` +
+            ` (${parseFloat(entry.total_hours || 0)}h)` +
+            (reason && reason.trim() ? ` — ${reason.trim()}` : ''),
+        })
+      } catch {}
+
+      toast.success('Entry deleted')
+      await fetchDetail()
+      return { success: true }
+    } catch (err) {
+      console.error('Instructor delete time clock error:', err)
+      toast.error(err.message || 'Failed to delete entry')
+      return { success: false, error: err.message }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ── Instructor: delete a time_entry_request (manual submission, not yet approved/rejected) ──
+  const instructorDeleteRequest = async (request, reason = '') => {
+    if (!profile) { toast.error('Not authorized'); return { success: false } }
+    if (!request?.request_id) { toast.error('Invalid request'); return { success: false } }
+    setSaving(true)
+    try {
+      const snapshot = {
+        request_id: request.request_id,
+        user_email: request.user_email,
+        user_name: request.user_name,
+        entry_type: request.entry_type,
+        class_id: request.class_id,
+        requested_date: request.requested_date,
+        start_time: request.start_time,
+        end_time: request.end_time,
+        total_hours: request.total_hours,
+        status: request.status,
+        reason: request.reason,
+      }
+
+      const { error, count } = await supabase
+        .from('time_entry_requests')
+        .delete({ count: 'exact' })
+        .eq('request_id', request.request_id)
+
+      if (error) throw error
+      if (count === 0) throw new Error('Delete failed — no rows affected (RLS?)')
+
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: `${profile.first_name} ${profile.last_name}`,
+          action: 'Instructor Delete Volunteer Request',
+          entity_type: 'Time Entry Request',
+          entity_id: request.request_id,
+          old_value: JSON.stringify(snapshot),
+          new_value: null,
+          details: `Deleted ${request.entry_type || 'Volunteer'} request ${request.request_id} for ${studentEmail}` +
+            ` (${parseFloat(request.total_hours || 0)}h, status: ${request.status || 'Pending'})` +
+            (reason && reason.trim() ? ` — ${reason.trim()}` : ''),
+        })
+      } catch {}
+
+      toast.success('Request deleted')
+      await fetchDetail()
+      return { success: true }
+    } catch (err) {
+      console.error('Instructor delete request error:', err)
+      toast.error(err.message || 'Failed to delete request')
+      return { success: false, error: err.message }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return {
     entries,
     pendingEntries,
@@ -1031,5 +1270,8 @@ export function useStudentVolunteerDetail(studentEmail) {
     refresh: fetchDetail,
     instructorEditTimeClock,
     instructorEditRequest,
+    instructorAddEntry,
+    instructorDeleteTimeClock,
+    instructorDeleteRequest,
   }
 }
