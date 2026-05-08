@@ -4,9 +4,11 @@ import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import NotificationBell from '@/components/NotificationBell'
+import WhatsNewModal from '@/components/WhatsNewModal'
 import HoldLockoutModal from '@/components/holds/HoldLockoutModal'
 import HoldReminderModal from '@/components/holds/HoldReminderModal'
 import HoldNudgeBanner from '@/components/holds/HoldNudgeBanner'
+import useChangelog from '@/hooks/useChangelog'
 import {
   Wrench,
   Package,
@@ -1468,10 +1470,24 @@ function LabLockedScreen({ profile, signOut }) {
 }
 
 export default function AppLayout() {
-  const { profile, signOut, labLocked } = useAuth()
+  const {
+    profile,
+    signOut,
+    labLocked,
+    realProfile,
+    isEmulating,
+    mustChangePassword,
+  } = useAuth()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+
+  // ── What's New popup ─────────────────────────────────────────────────
+  // Shows a one-time modal listing changelog entries the user hasn't seen.
+  // Bails for emulation, forced password change, and unauthenticated/kiosk
+  // sessions. New users (NULL marker) are silently caught up — no popup.
+  const { entries: whatsNewEntries, isOpen: whatsNewOpen, dismiss: dismissWhatsNew } =
+    useChangelog(realProfile, isEmulating, mustChangePassword)
 
   const userRole = profile?.role || 'Student'
   const isSuperAdmin = profile?.email?.toLowerCase() === SUPER_ADMIN_EMAIL
@@ -2068,6 +2084,16 @@ export default function AppLayout() {
       {/* Lockout 9000 > Reminder 8500 > temp toast 5000 > ChangePassword 2000.  */}
       <HoldReminderModal />
       <HoldLockoutModal />
+
+      {/* ── What's New popup ──────────────────────────────────────────────── */}
+      {/* z-index 2000 — behind hold lockout/reminder by design. The hook gates */}
+      {/* opening on emulation/password-change so it only appears for the real */}
+      {/* signed-in user when they have unseen changelog entries.              */}
+      <WhatsNewModal
+        open={whatsNewOpen}
+        entries={whatsNewEntries}
+        onDismiss={dismissWhatsNew}
+      />
 
       <style>{`
         @keyframes tempToastIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }

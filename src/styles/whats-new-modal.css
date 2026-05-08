@@ -1,0 +1,178 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   RICT CMMS — What's New Modal styles
+   Used by src/components/WhatsNewModal.jsx
+   File: src/styles/whats-new-modal.css
+
+   Tokens borrowed from dashboard.css to keep visual consistency:
+     #228be6 (brand blue), #1a1a2e (text dark), #495057 (text mid),
+     #868e96 (text muted), #e9ecef / #f1f3f5 (borders / muted backgrounds).
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* z-index 2000 — same as dash-modal-overlay. HoldLockoutModal (9000) and
+   HoldReminderModal (8500) intentionally sit above this; if a hold is
+   active the user will see those first. */
+.wn-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2000; padding: 20px;
+  animation: wnFadeIn 0.2s ease;
+}
+
+.wn-modal {
+  background: white; border-radius: 12px;
+  width: 100%; max-width: 560px;
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  animation: wnSlideUp 0.25s ease;
+}
+
+@keyframes wnFadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wnSlideUp { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.wn-modal-header {
+  padding: 18px 20px;
+  border-bottom: 1px solid #e9ecef;
+  background: linear-gradient(180deg, #f0f7ff 0%, #ffffff 100%);
+  display: flex; justify-content: space-between; align-items: center;
+  flex-shrink: 0;
+}
+.wn-modal-title-wrap {
+  display: inline-flex; align-items: center; gap: 10px;
+  min-width: 0;
+}
+.wn-modal-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+  background: #228be6; color: white;
+  border-radius: 8px; flex-shrink: 0;
+}
+.wn-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+.wn-modal-close {
+  background: none; border: none;
+  cursor: pointer; color: #868e96;
+  min-width: 36px; min-height: 36px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; padding: 0;
+  flex-shrink: 0;
+}
+.wn-modal-close:hover { background: #f1f3f5; color: #495057; }
+.wn-modal-close:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
+
+/* ── Body ────────────────────────────────────────────────────────────────── */
+.wn-modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.wn-modal-desc {
+  margin: 0 0 18px;
+  font-size: 0.88rem;
+  color: #495057;
+  line-height: 1.5;
+}
+
+/* ── Version groups ──────────────────────────────────────────────────────── */
+.wn-version-group { margin-bottom: 20px; }
+.wn-version-group:last-child { margin-bottom: 0; }
+
+.wn-version-header {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid #f1f3f5;
+}
+.wn-version-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+.wn-version-date {
+  font-size: 0.78rem;
+  color: #868e96;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Entry list ──────────────────────────────────────────────────────────── */
+.wn-entry-list {
+  list-style: none; margin: 0; padding: 0;
+}
+.wn-entry {
+  display: flex; align-items: flex-start;
+  gap: 10px;
+  padding: 8px 0;
+}
+.wn-entry-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  margin-top: 1px;
+  /* Colors set inline (per-type from TYPE_CONFIG) — text + icon both inherit
+     `color` from the badge style attribute, ensuring the SC 1.4.3 contrast
+     pairing carries through. */
+}
+.wn-entry-title {
+  font-size: 0.88rem;
+  color: #495057;
+  line-height: 1.45;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.wn-modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid #e9ecef;
+  display: flex; justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.wn-btn-primary {
+  background: #228be6; color: white;
+  border: none; border-radius: 8px;
+  padding: 10px 22px;
+  font-size: 0.88rem; font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  /* WCAG 2.5.5 (AAA) — 44×44 touch target */
+  min-height: 44px;
+}
+.wn-btn-primary:hover { background: #1c7ed6; }
+.wn-btn-primary:focus-visible {
+  outline: 2px solid #1a1a2e; outline-offset: 2px;
+}
+
+/* ── Mobile (≤ 600px) ────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .wn-modal-header { padding: 14px 16px; }
+  .wn-modal-body   { padding: 16px; }
+  .wn-modal-footer { padding: 12px 16px; }
+  /* WCAG 2.5.5 (AAA) — bump close to 44×44 on mobile */
+  .wn-modal-close { min-width: 44px; min-height: 44px; }
+  /* Stack version header on narrow viewports so the date doesn't overflow */
+  .wn-version-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+}
+
+/* ── Reduced motion (WCAG 2.3.3) ─────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .wn-modal-overlay,
+  .wn-modal { animation: none; }
+  .wn-btn-primary { transition: none; }
+}
