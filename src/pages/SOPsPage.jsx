@@ -42,6 +42,9 @@ function HL({ text, q }) {
 }
 
 // ─── Linked count badges for cards ───────────────────────────────────────
+// WO count includes OPEN work orders only — recurring PMs (e.g. quarterly Spindle
+// Inspection) would otherwise pile up closed WOs and inflate the badge indefinitely.
+// Closed WOs are still visible from inside the SOP via the "Show N closed" disclosure.
 function useLinkCounts(sops) {
   const [counts, setCounts] = useState({})
   useEffect(() => {
@@ -52,13 +55,26 @@ function useLinkCounts(sops) {
         const [{ data: a }, { data: p }, { data: w }] = await Promise.all([
           supabase.from('sop_assets').select('sop_id').in('sop_id', ids),
           supabase.from('sop_pm_schedules').select('sop_id').in('sop_id', ids),
-          supabase.from('sop_work_orders').select('sop_id').in('sop_id', ids),
+          supabase.from('sop_work_orders').select('sop_id, wo_id').in('sop_id', ids),
         ])
+        // Determine which linked WOs are still open. Closed WOs live in work_orders_closed
+        // and won't appear in this query, so they're naturally excluded from the count.
+        const linkedWoIds = [...new Set((w || []).map(r => r.wo_id).filter(Boolean))]
+        let openWoIds = new Set()
+        if (linkedWoIds.length > 0) {
+          const { data: openWOs } = await supabase
+            .from('work_orders')
+            .select('wo_id')
+            .in('wo_id', linkedWoIds)
+          openWoIds = new Set((openWOs || []).map(o => o.wo_id))
+        }
         const c = {}
         ids.forEach(id => { c[id] = { assets: 0, pms: 0, wos: 0 } })
         ;(a || []).forEach(r => { if (c[r.sop_id]) c[r.sop_id].assets++ })
         ;(p || []).forEach(r => { if (c[r.sop_id]) c[r.sop_id].pms++ })
-        ;(w || []).forEach(r => { if (c[r.sop_id]) c[r.sop_id].wos++ })
+        ;(w || []).forEach(r => {
+          if (c[r.sop_id] && openWoIds.has(r.wo_id)) c[r.sop_id].wos++
+        })
         setCounts(c)
       } catch {}
     })()
@@ -102,6 +118,16 @@ export default function SOPsPage() {
   const [linkedPMs, setLinkedPMs] = useState([])
   const [linkedWOs, setLinkedWOs] = useState([])
   const [linksLoading, setLinksLoading] = useState(false)
+
+  // ── Closed WOs (lazy-loaded on demand to avoid bloating the linked WOs list) ──
+  // Recurring PMs (e.g. quarterly Spindle Inspection) generate many closed WOs over
+  // time. Loading them all upfront would clutter the modal. We track their IDs only,
+  // then fetch full records when the user clicks "Show N closed work orders".
+  const [closedWOIds, setClosedWOIds] = useState([])           // IDs only — for count + picker exclusion
+  const [closedWOs, setClosedWOs] = useState([])               // Full records (loaded on first expand)
+  const [closedWOsLoaded, setClosedWOsLoaded] = useState(false)
+  const [closedWOsExpanded, setClosedWOsExpanded] = useState(false)
+  const [closedWOsLoading, setClosedWOsLoading] = useState(false)
 
   // Available items for link pickers
   const [allAssets, setAllAssets] = useState([])
@@ -206,9 +232,18 @@ export default function SOPsPage() {
   }, [searchParams, sops])
 
   // ── Fetch Links for selected SOP ──
+  // Open WOs are loaded immediately. CLOSED WOs are NOT fetched here — only their
+  // IDs are recorded so we can show a count and a "Show N closed" disclosure.
+  // The full closed records are pulled on demand via loadClosedWOs() when the user
+  // expands the disclosure.
   const fetchLinks = useCallback(async (sopId) => {
     if (!sopId) return
     setLinksLoading(true)
+    // Reset closed-WO state when switching SOPs so an open disclosure doesn't carry over
+    setClosedWOIds([])
+    setClosedWOs([])
+    setClosedWOsLoaded(false)
+    setClosedWOsExpanded(false)
     try {
       const { data: aL } = await supabase.from('sop_assets').select('asset_id').eq('sop_id', sopId)
       const { data: pL } = await supabase.from('sop_pm_schedules').select('pm_id').eq('sop_id', sopId)
@@ -221,14 +256,54 @@ export default function SOPsPage() {
       if (aIds.length) { const { data } = await supabase.from('assets').select('asset_id, name, category, location, status').in('asset_id', aIds).order('name'); setLinkedAssets(data || []) } else setLinkedAssets([])
       if (pIds.length) { const { data } = await supabase.from('pm_schedules').select('pm_id, pm_name, asset_name, frequency, next_due_date, status').in('pm_id', pIds).order('pm_name'); setLinkedPMs(data || []) } else setLinkedPMs([])
       if (wIds.length) {
+        // Only fetch OPEN work orders here. Closed ones are handled by loadClosedWOs on demand.
         const { data: od } = await supabase.from('work_orders').select('wo_id, description, asset_name, priority, status, assigned_to').in('wo_id', wIds)
-        const { data: cd } = await supabase.from('work_orders_closed').select('wo_id, description, asset_name, priority, status, assigned_to').in('wo_id', wIds)
-        const m = new Map(); (od || []).forEach(w => m.set(w.wo_id, w)); (cd || []).forEach(w => { if (!m.has(w.wo_id)) m.set(w.wo_id, w) })
-        setLinkedWOs(Array.from(m.values()))
-      } else setLinkedWOs([])
+        // Sort newest first by extracting the numeric portion of wo_id (robust to format changes)
+        const woNum = (id) => parseInt(String(id || '').replace(/\D/g, ''), 10) || 0
+        const sortedOpen = (od || []).slice().sort((a, b) => woNum(b.wo_id) - woNum(a.wo_id))
+        setLinkedWOs(sortedOpen)
+        // Closed = whatever's in the link table but didn't come back from work_orders
+        const openIds = new Set((od || []).map(w => w.wo_id))
+        const closedIds = wIds.filter(id => !openIds.has(id))
+        setClosedWOIds(closedIds)
+      } else {
+        setLinkedWOs([])
+        setClosedWOIds([])
+      }
     } catch (err) { console.error('Error fetching SOP links:', err) }
     finally { setLinksLoading(false) }
   }, [])
+
+  // ── Load CLOSED work orders on demand ──
+  // Triggered when the user clicks "Show N closed work orders". Caches the result
+  // so subsequent expand/collapse cycles don't re-query.
+  const loadClosedWOs = useCallback(async () => {
+    if (closedWOsLoaded || !closedWOIds.length) return
+    setClosedWOsLoading(true)
+    try {
+      const { data } = await supabase
+        .from('work_orders_closed')
+        .select('wo_id, description, asset_name, priority, status, assigned_to, closed_date, closed_by')
+        .in('wo_id', closedWOIds)
+      const woNum = (id) => parseInt(String(id || '').replace(/\D/g, ''), 10) || 0
+      const sorted = (data || []).slice().sort((a, b) => woNum(b.wo_id) - woNum(a.wo_id))
+      setClosedWOs(sorted)
+      setClosedWOsLoaded(true)
+    } catch (err) {
+      console.error('Error fetching closed WOs:', err)
+    } finally {
+      setClosedWOsLoading(false)
+    }
+  }, [closedWOIds, closedWOsLoaded])
+
+  // Toggle the closed-WOs section. First expand triggers the fetch; subsequent
+  // toggles just show/hide the cached list.
+  const toggleClosedWOs = useCallback(async () => {
+    if (!closedWOsExpanded && !closedWOsLoaded) {
+      await loadClosedWOs()
+    }
+    setClosedWOsExpanded(prev => !prev)
+  }, [closedWOsExpanded, closedWOsLoaded, loadClosedWOs])
 
   // ── Load available items for link picker ──
   const loadAvailable = useCallback(async (type) => {
@@ -492,11 +567,12 @@ export default function SOPsPage() {
       return allPMs.filter(p => !linked.has(p.pm_id)).filter(p => !q || (p.pm_name || '').toLowerCase().includes(q) || (p.pm_id || '').toLowerCase().includes(q) || (p.asset_name || '').toLowerCase().includes(q))
     }
     if (showLinkModal === 'wos') {
-      const linked = new Set(linkedWOs.map(w => w.wo_id))
+      // Include both open AND closed linked WO IDs so closed ones don't appear as "available"
+      const linked = new Set([...linkedWOs.map(w => w.wo_id), ...closedWOIds])
       return allWOs.filter(w => !linked.has(w.wo_id)).filter(w => !q || (w.description || '').toLowerCase().includes(q) || (w.wo_id || '').toLowerCase().includes(q) || (w.asset_name || '').toLowerCase().includes(q) || (w.assigned_to || '').toLowerCase().includes(q))
     }
     return []
-  }, [showLinkModal, linkSearch, allAssets, allPMs, allWOs, linkedAssets, linkedPMs, linkedWOs])
+  }, [showLinkModal, linkSearch, allAssets, allPMs, allWOs, linkedAssets, linkedPMs, linkedWOs, closedWOIds])
 
   // ── No Access ──
   if (!permsLoading && !loading && !hasPerm('view_page')) {
@@ -720,22 +796,83 @@ export default function SOPsPage() {
               {/* ── Linked WOs ── */}
               <div className="sops-link-section">
                 <div className="sops-link-section-header">
-                  <h5 className="sops-link-section-title"><span className="material-icons" style={{ fontSize: 18, color: '#fab005' }}>assignment</span> Linked Work Orders ({linkedWOs.length})</h5>
-                  {hasPerm('link_items') && <button className="sops-btn-sm" onClick={() => openLinkModal('wos')}><span className="material-icons" style={{ fontSize: 14 }}>add_link</span> Link WOs</button>}
+                  <h5 className="sops-link-section-title">
+                    <span className="material-icons" style={{ fontSize: 18, color: '#fab005' }} aria-hidden="true">assignment</span>
+                    Linked Work Orders ({closedWOIds.length > 0 ? `${linkedWOs.length} open · ${closedWOIds.length} closed` : linkedWOs.length})
+                  </h5>
+                  {hasPerm('link_items') && <button type="button" className="sops-btn-sm" onClick={() => openLinkModal('wos')}><span className="material-icons" style={{ fontSize: 14 }} aria-hidden="true">add_link</span> Link WOs</button>}
                 </div>
-                {linksLoading ? <p className="sops-link-empty">Loading...</p> : linkedWOs.length === 0 ? <p className="sops-link-empty">No work orders linked to this SOP.</p> : (
-                  <div className="sops-link-list">
-                    {linkedWOs.map(w => (
-                      <div key={w.wo_id} className="sops-link-item">
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div className="sops-link-item-name">{w.wo_id}: {(w.description || '').slice(0, 80)}{(w.description || '').length > 80 ? '...' : ''}</div>
-                          <div className="sops-link-item-sub">{w.asset_name || 'No asset'} · {w.priority} · {w.status}{w.assigned_to ? ` · ${w.assigned_to}` : ''}</div>
-                        </div>
-                        <span className={`sops-status-dot ${w.status === 'Closed' ? 'closed' : 'active'}`}>{w.status}</span>
-                        {hasPerm('link_items') && <button className="sops-btn-icon" onClick={() => handleUnlink('wo', w.wo_id)} title="Unlink"><span className="material-icons" style={{ fontSize: 16, color: '#fa5252' }}>link_off</span></button>}
+                {linksLoading ? (
+                  <p className="sops-link-empty">Loading...</p>
+                ) : linkedWOs.length === 0 && closedWOIds.length === 0 ? (
+                  <p className="sops-link-empty">No work orders linked to this SOP.</p>
+                ) : (
+                  <>
+                    {/* Open WOs (always shown) */}
+                    {linkedWOs.length > 0 ? (
+                      <div className="sops-link-list">
+                        {linkedWOs.map(w => (
+                          <div key={w.wo_id} className="sops-link-item">
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="sops-link-item-name">{w.wo_id}: {(w.description || '').slice(0, 80)}{(w.description || '').length > 80 ? '...' : ''}</div>
+                              <div className="sops-link-item-sub">{w.asset_name || 'No asset'} · {w.priority} · {w.status}{w.assigned_to ? ` · ${w.assigned_to}` : ''}</div>
+                            </div>
+                            <span className={`sops-status-dot ${w.status === 'Closed' ? 'closed' : 'active'}`}>{w.status}</span>
+                            {hasPerm('link_items') && <button type="button" className="sops-btn-icon" onClick={() => handleUnlink('wo', w.wo_id)} title="Unlink" aria-label={`Unlink work order ${w.wo_id}`}><span className="material-icons" style={{ fontSize: 16, color: '#fa5252' }} aria-hidden="true">link_off</span></button>}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    ) : (
+                      <p className="sops-link-empty">No open work orders linked.</p>
+                    )}
+
+                    {/* Closed WOs disclosure (lazy-loaded) */}
+                    {closedWOIds.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          className="sops-closed-wos-toggle"
+                          onClick={toggleClosedWOs}
+                          aria-expanded={closedWOsExpanded}
+                          aria-controls={`sops-closed-wos-${selectedSOP.sop_id}`}
+                          disabled={closedWOsLoading}
+                        >
+                          <span className="material-icons" style={{ fontSize: 16 }} aria-hidden="true">
+                            {closedWOsLoading ? 'sync' : closedWOsExpanded ? 'expand_less' : 'expand_more'}
+                          </span>
+                          {closedWOsLoading
+                            ? `Loading ${closedWOIds.length} closed work order${closedWOIds.length === 1 ? '' : 's'}...`
+                            : closedWOsExpanded
+                              ? `Hide ${closedWOIds.length} closed work order${closedWOIds.length === 1 ? '' : 's'}`
+                              : `Show ${closedWOIds.length} closed work order${closedWOIds.length === 1 ? '' : 's'}`}
+                        </button>
+
+                        {closedWOsExpanded && (
+                          <div
+                            id={`sops-closed-wos-${selectedSOP.sop_id}`}
+                            className="sops-link-list"
+                            style={{ marginTop: 8 }}
+                            aria-live="polite"
+                          >
+                            {closedWOs.map(w => (
+                              <div key={w.wo_id} className="sops-link-item">
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div className="sops-link-item-name">{w.wo_id}: {(w.description || '').slice(0, 80)}{(w.description || '').length > 80 ? '...' : ''}</div>
+                                  <div className="sops-link-item-sub">
+                                    {w.asset_name || 'No asset'} · {w.priority}
+                                    {w.assigned_to ? ` · ${w.assigned_to}` : ''}
+                                    {w.closed_date ? ` · Closed ${fmtDate(w.closed_date)}` : ''}
+                                  </div>
+                                </div>
+                                <span className="sops-status-dot closed">Closed</span>
+                                {hasPerm('link_items') && <button type="button" className="sops-btn-icon" onClick={() => handleUnlink('wo', w.wo_id)} title="Unlink" aria-label={`Unlink work order ${w.wo_id}`}><span className="material-icons" style={{ fontSize: 16, color: '#fa5252' }} aria-hidden="true">link_off</span></button>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -1160,6 +1297,10 @@ export default function SOPsPage() {
         .sops-status-dot.active { background: #d3f9d8; color: #2b8a3e; }
         .sops-status-dot.paused { background: #f1f3f5; color: #868e96; }
         .sops-status-dot.closed { background: #e7f5ff; color: #1971c2; }
+        .sops-closed-wos-toggle { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 12px; margin-top: 8px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 8px; font-size: 0.83rem; color: #495057; cursor: pointer; transition: all 0.15s; font-weight: 500; }
+        .sops-closed-wos-toggle:hover { background: #e9ecef; border-color: #adb5bd; color: #1971c2; }
+        .sops-closed-wos-toggle:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
+        .sops-closed-wos-toggle:disabled { opacity: 0.6; cursor: not-allowed; }
         .sops-link-picker-list { max-height: 360px; overflow-y: auto; border: 1px solid #e9ecef; border-radius: 8px; }
         .sops-link-picker-item { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid #f1f3f5; cursor: pointer; transition: background 0.1s; }
         .sops-link-picker-item:last-child { border-bottom: none; }
