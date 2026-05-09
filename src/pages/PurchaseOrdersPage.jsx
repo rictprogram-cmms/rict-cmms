@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
 import { usePODashboard, usePOList, usePODetail, useVendors, usePOActions, useLowStockItems } from '@/hooks/usePurchaseOrders'
+import { usePOBudgetSummary } from '@/hooks/usePOBudgetSummary'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
@@ -12,7 +13,7 @@ import {
   XCircle, Clock, DollarSign, AlertTriangle, ChevronRight, Eye,
   Printer, X, Check, Ban, Send, FileText, Link, Trash2, ArrowLeft,
   TrendingUp, BarChart3, Loader2, SlidersHorizontal, ScanLine,
-  Pencil
+  Pencil, Wallet
 } from 'lucide-react'
 
 const STATUS_COLORS = {
@@ -46,6 +47,51 @@ function fmtMoney(v) {
 // Statuses where line items can be edited
 const EDITABLE_STATUSES = ['Pending', 'Approved', 'Ordered']
 
+// Closed-status filter values that should trigger AY filtering on the Orders tab
+const CLOSED_STATUS_FILTERS = ['Received', 'Cancelled', 'Rejected']
+
+// localStorage key for remembering the user's selected academic year on the Orders tab
+const AY_STORAGE_KEY = 'po_school_year'
+
+// ── Academic Year helpers ────────────────────────────────────────────────────
+// AY runs July 1 → June 30. The "start year" is the calendar year the AY began in
+// (e.g. AY 2025-26 has startYear === 2025).
+function getAcademicYearStart(date) {
+  if (!date) return null
+  const d = date instanceof Date ? date : new Date(date)
+  if (isNaN(d.getTime())) return null
+  // Months are 0-indexed; July is 6
+  return d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1
+}
+
+function getCurrentAcademicYearStart() {
+  return getAcademicYearStart(new Date())
+}
+
+// "AY 2025-26"
+function formatAY(startYear) {
+  if (startYear == null) return ''
+  const endYear = startYear + 1
+  return `AY ${startYear}-${String(endYear).slice(-2)}`
+}
+
+// Inclusive of July 1 of startYear, exclusive of July 1 of (startYear + 1)
+function isInAcademicYear(dateValue, startYear) {
+  if (!dateValue || startYear == null) return false
+  const d = new Date(dateValue)
+  if (isNaN(d.getTime())) return false
+  const ayStart = new Date(startYear, 6, 1, 0, 0, 0)       // Jul 1, startYear
+  const ayEnd   = new Date(startYear + 1, 6, 1, 0, 0, 0)   // Jul 1, startYear + 1
+  return d >= ayStart && d < ayEnd
+}
+
+// Pick the date that determines an order's AY: prefer ordered_date (when actually
+// placed with the vendor), fall back to order_date so Pending/Approved orders that
+// haven't been placed yet still appear in the AY they were created in.
+function getOrderAYDate(order) {
+  return order?.ordered_date || order?.order_date || null
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -61,6 +107,52 @@ export default function PurchaseOrdersPage() {
   // QR Scanner state
   const [showScanner, setShowScanner] = useState(false)
   const html5QrRef = useRef(null)
+
+  // ── Shared academic-year state (used by Orders + Dashboard tabs) ────────
+  // Lifted out of OrdersTab so the Dashboard's Budget Remaining tile and the
+  // Orders tab's filter share a single source of truth. Persists to localStorage.
+  const [selectedAYStart, setSelectedAYStart] = useState(() => {
+    try {
+      const stored = window.localStorage?.getItem(AY_STORAGE_KEY)
+      const n = stored ? parseInt(stored, 10) : NaN
+      if (!isNaN(n) && n >= 2000 && n <= 2100) return n
+    } catch { /* localStorage unavailable */ }
+    return getCurrentAcademicYearStart()
+  })
+
+  useEffect(() => {
+    try { window.localStorage?.setItem(AY_STORAGE_KEY, String(selectedAYStart)) } catch {}
+  }, [selectedAYStart])
+
+  // ── Keyboard shortcuts: [ steps to older AY, ] steps to newer AY ────────
+  // Active on Orders and Dashboard tabs (where the AY context is meaningful).
+  // Skips when the user is typing in form fields, when modifiers are held,
+  // when the QR scanner is open, or when viewing an order detail.
+  useEffect(() => {
+    function handleKey(e) {
+      if (e.key !== '[' && e.key !== ']') return
+      // Don't fire while typing
+      const tag = (e.target?.tagName || '').toUpperCase()
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.target?.isContentEditable) return
+      // Don't fire with modifier keys
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      // Only on tabs where AY is meaningful
+      if (tab !== 'orders' && tab !== 'dashboard') return
+      // Don't fire when scanner is open or viewing an order
+      if (showScanner || viewingOrder) return
+
+      e.preventDefault()
+      setSelectedAYStart(prev => {
+        const delta = e.key === '[' ? -1 : 1
+        const next = prev + delta
+        // Clamp to a sensible range — prevents absurd years from runaway shortcuts
+        return Math.max(2010, Math.min(2099, next))
+      })
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [tab, showScanner, viewingOrder])
 
   // Build tabs based on permissions
   const tabs = useMemo(() => {
@@ -222,9 +314,19 @@ export default function PurchaseOrdersPage() {
       {viewingOrder ? (
         <OrderDetailView orderId={viewingOrder} onBack={() => { setViewingOrder(null); setAutoReceive(false) }} hasPerm={hasPerm} autoReceive={autoReceive} />
       ) : tab === 'dashboard' ? (
-        <DashboardTab onViewOrder={id => { setViewingOrder(id); setTab('orders') }} hasPerm={hasPerm} />
+        <DashboardTab
+          onViewOrder={id => { setViewingOrder(id); setTab('orders') }}
+          hasPerm={hasPerm}
+          selectedAYStart={selectedAYStart}
+          setSelectedAYStart={setSelectedAYStart}
+        />
       ) : tab === 'orders' ? (
-        <OrdersTab onViewOrder={setViewingOrder} hasPerm={hasPerm} />
+        <OrdersTab
+          onViewOrder={setViewingOrder}
+          hasPerm={hasPerm}
+          selectedAYStart={selectedAYStart}
+          setSelectedAYStart={setSelectedAYStart}
+        />
       ) : tab === 'create' ? (
         <CreatePOTab onCreated={() => setTab('orders')} hasPerm={hasPerm} />
       ) : tab === 'lowstock' ? (
@@ -238,10 +340,24 @@ export default function PurchaseOrdersPage() {
 // DASHBOARD TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function DashboardTab({ onViewOrder, hasPerm }) {
+function DashboardTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }) {
   const canViewAll = hasPerm('view_all_po')
   const canViewSpend = hasPerm('view_dashboard_spend')
   const { summary, loading } = usePODashboard(canViewAll)
+  // Pass null when user lacks the spend permission so the hook short-circuits
+  // and never even queries the budget tables.
+  const { summary: budget, loading: budgetLoading } = usePOBudgetSummary(canViewSpend ? selectedAYStart : null)
+
+  // Year options for the inline budget-tile selector. Generates a sensible
+  // range (current AY back 5 years, plus the currently selected AY in case
+  // it was reached via keyboard shortcut beyond that range).
+  const ayOptions = useMemo(() => {
+    const current = getCurrentAcademicYearStart()
+    const years = new Set()
+    for (let y = current - 5; y <= current; y++) years.add(y)
+    if (selectedAYStart != null) years.add(selectedAYStart)
+    return [...years].filter(v => v != null).sort((a, b) => b - a)
+  }, [selectedAYStart])
 
   if (loading) return <div className="text-center py-12 text-surface-400">Loading dashboard...</div>
   if (!summary) return <div className="text-center py-12 text-surface-400">No data</div>
@@ -253,6 +369,14 @@ function DashboardTab({ onViewOrder, hasPerm }) {
     { label: 'Received', value: summary.received, icon: Package, color: 'text-emerald-600 bg-emerald-50' },
   ]
 
+  // Color budget remaining based on % used (matches Program Budget page convention)
+  const remainingColorClass = budget && budget.totalBudget > 0
+    ? (budget.percentUsed > 90 ? 'text-red-600' : budget.percentUsed > 75 ? 'text-amber-600' : 'text-emerald-600')
+    : 'text-surface-700'
+  const progressColorClass = budget && budget.totalBudget > 0
+    ? (budget.percentUsed > 90 ? 'bg-red-500' : budget.percentUsed > 75 ? 'bg-amber-500' : 'bg-emerald-500')
+    : 'bg-surface-300'
+
   return (
     <div className="space-y-4">
       {/* Metrics */}
@@ -262,7 +386,9 @@ function DashboardTab({ onViewOrder, hasPerm }) {
           return (
             <div key={m.label} className="bg-white rounded-xl border border-surface-200 p-4">
               <div className="flex items-center gap-2 mb-2">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${m.color}`}><Icon size={16} /></div>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${m.color}`}>
+                  <Icon size={16} aria-hidden="true" />
+                </div>
                 <span className="text-xs text-surface-500 font-medium">{m.label}</span>
               </div>
               <div className="text-2xl font-bold text-surface-900">{m.value}</div>
@@ -271,22 +397,91 @@ function DashboardTab({ onViewOrder, hasPerm }) {
         })}
       </div>
 
-      {/* Spend — only if permission allows */}
+      {/* Spend / Budget — only if permission allows */}
       {canViewSpend && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* Monthly Spend */}
           <div className="bg-white rounded-xl border border-surface-200 p-4">
             <div className="flex items-center gap-2 mb-1">
-              <DollarSign size={16} className="text-emerald-500" />
+              <DollarSign size={16} className="text-emerald-500" aria-hidden="true" />
               <span className="text-xs text-surface-500 font-medium">Monthly Spend</span>
             </div>
             <div className="text-xl font-bold text-surface-900">{fmtMoney(summary.monthlySpend)}</div>
           </div>
+
+          {/* Yearly Spend */}
           <div className="bg-white rounded-xl border border-surface-200 p-4">
             <div className="flex items-center gap-2 mb-1">
-              <TrendingUp size={16} className="text-brand-500" />
+              <TrendingUp size={16} className="text-brand-500" aria-hidden="true" />
               <span className="text-xs text-surface-500 font-medium">Yearly Spend</span>
             </div>
             <div className="text-xl font-bold text-surface-900">{fmtMoney(summary.yearlySpend)}</div>
+          </div>
+
+          {/* Budget Remaining — AY-tied */}
+          <div
+            className="bg-white rounded-xl border border-surface-200 p-4"
+            aria-busy={budgetLoading || undefined}
+          >
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <Wallet size={16} className={remainingColorClass} aria-hidden="true" />
+                <span className="text-xs text-surface-500 font-medium truncate">Budget Remaining</span>
+              </div>
+              <label htmlFor="dashboard-ay-select" className="sr-only">
+                Budget academic year
+              </label>
+              <select
+                id="dashboard-ay-select"
+                value={selectedAYStart}
+                onChange={e => setSelectedAYStart(parseInt(e.target.value, 10))}
+                className="bg-surface-50 border border-surface-200 rounded text-[11px] font-medium text-surface-600 px-1.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                aria-label="Filter budget by academic year"
+                aria-keyshortcuts="[ ]"
+                title="Academic year — use [ and ] to step through years"
+              >
+                {ayOptions.map(ay => (
+                  <option key={ay} value={ay}>{formatAY(ay)}</option>
+                ))}
+              </select>
+            </div>
+
+            {budgetLoading ? (
+              <div className="text-sm text-surface-400 py-2 flex items-center gap-2">
+                <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Loading...
+              </div>
+            ) : !budget || budget.totalBudget === 0 ? (
+              <>
+                <div className="text-sm text-surface-500 mt-1">Budget not set</div>
+                <div className="text-[11px] text-surface-400 mt-0.5">
+                  {budget && budget.totalSpent > 0
+                    ? `${fmtMoney(budget.totalSpent)} spent — set up in Program Budget`
+                    : `No budget for ${formatAY(selectedAYStart)} — set up in Program Budget`}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={`text-xl font-bold ${remainingColorClass}`}>
+                  {fmtMoney(budget.remaining)}
+                </div>
+                <div className="text-[11px] text-surface-400 mt-0.5">
+                  of {fmtMoney(budget.totalBudget)} ({budget.percentUsed}% used)
+                </div>
+                <div
+                  className="h-1 bg-surface-100 rounded-full overflow-hidden mt-2"
+                  role="progressbar"
+                  aria-valuenow={budget.percentUsed}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Budget usage for ${formatAY(selectedAYStart)}: ${budget.percentUsed}% used`}
+                >
+                  <div
+                    className={`h-full rounded-full transition-all motion-reduce:transition-none ${progressColorClass}`}
+                    style={{ width: `${Math.min(budget.percentUsed, 100)}%` }}
+                  />
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -312,7 +507,7 @@ function DashboardTab({ onViewOrder, hasPerm }) {
                   <div className="text-sm font-semibold text-surface-900">{fmtMoney(o.total)}</div>
                   <StatusBadge status={o.status} />
                 </div>
-                <ChevronRight size={14} className="text-surface-300" />
+                <ChevronRight size={14} className="text-surface-300" aria-hidden="true" />
               </button>
             ))}
           </div>
@@ -326,33 +521,67 @@ function DashboardTab({ onViewOrder, hasPerm }) {
 // ORDERS LIST TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function OrdersTab({ onViewOrder, hasPerm }) {
+function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }) {
   const canViewAll = hasPerm('view_all_po')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
   const { orders, loading, refresh } = usePOList(statusFilter, canViewAll)
 
+  // Note: selectedAYStart and setSelectedAYStart are owned by the parent
+  // (PurchaseOrdersPage) so they can be shared with the Dashboard tab's
+  // Budget Remaining tile and driven by the page-level [ ] keyboard shortcuts.
+
+  // The AY filter only applies to "All Status" and the closed-status filters.
+  // Active views (active, Pending, Approved, Ordered, Partial) are always
+  // small enough that a year filter isn't needed — and can hide pending work.
+  const ayFilterApplies = statusFilter === 'all' || CLOSED_STATUS_FILTERS.includes(statusFilter)
+
+  // Build the list of selectable academic years from the loaded data, plus the
+  // current AY and the currently-selected AY. Newest first.
+  const availableAYs = useMemo(() => {
+    const set = new Set()
+    set.add(getCurrentAcademicYearStart())
+    set.add(selectedAYStart)
+    orders.forEach(o => {
+      const ay = getAcademicYearStart(getOrderAYDate(o))
+      if (ay != null) set.add(ay)
+    })
+    return [...set].filter(v => v != null).sort((a, b) => b - a)
+  }, [orders, selectedAYStart])
+
+  // Apply AY (if applicable) + search filters
   const filtered = useMemo(() => {
-    if (!search) return orders
-    const s = search.toLowerCase()
-    return orders.filter(o =>
-      (o.order_id || '').toLowerCase().includes(s) ||
-      (o.vendor_name || '').toLowerCase().includes(s) ||
-      (o.other_vendor || '').toLowerCase().includes(s) ||
-      (o.ordered_by || '').toLowerCase().includes(s)
-    )
-  }, [orders, search])
+    let result = orders
+    if (ayFilterApplies) {
+      result = result.filter(o => isInAcademicYear(getOrderAYDate(o), selectedAYStart))
+    }
+    if (search) {
+      const s = search.toLowerCase()
+      result = result.filter(o =>
+        (o.order_id || '').toLowerCase().includes(s) ||
+        (o.vendor_name || '').toLowerCase().includes(s) ||
+        (o.other_vendor || '').toLowerCase().includes(s) ||
+        (o.ordered_by || '').toLowerCase().includes(s)
+      )
+    }
+    return result
+  }, [orders, search, selectedAYStart, ayFilterApplies])
+
+  // Whether the AY filter is what's responsible for an empty result (vs. "no orders at all")
+  const isEmptyDueToAY = ayFilterApplies && filtered.length === 0 && orders.length > 0
 
   return (
     <div className="space-y-3">
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+          <label htmlFor="po-search" className="sr-only">Search orders</label>
+          <input id="po-search" type="text" value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search orders..." className="input pl-9 text-sm" />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+        <label htmlFor="po-status-filter" className="sr-only">Filter by status</label>
+        <select id="po-status-filter" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           className="input text-sm w-auto">
           <option value="all">All Status</option>
           <option value="active">Active Only</option>
@@ -364,12 +593,37 @@ function OrdersTab({ onViewOrder, hasPerm }) {
           <option value="Cancelled">Cancelled</option>
           <option value="Rejected">Rejected</option>
         </select>
+        {ayFilterApplies && (
+          <>
+            <label htmlFor="po-ay-filter" className="sr-only">Filter by academic year</label>
+            <select
+              id="po-ay-filter"
+              value={selectedAYStart}
+              onChange={e => setSelectedAYStart(parseInt(e.target.value, 10))}
+              className="input text-sm w-auto"
+              aria-label="Filter by academic year"
+              aria-keyshortcuts="[ ]"
+              title="Academic year (July 1 – June 30) — use [ and ] to step through years"
+            >
+              {availableAYs.map(ay => (
+                <option key={ay} value={ay}>{formatAY(ay)}</option>
+              ))}
+            </select>
+          </>
+        )}
       </div>
+
+      {/* Live announcement for screen readers when AY filter changes the result count */}
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {!loading && ayFilterApplies
+          ? `Showing ${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'} for ${formatAY(selectedAYStart)}`
+          : ''}
+      </span>
 
       {/* Info banner for filtered view */}
       {!canViewAll && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-center gap-2">
-          <Eye size={14} /> Showing only orders you created.
+          <Eye size={14} aria-hidden="true" /> Showing only orders you created.
         </div>
       )}
 
@@ -378,13 +632,23 @@ function OrdersTab({ onViewOrder, hasPerm }) {
         <div className="text-center py-12 text-surface-400">Loading orders...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-surface-400">
-          <ShoppingCart size={32} className="mx-auto mb-2 opacity-40" />
-          <p className="text-sm">No orders found</p>
+          <ShoppingCart size={32} className="mx-auto mb-2 opacity-40" aria-hidden="true" />
+          {isEmptyDueToAY ? (
+            <>
+              <p className="text-sm">No orders for {formatAY(selectedAYStart)}</p>
+              <p className="text-xs text-surface-300 mt-1">Try selecting a different academic year above.</p>
+            </>
+          ) : (
+            <p className="text-sm">No orders found</p>
+          )}
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              <caption className="sr-only">
+                Purchase orders{ayFilterApplies ? ` for ${formatAY(selectedAYStart)}` : ''} — {filtered.length} {filtered.length === 1 ? 'result' : 'results'}
+              </caption>
               <thead>
                 <tr className="bg-surface-50 text-left">
                   <th scope="col" className="px-4 py-2.5 font-semibold text-surface-600 text-xs">PO #</th>
