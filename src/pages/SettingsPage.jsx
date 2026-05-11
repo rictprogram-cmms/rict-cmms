@@ -1827,34 +1827,56 @@ function ReminderMarkdownPreview({ text, className = '' }) {
 // ─── Editor pane for a single scope (global or one class) ───────────────────
 // Self-contained: owns its message buffer, debounced auto-save, and on-unmount
 // flush. Keyed by scope at the parent so switching tabs remounts cleanly.
+//
+// CURSOR-JUMP FIX (v3.7.5):
+//   `savedMessage` was previously useState — which meant the sync effect's dep
+//   list `[initialMessage, savedMessage]` would re-fire whenever WE updated
+//   savedMessage from persist(). In the gap between our own `setSavedMessage`
+//   and the realtime echo arriving with a fresh `initialMessage`, the effect
+//   would clobber the textarea value with a STALE initialMessage for one paint,
+//   reassigning the DOM value and jumping the cursor to the end.
+//
+//   Fix: `savedMessage` becomes a ref (no render, no dep tracking). The sync
+//   effect now ONLY runs when `initialMessage` truly changes (real external
+//   input — another tab or instructor), never as a side-effect of our own save.
+//   `messageRef` mirrors `message` so the unmount-flush closure stays current.
 function ReminderEditor({ scope, initialMessage, onSave }) {
   const [message, setMessage] = useState(initialMessage || '')
-  const [savedMessage, setSavedMessage] = useState(initialMessage || '')
   const [saveState, setSaveState] = useState(null)
+  const savedMessageRef = useRef(initialMessage || '')  // last persisted value
+  const messageRef = useRef(initialMessage || '')        // mirror of `message`
   const debounceRef = useRef(null)
   const textareaRef = useRef(null)
   const messageId = useId()
   const helpId = useId()
   const previewId = useId()
+  const statusLiveId = useId()
 
   useAutoGrowTextarea(message, textareaRef, { min: 200, max: 400 })
 
-  // Re-sync when the realtime-fed initialMessage changes from another tab/user.
-  // Only overwrite the local buffer if we're not actively editing (no pending
-  // debounce) AND the incoming value differs from what we last saved.
+  // Keep messageRef in lock-step with message so unmount cleanup always reads
+  // the latest typed value (no stale closure).
+  useEffect(() => { messageRef.current = message }, [message])
+
+  // Re-sync when initialMessage actually changes — typically from realtime
+  // (another tab/instructor edited the same reminder). Guarded against:
+  //   • user is mid-edit (debounceRef.current is set)
+  //   • the value is already what we last saved (no-op)
+  // Deps intentionally exclude savedMessageRef (ref → not a dep), so our own
+  // persist() does NOT re-trigger this and clobber the user's input.
   useEffect(() => {
+    const incoming = initialMessage || ''
     if (debounceRef.current) return
-    if ((initialMessage || '') !== savedMessage) {
-      setMessage(initialMessage || '')
-      setSavedMessage(initialMessage || '')
-    }
-  }, [initialMessage, savedMessage])
+    if (incoming === savedMessageRef.current) return
+    savedMessageRef.current = incoming
+    setMessage(incoming)
+  }, [initialMessage])
 
   const persist = useCallback(async (val) => {
     setSaveState('saving')
     try {
       await onSave(scope.classId, val, scope.label)
-      setSavedMessage(val.trim())
+      savedMessageRef.current = val.trim()
       setSaveState('saved')
       setTimeout(() => setSaveState(s => s === 'saved' ? null : s), 2000)
     } catch {
@@ -1868,18 +1890,20 @@ function ReminderEditor({ scope, initialMessage, onSave }) {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
       debounceRef.current = null
-      if (val.trim() !== savedMessage.trim()) persist(val)
+      if (val.trim() !== savedMessageRef.current.trim()) persist(val)
     }, 800)
   }
 
-  // Flush on unmount (tab switch or page leave)
+  // Flush on unmount (tab switch or page leave). Uses refs so we always read
+  // the current message + savedMessage without re-running this effect.
   useEffect(() => {
     return () => {
       if (debounceRef.current) {
         clearTimeout(debounceRef.current)
         debounceRef.current = null
-        if (message.trim() !== savedMessage.trim()) {
-          persist(message).catch(() => {})
+        const finalVal = messageRef.current
+        if (finalVal.trim() !== savedMessageRef.current.trim()) {
+          persist(finalVal).catch(() => {})
         }
       }
     }
@@ -1940,12 +1964,18 @@ function ReminderEditor({ scope, initialMessage, onSave }) {
         className="settings-input"
         maxLength={1500}
         style={{ minHeight: '200px', resize: 'none', lineHeight: '1.5' }}
-        aria-describedby={`${helpId} ${message.trim() ? previewId : ''}`}
+        aria-describedby={[helpId, message.trim() ? previewId : null, statusLiveId].filter(Boolean).join(' ')}
       />
       <p id={helpId} className="sr-only">
         This message will appear in the Mark All Done popup. Markdown formatting is supported.
         Press Enter twice to create a blank line between messages.
       </p>
+      {/* Screen-reader-only live region: announces save progress without
+          duplicating the visual SavedIndicator. Avoids reading "Saved" twice. */}
+      <div id={statusLiveId} role="status" aria-live="polite" className="sr-only">
+        {saveState === 'saving' && 'Saving reminder'}
+        {saveState === 'saved' && 'Reminder saved'}
+      </div>
       <div className="flex justify-between items-center mt-1">
         <span className="text-[10px] text-surface-400" aria-live="polite">
           {message.length}/1500 characters
