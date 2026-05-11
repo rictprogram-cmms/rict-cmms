@@ -12,12 +12,18 @@
  *
  * Features:
  *   - Semester dropdown (defaults to current, filters at query level)
+ *   - localStorage persistence for selected semester + page size
+ *   - Keyboard shortcuts: [ previous semester, ] next semester
+ *   - Debounced search (300ms) to reduce filter churn on large lists
+ *   - Pagination (25/50/100/250 per page) so semesters with many
+ *     requests don't choke the DOM
+ *   - aria-live announcements when semester changes (screen reader support)
  *   - Summary cards with counts per type
  *   - Filterable by student, type, status
  *   - Expandable detail rows with full request info
  *   - Clickable links back to source pages
  *   - Notification status indicator (email sent on rejection)
- *   - Excel export
+ *   - Excel export (exports all currently-filtered rows, not just current page)
  *   - WCAG 2.1 AA compliant
  *
  * File: src/pages/RequestHistoryPage.jsx
@@ -29,7 +35,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useRequestHistory, useRequestStats, useSemesters } from '@/hooks/useRequestHistory'
 import {
-  Search, Filter, ChevronDown, ChevronUp, ChevronRight,
+  Search, Filter, ChevronDown, ChevronUp, ChevronRight, ChevronLeft,
+  ChevronsLeft, ChevronsRight,
   Download, RefreshCcw, Loader2, Mail, MailX,
   FlaskConical, Clock, KeyRound, ClipboardList,
   ExternalLink, X, Inbox, Calendar, Network,
@@ -512,6 +519,31 @@ async function exportToExcel(requests, filename) {
 const SEMESTER_CUSTOM = '__custom__'
 const SEMESTER_ALL = '__all__'
 
+// localStorage keys (scoped to this page)
+const LS_SEMESTER_KEY = 'rict-request-history-semester'
+const LS_PAGESIZE_KEY = 'rict-request-history-pagesize'
+
+// Pagination options (allowed values for the per-page selector)
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
+const DEFAULT_PAGE_SIZE = 50
+
+// Debounce delay for search input (ms)
+const SEARCH_DEBOUNCE_MS = 300
+
+// ─── localStorage helpers (private-mode safe) ─────────────────────────────────
+function lsGet(key) {
+  try {
+    if (typeof window === 'undefined') return null
+    return window.localStorage.getItem(key)
+  } catch { return null }
+}
+function lsSet(key, value) {
+  try {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(key, String(value))
+  } catch { /* ignore (private mode, quota, etc.) */ }
+}
+
 export default function RequestHistoryPage() {
   const { profile } = useAuth()
   const { hasPerm, permsLoading } = usePermissions('Request History')
@@ -522,20 +554,38 @@ export default function RequestHistoryPage() {
   const { semesters, currentSemester, loading: semLoading } = useSemesters()
   const [selectedSemesterLabel, setSelectedSemesterLabel] = useState(null) // null = waiting for semesters to load
 
-  // Once semesters load, default to current semester (never "All Time")
+  // Once semesters load, default to: localStorage > current > most recent > All Time.
+  // Stored value is validated against the current list so an academic-year
+  // rollover (where the saved label no longer exists) silently falls through.
   useEffect(() => {
     if (!semLoading && selectedSemesterLabel === null) {
+      const stored = lsGet(LS_SEMESTER_KEY)
+      if (stored) {
+        if (stored === SEMESTER_ALL || stored === SEMESTER_CUSTOM) {
+          setSelectedSemesterLabel(stored)
+          return
+        }
+        if (semesters.some(s => s.label === stored)) {
+          setSelectedSemesterLabel(stored)
+          return
+        }
+        // Stored label is stale — fall through to the normal defaults.
+      }
       if (currentSemester) {
         setSelectedSemesterLabel(currentSemester.label)
       } else if (semesters.length > 0) {
-        // No current semester found — default to most recent
         setSelectedSemesterLabel(semesters[0].label)
       } else {
-        // Truly no semesters at all (shouldn't happen with synthetic fallback) — show all
         setSelectedSemesterLabel(SEMESTER_ALL)
       }
     }
   }, [semLoading, currentSemester, semesters, selectedSemesterLabel])
+
+  // Persist semester selection to localStorage whenever it changes
+  useEffect(() => {
+    if (selectedSemesterLabel === null) return
+    lsSet(LS_SEMESTER_KEY, selectedSemesterLabel)
+  }, [selectedSemesterLabel])
 
   // Custom date range (only used when "Custom Range" is selected)
   const [customFrom, setCustomFrom] = useState('')
@@ -555,11 +605,42 @@ export default function RequestHistoryPage() {
 
   // ── Client-side filters ─────────────────────────────────────────────────────
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('All')
   const [expandedId, setExpandedId] = useState(null)
   const [sortField, setSortField] = useState('submittedDate')
   const [sortDir, setSortDir] = useState('desc')
+
+  // Debounce the search input so filtering doesn't run on every keystroke.
+  // 300ms is the sweet spot — fast enough to feel responsive, slow enough to
+  // batch typing into a single filter pass.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // ── Pagination state ────────────────────────────────────────────────────────
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(() => {
+    const stored = parseInt(lsGet(LS_PAGESIZE_KEY) || '', 10)
+    return PAGE_SIZE_OPTIONS.includes(stored) ? stored : DEFAULT_PAGE_SIZE
+  })
+
+  // Persist page size to localStorage
+  useEffect(() => {
+    lsSet(LS_PAGESIZE_KEY, pageSize)
+  }, [pageSize])
+
+  // ── aria-live announcement for screen readers ───────────────────────────────
+  const [announcement, setAnnouncement] = useState('')
+  useEffect(() => {
+    if (selectedSemesterLabel === null) return
+    const label = selectedSemesterLabel === SEMESTER_ALL ? 'All Time'
+      : selectedSemesterLabel === SEMESTER_CUSTOM ? 'Custom Date Range'
+      : selectedSemesterLabel
+    setAnnouncement(`Showing requests from ${label}`)
+  }, [selectedSemesterLabel])
 
   // Pre-fill student filter from URL params (e.g. from Users page link)
   useEffect(() => {
@@ -571,8 +652,8 @@ export default function RequestHistoryPage() {
   const filtered = useMemo(() => {
     let list = allRequests
 
-    if (search.trim()) {
-      const s = search.toLowerCase()
+    if (debouncedSearch.trim()) {
+      const s = debouncedSearch.toLowerCase()
       list = list.filter(r =>
         r.studentName.toLowerCase().includes(s) ||
         r.studentEmail.toLowerCase().includes(s) ||
@@ -604,7 +685,31 @@ export default function RequestHistoryPage() {
     })
 
     return list
-  }, [allRequests, search, typeFilter, statusFilter, sortField, sortDir])
+  }, [allRequests, debouncedSearch, typeFilter, statusFilter, sortField, sortDir])
+
+  // ── Pagination: derived values + page slice ─────────────────────────────────
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  // Guard against currentPage being out of range (e.g. user reduces page count
+  // by filtering, or pageSize changes). safePage is used everywhere for display
+  // and slicing so we never request a non-existent page.
+  const safePage = Math.min(Math.max(1, currentPage), totalPages)
+
+  const paginatedList = useMemo(() => {
+    const start = (safePage - 1) * pageSize
+    return filtered.slice(start, start + pageSize)
+  }, [filtered, safePage, pageSize])
+
+  // Reset to page 1 whenever the filtered set changes underneath us
+  // (semester, search, type, status, custom range, sort field, sort direction)
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [debouncedSearch, typeFilter, statusFilter, selectedSemesterLabel, customFrom, customTo, sortField, sortDir])
+
+  // Keep currentPage in sync if totalPages shrinks (e.g. switching to a
+  // semester with fewer results while sitting on page 5)
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages)
+  }, [currentPage, totalPages])
 
   const stats = useRequestStats(filtered)
 
@@ -620,6 +725,46 @@ export default function RequestHistoryPage() {
   const hasFilters = search || typeFilter !== 'All' || statusFilter !== 'All'
   const clearFilters = () => { setSearch(''); setTypeFilter('All'); setStatusFilter('All') }
 
+  // ── Keyboard shortcuts: [ = older semester, ] = newer semester ──────────────
+  // Skipped when user is typing in an input/textarea/select or holding a
+  // modifier (so Ctrl+[ for browser-back-style shortcuts still works).
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key !== '[' && e.key !== ']') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const tag = (e.target?.tagName || '').toLowerCase()
+      if (['input', 'textarea', 'select'].includes(tag)) return
+      if (e.target?.isContentEditable) return
+
+      // If currently on All Time or Custom Range, both keys jump to current
+      // semester (so users have a clear "home base" to navigate from).
+      if (selectedSemesterLabel === SEMESTER_ALL || selectedSemesterLabel === SEMESTER_CUSTOM) {
+        if (currentSemester) {
+          e.preventDefault()
+          setSelectedSemesterLabel(currentSemester.label)
+        }
+        return
+      }
+
+      // Otherwise navigate within the semesters list.
+      // semesters is sorted DESCENDING (newest first), so:
+      //   [ = older = HIGHER index
+      //   ] = newer = LOWER index
+      const idx = semesters.findIndex(s => s.label === selectedSemesterLabel)
+      if (idx === -1) return
+
+      if (e.key === '[' && idx < semesters.length - 1) {
+        e.preventDefault()
+        setSelectedSemesterLabel(semesters[idx + 1].label)
+      } else if (e.key === ']' && idx > 0) {
+        e.preventDefault()
+        setSelectedSemesterLabel(semesters[idx - 1].label)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [selectedSemesterLabel, semesters, currentSemester])
+
   const SortIcon = ({ field }) => {
     if (sortField !== field) return <ChevronDown size={12} className="text-surface-300" />
     return sortDir === 'asc'
@@ -631,6 +776,10 @@ export default function RequestHistoryPage() {
     const set = new Set(allRequests.map(r => r.status))
     return ['All', ...Array.from(set).sort()]
   }, [allRequests])
+
+  // Range labels for the pagination "Showing X–Y of Z" indicator
+  const rangeStart = filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const rangeEnd = Math.min(safePage * pageSize, filtered.length)
 
   // ── Loading state ───────────────────────────────────────────────────────────
   if (semLoading || selectedSemesterLabel === null) {
@@ -644,6 +793,12 @@ export default function RequestHistoryPage() {
 
   return (
     <div className="space-y-6">
+      {/* aria-live region announces semester changes to assistive tech.
+          Visually hidden but read aloud by screen readers. */}
+      <div className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
+
       {/* ── Page Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -656,8 +811,8 @@ export default function RequestHistoryPage() {
               : 'View the status of your submitted requests.'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Semester selector */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Semester selector + keyboard hint */}
           <div className="flex items-center gap-1.5">
             <Calendar size={14} className="text-surface-400" aria-hidden="true" />
             <select
@@ -665,8 +820,10 @@ export default function RequestHistoryPage() {
               onChange={(e) => setSelectedSemesterLabel(e.target.value)}
               className="px-3 py-2 text-sm font-medium border border-surface-200 rounded-lg bg-white
                 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500
+                focus-visible:ring-2 focus-visible:ring-brand-500
                 text-surface-700"
               aria-label="Select semester"
+              aria-keyshortcuts="BracketLeft BracketRight"
             >
               {semesters.map(s => (
                 <option key={s.label} value={s.label}>
@@ -677,6 +834,16 @@ export default function RequestHistoryPage() {
               <option value={SEMESTER_ALL}>All Time</option>
               <option value={SEMESTER_CUSTOM}>Custom Range…</option>
             </select>
+            {/* Keyboard shortcut hint (hidden on mobile to save space) */}
+            <span
+              className="hidden md:inline-flex items-center gap-1 text-[10px] text-surface-400 select-none"
+              aria-hidden="true"
+              title="Press [ to go to an older semester, ] to go to a newer one"
+            >
+              <kbd className="px-1 py-px font-mono bg-surface-100 border border-surface-200 rounded text-surface-600">[</kbd>
+              <kbd className="px-1 py-px font-mono bg-surface-100 border border-surface-200 rounded text-surface-600">]</kbd>
+              <span>nav</span>
+            </span>
           </div>
 
           <button
@@ -687,7 +854,7 @@ export default function RequestHistoryPage() {
               hover:bg-surface-50 disabled:opacity-50 disabled:cursor-not-allowed
               focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2
               transition-colors"
-            aria-label="Export filtered results to Excel"
+            aria-label={`Export ${filtered.length} filtered result${filtered.length === 1 ? '' : 's'} to Excel`}
           >
             <Download size={14} />
             Export
@@ -785,7 +952,13 @@ export default function RequestHistoryPage() {
               {isInstructor ? 'Search student, ID, or reason' : 'Search request ID or reason'}
             </label>
             <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+              <Search
+                size={14}
+                className={`absolute left-3 top-1/2 -translate-y-1/2 ${
+                  search && search !== debouncedSearch ? 'text-brand-500 animate-pulse' : 'text-surface-400'
+                }`}
+                aria-hidden="true"
+              />
               <input
                 id="rh-search"
                 type="text"
@@ -795,11 +968,16 @@ export default function RequestHistoryPage() {
                 className="w-full pl-9 pr-3 py-2 text-sm border border-surface-200 rounded-lg
                   focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500
                   placeholder:text-surface-400"
+                aria-describedby="rh-search-hint"
               />
+              <span id="rh-search-hint" className="sr-only">
+                Search is debounced by 300 milliseconds. Results update shortly after you stop typing.
+              </span>
               {search && (
                 <button
                   onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-surface-400 hover:text-surface-600"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-surface-400 hover:text-surface-600
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   aria-label="Clear search"
                 >
                   <X size={14} />
@@ -896,7 +1074,7 @@ export default function RequestHistoryPage() {
           </div>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-surface-200 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-xl border border-surface-200 shadow-sm overflow-hidden" aria-busy={loading}>
           <div className="overflow-x-auto">
             <table className="w-full text-sm" role="grid" aria-label="Request history table">
               <thead className="bg-surface-50 border-b border-surface-200">
@@ -954,7 +1132,7 @@ export default function RequestHistoryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
-                {filtered.map(r => {
+                {paginatedList.map(r => {
                   const isExpanded = expandedId === r.id
                   const emailSent = emailSentMap[r.id]
 
@@ -1031,6 +1209,100 @@ export default function RequestHistoryPage() {
               </tbody>
             </table>
           </div>
+
+          {/* ── Pagination Controls ──
+              Sits inside the same card as the table for visual grouping.
+              Hidden when there's nothing to paginate (filtered.length <= pageSize). */}
+          {filtered.length > 0 && (
+            <div
+              className="border-t border-surface-100 px-4 py-3 flex flex-wrap items-center justify-between gap-3 bg-surface-50/40"
+              role="navigation"
+              aria-label="Pagination"
+            >
+              {/* Left: range + per-page selector */}
+              <div className="flex items-center gap-3 text-xs text-surface-600 flex-wrap">
+                <span>
+                  Showing <strong>{rangeStart.toLocaleString()}</strong>
+                  {rangeStart !== rangeEnd && <>–<strong>{rangeEnd.toLocaleString()}</strong></>}
+                  {' '}of <strong>{filtered.length.toLocaleString()}</strong>
+                </span>
+                <span className="text-surface-300" aria-hidden="true">·</span>
+                <label className="flex items-center gap-1.5">
+                  <span className="text-surface-500">Per page:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="px-2 py-1 text-xs border border-surface-200 rounded bg-white
+                      focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500"
+                    aria-label="Results per page"
+                  >
+                    {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              {/* Right: page navigation (only show if multiple pages) */}
+              {totalPages > 1 && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={safePage === 1}
+                    className="inline-flex items-center justify-center min-w-[28px] min-h-[32px] px-1.5 py-1 rounded
+                      text-surface-600 hover:bg-surface-100 disabled:opacity-30 disabled:cursor-not-allowed
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
+                      transition-colors"
+                    aria-label="First page"
+                  >
+                    <ChevronsLeft size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={safePage === 1}
+                    className="inline-flex items-center justify-center min-w-[28px] min-h-[32px] px-1.5 py-1 rounded
+                      text-surface-600 hover:bg-surface-100 disabled:opacity-30 disabled:cursor-not-allowed
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
+                      transition-colors"
+                    aria-label="Previous page"
+                  >
+                    <ChevronLeft size={14} aria-hidden="true" />
+                  </button>
+                  <span
+                    className="text-xs px-2 text-surface-700"
+                    aria-current="page"
+                    aria-live="polite"
+                  >
+                    Page <strong>{safePage}</strong> of <strong>{totalPages}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={safePage === totalPages}
+                    className="inline-flex items-center justify-center min-w-[28px] min-h-[32px] px-1.5 py-1 rounded
+                      text-surface-600 hover:bg-surface-100 disabled:opacity-30 disabled:cursor-not-allowed
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
+                      transition-colors"
+                    aria-label="Next page"
+                  >
+                    <ChevronRight size={14} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={safePage === totalPages}
+                    className="inline-flex items-center justify-center min-w-[28px] min-h-[32px] px-1.5 py-1 rounded
+                      text-surface-600 hover:bg-surface-100 disabled:opacity-30 disabled:cursor-not-allowed
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
+                      transition-colors"
+                    aria-label="Last page"
+                  >
+                    <ChevronsRight size={14} aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
