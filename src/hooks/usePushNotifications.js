@@ -36,6 +36,15 @@ import { useAuth } from '@/contexts/AuthContext';
 // ─────────────────────────────────────────────────────────────────────────────
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || 'YOUR_VAPID_PUBLIC_KEY_HERE';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Service Worker URL — MUST match the one in main.jsx exactly. Both files
+// share the same scope ('/'), so registering with a different query string
+// from each file would cause them to replace each other on every page load.
+// The ?v= ensures the browser fetches a fresh SW on every new deploy.
+// ─────────────────────────────────────────────────────────────────────────────
+const SW_VERSION = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
+const SW_URL = `/sw.js?v=${SW_VERSION}`;
+
 /**
  * Converts a base64url VAPID public key to the Uint8Array
  * format required by PushManager.subscribe().
@@ -71,9 +80,12 @@ export function usePushNotifications() {
 
     (async () => {
       try {
-        // Register sw.js from the public root
-        const registration = await navigator.serviceWorker.register('/sw.js', {
+        // Register sw.js from the public root. Versioned URL + updateViaCache
+        // ensures we always fetch the latest SW on each deploy.
+        // (Must match main.jsx — same URL, same options.)
+        const registration = await navigator.serviceWorker.register(SW_URL, {
           scope: '/',
+          updateViaCache: 'none',
         });
         setSwRegistration(registration);
         console.log('[Push] Service worker registered:', registration.scope);

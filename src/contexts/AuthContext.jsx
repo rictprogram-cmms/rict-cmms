@@ -111,6 +111,10 @@ export function AuthProvider({ children }) {
   const visibilityRefreshingRef = useRef(false)
   // Stable ref so the 60-s timeout interval always reads the latest value
   const sessionTimeoutHoursRef = useRef(0)
+  // Tracks which email we've already done a build-version cache check for
+  // in this session. Prevents the check from re-running every time the
+  // realProfile state object reference changes for the same user.
+  const versionCheckedRef = useRef(null)
 
   // ── Lab Mode Fetch ─────────────────────────────────────────────────
   // Fetches the current lab_access_mode setting from the DB once. Called
@@ -755,6 +759,79 @@ export function AuthProvider({ children }) {
     return () => clearInterval(id)
   }, [realProfile?.email])
 
+  // ── Build-Version Cache-Bust Check ─────────────────────────────────
+  // When a profile becomes available (either freshly signed in OR loaded
+  // from cache on a fresh tab), compare the BUILD_VERSION baked into this
+  // JS bundle against the live /version.json on the server. If they
+  // differ, the user is running stale code — silently reload to pick up
+  // the latest deploy. This eliminates the "pages stuck until Ctrl-Shift-R"
+  // problem reported by users after deploys.
+  //
+  // Guards:
+  //   • useRef so we run at most once per email per page session, even
+  //     if realProfile fires multiple times during init.
+  //   • sessionStorage attempt counter so a misconfigured deploy can
+  //     never put us in an infinite reload loop. Bails after 2 attempts.
+  //   • 500 ms defer so the user briefly sees a rendered page before the
+  //     reload — feels intentional, not like a crash.
+  //   • Try/catch on every async step so a 404, parse error, or network
+  //     hiccup just silently skips the check (no user-visible breakage).
+  useEffect(() => {
+    if (!realProfile?.email) return
+    if (typeof __BUILD_VERSION__ === 'undefined') return
+    if (versionCheckedRef.current === realProfile.email) return
+    versionCheckedRef.current = realProfile.email
+
+    const ATTEMPT_KEY = '__rict_cache_reload_attempts'
+    const attempts = parseInt(sessionStorage.getItem(ATTEMPT_KEY) || '0', 10)
+    if (attempts >= 2) {
+      console.warn('[CacheBust] Already reloaded twice this session — bailing to avoid loop')
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/version.json?t=${Date.now()}`, {
+          cache: 'no-store',
+          credentials: 'omit',
+        })
+        if (!res.ok) return
+        const json = await res.json()
+        const serverVersion = json?.version
+        if (!serverVersion) return
+
+        if (serverVersion !== __BUILD_VERSION__) {
+          console.log(
+            `[CacheBust] Build mismatch — client=${__BUILD_VERSION__} server=${serverVersion}. Reloading…`
+          )
+          sessionStorage.setItem(ATTEMPT_KEY, String(attempts + 1))
+
+          // Best-effort SW update before reload, so the new bundle and
+          // new SW activate together.
+          try {
+            if ('serviceWorker' in navigator) {
+              const reg = await navigator.serviceWorker.getRegistration()
+              if (reg) await reg.update()
+            }
+          } catch {}
+
+          window.location.reload()
+        } else {
+          // Versions match — clear the attempt counter so a future legit
+          // mismatch isn't accidentally bailed out.
+          sessionStorage.removeItem(ATTEMPT_KEY)
+          console.log(`[CacheBust] Version OK: ${serverVersion}`)
+        }
+      } catch (err) {
+        // Network blip, JSON parse error (e.g. SPA fallback served HTML
+        // for version.json in dev), etc. — silently skip.
+        console.warn('[CacheBust] Version check skipped:', err?.message || err)
+      }
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [realProfile?.email])
+
   // ── Auth Actions ───────────────────────────────────────────────────
 
   async function signIn(email, password) {
@@ -778,6 +855,8 @@ export function AuthProvider({ children }) {
     setSession(null)
     currentUserIdRef.current = null
     setCachedProfile(null)
+    // Reset the version-check guard so a fresh sign-in re-runs the check
+    versionCheckedRef.current = null
   }
 
   async function resetPassword(email) {
