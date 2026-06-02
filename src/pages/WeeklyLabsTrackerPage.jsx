@@ -9,7 +9,7 @@ import {
 import {
   Printer, Loader2, CheckCircle2, Lock, BadgeCheck,
   ChevronDown, ChevronUp, BarChart3, ShieldCheck, X,
-  AlertTriangle, ClipboardList, Clock, Star, BookOpen,
+  AlertTriangle, ClipboardList, Clock, Star, BookOpen, UserCircle,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -245,7 +245,8 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   const processingRef = useRef(false)
 
   // Fetch weekly reminders when modal opens — global + any class-scoped
-  // reminders for the classes this student is enrolled in for the current week.
+  // reminders for the classes this student is enrolled in for the current
+  // week, plus any per-student reminders addressed to this specific student.
   useEffect(() => {
     if (!isOpen) return
     const enrolledClassIds = (classes || [])
@@ -262,12 +263,17 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
           return
         }
         const all = data || []
-        // Keep: global reminders OR reminders matching one of the student's classes
+        // Keep: non-empty message AND in scope for this student
+        //   • class_id == null → global (always in scope)
+        //   • class_id matches one of student's classes → in scope
+        //   • user_email == null → not student-targeted (always in scope)
+        //   • user_email matches this student → in scope
         const filtered = all
           .filter(r => r.message && r.message.trim())
           .filter(r => r.class_id == null || enrolledClassIds.includes(r.class_id))
+          .filter(r => r.user_email == null || r.user_email === studentEmail)
 
-        // Stable display order: global first, then alphabetical by class label
+        // Label + tier metadata for display
         const labeled = filtered.map(r => {
           const cls = r.class_id
             ? (classes || []).find(c => c?.classId === r.class_id)
@@ -276,17 +282,21 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
             ...r,
             _label: r.class_id ? (cls?.className || r.class_id) : 'All Classes',
             _isGlobal: r.class_id == null,
+            _isPerStudent: r.user_email != null,
           }
         }).sort((a, b) => {
-          if (a._isGlobal && !b._isGlobal) return -1
-          if (!a._isGlobal && b._isGlobal) return 1
+          // D1: Per-Student → Per-Class → Global (most relevant first)
+          const tier = (r) => r._isPerStudent ? 0 : r._isGlobal ? 2 : 1
+          const ta = tier(a)
+          const tb = tier(b)
+          if (ta !== tb) return ta - tb
           return a._label.localeCompare(b._label)
         })
 
         setWeeklyReminders(labeled)
       })
       .catch(() => setWeeklyReminders([]))
-  }, [isOpen, classes])
+  }, [isOpen, classes, studentEmail])
 
   // Fetch work orders when modal opens
   useEffect(() => {
@@ -951,11 +961,17 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                         acked ? 'bg-indigo-600' : 'bg-red-600'
                       }`}
                     >
-                      <BookOpen size={14} className="text-white flex-shrink-0" aria-hidden="true" />
+                      {r._isPerStudent ? (
+                        <UserCircle size={14} className="text-white flex-shrink-0" aria-hidden="true" />
+                      ) : (
+                        <BookOpen size={14} className="text-white flex-shrink-0" aria-hidden="true" />
+                      )}
                       <span className="text-xs font-bold text-white uppercase tracking-wide truncate">
-                        {r._isGlobal
-                          ? 'Message from Your Instructor'
-                          : `Message for ${r._label}`}
+                        {r._isPerStudent
+                          ? `Personal Message for ${(studentName || '').split(' ')[0] || 'You'}`
+                          : r._isGlobal
+                            ? 'Message from Your Instructor'
+                            : `Message for ${r._label}`}
                       </span>
                       {!acked && (
                         <span className="ml-auto text-[10px] font-bold text-white/90 flex items-center gap-1 flex-shrink-0">

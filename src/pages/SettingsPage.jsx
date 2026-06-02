@@ -37,14 +37,15 @@ import {
   useVendorsList, useVendorActions, useWOStatuses, useWOStatusActions,
   useClasses, useClassActions,
   useWeeklyReminders, useWeeklyReminderActions,
+  useStudentsInClass,
 } from '@/hooks/useSettings'
 import {
   Settings, Save, Plus, Trash2, Edit3, X, Loader2, CheckCircle2,
   Tag, MapPin, Box, Truck, ClipboardList, GraduationCap, Sliders,
-  Users, Calendar, Clock, BookOpen, ChevronRight, Search,
+  Users, Calendar, Clock, BookOpen, ChevronRight, Search, UserPlus, UserCircle,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
   LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
-  History, Globe,
+  History, Globe, FileSearch,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -384,6 +385,76 @@ const CATEGORY_ICONS = {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// AUDIT LOG SETTINGS METADATA
+// Numeric audit-log settings managed by AuditLogSettings tab.
+// (audit_track_view_entities, audit_failed_count, and purge are handled as
+// special cases inside the component since they're not simple number inputs.)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const AUDIT_SETTINGS = [
+  {
+    key: 'audit_retention_days',
+    label: 'Retention Period',
+    desc: 'How many days to keep audit log entries before they become eligible for purge.',
+    default: '730',
+    min: '0', step: '1', suffix: 'days',
+    details: {
+      what: 'Maximum age of audit log entries the purge button considers. 0 means never purge.',
+      where: 'Used by the audit_log_purge() RPC when the Purge Now button is pressed.',
+      effect: 'Lower values reclaim storage faster. Default 730 = ~2 years. Purge has a hard minimum of 30 days.',
+    },
+  },
+  {
+    key: 'audit_suspicious_deletes_threshold',
+    label: 'Delete Burst — Threshold',
+    desc: 'How many Delete actions by the same user trigger a suspicious-activity flag.',
+    default: '5',
+    min: '2', step: '1', suffix: 'deletes',
+    details: {
+      what: 'Number of Delete actions detected as a burst when they fall inside the time window.',
+      where: 'Audit Log page — suspicious activity banner at the top.',
+      effect: 'Lower = more sensitive. Default catches 5 deletes in 60 minutes.',
+    },
+  },
+  {
+    key: 'audit_suspicious_deletes_minutes',
+    label: 'Delete Burst — Window',
+    desc: 'Time window in minutes for the Delete burst detector.',
+    default: '60',
+    min: '1', step: '1', suffix: 'minutes',
+    details: {
+      what: 'Sliding window over which Delete actions are counted.',
+      where: 'Audit Log page — suspicious activity banner.',
+      effect: 'Larger window catches slower bursts. Default 60 minutes.',
+    },
+  },
+  {
+    key: 'audit_suspicious_updates_threshold',
+    label: 'Update Burst — Threshold',
+    desc: 'How many Update actions by the same user trigger a suspicious-activity flag.',
+    default: '20',
+    min: '2', step: '1', suffix: 'updates',
+    details: {
+      what: 'Number of Update actions detected as a burst when they fall inside the time window.',
+      where: 'Audit Log page — suspicious activity banner.',
+      effect: 'Lower = more sensitive. Default catches 20 updates in 5 minutes.',
+    },
+  },
+  {
+    key: 'audit_suspicious_updates_minutes',
+    label: 'Update Burst — Window',
+    desc: 'Time window in minutes for the Update burst detector.',
+    default: '5',
+    min: '1', step: '1', suffix: 'minutes',
+    details: {
+      what: 'Sliding window over which Update actions are counted.',
+      where: 'Audit Log page — suspicious activity banner.',
+      effect: 'Larger window catches slower bursts. Default 5 minutes.',
+    },
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // FIND-A-SETTING REGISTRY (search index across all tabs)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -392,6 +463,7 @@ const TAB_LABELS = {
   dashboard: 'Dashboard',
   weekly_labs: 'Weekly Labs',
   evaluation: 'WOC Ratio',
+  audit: 'Audit Log',
   categories: 'Categories',
   asset_locations: 'Asset Locations',
   inv_locations: 'Inventory Locations',
@@ -425,6 +497,14 @@ function buildRegistry() {
   EVAL_SETTINGS.forEach(s => {
     reg.push({ key: s.key, tab: 'evaluation', label: s.label, desc: s.desc, aliases: 'woc ratio scoring evaluation' })
   })
+
+  // Audit Log
+  AUDIT_SETTINGS.forEach(s => {
+    reg.push({ key: s.key, tab: 'audit', label: s.label, desc: s.desc, aliases: 'audit log retention purge suspicious failed write tracking history' })
+  })
+  reg.push({ key: 'audit_track_view_entities', tab: 'audit', label: 'Tracked Entity Types', desc: 'Comma-separated entity types whose page-views are logged', aliases: 'audit log read tracking view track entities' })
+  reg.push({ key: 'audit_failed_count',        tab: 'audit', label: 'Failed Audit Writes',  desc: 'Counter of failed audit log INSERTs',                       aliases: 'audit log failed writes counter reset' })
+  reg.push({ key: 'audit_purge_now',           tab: 'audit', label: 'Purge Old Entries',    desc: 'Permanently delete audit log entries older than retention', aliases: 'audit log purge delete clear retention' })
 
   // Lookup tables — searchable by section name
   reg.push({ key: 'categories', tab: 'categories', label: 'Categories', desc: 'Inventory and asset categorization', aliases: 'lookup table' })
@@ -785,6 +865,7 @@ export default function SettingsPage() {
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'weekly_labs', label: 'Weekly Labs', icon: FlaskConical },
         { id: 'evaluation', label: 'WOC Ratio', icon: Target },
+        { id: 'audit',      label: 'Audit Log', icon: FileSearch },
       ],
     },
     {
@@ -879,6 +960,7 @@ export default function SettingsPage() {
       {tab === 'dashboard' && <DashboardSettings />}
       {tab === 'weekly_labs' && <WeeklyLabsSettings />}
       {tab === 'evaluation' && <EvaluationSettings />}
+      {tab === 'audit' && <AuditLogSettings />}
       {tab === 'categories' && <CategoriesSection />}
       {tab === 'asset_locations' && <AssetLocationsSection />}
       {tab === 'inv_locations' && <InventoryLocationsSection />}
@@ -2066,6 +2148,429 @@ function ScopeTabStrip({ scopes, activeKey, onChange, reminderByScope }) {
   )
 }
 
+// ─── Per-Student Reminders ──────────────────────────────────────────────────
+/**
+ * PerStudentReminders — appears inside each class tab below the class message
+ * editor. Lists per-student override messages for THIS class, with auto-save
+ * and Add-on-demand creation.
+ *
+ * Add flow:
+ *   1. Click "+ Add per-student message" → dropdown of enrolled students who
+ *      don't already have an override
+ *   2. Pick a student → an empty card appears immediately AND a placeholder
+ *      row is persisted by typing (no row exists in DB until first save)
+ *
+ * Delete flow:
+ *   • Click × on a card → calls onSave(classId, '', label, userEmail), which
+ *     setReminder() treats as "blank message → DELETE row"
+ *   • Blanking the textarea has the same effect on blur
+ *
+ * Realtime: parent (WeeklyLabsSettings) already subscribes to weekly_reminders
+ * via useWeeklyReminders(), so new/edited/deleted rows flow in via props.
+ */
+function PerStudentReminders({ classId, classLabel, reminders, onSave }) {
+  const { students, loading: studentsLoading } = useStudentsInClass(classId)
+  const [adding, setAdding] = useState(false)        // shows the dropdown when true
+  const [pickerValue, setPickerValue] = useState('') // controlled select
+  // Locally-added emails that don't yet have a DB row (so the empty card renders)
+  const [draftEmails, setDraftEmails] = useState([])
+  const addButtonRef = useRef(null)
+  const pickerRef = useRef(null)
+
+  // Existing per-student rows for this class
+  const existing = useMemo(
+    () => (reminders || [])
+      .filter(r => r.class_id === classId && r.user_email)
+      .filter(r => r.message && r.message.trim()),
+    [reminders, classId]
+  )
+
+  // Clean up draft emails once their row arrives via realtime
+  useEffect(() => {
+    if (draftEmails.length === 0) return
+    const persistedEmails = new Set(existing.map(r => r.user_email))
+    const stillDraft = draftEmails.filter(e => !persistedEmails.has(e))
+    if (stillDraft.length !== draftEmails.length) {
+      setDraftEmails(stillDraft)
+    }
+  }, [existing, draftEmails])
+
+  // Cards = persisted rows + drafts (deduplicated; drafts get an empty message)
+  const cards = useMemo(() => {
+    const out = []
+    const seen = new Set()
+    existing.forEach(r => {
+      const stu = students.find(s => s.email === r.user_email)
+      out.push({
+        userEmail: r.user_email,
+        student: stu || null,
+        message: r.message,
+        isDraft: false,
+      })
+      seen.add(r.user_email)
+    })
+    draftEmails.forEach(email => {
+      if (seen.has(email)) return
+      const stu = students.find(s => s.email === email)
+      out.push({
+        userEmail: email,
+        student: stu || null,
+        message: '',
+        isDraft: true,
+      })
+      seen.add(email)
+    })
+    // Sort by last name then first name to match useStudentsInClass ordering
+    return out.sort((a, b) => {
+      const aLast = (a.student?.last_name || '').toLowerCase()
+      const bLast = (b.student?.last_name || '').toLowerCase()
+      if (aLast !== bLast) return aLast.localeCompare(bLast)
+      return (a.student?.first_name || '').toLowerCase()
+        .localeCompare((b.student?.first_name || '').toLowerCase())
+    })
+  }, [existing, draftEmails, students])
+
+  // Available students for the picker = enrolled minus those already with a card
+  const availableStudents = useMemo(() => {
+    const taken = new Set(cards.map(c => c.userEmail))
+    return students.filter(s => !taken.has(s.email))
+  }, [students, cards])
+
+  const openPicker = () => {
+    setPickerValue('')
+    setAdding(true)
+    // Focus the select after it renders
+    setTimeout(() => pickerRef.current?.focus(), 50)
+  }
+
+  const cancelPicker = () => {
+    setAdding(false)
+    setPickerValue('')
+    // Return focus to the add button
+    setTimeout(() => addButtonRef.current?.focus(), 50)
+  }
+
+  const addDraft = (email) => {
+    if (!email) return
+    setDraftEmails(prev => prev.includes(email) ? prev : [...prev, email])
+    setAdding(false)
+    setPickerValue('')
+  }
+
+  const removeDraft = (email) => {
+    setDraftEmails(prev => prev.filter(e => e !== email))
+  }
+
+  return (
+    <section
+      className="mt-6 border-t border-surface-200 pt-5"
+      aria-labelledby={`ps-heading-${classId}`}
+    >
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h3
+          id={`ps-heading-${classId}`}
+          className="text-sm font-semibold text-surface-900 flex items-center gap-2"
+        >
+          <UserCircle size={15} className="text-indigo-600" aria-hidden="true" />
+          Per-Student Messages
+          {cards.length > 0 && (
+            <span className="text-xs font-medium text-surface-500">({cards.length})</span>
+          )}
+        </h3>
+
+        {!adding && (
+          <button
+            ref={addButtonRef}
+            type="button"
+            onClick={openPicker}
+            disabled={studentsLoading || availableStudents.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md border border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400 transition-colors"
+            aria-describedby={availableStudents.length === 0 ? `ps-no-students-${classId}` : undefined}
+          >
+            <UserPlus size={13} aria-hidden="true" />
+            Add per-student message
+          </button>
+        )}
+      </div>
+
+      <p className="text-xs text-surface-500 leading-relaxed mb-3">
+        Personal messages shown to specific students in <strong>{classLabel}</strong>.
+        Each appears as its own card in <em>Mark All Done</em> with an independent
+        acknowledgment. Blank the message or click <span className="font-mono">×</span> to remove an override.
+      </p>
+
+      {/* Add picker */}
+      {adding && (
+        <div
+          className="mb-3 p-3 bg-indigo-50 border border-indigo-200 rounded-lg flex items-center gap-2 flex-wrap"
+          role="region"
+          aria-label="Choose a student to add a personal message for"
+        >
+          <label
+            htmlFor={`ps-picker-${classId}`}
+            className="text-xs font-semibold text-indigo-900"
+          >
+            Add message for:
+          </label>
+          <select
+            ref={pickerRef}
+            id={`ps-picker-${classId}`}
+            value={pickerValue}
+            onChange={(e) => setPickerValue(e.target.value)}
+            className="flex-1 min-w-[180px] px-3 py-1.5 min-h-[32px] text-sm border border-indigo-300 rounded-md bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+          >
+            <option value="">— pick a student —</option>
+            {availableStudents.map(s => (
+              <option key={s.email} value={s.email}>
+                {s.first_name} {(s.last_name || '').charAt(0)}. ({s.email})
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => addDraft(pickerValue)}
+            disabled={!pickerValue}
+            className="inline-flex items-center gap-1 px-3 py-1.5 min-h-[32px] text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-md disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+          >
+            <Plus size={12} aria-hidden="true" />
+            Add
+          </button>
+          <button
+            type="button"
+            onClick={cancelPicker}
+            className="inline-flex items-center gap-1 px-2 py-1.5 min-h-[32px] text-xs font-medium text-surface-600 hover:text-surface-900 hover:bg-surface-100 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-surface-400"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Empty states */}
+      {cards.length === 0 && !adding && (
+        studentsLoading ? (
+          <div className="text-xs text-surface-500 italic flex items-center gap-2 py-3">
+            <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+            Loading students…
+          </div>
+        ) : students.length === 0 ? (
+          <div className="text-xs text-surface-500 italic py-3">
+            No students are currently enrolled in this class.
+          </div>
+        ) : (
+          <div
+            id={`ps-no-students-${classId}`}
+            className="text-xs text-surface-500 italic py-3"
+          >
+            No per-student messages yet. Click <strong>Add per-student message</strong> above to send
+            a personal note to a specific student in this class.
+          </div>
+        )
+      )}
+
+      {availableStudents.length === 0 && students.length > 0 && cards.length > 0 && !adding && (
+        <div className="text-[11px] text-surface-500 italic mb-3">
+          Every enrolled student already has a per-student message in this class.
+        </div>
+      )}
+
+      {/* Per-student cards */}
+      {cards.length > 0 && (
+        <div className="space-y-3" aria-live="polite">
+          {cards.map(card => (
+            <PerStudentCard
+              key={card.userEmail}
+              classId={classId}
+              classLabel={classLabel}
+              userEmail={card.userEmail}
+              student={card.student}
+              initialMessage={card.message}
+              isDraft={card.isDraft}
+              onSave={onSave}
+              onRemoveDraft={() => removeDraft(card.userEmail)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/**
+ * PerStudentCard — one editable per-student message. Mirrors the auto-save +
+ * mid-edit conflict-guard pattern of ReminderEditor, scaled down to a
+ * single-card layout. Each card auto-saves 800ms after the user stops typing
+ * AND on blur AND on unmount (matching the existing pattern).
+ *
+ * Blank message on blur/unmount → setReminder() deletes the underlying row.
+ * For drafts (no DB row yet), blanking does nothing; the parent removes the
+ * draft card via the × button or implicit cancel.
+ */
+function PerStudentCard({
+  classId, classLabel, userEmail, student,
+  initialMessage, isDraft, onSave, onRemoveDraft,
+}) {
+  const [message, setMessage] = useState(initialMessage || '')
+  const [saveState, setSaveState] = useState(null)
+  const savedMessageRef = useRef(initialMessage || '')
+  const messageRef = useRef(initialMessage || '')
+  const debounceRef = useRef(null)
+  const textareaRef = useRef(null)
+  const messageId = useId()
+  const helpId = useId()
+
+  useAutoGrowTextarea(message, textareaRef, { min: 100, max: 280 })
+
+  useEffect(() => { messageRef.current = message }, [message])
+
+  // Re-sync from realtime (other instructor edited the same row)
+  useEffect(() => {
+    const incoming = initialMessage || ''
+    if (debounceRef.current) return
+    if (incoming === savedMessageRef.current) return
+    savedMessageRef.current = incoming
+    setMessage(incoming)
+  }, [initialMessage])
+
+  // Auto-focus a freshly-added draft card so the instructor starts typing
+  useEffect(() => {
+    if (isDraft) {
+      setTimeout(() => textareaRef.current?.focus(), 50)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const persist = useCallback(async (val) => {
+    setSaveState('saving')
+    try {
+      await onSave(classId, val, classLabel, userEmail)
+      savedMessageRef.current = val.trim()
+      setSaveState('saved')
+      setTimeout(() => setSaveState(s => s === 'saved' ? null : s), 2000)
+    } catch {
+      setSaveState(null)
+    }
+  }, [onSave, classId, classLabel, userEmail])
+
+  const handleChange = (val) => {
+    setMessage(val)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      if (val.trim() !== savedMessageRef.current.trim()) persist(val)
+    }, 800)
+  }
+
+  const handleBlur = () => {
+    // Flush pending save immediately on blur
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+      const val = messageRef.current
+      if (val.trim() !== savedMessageRef.current.trim()) persist(val)
+    }
+  }
+
+  const handleRemove = async () => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+      debounceRef.current = null
+    }
+    if (isDraft && !message.trim()) {
+      // Draft with no content — just remove the card locally
+      onRemoveDraft?.()
+      return
+    }
+    // Real row OR draft with typed content — clear via setReminder (deletes row if exists)
+    setMessage('')
+    setSaveState('saving')
+    try {
+      await onSave(classId, '', classLabel, userEmail)
+      savedMessageRef.current = ''
+      setSaveState(null)
+      if (isDraft) onRemoveDraft?.()
+    } catch {
+      setSaveState(null)
+    }
+  }
+
+  // Flush on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        debounceRef.current = null
+        const finalVal = messageRef.current
+        if (finalVal.trim() !== savedMessageRef.current.trim()) {
+          persist(finalVal).catch(() => {})
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const displayName = student
+    ? `${student.first_name} ${(student.last_name || '').charAt(0)}.`
+    : userEmail
+
+  return (
+    <div className="rounded-lg border border-surface-200 bg-white shadow-sm overflow-hidden">
+      <header className="flex items-center justify-between gap-2 px-3 py-2 bg-indigo-50 border-b border-indigo-100">
+        <div className="flex items-center gap-2 min-w-0">
+          <UserCircle size={14} className="text-indigo-600 flex-shrink-0" aria-hidden="true" />
+          <span className="text-xs font-semibold text-indigo-900 truncate">
+            {displayName}
+          </span>
+          <span className="text-[10px] text-indigo-700 truncate hidden sm:inline">
+            ({userEmail})
+          </span>
+          {isDraft && (
+            <span className="text-[10px] font-medium text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
+              Draft — type to save
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={handleRemove}
+          className="p-1 min-h-[28px] min-w-[28px] flex items-center justify-center text-surface-500 hover:text-red-600 hover:bg-red-50 rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-red-400 transition-colors"
+          aria-label={`Remove per-student message for ${displayName}`}
+          title="Remove this per-student message"
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </header>
+      <div className="p-3 space-y-1">
+        <label htmlFor={messageId} className="sr-only">
+          Personal message for {displayName}
+        </label>
+        <textarea
+          ref={textareaRef}
+          id={messageId}
+          value={message}
+          onChange={(e) => handleChange(e.target.value)}
+          onBlur={handleBlur}
+          placeholder={`Type a personal message for ${displayName}…`}
+          maxLength={1500}
+          aria-describedby={helpId}
+          className="w-full px-3 py-2 text-sm border border-surface-300 rounded-md resize-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-500 focus-visible:border-indigo-500"
+          style={{ minHeight: 80 }}
+        />
+        <div className="flex justify-between items-center gap-3">
+          <span id={helpId} className="text-[10px] text-surface-400">
+            {message.length}/1500 — supports markdown · auto-saves
+          </span>
+          <SavedIndicator state={saveState} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WEEKLY LABS — REMINDER EDITOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function WeeklyLabsSettings() {
   const { reminders, loading: remindersLoading } = useWeeklyReminders()
   const { items: classList, loading: classesLoading } = useClasses()
@@ -2165,6 +2670,17 @@ function WeeklyLabsSettings() {
               onSave={setReminder}
             />
           </div>
+
+          {/* Per-student overrides — class scopes only, not on "All Classes" tab */}
+          {activeScope.classId !== null && (
+            <PerStudentReminders
+              key={`ps-${activeScope.key}`}
+              classId={activeScope.classId}
+              classLabel={activeScope.label}
+              reminders={reminders}
+              onSave={setReminder}
+            />
+          )}
         </div>
       </SettingCard>
 
@@ -2316,6 +2832,466 @@ function EvaluationSettings() {
     </div>
   )
 }
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUDIT LOG SETTINGS — retention, purge, suspicious thresholds, read tracking
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function AuditLogSettings() {
+  const { profile, realProfile, isEmulating } = useAuth()
+  const { settings, loading } = useSettings()
+  const actions = useSettingsActions()
+  const [edits, setEdits] = useState({})
+
+  // Super admin check (matches usePermissions pattern: real super admin AND not emulating)
+  const isSuperAdmin = realProfile?.email?.toLowerCase() === 'rictprogram@gmail.com' && !isEmulating
+
+  const userName = profile
+    ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
+    : 'Unknown'
+
+  const settingsMap = useMemo(() => {
+    const m = {}
+    settings.forEach(s => { m[s.setting_key] = s.setting_value })
+    return m
+  }, [settings])
+
+  // ── Numeric settings (retention + suspicious thresholds) ──
+  const saveFn = useCallback(async (key, value) => {
+    const meta = AUDIT_SETTINGS.find(e => e.key === key)
+    if (!meta) return false
+    const valueToSave = (value === '' || value === undefined) ? meta.default : String(value)
+    return await actions.updateSetting(key, valueToSave, {
+      silent: true,
+      category: 'audit',
+      description: meta.desc,
+    })
+  }, [actions])
+
+  const { queueSave, flushSave, saveState, pendingValuesRef } = useAutoSave(saveFn)
+
+  useEffect(() => {
+    setEdits(prev => {
+      const next = {}
+      AUDIT_SETTINGS.forEach(es => {
+        if (pendingValuesRef.current[es.key] !== undefined) {
+          next[es.key] = prev[es.key] ?? es.default
+          return
+        }
+        const live = settingsMap[es.key]
+        next[es.key] = (live !== undefined && live !== null && live !== '')
+          ? String(live)
+          : es.default
+      })
+      return next
+    })
+  }, [settingsMap, pendingValuesRef])
+
+  const handleChange = (key, value) => {
+    setEdits(prev => ({ ...prev, [key]: value }))
+    queueSave(key, value)
+  }
+
+  const handleResetDefault = (key) => {
+    const meta = AUDIT_SETTINGS.find(e => e.key === key)
+    if (!meta) return
+    handleChange(key, meta.default)
+  }
+
+  // ── Tracked entities ──
+  const [trackedRaw, setTrackedRaw] = useState('')
+  const [trackedSaving, setTrackedSaving] = useState(false)
+  const [trackedSavedFlash, setTrackedSavedFlash] = useState(false)
+  const trackedLive = settingsMap.audit_track_view_entities ?? ''
+
+  useEffect(() => { setTrackedRaw(String(trackedLive)) }, [trackedLive])
+
+  const trackedDirty = useMemo(() => {
+    const norm = (s) => String(s || '').split(',').map(x => x.trim()).filter(Boolean).join(',')
+    return norm(trackedRaw) !== norm(trackedLive)
+  }, [trackedRaw, trackedLive])
+
+  const saveTrackedEntities = async () => {
+    setTrackedSaving(true)
+    try {
+      const cleaned = trackedRaw.split(',').map(s => s.trim()).filter(Boolean).join(',')
+      await actions.updateSetting('audit_track_view_entities', cleaned, {
+        silent: true,
+        category: 'audit',
+        description: 'Comma-separated entity types whose page-views are tracked',
+      })
+      setTrackedSavedFlash(true)
+      setTimeout(() => setTrackedSavedFlash(false), 2000)
+    } finally {
+      setTrackedSaving(false)
+    }
+  }
+
+  // ── Failed-write counter ──
+  const failedCount = Number(settingsMap.audit_failed_count) || 0
+  const [resettingFailed, setResettingFailed] = useState(false)
+
+  const resetFailedCount = async () => {
+    setResettingFailed(true)
+    try {
+      await actions.updateSetting('audit_failed_count', '0', {
+        silent: true,
+        category: 'audit',
+        description: 'Counter of failed audit_log INSERTs since last reset',
+      })
+      toast.success('Failed-write counter reset to 0')
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile?.email,
+          user_name:  userName,
+          action:      'Reset',
+          entity_type: 'Audit Log',
+          entity_id:   'FAILED_COUNT',
+          details:     'Reset failed audit write counter to 0 from Settings',
+        })
+      } catch {}
+    } catch (e) {
+      toast.error(e.message || 'Could not reset')
+    } finally {
+      setResettingFailed(false)
+    }
+  }
+
+  // ── Purge ──
+  const [purgeOpen, setPurgeOpen] = useState(false)
+  const [purgePreview, setPurgePreview] = useState(null)
+  const [purgeLoading, setPurgeLoading] = useState(false)
+  const [purgeExecuting, setPurgeExecuting] = useState(false)
+  const purgeDialogRef = useDialogA11y(purgeOpen, () => {
+    if (purgeExecuting) return
+    setPurgeOpen(false); setPurgePreview(null)
+  })
+
+  const openPurge = async () => {
+    const days = Number(edits.audit_retention_days) || 730
+    if (days < 30) {
+      toast.error('Retention must be at least 30 days to purge (safety minimum).')
+      return
+    }
+    setPurgeOpen(true)
+    setPurgeLoading(true)
+    setPurgePreview(null)
+    try {
+      const { data, error: err } = await supabase.rpc('audit_log_purge_preview', { p_days_to_keep: days })
+      if (err) throw err
+      setPurgePreview(data)
+    } catch (e) {
+      toast.error(e.message || 'Preview failed')
+      setPurgeOpen(false)
+    } finally {
+      setPurgeLoading(false)
+    }
+  }
+
+  const executePurge = async () => {
+    const days = Number(edits.audit_retention_days) || 730
+    setPurgeExecuting(true)
+    try {
+      const { data, error: err } = await supabase.rpc('audit_log_purge', { p_days_to_keep: days })
+      if (err) throw err
+      toast.success(`Purged ${(data ?? 0).toLocaleString()} audit log entries`)
+      setPurgeOpen(false); setPurgePreview(null)
+    } catch (e) {
+      toast.error(e.message || 'Purge failed')
+    } finally {
+      setPurgeExecuting(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="settings-loading">
+        <Loader2 size={20} className="mx-auto mb-2 animate-spin" aria-hidden="true" />
+        <p className="text-sm">Loading audit log settings…</p>
+      </div>
+    )
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-4">
+
+      {/* Intro */}
+      <div className="settings-note">
+        <FileSearch size={16} className="settings-note-icon" aria-hidden="true" />
+        <div className="settings-note-body">
+          <p className="settings-note-title">Audit Log</p>
+          <p className="settings-note-text">
+            Control retention, monitoring sensitivity, and which entity views are tracked.
+            Numeric settings auto-save. The Audit Log viewer is at{' '}
+            <strong>Administration → Audit Log</strong>.
+          </p>
+        </div>
+      </div>
+
+      {/* ── Retention + Failed Writes + Purge ───────────────────────────── */}
+      <SettingCard icon={History} title="Retention &amp; Purge">
+        {[AUDIT_SETTINGS[0]].map(es => {
+          const isUnset    = settingsMap[es.key] === undefined || settingsMap[es.key] === null || settingsMap[es.key] === ''
+          const inputId    = `audit-${es.key}`
+          const isAtDefault = String(edits[es.key]) === String(es.default)
+          return (
+            <SettingRow
+              key={es.key}
+              id={`setting-${es.key}`}
+              label={es.label}
+              labelFor={inputId}
+              helper={es.desc}
+              details={es.details}
+              defaultHint={isUnset ? `Using default (${es.default} ${es.suffix}) — no override saved.` : null}
+            >
+              <DebouncedInput
+                id={inputId}
+                type="number"
+                inputMode="decimal"
+                min={es.min}
+                step={es.step}
+                value={edits[es.key] ?? ''}
+                onChange={(v) => handleChange(es.key, v)}
+                onBlur={() => flushSave(es.key)}
+                className="settings-input--num"
+                aria-describedby={`${inputId}-suffix`}
+                suffix={<span id={`${inputId}-suffix`}>{es.suffix}</span>}
+              />
+              <button
+                type="button"
+                onClick={() => handleResetDefault(es.key)}
+                disabled={isAtDefault}
+                className="settings-icon-btn"
+                title={`Reset to default (${es.default})`}
+                aria-label={`Reset ${es.label} to default value of ${es.default}`}
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+              </button>
+              <SavedIndicator state={saveState[es.key]} />
+            </SettingRow>
+          )
+        })}
+
+        <SettingRow
+          id="setting-audit_failed_count"
+          label="Failed Audit Writes"
+          helper="Counter incremented by Phase 2's writeAudit() helper when an insert fails. A non-zero value indicates audit data may be incomplete."
+        >
+          <span
+            className={
+              'inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium border ' +
+              (failedCount > 0
+                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                : 'bg-green-100 text-green-800 border-green-300')
+            }
+            aria-live="polite"
+          >
+            {failedCount.toLocaleString()} failed
+          </span>
+          <button
+            type="button"
+            onClick={resetFailedCount}
+            disabled={failedCount === 0 || resettingFailed}
+            className="inline-flex items-center gap-1 px-3 py-1.5 min-h-[32px] text-sm font-medium text-surface-700 bg-white border border-surface-300 rounded-lg hover:bg-surface-50 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
+            aria-label="Reset failed-write counter to zero"
+          >
+            {resettingFailed && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            Reset to 0
+          </button>
+        </SettingRow>
+
+        <SettingRow
+          id="setting-audit_purge_now"
+          label="Purge Old Entries"
+          helper={isSuperAdmin
+            ? 'Permanently delete entries older than the retention period above. The purge action itself is recorded as a new audit log entry. Cannot be undone.'
+            : 'Only Super Admin can purge audit log entries.'}
+        >
+          <button
+            type="button"
+            onClick={openPurge}
+            disabled={!isSuperAdmin || purgeLoading || purgeExecuting}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+            aria-label="Preview audit log purge"
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            Purge Now
+          </button>
+        </SettingRow>
+      </SettingCard>
+
+      {/* ── Suspicious Activity Thresholds ────────────────────────────────── */}
+      <SettingCard icon={AlertTriangle} title="Suspicious Activity Thresholds">
+        {AUDIT_SETTINGS.slice(1).map(es => {
+          const isUnset     = settingsMap[es.key] === undefined || settingsMap[es.key] === null || settingsMap[es.key] === ''
+          const inputId     = `audit-${es.key}`
+          const isAtDefault = String(edits[es.key]) === String(es.default)
+          return (
+            <SettingRow
+              key={es.key}
+              id={`setting-${es.key}`}
+              label={es.label}
+              labelFor={inputId}
+              helper={es.desc}
+              details={es.details}
+              defaultHint={isUnset ? `Using default (${es.default} ${es.suffix}) — no override saved.` : null}
+            >
+              <DebouncedInput
+                id={inputId}
+                type="number"
+                inputMode="decimal"
+                min={es.min}
+                step={es.step}
+                value={edits[es.key] ?? ''}
+                onChange={(v) => handleChange(es.key, v)}
+                onBlur={() => flushSave(es.key)}
+                className="settings-input--num"
+                aria-describedby={`${inputId}-suffix`}
+                suffix={<span id={`${inputId}-suffix`}>{es.suffix}</span>}
+              />
+              <button
+                type="button"
+                onClick={() => handleResetDefault(es.key)}
+                disabled={isAtDefault}
+                className="settings-icon-btn"
+                title={`Reset to default (${es.default})`}
+                aria-label={`Reset ${es.label} to default value of ${es.default}`}
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+              </button>
+              <SavedIndicator state={saveState[es.key]} />
+            </SettingRow>
+          )
+        })}
+      </SettingCard>
+
+      {/* ── Read Tracking ────────────────────────────────────────────────── */}
+      <SettingCard icon={Eye} title="Read Tracking — Entity Allowlist">
+        <SettingRow
+          id="setting-audit_track_view_entities"
+          label="Tracked Entity Types"
+          labelFor="audit-track-input"
+          helper='Comma-separated entity types whose page-views are written to audit_log as action="View". Leave empty to disable read tracking.'
+          details={{
+            what: 'When a page calls trackView(entityType, entityId), the call only writes an audit row if entityType appears in this list.',
+            where: 'Wired into the Audit Log page itself; UsersPage and AccessPage can opt-in via a one-line useEffect (see Phase 1 follow-up notes).',
+            effect: 'Lets you meta-audit access to sensitive pages without instrumenting every page. Keep the list short — every tracked view creates a row.',
+          }}
+        >
+          <input
+            id="audit-track-input"
+            type="text"
+            value={trackedRaw}
+            onChange={e => setTrackedRaw(e.target.value)}
+            className="settings-input"
+            placeholder="Users, Audit Log, Access Page, Settings"
+            aria-label="Tracked entity types, comma-separated"
+          />
+          <button
+            type="button"
+            onClick={saveTrackedEntities}
+            disabled={trackedSaving || !trackedDirty}
+            className="inline-flex items-center gap-1 px-3 py-1.5 min-h-[32px] text-sm font-medium text-white bg-brand-600 rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
+          >
+            {trackedSaving
+              ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              : <Save size={14} aria-hidden="true" />}
+            Save
+          </button>
+          {trackedSavedFlash && (
+            <span className="text-xs text-green-700 flex items-center gap-1" aria-live="polite">
+              <CheckCircle2 size={12} aria-hidden="true" /> Saved
+            </span>
+          )}
+        </SettingRow>
+      </SettingCard>
+
+      {/* Purge confirmation modal */}
+      {purgeOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.5)' }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="audit-purge-title"
+          onClick={e => {
+            if (e.target === e.currentTarget && !purgeExecuting) {
+              setPurgeOpen(false); setPurgePreview(null)
+            }
+          }}
+        >
+          <div
+            ref={purgeDialogRef}
+            className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden flex flex-col"
+          >
+            <div className="flex items-center justify-between p-4 border-b border-surface-200">
+              <h2 id="audit-purge-title" className="text-base font-semibold text-surface-900 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-red-600" aria-hidden="true" />
+                Confirm Audit Log Purge
+              </h2>
+              <button
+                type="button"
+                onClick={() => { setPurgeOpen(false); setPurgePreview(null) }}
+                disabled={purgeExecuting}
+                className="p-1 min-h-[32px] min-w-[32px] flex items-center justify-center text-surface-500 hover:text-surface-900 rounded-md hover:bg-surface-100 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
+                aria-label="Close"
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3 text-sm">
+              {purgeLoading ? (
+                <div className="text-center py-4">
+                  <Loader2 size={20} className="mx-auto mb-2 animate-spin text-brand-500" aria-hidden="true" />
+                  Counting entries to purge…
+                </div>
+              ) : (
+                <>
+                  <p className="text-surface-800">
+                    This will permanently delete{' '}
+                    <strong className="text-red-600">{(purgePreview ?? 0).toLocaleString()}</strong>{' '}
+                    audit log {purgePreview === 1 ? 'entry' : 'entries'} older than{' '}
+                    <strong>{edits.audit_retention_days || 730} days</strong>.
+                  </p>
+                  <p className="text-xs text-surface-600">
+                    The purge itself will be recorded as a new audit log entry. This action cannot be undone.
+                  </p>
+                  {purgePreview === 0 && (
+                    <div className="p-2 bg-green-50 border border-green-200 rounded-md text-xs text-green-800">
+                      Nothing to purge — no entries are older than the retention period.
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="px-4 py-3 border-t border-surface-200 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setPurgeOpen(false); setPurgePreview(null) }}
+                disabled={purgeExecuting}
+                className="px-3 py-1.5 min-h-[32px] text-sm font-medium text-surface-700 bg-white border border-surface-300 rounded-lg hover:bg-surface-50 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executePurge}
+                disabled={purgeLoading || purgeExecuting || !purgePreview}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[32px] text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
+              >
+                {purgeExecuting && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+                {purgeExecuting
+                  ? 'Purging…'
+                  : `Purge ${(purgePreview ?? 0).toLocaleString()} ${purgePreview === 1 ? 'Entry' : 'Entries'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // GENERIC CRUD TABLE SECTION
 // Used by: Categories, Asset Locations, Inventory Locations, Vendors, WO Statuses

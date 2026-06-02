@@ -21,6 +21,7 @@ import ProgramBudgetPage from '@/pages/ProgramBudgetPage'
 import BugTrackerPage from '@/pages/BugTrackerPage'
 import TimeCardsPage from '@/pages/TimeCardsPage'
 import AccessPage from '@/pages/AccessPage'
+import AuditLogPage from '@/pages/AuditLogPage'
 import WOCRatioPage from '@/pages/WOCRatioPage'
 import VolunteerHoursPage from '@/pages/VolunteerHoursPage'
 import ComingSoonPage from '@/pages/ComingSoonPage'
@@ -387,6 +388,7 @@ function AppRoutes() {
             <Route path="/announcements" element={<AnnouncementsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/access" element={<AccessPage />} />
+            <Route path="/audit-log" element={<AuditLogPage />} />
             <Route path="/instructor-tools" element={<InstructorToolsPage />} />
             <Route path="/program-planner" element={<ProgramPlannerPage />} />
             <Route path="/program-cost" element={<ProgramCostPage />} />

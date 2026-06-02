@@ -485,16 +485,58 @@ export function useWeeklyReminderActions() {
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
   const [saving, setSaving] = useState(false)
 
-  const setReminder = useCallback(async (classId, newMessage, classLabel) => {
+  /**
+   * setReminder — upsert a reminder row in any of the three scopes.
+   *
+   * @param {string|null} classId    Class ID (null for global)
+   * @param {string}      newMessage Message text (empty/whitespace = delete row)
+   * @param {string}      classLabel Human-readable label for history/audit
+   * @param {string|null} userEmail  Student email (null for global or per-class)
+   *
+   * Scope rules:
+   *   classId NULL,   userEmail NULL   → Global
+   *   classId set,    userEmail NULL   → Per-class
+   *   classId set,    userEmail set    → Per-student (NEW)
+   *   classId NULL,   userEmail set    → DISALLOWED (no use case)
+   *
+   * Behavior:
+   *   • Reads existing row in the same scope (4-way NULL match)
+   *   • Empty message → DELETE; non-empty → UPDATE or INSERT
+   *   • Writes audit_log entry (entity_id includes user_email when present)
+   *   • Writes reminder_history entry ONLY for global + per-class scopes
+   *     (the existing reminder_history table has no user_email column;
+   *     audit_log captures per-student changes fully)
+   *
+   * Backward compatible: callers that omit userEmail still hit the
+   * existing global / per-class behavior with no change.
+   */
+  const setReminder = useCallback(async (classId, newMessage, classLabel, userEmail = null) => {
     setSaving(true)
     const trimmed = (newMessage || '').trim()
-    const label = classLabel || (classId || 'All Classes')
+    const cid = classId || null
+    const uem = userEmail || null
+
+    // Guard: per-student rows MUST have a class_id
+    if (uem && !cid) {
+      setSaving(false)
+      throw new Error('A per-student reminder must be scoped to a class.')
+    }
+
+    const label = classLabel || (cid || 'All Classes')
+    const scopeLabel = uem ? `${label} → ${uem}` : label
+
+    // Helper: apply the scope filters (class_id + user_email) to a query.
+    // Uses .eq() when the value is set, .is(null) when null.
+    const applyScope = (q) => {
+      const q1 = cid ? q.eq('class_id', cid) : q.is('class_id', null)
+      return uem ? q1.eq('user_email', uem) : q1.is('user_email', null)
+    }
+
     try {
-      // 1. Read existing row in this scope (NULL-safe match)
-      const existingQ = classId
-        ? supabase.from('weekly_reminders').select('*').eq('class_id', classId).maybeSingle()
-        : supabase.from('weekly_reminders').select('*').is('class_id', null).maybeSingle()
-      const { data: existing, error: selErr } = await existingQ
+      // 1. Read existing row in this scope
+      const { data: existing, error: selErr } = await applyScope(
+        supabase.from('weekly_reminders').select('*')
+      ).maybeSingle()
       if (selErr) throw selErr
       const oldMessage = existing?.message || ''
 
@@ -506,28 +548,19 @@ export function useWeeklyReminderActions() {
       if (trimmed === '') {
         if (!existing) { setSaving(false); return true }
         action = 'Clear'
-        const delQ = classId
-          ? supabase.from('weekly_reminders').delete().eq('class_id', classId)
-          : supabase.from('weekly_reminders').delete().is('class_id', null)
-        const { error: delErr } = await delQ
+        const { error: delErr } = await applyScope(
+          supabase.from('weekly_reminders').delete()
+        )
         if (delErr) throw delErr
       } else if (existing) {
-        const updQ = classId
-          ? supabase.from('weekly_reminders')
-              .update({
-                message: trimmed,
-                updated_at: new Date().toISOString(),
-                updated_by: userName,
-              })
-              .eq('class_id', classId)
-          : supabase.from('weekly_reminders')
-              .update({
-                message: trimmed,
-                updated_at: new Date().toISOString(),
-                updated_by: userName,
-              })
-              .is('class_id', null)
-        const { error: updErr } = await updQ
+        const { error: updErr } = await applyScope(
+          supabase.from('weekly_reminders')
+            .update({
+              message: trimmed,
+              updated_at: new Date().toISOString(),
+              updated_by: userName,
+            })
+        )
         if (updErr) throw updErr
       } else {
         action = 'Create'
@@ -538,7 +571,8 @@ export function useWeeklyReminderActions() {
           .from('weekly_reminders')
           .insert({
             id: newId,
-            class_id: classId || null,
+            class_id: cid,
+            user_email: uem,
             message: trimmed,
             updated_at: new Date().toISOString(),
             updated_by: userName,
@@ -546,23 +580,27 @@ export function useWeeklyReminderActions() {
         if (insErr) throw insErr
       }
 
-      // 4. Append history row (best-effort — failure here doesn't break the save)
-      try {
-        const { data: histId } = await supabase
-          .rpc('get_next_id', { p_type: 'reminder_history' })
-        if (histId) {
-          await supabase.from('reminder_history').insert({
-            id: histId,
-            class_id: classId || null,
-            class_label: label,
-            old_message: oldMessage,
-            new_message: trimmed,
-            changed_at: new Date().toISOString(),
-            changed_by: userName,
-          })
+      // 4. Append history row — global + per-class only.
+      // reminder_history has no user_email column; per-student changes are
+      // fully captured by audit_log below.
+      if (!uem) {
+        try {
+          const { data: histId } = await supabase
+            .rpc('get_next_id', { p_type: 'reminder_history' })
+          if (histId) {
+            await supabase.from('reminder_history').insert({
+              id: histId,
+              class_id: cid,
+              class_label: label,
+              old_message: oldMessage,
+              new_message: trimmed,
+              changed_at: new Date().toISOString(),
+              changed_by: userName,
+            })
+          }
+        } catch (e) {
+          console.warn('reminder_history insert failed:', e.message)
         }
-      } catch (e) {
-        console.warn('reminder_history insert failed:', e.message)
       }
 
       // 5. Audit (best-effort)
@@ -572,11 +610,11 @@ export function useWeeklyReminderActions() {
           user_name: userName,
           action,
           entity_type: 'weekly_reminders',
-          entity_id: classId || 'GLOBAL',
+          entity_id: uem ? `${cid}::${uem}` : (cid || 'GLOBAL'),
           field_changed: 'message',
           old_value: oldMessage,
           new_value: trimmed,
-          details: `Weekly reminder for ${label}`,
+          details: `Weekly reminder for ${scopeLabel}`,
         })
       } catch {}
 
@@ -646,4 +684,92 @@ export function useReminderHistory(scopeFilter = 'all') {
   }, [fetch])
 
   return { history, loading, refresh: fetch }
+}
+
+// ─── Students enrolled in a specific class ───────────────────────────────────
+/**
+ * useStudentsInClass — list students (and work-study) enrolled in a given class.
+ *
+ * IMPORTANT: profiles.classes stores course_id values (e.g. "RICT1610"), not
+ * class_id values (e.g. "CLS1020"). However, some legacy data may use class_id.
+ * To match the defensive pattern used by TimeCardsPage and others, this hook
+ * looks up BOTH identifiers from the classes table and matches either form in
+ * profile.classes. This makes enrollment-matching robust to either storage
+ * convention.
+ *
+ * Excludes the super admin utility account. Sorted by last name then first
+ * name for stable picker rendering.
+ *
+ * Returns { students: [{email, first_name, last_name, role}], loading, refresh }.
+ *
+ * Used by the Per-Student Reminders section on the Settings page to populate
+ * the "Add per-student message" dropdown.
+ */
+export function useStudentsInClass(classId) {
+  const [students, setStudents] = useState([])
+  const [loading, setLoading]   = useState(true)
+
+  const fetch = useCallback(async () => {
+    if (!classId) {
+      setStudents([])
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    try {
+      // 1. Look up the class to get BOTH class_id and course_id, since
+      //    profile.classes may contain either form.
+      const { data: cls } = await supabase
+        .from('classes')
+        .select('class_id, course_id')
+        .eq('class_id', classId)
+        .maybeSingle()
+
+      const cid = String(classId).trim()
+      const courseId = cls?.course_id ? String(cls.course_id).trim() : null
+
+      // 2. Fetch all candidate profiles (Student + Work Study).
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('email, first_name, last_name, role, classes, status')
+        .in('role', ['Student', 'Work Study'])
+
+      if (error) throw error
+
+      const list = (data || [])
+        // Exclude super admin from user-facing picker (defense-in-depth)
+        .filter(p => (p.email || '').toLowerCase() !== 'rictprogram@gmail.com')
+        // Exclude inactive accounts; permissive on unknown statuses
+        .filter(p => (p.status || 'Active').toLowerCase() !== 'inactive')
+        // Match enrollment via standard comma-separated parse, accepting EITHER
+        // class_id (CLS####) or course_id (RICT####) in profile.classes —
+        // mirrors the pattern used by TimeCardsPage and others.
+        .filter(p => {
+          const userClasses = (p.classes || '')
+            .split(',')
+            .map(c => c.trim())
+            .filter(Boolean)
+          return userClasses.includes(cid)
+            || (courseId && userClasses.includes(courseId))
+        })
+        .sort((a, b) => {
+          const aLast = (a.last_name || '').toLowerCase()
+          const bLast = (b.last_name || '').toLowerCase()
+          if (aLast !== bLast) return aLast.localeCompare(bLast)
+          return (a.first_name || '').toLowerCase()
+            .localeCompare((b.first_name || '').toLowerCase())
+        })
+
+      setStudents(list)
+    } catch (err) {
+      console.error('useStudentsInClass error:', err)
+      setStudents([])
+    } finally {
+      setLoading(false)
+    }
+  }, [classId])
+
+  useEffect(() => { fetch() }, [fetch])
+
+  return { students, loading, refresh: fetch }
 }

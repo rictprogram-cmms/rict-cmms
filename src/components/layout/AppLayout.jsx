@@ -99,6 +99,7 @@ const navSections = [
       { name: 'Users', href: '/users', icon: Users, permPage: 'Users', roles: ['Instructor'] },
       { name: 'Announcements', href: '/announcements', icon: Megaphone, permPage: 'Announcements', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Settings', href: '/settings', icon: Settings, permPage: 'Settings', roles: ['Instructor'] },
+      { name: 'Audit Log', href: '/audit-log', icon: FileSearch, permPage: 'Audit Log', roles: ['Instructor'] },
       { name: 'Access Control', href: '/access', icon: ShieldCheck, superAdminOnly: true, roles: ['Instructor'] },
       { name: 'Instructor Tools', href: '/instructor-tools', icon: GraduationCap, permPage: null, roles: ['Instructor'] },
       // Not shown in sidebar but registered so breadcrumb resolves correctly
