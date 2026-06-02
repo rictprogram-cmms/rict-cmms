@@ -2080,7 +2080,7 @@ function ReminderEditor({ scope, initialMessage, onSave }) {
 }
 
 // ─── Tab strip with proper ARIA for WCAG 2.1 AA ─────────────────────────────
-function ScopeTabStrip({ scopes, activeKey, onChange, reminderByScope }) {
+function ScopeTabStrip({ scopes, activeKey, onChange, reminderByScope, perStudentCountByScope = {} }) {
   const listRef = useRef(null)
 
   // Arrow / Home / End keyboard navigation per WAI-ARIA Authoring Practices
@@ -2107,7 +2107,8 @@ function ScopeTabStrip({ scopes, activeKey, onChange, reminderByScope }) {
     >
       {scopes.map((s, idx) => {
         const active = s.key === activeKey
-        const hasContent = !!reminderByScope[s.key]
+        const hasReminder = !!reminderByScope[s.key]
+        const perStudentCount = perStudentCountByScope[s.key] || 0
         const isGlobal = s.classId === null
         return (
           <button
@@ -2132,14 +2133,38 @@ function ScopeTabStrip({ scopes, activeKey, onChange, reminderByScope }) {
               <BookOpen size={12} aria-hidden="true" />
             )}
             <span>{s.label}</span>
-            {hasContent && (
+            {/* Indicators are wrapped in a labelled <span> (not relying on color
+                or shape alone) so screen readers announce exactly what's set —
+                WCAG 1.4.1. A solid dot = class-level reminder; a person glyph =
+                per-student messages exist. Both can show when both are set. */}
+            {hasReminder && (
               <span
-                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                  active ? 'bg-indigo-600' : 'bg-amber-500'
-                }`}
-                aria-label="has content"
-                title="This scope has a reminder set"
-              />
+                role="img"
+                aria-label="Class reminder set"
+                title="Class reminder set"
+                className="inline-flex flex-shrink-0"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    active ? 'bg-indigo-600' : 'bg-amber-500'
+                  }`}
+                />
+              </span>
+            )}
+            {perStudentCount > 0 && (
+              <span
+                role="img"
+                aria-label={`${perStudentCount} per-student message${perStudentCount === 1 ? '' : 's'} set`}
+                title={`${perStudentCount} per-student message${perStudentCount === 1 ? '' : 's'} set`}
+                className="inline-flex flex-shrink-0"
+              >
+                <UserCircle
+                  size={12}
+                  aria-hidden="true"
+                  className={active ? 'text-indigo-600' : 'text-amber-500'}
+                />
+              </span>
             )}
           </button>
         )
@@ -2605,13 +2630,31 @@ function WeeklyLabsSettings() {
     return list
   }, [classList])
 
-  // Map scope key → message string (for tab dot indicator + active editor seed)
+  // Map scope key → CLASS-LEVEL message string (drives the tab dot + the active
+  // editor seed). Per-student override rows also live in `weekly_reminders` under
+  // the same class_id but carry a user_email — they must NOT count here, or a
+  // lingering per-student message would (a) keep the tab dot lit after the class
+  // message is cleared and (b) bleed into the class editor on re-seed.
   const reminderByScope = useMemo(() => {
     const m = {}
     for (const r of reminders) {
+      if (r.user_email) continue // skip per-student overrides — class-level only
       if (!r.message || !r.message.trim()) continue
       const key = r.class_id === null || r.class_id === undefined ? 'global' : r.class_id
       m[key] = r.message
+    }
+    return m
+  }, [reminders])
+
+  // Map class_id → count of per-student override messages (drives the secondary
+  // tab indicator). Global scope ('All Classes') never has per-student rows.
+  const perStudentCountByScope = useMemo(() => {
+    const m = {}
+    for (const r of reminders) {
+      if (!r.user_email) continue        // class-level/global handled above
+      if (!r.class_id) continue          // per-student rows are always class-scoped
+      if (!r.message || !r.message.trim()) continue
+      m[r.class_id] = (m[r.class_id] || 0) + 1
     }
     return m
   }, [reminders])
@@ -2660,6 +2703,7 @@ function WeeklyLabsSettings() {
             activeKey={activeKey}
             onChange={setActiveKey}
             reminderByScope={reminderByScope}
+            perStudentCountByScope={perStudentCountByScope}
           />
 
           <div id={`scope-panel-${activeScope.key}`}>
