@@ -3743,43 +3743,69 @@ function ClassesSection() {
   const [showInactive, setShowInactive] = useState(false)
   const [search, setSearch] = useState('')
   const [enrollmentMap, setEnrollmentMap] = useState({})
+  // Tracks mount state so async loads (initial fetch + realtime-triggered
+  // reloads + post-save refresh) never call setState after unmount.
+  const enrollmentMountedRef = useRef(true)
 
-  // Load enrollment data so we can search by student name/email.
-  // Includes Archived (graduated) students — tagged with `archived: true` —
-  // so the historical roster of who was in a class is preserved in the UI
-  // even after a student is archived. Archiving never clears profiles.classes,
-  // so this is purely a display concern.
-  useEffect(() => {
-    let cancelled = false
-    async function loadEnrollment() {
-      try {
-        const { data } = await supabase
-          .from('profiles')
-          .select('first_name, last_name, email, classes, status')
-          .in('role', ['Student', 'Work Study'])
-          .in('status', ['Active', 'Archived'])
-        if (cancelled) return
-        const map = {}
-        ;(data || []).forEach(s => {
-          const archived = s.status === 'Archived'
-          const courses = (s.classes || '').split(',').map(c => c.trim()).filter(Boolean)
-          courses.forEach(courseId => {
-            if (!map[courseId]) map[courseId] = []
-            map[courseId].push({
-              name: `${s.first_name} ${s.last_name}`,
-              email: s.email || '',
-              archived,
-            })
+  // Load enrollment data so we can search by student name/email AND drive the
+  // live Enrolled count per class. Includes Archived (graduated) students —
+  // tagged with `archived: true` — so the historical roster of who was in a
+  // class is preserved in the UI even after a student is archived. Archiving
+  // never clears profiles.classes, so this is purely a display concern.
+  //
+  // Exposed as a callable (useCallback) so the EnrollmentModal can trigger an
+  // immediate refresh after saving, and so the realtime subscription below can
+  // re-pull when profiles change from any session or kiosk.
+  const loadEnrollment = useCallback(async () => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('first_name, last_name, email, classes, status')
+        .in('role', ['Student', 'Work Study'])
+        .in('status', ['Active', 'Archived'])
+      if (!enrollmentMountedRef.current) return
+      const map = {}
+      ;(data || []).forEach(s => {
+        const archived = s.status === 'Archived'
+        const courses = (s.classes || '').split(',').map(c => c.trim()).filter(Boolean)
+        courses.forEach(courseId => {
+          if (!map[courseId]) map[courseId] = []
+          map[courseId].push({
+            name: `${s.first_name} ${s.last_name}`,
+            email: s.email || '',
+            archived,
           })
         })
-        setEnrollmentMap(map)
-      } catch (err) {
-        console.error('Enrollment map load error:', err)
-      }
+      })
+      setEnrollmentMap(map)
+    } catch (err) {
+      console.error('Enrollment map load error:', err)
     }
-    loadEnrollment()
-    return () => { cancelled = true }
   }, [])
+
+  // Initial load on mount.
+  useEffect(() => {
+    enrollmentMountedRef.current = true
+    loadEnrollment()
+    return () => { enrollmentMountedRef.current = false }
+  }, [loadEnrollment])
+
+  // Realtime: keep the Enrolled column in sync when student enrollment changes
+  // (profiles.classes) — from this session, another instructor's session, or a
+  // kiosk. Unique channel name per mount avoids collisions with other realtime
+  // channels elsewhere in the app. Enrollment changes are infrequent, so we
+  // simply re-pull the whole map on any profiles change (cheap and robust).
+  useEffect(() => {
+    const channel = supabase
+      .channel(`classes-enrollment-${Math.random().toString(36).slice(2)}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        () => { loadEnrollment() }
+      )
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [loadEnrollment])
 
   // Convert empty date strings to null for Supabase
   const cleanDates = (data) => {
@@ -4266,7 +4292,11 @@ function ClassesSection() {
 
       {/* Enrollment Modal */}
       {enrollmentClass && (
-        <EnrollmentModal cls={enrollmentClass} onClose={() => setEnrollmentClass(null)} />
+        <EnrollmentModal
+          cls={enrollmentClass}
+          onClose={() => setEnrollmentClass(null)}
+          onSaved={loadEnrollment}
+        />
       )}
 
       {/* Duplicate Modal */}
@@ -4540,7 +4570,7 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 // ENROLLMENT MODAL (preserved as-is)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function EnrollmentModal({ cls, onClose }) {
+function EnrollmentModal({ cls, onClose, onSaved }) {
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -4632,6 +4662,7 @@ function EnrollmentModal({ cls, onClose }) {
         }
       }
       toast.success('Enrollment updated!')
+      onSaved?.()
       onClose()
     } catch (err) {
       toast.error(err.message || 'Failed to save enrollment')
