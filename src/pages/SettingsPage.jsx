@@ -45,7 +45,7 @@ import {
   Users, Calendar, Clock, BookOpen, ChevronRight, Search, UserPlus, UserCircle,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
   LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
-  History, Globe, FileSearch,
+  History, Globe, FileSearch, Archive, ArchiveRestore,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -3836,6 +3836,30 @@ function ClassesSection() {
     } catch {}
   }
 
+  // Quick Active⇄Inactive toggle from the Actions column (no edit modal).
+  // Inactive classes are hidden from students everywhere (Weekly Labs, Lab
+  // Signup, Time Clock, Dashboard all filter status='Active') while the row
+  // and all linked history are preserved — i.e. this is the "archive" action.
+  // Reactivating, or archiving an empty class, is instant. Archiving a class
+  // that still has enrolled students asks for confirmation first.
+  const handleToggleStatus = async (cls, enrolledCount = 0) => {
+    const archiving = cls.status === 'Active'
+    const newStatus = archiving ? 'Inactive' : 'Active'
+    if (archiving && enrolledCount > 0) {
+      const ok = confirm(
+        `Archive ${cls.course_id || cls.class_id}?\n\n` +
+        `It will be hidden from ${enrolledCount} enrolled student${enrolledCount !== 1 ? 's' : ''} ` +
+        `(Weekly Labs, Lab Signup, Time Clock, Dashboard). All existing data is preserved, ` +
+        `and you can reactivate it any time.`
+      )
+      if (!ok) return
+    }
+    try {
+      await actions.updateItem(cls.class_id, { status: newStatus })
+      refresh()
+    } catch {}
+  }
+
   // Week preview for the form
   const weekPreview = useMemo(() => {
     if (!form.start_date || !form.end_date) return []
@@ -4179,6 +4203,21 @@ function ClassesSection() {
                             title="Duplicate Class (new semester)" aria-label={`Duplicate ${cls.course_id} for new semester`}
                             className="p-1 rounded hover:bg-violet-50 text-surface-400 hover:text-violet-600">
                             <Copy size={13} aria-hidden="true" />
+                          </button>
+                          <button type="button" onClick={() => handleToggleStatus(cls, enrolledCount)}
+                            disabled={actions.saving}
+                            title={isInactive ? 'Reactivate Class (show to students)' : 'Archive Class (hide from students)'}
+                            aria-label={isInactive
+                              ? `Reactivate ${cls.course_id} — currently inactive, show to students`
+                              : `Archive ${cls.course_id} — currently active, hide from students`}
+                            className={`p-1 rounded text-surface-400 disabled:opacity-40 disabled:cursor-not-allowed ${
+                              isInactive
+                                ? 'hover:bg-emerald-50 hover:text-emerald-600'
+                                : 'hover:bg-amber-50 hover:text-amber-600'
+                            }`}>
+                            {isInactive
+                              ? <ArchiveRestore size={13} aria-hidden="true" />
+                              : <Archive size={13} aria-hidden="true" />}
                           </button>
                           <button type="button" onClick={() => startEdit(cls)}
                             title="Edit Class" aria-label={`Edit ${cls.course_id}`}
