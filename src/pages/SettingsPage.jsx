@@ -3738,29 +3738,37 @@ function ClassesSection() {
   const [form, setForm] = useState({})
   const [enrollmentClass, setEnrollmentClass] = useState(null)
   const [duplicateClass, setDuplicateClass] = useState(null)
+  // Holds { cls, enrolledCount } while the themed archive-confirm modal is open.
+  const [archiveConfirm, setArchiveConfirm] = useState(null)
   const [showInactive, setShowInactive] = useState(false)
   const [search, setSearch] = useState('')
   const [enrollmentMap, setEnrollmentMap] = useState({})
 
-  // Load enrollment data so we can search by student name/email
+  // Load enrollment data so we can search by student name/email.
+  // Includes Archived (graduated) students — tagged with `archived: true` —
+  // so the historical roster of who was in a class is preserved in the UI
+  // even after a student is archived. Archiving never clears profiles.classes,
+  // so this is purely a display concern.
   useEffect(() => {
     let cancelled = false
     async function loadEnrollment() {
       try {
         const { data } = await supabase
           .from('profiles')
-          .select('first_name, last_name, email, classes')
+          .select('first_name, last_name, email, classes, status')
           .in('role', ['Student', 'Work Study'])
-          .eq('status', 'Active')
+          .in('status', ['Active', 'Archived'])
         if (cancelled) return
         const map = {}
         ;(data || []).forEach(s => {
+          const archived = s.status === 'Archived'
           const courses = (s.classes || '').split(',').map(c => c.trim()).filter(Boolean)
           courses.forEach(courseId => {
             if (!map[courseId]) map[courseId] = []
             map[courseId].push({
               name: `${s.first_name} ${s.last_name}`,
               email: s.email || '',
+              archived,
             })
           })
         })
@@ -3841,23 +3849,22 @@ function ClassesSection() {
   // Signup, Time Clock, Dashboard all filter status='Active') while the row
   // and all linked history are preserved — i.e. this is the "archive" action.
   // Reactivating, or archiving an empty class, is instant. Archiving a class
-  // that still has enrolled students asks for confirmation first.
-  const handleToggleStatus = async (cls, enrolledCount = 0) => {
-    const archiving = cls.status === 'Active'
-    const newStatus = archiving ? 'Inactive' : 'Active'
-    if (archiving && enrolledCount > 0) {
-      const ok = confirm(
-        `Archive ${cls.course_id || cls.class_id}?\n\n` +
-        `It will be hidden from ${enrolledCount} enrolled student${enrolledCount !== 1 ? 's' : ''} ` +
-        `(Weekly Labs, Lab Signup, Time Clock, Dashboard). All existing data is preserved, ` +
-        `and you can reactivate it any time.`
-      )
-      if (!ok) return
-    }
+  // that still has enrolled students opens a themed confirm modal first.
+  const performToggle = async (cls) => {
+    const newStatus = cls.status === 'Active' ? 'Inactive' : 'Active'
     try {
       await actions.updateItem(cls.class_id, { status: newStatus })
       refresh()
     } catch {}
+  }
+
+  const handleToggleStatus = (cls, enrolledCount = 0) => {
+    const archiving = cls.status === 'Active'
+    if (archiving && enrolledCount > 0) {
+      setArchiveConfirm({ cls, enrolledCount })
+      return
+    }
+    performToggle(cls)
   }
 
   // Week preview for the form
@@ -4135,7 +4142,10 @@ function ClassesSection() {
                 {displayedClasses.map(cls => {
                   const wks = countClassWeeks(cls)
                   const enrolledStudents = enrollmentMap[cls.course_id] || []
-                  const enrolledCount = enrolledStudents.length
+                  const activeStudents = enrolledStudents.filter(s => !s.archived)
+                  const formerStudents = enrolledStudents.filter(s => s.archived)
+                  const enrolledCount = activeStudents.length
+                  const formerCount = formerStudents.length
                   const isInactive = cls.status === 'Inactive'
                   return (
                     <tr key={cls.class_id} className={`hover:bg-surface-50 ${isInactive ? 'opacity-50' : ''}`}>
@@ -4164,13 +4174,27 @@ function ClassesSection() {
                         {cls.start_date ? `${String(cls.start_date).substring(0, 10)} → ${String(cls.end_date || '').substring(0, 10)}` : '—'}
                       </td>
                       <td className="px-4 py-2 text-center">
-                        {enrolledCount > 0 ? (
-                          <span
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 cursor-default"
-                            title={enrolledStudents.map(s => s.name).join('\n')}
-                          >
-                            <Users size={10} aria-hidden="true" /> {enrolledCount}
-                          </span>
+                        {(enrolledCount > 0 || formerCount > 0) ? (
+                          <div className="inline-flex items-center justify-center gap-1 flex-wrap">
+                            {enrolledCount > 0 && (
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 cursor-default"
+                                title={`Currently enrolled:\n${activeStudents.map(s => s.name).join('\n')}`}
+                                aria-label={`${enrolledCount} currently enrolled`}
+                              >
+                                <Users size={10} aria-hidden="true" /> {enrolledCount}
+                              </span>
+                            )}
+                            {formerCount > 0 && (
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-surface-100 text-surface-500 border border-surface-200 cursor-default"
+                                title={`Former / graduated:\n${formerStudents.map(s => s.name).join('\n')}`}
+                                aria-label={`${formerCount} former or graduated student${formerCount !== 1 ? 's' : ''}`}
+                              >
+                                <GraduationCap size={10} aria-hidden="true" /> {formerCount}
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="text-xs text-surface-300">—</span>
                         )}
@@ -4254,6 +4278,100 @@ function ClassesSection() {
           onSaved={() => { setDuplicateClass(null); refresh() }}
         />
       )}
+
+      {/* Archive (deactivate) confirm — themed, only shown for enrolled classes */}
+      <ClassArchiveConfirmModal
+        confirm={archiveConfirm}
+        saving={actions.saving}
+        onCancel={() => setArchiveConfirm(null)}
+        onConfirm={async () => {
+          const cls = archiveConfirm?.cls
+          if (cls) await performToggle(cls)
+          setArchiveConfirm(null)
+        }}
+      />
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ARCHIVE CLASS CONFIRM MODAL
+// Themed confirmation (matches the Lab Access dialog) shown when archiving a
+// class that still has enrolled students. Reuses the shared settings-modal-*
+// styles + useDialogA11y (focus trap, Escape to close, focus return).
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ClassArchiveConfirmModal({ confirm, saving, onCancel, onConfirm }) {
+  const isOpen = !!confirm
+  const dialogRef = useDialogA11y(isOpen, onCancel)
+  const titleId = useId()
+  const descId = useId()
+
+  if (!isOpen) return null
+  const { cls, enrolledCount } = confirm
+  const label = cls.course_id || cls.class_id
+  const plural = enrolledCount !== 1
+
+  return (
+    <div
+      className="settings-modal-overlay"
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="settings-modal"
+      >
+        <header className="settings-modal-header settings-modal-header--warn">
+          <span className="settings-modal-header-icon-wrap">
+            <Archive size={20} aria-hidden="true" />
+          </span>
+          <h3 id={titleId} className="settings-modal-title">
+            Archive {label}?
+          </h3>
+        </header>
+
+        <div className="settings-modal-body" id={descId}>
+          <div className="settings-modal-warning">
+            <AlertTriangle size={18} className="settings-modal-warning-icon" aria-hidden="true" />
+            <p className="settings-modal-warning-text">
+              This class will be <strong>hidden from {enrolledCount} enrolled
+              student{plural ? 's' : ''}</strong> across Weekly Labs, Lab Signup,
+              the Time Clock kiosk, and the Dashboard.
+            </p>
+          </div>
+          <p className="settings-modal-text">
+            <strong>All existing data is preserved</strong> — work history, hours,
+            and signups stay intact. You can reactivate this class at any time from
+            the same button.
+          </p>
+        </div>
+
+        <footer className="settings-modal-footer">
+          <button
+            type="button"
+            className="settings-modal-btn settings-modal-btn--secondary"
+            onClick={onCancel}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="settings-modal-btn settings-modal-btn--warn"
+            onClick={onConfirm}
+            disabled={saving}
+          >
+            {saving
+              ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+              : <Archive size={14} aria-hidden="true" />}
+            Archive Class
+          </button>
+        </footer>
+      </div>
     </div>
   )
 }
@@ -4428,6 +4546,8 @@ function EnrollmentModal({ cls, onClose }) {
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [enrolled, setEnrolled] = useState({})
+  // Read-only history: archived (graduated) students who were enrolled in this course.
+  const [formerMembers, setFormerMembers] = useState([])
 
   useEffect(() => {
     let cancelled = false
@@ -4452,6 +4572,22 @@ function EnrollmentModal({ cls, onClose }) {
           if (classes.includes(courseId)) enrolledMap[s.id] = true
         })
         setEnrolled(enrolledMap)
+
+        // Read-only history — archived (graduated) students who were in this
+        // course. Archiving never clears profiles.classes, so this list shows
+        // who was previously enrolled even after they've left the program.
+        const { data: archivedData } = await supabase
+          .from('profiles')
+          .select('id, first_name, last_name, email, role, classes')
+          .eq('status', 'Archived')
+          .in('role', ['Student', 'Work Study'])
+          .order('last_name')
+        if (cancelled) return
+        const former = (archivedData || []).filter(s => {
+          const classes = (s.classes || '').split(',').map(c => c.trim())
+          return classes.includes(courseId)
+        })
+        setFormerMembers(former)
       } catch (err) {
         if (!cancelled) console.error('Error loading students:', err)
       } finally {
@@ -4554,6 +4690,34 @@ function EnrollmentModal({ cls, onClose }) {
                   }`}>{s.role}</span>
                 </label>
               ))}
+
+              {/* Read-only history of archived (graduated) members. Not
+                  editable — archived users can't be re-enrolled here; restore
+                  them from Users first. Preserves "who was in this class". */}
+              {formerMembers.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-surface-100">
+                  <div className="flex items-center gap-1.5 px-1 mb-1.5">
+                    <GraduationCap size={12} className="text-surface-400" aria-hidden="true" />
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-surface-400">
+                      Former / graduated ({formerMembers.length})
+                    </span>
+                  </div>
+                  <ul className="space-y-1 list-none m-0 p-0">
+                    {formerMembers.map(s => (
+                      <li key={s.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-50/60 opacity-70">
+                        <GraduationCap size={14} className="text-surface-400 flex-shrink-0" aria-hidden="true" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-surface-700">{s.first_name} {s.last_name}</div>
+                          <div className="text-xs text-surface-400">{s.email}</div>
+                        </div>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-surface-100 text-surface-400">
+                          Archived
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </div>
