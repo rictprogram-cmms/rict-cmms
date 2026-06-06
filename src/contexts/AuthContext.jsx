@@ -94,10 +94,13 @@ export function AuthProvider({ children }) {
   // automatically re-evaluates whenever emulation starts/stops or the
   // setting changes. No imperative setLabLocked calls scattered around.
   //
-  // True-emulation convention: Super Admin emulating a Student during
-  // summer break WILL be locked out — matching exactly what the student
-  // sees. Escape hatch is the EmulationBar "Stop" button (z-index 9999,
-  // above the LabLockedScreen).
+  // Emulation bypass convention: while the Super Admin is emulating a
+  // Student or Work Study user, the summer-break lockout is intentionally
+  // bypassed (labLocked === false) so the admin can record training
+  // videos and test the full app during the break. Real Student / Work
+  // Study sessions are still locked out normally. The bypass keys off
+  // isEmulating (which is true only for the real Super Admin), so a real
+  // student can never reach it.
   const [labAccessMode, setLabAccessMode] = useState(null)
   // Set of lowercase emails currently online (via Supabase Presence)
   const [onlineUsers, setOnlineUsers] = useState(new Set())
@@ -142,9 +145,14 @@ export function AuthProvider({ children }) {
   // identity changes) or when the setting is updated via realtime.
   const labLocked = useMemo(() => {
     if (labAccessMode !== 'summer_break') return false
+    // Super Admin emulating a Student/Work Study is NOT locked out — this
+    // lets the admin make training videos and test during summer break.
+    // isEmulating is only ever true for the real Super Admin, so real
+    // students can never hit this bypass.
+    if (isEmulating) return false
     const role = profile?.role
     return LOCKABLE_ROLES.includes(role)
-  }, [labAccessMode, profile?.role])
+  }, [labAccessMode, profile?.role, isEmulating])
 
   // ── Session Timeout Fetch ──────────────────────────────────────────
   // Reads session_timeout_hours from DB. 0 = disabled (never auto-logout).

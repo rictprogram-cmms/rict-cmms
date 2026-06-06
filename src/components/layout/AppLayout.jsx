@@ -1496,11 +1496,13 @@ export default function AppLayout() {
   const isInstructor = userRole === 'Instructor' || isSuperAdmin
 
   // ── Lab Access Mode lockout ──────────────────────────────────────────
-  // Render the lockout screen before any other checks.
-  // Instructors and Super Admins always bypass this.
-  if (labLocked && !isInstructor) {
-    return <LabLockedScreen profile={profile} signOut={signOut} />
-  }
+  // NOTE: the actual lockout render happens AFTER all hooks below (search
+  // for "LAB LOCKOUT RENDER GATE"). Returning here — above the remaining
+  // useState/useEffect hooks — would change the hook count between renders
+  // and crash React ("Rendered fewer hooks than during the previous
+  // render"), which showed up as a blank white screen when labLocked
+  // flipped false→true mid-session. Instructors, Super Admins, and any
+  // active emulation session bypass the lockout entirely.
 
   // ── Change Password Modal State ──
   const [changePasswordOpen, setChangePasswordOpen] = useState(false)
@@ -1852,6 +1854,21 @@ export default function AppLayout() {
   }
 
   const keyStyle = getKeyIconStyle()
+
+  // ── LAB LOCKOUT RENDER GATE ───────────────────────────────────────────
+  // Placed here, AFTER every hook above, so the hook count is identical on
+  // every render. Returning earlier (above later useState/useEffect calls)
+  // crashed React with "Rendered fewer hooks than during the previous
+  // render" the moment labLocked flipped false→true mid-session, which the
+  // user saw as a blank white screen.
+  //
+  // Bypass: Instructors, Super Admins, and any active emulation session.
+  // labLocked is already false while emulating (see AuthContext), so the
+  // !isEmulating check is a defensive second guard. Real Student / Work
+  // Study sessions during summer break fall through to LabLockedScreen.
+  if (labLocked && !isInstructor && !isEmulating) {
+    return <LabLockedScreen profile={profile} signOut={signOut} />
+  }
 
   return (
     <div className="flex h-screen bg-surface-50">
