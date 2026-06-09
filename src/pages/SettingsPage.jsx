@@ -1044,33 +1044,11 @@ function LabAccessModeCard() {
 
       setMode(newMode)
 
-      // ── Sync PM generation pause ─────────────────────────────────────────
-      // Summer Break → pause PMs. In Session → unpause PMs.
-      try {
-        const pmPausedValue = newMode === 'summer_break' ? 'true' : 'false'
-        const { data: pmRows } = await supabase
-          .from('settings')
-          .update({
-            setting_value: pmPausedValue,
-            updated_at: new Date().toISOString(),
-            updated_by: userName,
-          })
-          .eq('setting_key', 'pm_generation_paused')
-          .select()
-
-        if (!pmRows || pmRows.length === 0) {
-          await supabase.from('settings').insert({
-            setting_key: 'pm_generation_paused',
-            setting_value: pmPausedValue,
-            description: 'When true, all PM work order auto-generation is paused (summer/winter break)',
-            category: 'PM',
-            updated_at: new Date().toISOString(),
-            updated_by: userName,
-          })
-        }
-      } catch (pmErr) {
-        console.warn('[LabAccessMode] PM pause sync failed (non-fatal):', pmErr.message)
-      }
+      // ── PM generation is intentionally NOT synced here ───────────────────
+      // Lab Access Mode only controls student/work-study lockout. PM work
+      // order generation is managed manually on the Preventive Maintenance
+      // page (see usePMSchedules.js → pm_generation_paused). Decoupled by
+      // request so breaks don't force PM state either direction.
 
       // ── Audit log ────────────────────────────────────────────────────────
       try {
@@ -1084,16 +1062,16 @@ function LabAccessModeCard() {
           old_value: oldMode,
           new_value: newMode,
           details: newMode === 'summer_break'
-            ? 'Lab Access Mode set to Summer Break — students locked out, PM generation paused.'
-            : 'Lab Access Mode restored to In Session — students have access, PM generation resumed.',
+            ? 'Lab Access Mode set to Summer Break — students and work study locked out.'
+            : 'Lab Access Mode restored to In Session — students and work study have access.',
         })
       } catch (auditErr) {
         console.warn('[LabAccessMode] Audit log failed (non-fatal):', auditErr.message)
       }
 
       toast.success(newMode === 'summer_break'
-        ? 'Summer Break Mode enabled — students locked out & PMs paused'
-        : 'In-Session Mode restored — students have access & PMs resumed')
+        ? 'Summer Break Mode enabled — students & work study locked out'
+        : 'In-Session Mode restored — students & work study have access')
     } catch (err) {
       toast.error('Failed to update Lab Access Mode: ' + err.message)
     } finally {
@@ -1137,7 +1115,7 @@ function LabAccessModeCard() {
           }
           details={{
             what: 'Single switch that controls whether non-instructor users can log in at all.',
-            where: 'Affects every page, the Time Clock kiosk, and the Lab Status display. Also auto-pauses PM work order generation when set to Summer Break.',
+            where: 'Affects every page, the Time Clock kiosk, and the Lab Status display. PM work order generation is managed separately on the Preventive Maintenance page.',
             effect: 'Switching to Summer Break shows a "Lab Closed" screen to students. Switching back to In Session restores all access immediately.',
           }}
         >
@@ -1214,6 +1192,13 @@ function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
               <p className="settings-modal-text">
                 <strong>Instructors are not affected.</strong> You can restore access at any time
                 by switching back to In Session.
+              </p>
+              <p className="settings-modal-text" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                <Info size={14} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  This <strong>no longer</strong> pauses PM work order generation. Pause or resume PMs
+                  manually on the Preventive Maintenance page.
+                </span>
               </p>
             </>
           ) : (
