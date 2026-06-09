@@ -237,6 +237,80 @@ export function usePMGlobalPause() {
     }
   }
 
+  // ── Resume generation (TRUE pause — Option A) ──────────────────────────────
+  // Clicking "Resume Generation" rolls every overdue Active PM's next_due_date
+  // FORWARD (via the reset_overdue_pm_dates RPC) BEFORE unpausing. The auto-
+  // generator then finds nothing overdue and does NOT dump a backlog of work
+  // orders. Students return to a clean board; PMs pick their normal cadence up
+  // from the resume date (missed break cycles are skipped, by design).
+  //
+  // Order matters: roll forward FIRST, then unpause — this closes the race
+  // where the 6am pg_cron job or a page-load auto-gen could fire generation in
+  // the gap between unpausing and resetting the dates.
+  //
+  // Returns the number of schedules rolled forward (for the confirmation toast).
+  const resume = async () => {
+    setSaving(true)
+    try {
+      // 1) Roll overdue schedules forward (atomic, SECURITY DEFINER RPC).
+      const { data: resetData, error: resetErr } = await supabase.rpc('reset_overdue_pm_dates')
+      if (resetErr) throw resetErr
+      const count = typeof resetData === 'number' ? resetData : 0
+
+      // 2) Unpause — mirror toggle's upsert logic, forced to 'false'.
+      const { data: existing } = await supabase
+        .from('settings')
+        .select('setting_key')
+        .eq('setting_key', 'pm_generation_paused')
+        .maybeSingle()
+
+      if (existing) {
+        const { error } = await supabase.from('settings').update({
+          setting_value: 'false',
+          updated_at: new Date().toISOString(),
+          updated_by: userName
+        }).eq('setting_key', 'pm_generation_paused')
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('settings').insert({
+          setting_key: 'pm_generation_paused',
+          setting_value: 'false',
+          description: 'When true, all PM work order auto-generation is paused (summer/winter break)',
+          category: 'PM',
+          updated_at: new Date().toISOString(),
+          updated_by: userName
+        })
+        if (error) throw error
+      }
+
+      setPaused(false)
+
+      // Audit log
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Resume PM Generation',
+          entity_type: 'Settings',
+          entity_id: 'pm_generation_paused',
+          details: `PM generation resumed — ${count} overdue schedule(s) rolled forward; no backlog work orders generated`
+        })
+      } catch {}
+
+      toast.success(
+        count > 0
+          ? `PM generation resumed — ${count} schedule${count === 1 ? '' : 's'} reset forward, no work orders generated`
+          : 'PM generation resumed!'
+      )
+      return count
+    } catch (err) {
+      toast.error(err.message)
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
   useEffect(() => { fetch() }, [fetch])
 
   // Real-time: refresh when settings change (another user might toggle pause)
@@ -253,7 +327,7 @@ export function usePMGlobalPause() {
     return () => { supabase.removeChannel(channel) }
   }, [fetch])
 
-  return { paused, loading, saving, toggle, refresh: fetch }
+  return { paused, loading, saving, toggle, resume, refresh: fetch }
 }
 
 // ─── PM Actions ──────────────────────────────────────────────────────────────
