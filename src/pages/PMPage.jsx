@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import {
   usePMSchedules, usePMActions, useActiveAssets, usePMGlobalPause, calculateNextDueDate
@@ -56,6 +57,7 @@ export default function PMPage() {
   const [expandedId, setExpandedId] = useState(null)
   const [openWOMap, setOpenWOMap] = useState({}) // pm_id -> open WO info
   const [sopLinkedPMIds, setSopLinkedPMIds] = useState(new Set()) // pm_ids that have a linked SOP
+  const [showResumeConfirm, setShowResumeConfirm] = useState(false) // TRUE-pause resume confirmation
 
   // Load open PM work orders to show duplicate status
   useEffect(() => {
@@ -140,6 +142,28 @@ export default function PMPage() {
     if (woId) refresh()
   }
 
+  // Pause/Resume button router:
+  //   • Currently ACTIVE  → one-click pause (no confirmation needed).
+  //   • Currently PAUSED  → open the resume confirmation. Resuming rolls overdue
+  //                         dates forward FIRST (no backlog dump), then unpauses.
+  const handlePauseResumeClick = () => {
+    if (globalPause.paused) {
+      setShowResumeConfirm(true)
+    } else {
+      globalPause.toggle()
+    }
+  }
+
+  const handleConfirmResume = async () => {
+    try {
+      await globalPause.resume()   // rolls overdue dates forward, then unpauses (toasts the count)
+      setShowResumeConfirm(false)
+      refresh()                    // immediate refresh; realtime will also reconcile
+    } catch {
+      // resume() already surfaced the error via toast — keep the dialog open for retry
+    }
+  }
+
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-4">
       {/* Header */}
@@ -188,7 +212,7 @@ export default function PMPage() {
             </div>
           </div>
           <button
-            onClick={globalPause.toggle}
+            onClick={handlePauseResumeClick}
             disabled={globalPause.saving}
             className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all ${
               globalPause.paused
@@ -261,6 +285,15 @@ export default function PMPage() {
         </div>
       )}
 
+      {/* Resume Generation Confirmation (TRUE pause — rolls overdue dates forward) */}
+      <ResumeConfirmModal
+        open={showResumeConfirm}
+        overdueCount={overdue}
+        saving={globalPause.saving}
+        onConfirm={handleConfirmResume}
+        onCancel={() => { if (!globalPause.saving) setShowResumeConfirm(false) }}
+      />
+
       {/* Schedule List */}
       {loading ? (
         <div className="text-center py-12 text-surface-400">
@@ -289,6 +322,88 @@ export default function PMPage() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESUME CONFIRMATION MODAL  (WCAG 2.1 AA — SC 2.1.1, 2.4.3, 4.1.2)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Confirms a "true pause" resume: overdue PM schedules are rolled forward so no
+// backlog of work orders is generated. Uses useDialogA11y for focus trap, Escape
+// to close, and focus restore. Color is never the sole signal — every state has
+// a text label.
+
+function ResumeConfirmModal({ open, overdueCount = 0, saving, onConfirm, onCancel }) {
+  const dialogRef = useDialogA11y(open, onCancel)
+  if (!open) return null
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 z-[60] flex items-center justify-center p-4"
+      onClick={e => { if (e.target === e.currentTarget && !saving) onCancel() }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resume-pm-title"
+        aria-describedby="resume-pm-desc"
+        className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 focus:outline-none"
+      >
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex-shrink-0 rounded-full bg-emerald-100 p-2">
+            <PlayCircle size={20} className="text-emerald-600" aria-hidden="true" />
+          </div>
+          <div className="flex-1">
+            <h2 id="resume-pm-title" className="text-base font-bold text-surface-900">
+              Resume PM Generation?
+            </h2>
+            <div id="resume-pm-desc" className="text-sm text-surface-600 mt-1.5 space-y-1.5">
+              {overdueCount > 0 ? (
+                <>
+                  <p>
+                    <span className="font-semibold text-surface-900">
+                      {overdueCount} overdue schedule{overdueCount === 1 ? '' : 's'}
+                    </span>{' '}
+                    will be rolled forward to a fresh start, so students don&apos;t come back to a pile of work orders.
+                  </p>
+                  <p>
+                    <span className="font-semibold text-surface-900">No work orders will be generated now.</span>{' '}
+                    The missed break cycles are skipped, and PMs resume on their normal cadence starting today.
+                  </p>
+                </>
+              ) : (
+                <p>
+                  There are no overdue schedules right now. Generation will simply resume — nothing will be reset and no work orders will be generated.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-surface-400 focus-visible:outline-none disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={saving}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-50 flex items-center gap-2"
+          >
+            {saving ? (
+              <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Resuming…</>
+            ) : (
+              <><Play size={14} aria-hidden="true" /> Resume Generation</>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
