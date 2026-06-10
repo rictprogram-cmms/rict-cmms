@@ -1,7 +1,7 @@
 /**
  * RICT CMMS — Absence Request hooks
  *
- * Backing logic for the Absence Request page (Program Policy §4.1–4.3).
+ * Backing logic for the Absence Request page (Program Policy Section 4.1–4.3).
  * Students (or instructors on their behalf) submit an absence with a
  * make-up plan; instructors approve (choosing the deduction outcome) or
  * reject, and can later check off "Make-up complete".
@@ -410,7 +410,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
 
       const deductionLine = deductionStatus === 'Waived'
         ? 'The 20% assignment deduction is WAIVED (institutional excused absence).'
-        : 'The automatic 20% assignment deduction applies (maximum score 80%) per program policy §5.2.'
+        : 'The automatic 20% assignment deduction applies (maximum score 80%) per program policy Section 5.2.'
       await sendAbsenceBellNotification(
         profile,
         request.user_email,

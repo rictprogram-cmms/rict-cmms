@@ -1,7 +1,7 @@
 /**
  * RICT CMMS — Absence Request Page
  *
- * Implements the manual tracking workflow for Program Policy §4.1–4.3:
+ * Implements the manual tracking workflow for Program Policy Section 4.1–4.3:
  * students notify of an absence WITH a make-up plan; instructors approve
  * (choosing "20% Deduction" or "Waived — institutional excused") or reject,
  * and later check off "Make-up complete" when the student follows through.
@@ -248,7 +248,7 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
           <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2.5 text-xs text-blue-800">
             <Info size={14} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
             <p>
-              Per program policy §4.1, notify before the missed lab time or within 24 hours after.
+              Per program policy Section 4.1, notify before the missed lab time or within 24 hours after.
               Approval is required for the make-up window (first two lab days of the following week).
               Submitting does not guarantee approval.
             </p>
@@ -479,7 +479,7 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
           {/* Deduction decision */}
           <fieldset>
             <legend id={groupId} className="block text-xs font-semibold text-surface-700 mb-2">
-              Assignment Deduction (Policy §4.2 / §4.3) <span className="text-red-600" aria-hidden="true">*</span>
+              Assignment Deduction (Policy Section 4.2 / Section 4.3) <span className="text-red-600" aria-hidden="true">*</span>
             </legend>
             <div className="space-y-2" role="radiogroup" aria-labelledby={groupId}>
               <label className="flex items-start gap-2.5 p-3 border border-surface-200 rounded-lg cursor-pointer
@@ -496,7 +496,7 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
                 <span>
                   <span className="block text-sm font-medium text-surface-900">20% Deduction</span>
                   <span className="block text-xs text-surface-500">
-                    Instructor-approved make-up — assignment max score 80% (§5.2)
+                    Instructor-approved make-up — assignment max score 80% (Section 5.2)
                   </span>
                 </span>
               </label>
@@ -514,7 +514,7 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
                 <span>
                   <span className="block text-sm font-medium text-surface-900">Waived — Institutional Excused</span>
                   <span className="block text-xs text-surface-500">
-                    Qualifying §4.3 event (closure, documented medical, jury duty, bereavement…)
+                    Qualifying Section 4.3 event (closure, documented medical, jury duty, bereavement…)
                   </span>
                 </span>
               </label>
@@ -831,7 +831,7 @@ export default function AbsenceRequestPage() {
           <div>
             <h1 className="text-xl font-bold text-surface-900">Absence Request</h1>
             <p className="text-xs text-surface-400">
-              Notify of a missed lab with a make-up plan — Program Policy §4
+              Notify of a missed lab with a make-up plan — Program Policy Section 4
             </p>
           </div>
         </div>
@@ -852,10 +852,10 @@ export default function AbsenceRequestPage() {
       <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-800">
         <Info size={15} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
         <p>
-          Notify before the missed lab time, or within 24 hours after (§4.1). If approved, make-up hours
-          are completed during the first two lab days of the following week (§4.2) — sign up and punch
+          Notify before the missed lab time, or within 24 hours after (Section 4.1). If approved, make-up hours
+          are completed during the first two lab days of the following week (Section 4.2) — sign up and punch
           like any other hours. Approval sets the assignment outcome: 20% deduction, or waived for
-          institutional excused absences (§4.3).
+          institutional excused absences (Section 4.3).
         </p>
       </div>
 
