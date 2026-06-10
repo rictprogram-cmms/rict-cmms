@@ -24,6 +24,7 @@ import {
   Bug,
   ShoppingCart,
   Calendar,
+  CalendarOff,
   FlaskConical,
   LayoutDashboard,
   ClipboardList,
@@ -77,6 +78,7 @@ const navSections = [
     items: [
       { name: 'Preventive Maintenance', href: '/pm-schedules', icon: Calendar, permPage: 'PM', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Lab Signup', href: '/lab-signup', icon: FlaskConical, permPage: 'Lab Signup', roles: ['Student', 'Work Study', 'Instructor'] },
+      { name: 'Absence Request', href: '/absence-requests', icon: CalendarOff, permPage: 'Absence Requests', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Equipment Scheduling', href: '/equipment-scheduling', icon: Printer, permPage: 'Equipment Scheduling', roles: ['Student', 'Work Study', 'Instructor'] },
     ],
   },
