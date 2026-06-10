@@ -28,7 +28,7 @@ export default function NotificationBell() {
   // and update that one slice — instead of re-running 8+ queries on every event.
   // The derived `items` array preserves the original render order.
   const [itemsByTable, setItemsByTable] = useState({
-    access: [], wo: [], parts: [], time: [], lab: [], temp: [], help: [], announcement: [], netchg: [], pendingAck: [],
+    access: [], wo: [], parts: [], time: [], lab: [], temp: [], help: [], announcement: [], netchg: [], pendingAck: [], absence: [],
   });
   const items = useMemo(() => [
     // Pending asset-checkout acknowledgments float to the top — they're
@@ -44,6 +44,7 @@ export default function NotificationBell() {
     ...(itemsByTable.help || []),
     ...(itemsByTable.announcement || []),
     ...(itemsByTable.netchg || []),
+    ...(itemsByTable.absence || []),
   ], [itemsByTable]);
   const [open, setOpen] = useState(false);
   const [hasNew, setHasNew] = useState(false);
@@ -687,6 +688,45 @@ export default function NotificationBell() {
     setItemsByTable(prev => ({ ...prev, netchg: _items }));
   }, [profile?.email, isInstructor]);
 
+  // ── INSTRUCTOR ONLY: Pending absence requests ──
+  // Mirrors fetchNetworkChanges: one bell item per Pending absence_requests row.
+  // Review (approve with deduction choice / reject) lives on the Absence Request
+  // page where the deduction modal is, so the bell action is view-only.
+  const fetchAbsenceRequests = useCallback(async () => {
+    if (!profile?.email || !isInstructor) {
+      setItemsByTable(prev => ({ ...prev, absence: [] }));
+      return;
+    }
+    const _items = [];
+    try {
+      const { data } = await supabase
+        .from('absence_requests')
+        .select('request_id, user_name, user_email, course_id, class_id, absence_date, hours_missed, submitted_by_email, submitted_by_name, created_at')
+        .eq('status', 'Pending')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      (data || []).forEach(r => {
+        const cls = r.course_id || r.class_id || '';
+        const dateLabel = r.absence_date
+          ? new Date(r.absence_date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : '';
+        const isOnBehalf = r.submitted_by_email &&
+          r.submitted_by_email.toLowerCase() !== (r.user_email || '').toLowerCase();
+        _items.push({
+          id: `absence-${r.request_id}`,
+          type: 'absence',
+          icon: 'event_busy',
+          color: '#f59f00',
+          title: `${r.user_name || r.user_email} — absence ${dateLabel}`,
+          subtitle: `${cls ? cls + '  •  ' : ''}${r.hours_missed ? r.hours_missed + 'h missed' : 'Hours TBD'}${isOnBehalf ? '  •  filed by ' + (r.submitted_by_name || 'instructor') : ''}`,
+          date: r.created_at,
+          raw: r,
+        });
+      });
+    } catch {}
+    setItemsByTable(prev => ({ ...prev, absence: _items }));
+  }, [profile?.email, isInstructor]);
+
   // Wrapper used by polling, opening the panel, and post-action refreshes.
   // Each call_site that previously called fetchNotifications still does so —
   // this just dispatches to all per-table fetchers.
@@ -702,7 +742,8 @@ export default function NotificationBell() {
     fetchHelpRequests();
     fetchAnnouncements();
     fetchNetworkChanges();
-  }, [profile?.email, fetchAccessRequests, fetchPendingAcknowledgments, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges]);
+    fetchAbsenceRequests();
+  }, [profile?.email, fetchAccessRequests, fetchPendingAcknowledgments, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges, fetchAbsenceRequests]);
 
   // ── Play sound on new item arrival ──
   // Compares the SET OF item IDs across renders. This catches the case where one
@@ -769,6 +810,7 @@ export default function NotificationBell() {
       help_requests:        fetchHelpRequests,
       announcements:        fetchAnnouncements,
       network_change_requests: fetchNetworkChanges,
+      absence_requests:     fetchAbsenceRequests,
     };
     const tables = Object.keys(tableToFetcher);
     console.log('[NotificationBell] Setting up per-table realtime subscriptions for:', tables);
@@ -797,7 +839,7 @@ export default function NotificationBell() {
       console.log('[NotificationBell] Cleaning up realtime channel');
       supabase.removeChannel(channel);
     };
-  }, [profile?.email, fetchAccessRequests, fetchPendingAcknowledgments, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges]);
+  }, [profile?.email, fetchAccessRequests, fetchPendingAcknowledgments, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges, fetchAbsenceRequests]);
 
   // Pending-ack countdown ticker — only runs while there's at least one
   // pending acknowledgment row, so we don't burn cycles re-rendering the
@@ -1427,6 +1469,7 @@ export default function NotificationBell() {
     wo_assignment: 'WORK ORDER ASSIGNED',
     help: 'NEEDS HELP',
     netchg: 'NETWORK CHANGE',
+    absence: 'ABSENCE REQUEST',
     pending_ack: 'AWAITING YOUR SIGNATURE',
   };
 
@@ -1452,6 +1495,14 @@ export default function NotificationBell() {
     navigate('/network-map');
   };
 
+  // Navigate to the Absence Request page so the instructor can review pending
+  // requests. Approve (deduction decision) / Reject live on that page, so this
+  // is view-only — same pattern as viewNetworkChange.
+  const viewAbsenceRequest = () => {
+    setOpen(false);
+    navigate('/absence-requests');
+  };
+
   const renderActions = (item) => {
     const disabled = actionLoading === item.id;
     switch (item.type) {
@@ -1469,6 +1520,7 @@ export default function NotificationBell() {
       case 'wo_assignment': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
       case 'help': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       case 'netchg': return (<button className="nbtn nbtn-view" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
+      case 'absence': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review absence request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
       case 'pending_ack': return (<button className="nbtn nbtn-approve" disabled={disabled} onClick={() => setAckModalTarget(item.raw)} aria-label={`Sign for asset ${item.raw?.asset_name || item.raw?.asset_id}`}><span className="material-icons" aria-hidden="true">verified_user</span>Sign Now</button>);
       default: return null;
     }

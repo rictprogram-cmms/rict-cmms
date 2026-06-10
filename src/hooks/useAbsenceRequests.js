@@ -357,6 +357,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
         )
       }
 
+      fetchRequests() // direct refresh — don't depend on realtime for our own writes
       return { success: true, requestId: row.request_id }
     } catch (e) {
       console.error('submitRequest failed:', e.message)
@@ -364,7 +365,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     } finally {
       setSaving(false)
     }
-  }, [profile])
+  }, [profile, fetchRequests])
 
   // ── Approve (instructor; deduction decision required) ──────────────────────
   /**
@@ -418,6 +419,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
         `Your absence request for ${formatDateHuman(request.absence_date)} was approved. ${deductionLine} Complete your make-up hours per your plan: "${request.makeup_plan}"`
       )
 
+      fetchRequests() // direct refresh — don't depend on realtime for our own writes
       return { success: true }
     } catch (e) {
       console.error('approveRequest failed:', e.message)
@@ -425,7 +427,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     } finally {
       setSaving(false)
     }
-  }, [profile])
+  }, [profile, fetchRequests])
 
   // ── Reject (instructor; reason required — collected by RejectionModal) ─────
   const rejectRequest = useCallback(async (request, reason) => {
@@ -468,6 +470,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
         `Your absence request for ${formatDateHuman(request.absence_date)} was rejected. Reason: ${reason.trim()}. Per program policy, unapproved absences are not eligible for the make-up window.`
       )
 
+      fetchRequests() // direct refresh — don't depend on realtime for our own writes
       return { success: true }
     } catch (e) {
       console.error('rejectRequest failed:', e.message)
@@ -475,7 +478,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     } finally {
       setSaving(false)
     }
-  }, [profile])
+  }, [profile, fetchRequests])
 
   // ── Make-up complete checkbox (instructor, approved rows only) ─────────────
   const toggleMakeupComplete = useCallback(async (request, value) => {
@@ -511,6 +514,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
         null
       )
 
+      fetchRequests() // direct refresh — don't depend on realtime for our own writes
       return { success: true }
     } catch (e) {
       console.error('toggleMakeupComplete failed:', e.message)
@@ -518,7 +522,44 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     } finally {
       setSaving(false)
     }
-  }, [profile])
+  }, [profile, fetchRequests])
+
+  // ── Delete (super-admin cleanup, e.g. removing test requests) ──────────────
+  // RLS limits deletes to instructor-role accounts; the page only exposes the
+  // button to the super admin. Audit-logged like every other action.
+  const deleteRequest = useCallback(async (request) => {
+    if (!profile?.email) return { success: false, message: 'Not signed in.' }
+    if (!request?.request_id) return { success: false, message: 'Missing request.' }
+
+    setSaving(true)
+    try {
+      const { data: deleted, error: delErr } = await supabase
+        .from('absence_requests')
+        .delete()
+        .eq('request_id', request.request_id)
+        .select()
+      if (delErr) throw delErr
+      if (!deleted || deleted.length === 0) {
+        throw new Error('Delete blocked (no rows returned). Check permissions.')
+      }
+
+      await writeAudit(
+        profile,
+        'ABSENCE_REQUEST_DELETE',
+        request.request_id,
+        null, null, null,
+        `Deleted ${request.status} request for ${request.user_name} (${request.user_email}), absence ${request.absence_date}`
+      )
+
+      fetchRequests() // direct refresh — don't depend on realtime for our own writes
+      return { success: true }
+    } catch (e) {
+      console.error('deleteRequest failed:', e.message)
+      return { success: false, message: e.message }
+    } finally {
+      setSaving(false)
+    }
+  }, [profile, fetchRequests])
 
   return {
     requests,
@@ -530,6 +571,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     approveRequest,
     rejectRequest,
     toggleMakeupComplete,
+    deleteRequest,
   }
 }
 

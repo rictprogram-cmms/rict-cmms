@@ -33,7 +33,7 @@ import toast from 'react-hot-toast'
 import {
   CalendarOff, CalendarCheck2, Plus, Loader2, Inbox, Info, User, Users,
   Calendar, Clock, FileText, CheckCircle2, XCircle, AlertTriangle,
-  Search, Filter, X, ClipboardCheck, MessageSquareText,
+  Search, Filter, X, ClipboardCheck, MessageSquareText, Trash2,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -45,6 +45,8 @@ import {
   useAbsenceStudentOptions,
   mondayOf,
 } from '@/hooks/useAbsenceRequests'
+
+const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -572,10 +574,72 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// DELETE CONFIRM MODAL (super admin only — test cleanup)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function DeleteConfirmModal({ open, request, onClose, onConfirm, saving }) {
+  const titleId = useId()
+  const dialogRef = useDialogA11y(open, onClose)
+
+  if (!open || !request) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      onClick={() => { if (!saving) onClose() }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="bg-white rounded-xl w-full max-w-sm shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center">
+            <Trash2 size={16} className="text-red-600" aria-hidden="true" />
+          </div>
+          <h2 id={titleId} className="font-semibold text-surface-900">Delete Absence Request</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-surface-600">
+            Permanently delete <span className="font-semibold">{request.request_id}</span> for{' '}
+            <span className="font-semibold">{request.user_name || request.user_email}</span>{' '}
+            ({formatDate(request.absence_date)})? This cannot be undone. The deletion is recorded
+            in the audit log.
+          </p>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 text-sm font-medium text-surface-600 rounded-lg hover:bg-surface-100
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-red-600 text-white
+                rounded-lg hover:bg-red-700 active:bg-red-800 disabled:opacity-50 shadow-sm
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // REQUEST CARD (shared by student + instructor views)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function RequestCard({ req, isReviewer, canMarkMakeup, saving, onApprove, onReject, onToggleMakeup }) {
+function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onApprove, onReject, onToggleMakeup, onDelete }) {
   const isOnBehalf =
     req.submitted_by_email &&
     req.submitted_by_email.toLowerCase() !== (req.user_email || '').toLowerCase()
@@ -606,6 +670,19 @@ function RequestCard({ req, isReviewer, canMarkMakeup, saving, onApprove, onReje
           <StatusBadge status={req.status} />
           <DeductionBadge deduction={req.deduction_status} />
           <span className="text-[10px] text-surface-400" title={req.created_at}>{timeAgo(req.created_at)}</span>
+          {canDelete && (
+            <button
+              onClick={() => onDelete(req)}
+              disabled={saving}
+              className="p-1.5 rounded-lg text-surface-400 hover:text-red-600 hover:bg-red-50
+                disabled:opacity-50 disabled:cursor-not-allowed
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+              aria-label={`Delete request ${req.request_id}`}
+              title="Delete (super admin)"
+            >
+              <Trash2 size={14} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -716,12 +793,12 @@ function RequestCard({ req, isReviewer, canMarkMakeup, saving, onApprove, onReje
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function AbsenceRequestPage() {
-  const { profile } = useAuth()
+  const { profile, realProfile, isEmulating } = useAuth()
   const { hasPerm, permsLoading } = usePermissions('Absence Requests')
 
   const {
     requests, loading, saving,
-    submitRequest, approveRequest, rejectRequest, toggleMakeupComplete,
+    submitRequest, approveRequest, rejectRequest, toggleMakeupComplete, deleteRequest,
   } = useAbsenceRequests({ enabled: true })
 
   const isReviewer = hasPerm('review_requests')
@@ -729,10 +806,19 @@ export default function AbsenceRequestPage() {
   const canSubmitOnBehalf = hasPerm('submit_on_behalf')
   const canMarkMakeup = hasPerm('mark_makeup_complete')
 
+  // Delete is super-admin only (test cleanup). Checks the REAL account
+  // (realProfile during emulation, profile otherwise) so an emulated user's
+  // identity never grants it, and hides it while emulating so the emulated
+  // view stays true to what that user would see.
+  const isSuperAdmin =
+    !isEmulating &&
+    ((realProfile?.email || profile?.email || '').toLowerCase() === SUPER_ADMIN_EMAIL)
+
   // ── UI state ────────────────────────────────────────────────────────────────
   const [showSubmitModal, setShowSubmitModal] = useState(false)
   const [approveTarget, setApproveTarget] = useState(null)
   const [rejectTarget, setRejectTarget] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
   // Instructor filters
   const [statusFilter, setStatusFilter] = useState('Pending')
@@ -797,6 +883,16 @@ export default function AbsenceRequestPage() {
       toast.error(result?.message || 'Update failed')
     }
   }, [toggleMakeupComplete])
+
+  const handleDeleteConfirm = useCallback(async () => {
+    const result = await deleteRequest(deleteTarget)
+    if (result?.success) {
+      toast.success(`Request ${deleteTarget.request_id} deleted`)
+      setDeleteTarget(null)
+    } else {
+      toast.error(result?.message || 'Delete failed')
+    }
+  }, [deleteRequest, deleteTarget])
 
   // ── Permission gate ─────────────────────────────────────────────────────────
   if (permsLoading) {
@@ -954,10 +1050,12 @@ export default function AbsenceRequestPage() {
                   req={req}
                   isReviewer
                   canMarkMakeup={canMarkMakeup}
+                  canDelete={isSuperAdmin}
                   saving={saving}
                   onApprove={setApproveTarget}
                   onReject={setRejectTarget}
                   onToggleMakeup={handleToggleMakeup}
+                  onDelete={setDeleteTarget}
                 />
               ))}
             </div>
@@ -1002,10 +1100,12 @@ export default function AbsenceRequestPage() {
                   req={req}
                   isReviewer={false}
                   canMarkMakeup={false}
+                  canDelete={isSuperAdmin}
                   saving={saving}
                   onApprove={() => {}}
                   onReject={() => {}}
                   onToggleMakeup={() => {}}
+                  onDelete={setDeleteTarget}
                 />
               ))}
             </div>
@@ -1028,6 +1128,14 @@ export default function AbsenceRequestPage() {
         request={approveTarget}
         onClose={() => setApproveTarget(null)}
         onConfirm={handleApproveConfirm}
+        saving={saving}
+      />
+
+      <DeleteConfirmModal
+        open={!!deleteTarget}
+        request={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
         saving={saving}
       />
 
