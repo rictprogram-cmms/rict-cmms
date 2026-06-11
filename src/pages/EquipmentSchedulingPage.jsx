@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
-import { supabase } from '@/lib/supabase'
+import { useLabVisibleDays } from '@/hooks/useLabDays'
 import {
   useAllEquipmentList,
   useAssetPickerData,
@@ -160,29 +160,12 @@ function ScheduleTab({ hasPerm }) {
   const [weekStart, setWeekStart] = useState(() => getWeekStart(new Date()))
   const [selectedDate, setSelectedDate] = useState(() => formatDateKey(new Date()))
 
-  // Load visible days setting (same pattern as Lab Signup)
-  const [visibleDays, setVisibleDays] = useState([1, 2, 3, 4])
-  const [settingsLoaded, setSettingsLoaded] = useState(false)
-
-  useEffect(() => {
-    async function loadSettings() {
-      const { data } = await supabase
-        .from('settings')
-        .select('setting_key, setting_value')
-        .eq('setting_key', 'lab_visible_days')
-        .maybeSingle()
-      if (data?.setting_value) {
-        try {
-          const parsed = JSON.parse(data.setting_value)
-          if (Array.isArray(parsed)) setVisibleDays(parsed.map(Number))
-        } catch (e) {
-          // Leave default
-        }
-      }
-      setSettingsLoaded(true)
-    }
-    loadSettings()
-  }, [])
+  // Load visible days from the shared lab-days hook (single source of truth).
+  // NOTE: the previous local loader JSON.parse'd the setting, but the stored
+  // value is a comma string ("1,2,3,4,5") — the parse always threw, so this
+  // page silently stayed on the Mon–Thu default. The shared parser handles
+  // both formats and updates in real time when the setting changes.
+  const { days: visibleDays, loaded: settingsLoaded } = useLabVisibleDays()
 
   const { weeks, equipment, slots, days, loading, refresh } = useEquipmentBookingsData(
     weekStart,

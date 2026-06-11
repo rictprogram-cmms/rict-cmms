@@ -16,7 +16,8 @@
  *     ≥ minCloserHours (default 0.25 hr) on that WO.
  *   Floor: 0%, Cap: 100%. Uncapped raw score also surfaced for instructor view.
  *
- * School days: Mon–Thu only, excluding US holidays + custom closed days.
+ * School days: lab-open days per the Lab Open Days setting (lab_visible_days,
+ * default Mon–Thu), excluding US holidays + custom closed days.
  *
  * Features:
  *   - Date range picker with quick presets
@@ -32,6 +33,7 @@ import React, { useState, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useWOCRatio, useClosedDaysActions } from '@/hooks/useWOCRatio'
+import { useLabVisibleDays, formatLabDaysShort } from '@/hooks/useLabDays'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Loader2, TrendingUp, TrendingDown, AlertTriangle, Award, Clock,
@@ -430,6 +432,9 @@ function StatCard({ icon: Icon, label, value, sub, color = '#3b82f6' }) {
 
 function HowCalculatedModal({ isOpen, onClose, scoringConfig }) {
   const dialogRef = useDialogA11y(isOpen, onClose)
+  // Live lab-open days — drives the "School Days" explainer text below.
+  // Must be called before the early return (Rules of Hooks).
+  const { days: labDays } = useLabVisibleDays()
   if (!isOpen) return null
 
   const cfg = scoringConfig || {
@@ -580,7 +585,8 @@ function HowCalculatedModal({ isOpen, onClose, scoringConfig }) {
           </Section>
 
           <Section title="School Days">
-            Only <strong>Mon–Thu</strong> count as school days. US federal holidays and any
+            Only <strong>{formatLabDaysShort(labDays)}</strong> count as school days (set by
+            Lab Open Days in Settings). US federal holidays and any
             custom closed days set by an instructor are excluded from all "per school day"
             calculations.
           </Section>

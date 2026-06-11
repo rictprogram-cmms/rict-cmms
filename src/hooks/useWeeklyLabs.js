@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
+import { fetchLabVisibleDays, weekEndOffsetFromDays, getCachedWeekEndOffset } from '@/hooks/useLabDays'
 import toast from 'react-hot-toast'
 
 // ─── Timestamp Helper ────────────────────────────────────────────────────────
@@ -65,8 +66,13 @@ export function useLabClasses() {
 }
 
 // ─── Build weeks array from class date range ────────────────────────────────
+// Weeks are Monday-anchored; the week END is the last lab-open day of that
+// week, driven by the lab_visible_days setting (Mon–Thu → offset 3,
+// Mon–Fri → offset 4). Callers that have already fetched the setting should
+// pass the offset explicitly (deterministic); callers that don't pass one get
+// the module-cached value from useLabDays, which is warmed at app load.
 
-export function buildClassWeeks(cls) {
+export function buildClassWeeks(cls, weekEndOffset = getCachedWeekEndOffset()) {
   if (!cls.startDate || !cls.endDate) return []
   // Parse dates without timezone shift
   const parseSafe = (d) => {
@@ -92,7 +98,7 @@ export function buildClassWeeks(cls) {
   while (current <= end) {
     const wkStart = new Date(current)
     const wkEnd = new Date(current)
-    wkEnd.setDate(wkEnd.getDate() + 3) // Mon-Thu
+    wkEnd.setDate(wkEnd.getDate() + weekEndOffset) // Monday + last open day (Thu=3, Fri=4)
 
     // Check if this week overlaps with spring break
     const isSpringBreak = sbStart && sbEnd &&
@@ -144,6 +150,11 @@ export function useLabReport(className) {
         return
       }
 
+      // Resolve the current lab-open days so week ranges end on the last
+      // open day (e.g. Friday when lab_visible_days includes 5).
+      const labDays = await fetchLabVisibleDays()
+      const weekEndOffset = weekEndOffsetFromDays(labDays)
+
       const classWeeks = buildClassWeeks({
         startDate: classData.start_date,
         endDate: classData.end_date,
@@ -151,7 +162,7 @@ export function useLabReport(className) {
         springBreakEnd: classData.spring_break_end,
         finalsStart: classData.finals_start,
         finalsEnd: classData.finals_end,
-      })
+      }, weekEndOffset)
       const totalWeeks = classWeeks.length || 8
 
       // Get students enrolled in this class
@@ -224,6 +235,7 @@ export function useLabReport(className) {
       .channel(`lab-report-${className}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, () => { fetch() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [className, fetch])
@@ -266,6 +278,11 @@ export function useStudentLabReport() {
         .select('*')
         .or(`user_id.eq.${profile.id},user_email.eq.${profile.email}`)
 
+      // Resolve the current lab-open days once for all classes so week
+      // ranges end on the last open day (Thu=3, Fri=4 offset from Monday).
+      const labDays = await fetchLabVisibleDays()
+      const weekEndOffset = weekEndOffsetFromDays(labDays)
+
       const classes = (classesData || []).map(cls => {
         const classWeeks = buildClassWeeks({
           startDate: cls.start_date,
@@ -274,7 +291,7 @@ export function useStudentLabReport() {
           springBreakEnd: cls.spring_break_end,
           finalsStart: cls.finals_start,
           finalsEnd: cls.finals_end,
-        })
+        }, weekEndOffset)
         const totalWeeks = classWeeks.length || 8
 
         const weeks = {}
@@ -319,6 +336,7 @@ export function useStudentLabReport() {
     const channel = supabase
       .channel('student-lab-report-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => { fetch() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, () => { fetch() })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [profile, fetch])

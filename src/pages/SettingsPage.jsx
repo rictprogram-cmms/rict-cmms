@@ -30,6 +30,7 @@ import { useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, use
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
+import { useLabVisibleDays, weekEndDayName } from '@/hooks/useLabDays'
 import { supabase } from '@/lib/supabase'
 import {
   useSettings, useSettingsActions, useCategories, useCategoryActions,
@@ -158,11 +159,11 @@ const SETTING_META = {
   lab_visible_days: {
     label: 'Lab Open Days',
     type: 'custom', category: 'Lab Signup',
-    desc: 'Days of the week the lab accepts signups.',
+    desc: 'Days of the week the lab is open.',
     details: {
-      what: 'Controls which weekdays show up as bookable on the Lab Signup page.',
-      where: 'Lab Signup page (week grid columns).',
-      effect: 'Closed days are hidden entirely from the signup grid. Sun=0, Mon=1, …, Sat=6.',
+      what: 'Controls which weekdays the lab is treated as open across the whole app.',
+      where: 'Lab Signup grid, Equipment Scheduling grid, Weekly Lab Tracker week ranges, Classes-tab week preview, and WOC Ratio school days.',
+      effect: 'Closed days are hidden from signup/scheduling grids; tracker weeks run Monday through the last open day; WOC Ratio counts only open days as school days. Sun=0, Mon=1, …, Sat=6. Updated each semester as the lab schedule changes.',
     },
   },
   lab_weeks_to_display: {
@@ -3651,7 +3652,7 @@ function WOStatusesSection() {
 // WEEK CALCULATION HELPERS (for Classes section)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsEnd) {
+function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsEnd, weekEndOffset = 3) {
   if (!startDate || !endDate) return []
 
   const start = new Date(startDate + 'T12:00:00')
@@ -3673,8 +3674,10 @@ function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsE
 
   while (current <= end) {
     const wkMon = new Date(current)
-    const wkThu = new Date(current)
-    wkThu.setDate(wkThu.getDate() + 3)
+    // Week ends on the last lab-open day (Thu=+3 default, Fri=+4) —
+    // driven by the lab_visible_days setting via useLabVisibleDays().
+    const wkEnd = new Date(current)
+    wkEnd.setDate(wkEnd.getDate() + weekEndOffset)
 
     let type = 'normal'
     if (sbS && sbE && wkMon >= sbS && wkMon <= sbE) {
@@ -3688,7 +3691,7 @@ function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsE
     weeks.push({
       num: type === 'spring_break' ? 'SB' : type === 'finals' ? 'Finals' : `W${weekNum}`,
       start: fmtShort(wkMon),
-      end: fmtShort(wkThu),
+      end: fmtShort(wkEnd),
       type,
     })
 
@@ -3699,7 +3702,7 @@ function calculateWeeks(startDate, endDate, sbStart, sbEnd, finalsStart, finalsE
   return weeks
 }
 
-function countClassWeeks(cls) {
+function countClassWeeks(cls, weekEndOffset = 3) {
   if (!cls.start_date || !cls.end_date) return null
   const weeks = calculateWeeks(
     String(cls.start_date).substring(0, 10),
@@ -3707,7 +3710,8 @@ function countClassWeeks(cls) {
     cls.spring_break_start ? String(cls.spring_break_start).substring(0, 10) : '',
     cls.spring_break_end ? String(cls.spring_break_end).substring(0, 10) : '',
     cls.finals_start ? String(cls.finals_start).substring(0, 10) : '',
-    cls.finals_end ? String(cls.finals_end).substring(0, 10) : ''
+    cls.finals_end ? String(cls.finals_end).substring(0, 10) : '',
+    weekEndOffset
   )
   return weeks.filter(w => w.type === 'normal').length
 }
@@ -3719,6 +3723,9 @@ function countClassWeeks(cls) {
 function ClassesSection() {
   const { items: classes, loading, refresh } = useClasses()
   const actions = useClassActions()
+  // Live lab-open days — drives the week-end day in the Week Preview and the
+  // weeks counter. Updates in real time when the Lab Open Days toggle changes.
+  const { weekEndOffset } = useLabVisibleDays()
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({})
   const [enrollmentClass, setEnrollmentClass] = useState(null)
@@ -3884,9 +3891,10 @@ function ClassesSection() {
     return calculateWeeks(
       form.start_date, form.end_date,
       form.spring_break_start, form.spring_break_end,
-      form.finals_start, form.finals_end
+      form.finals_start, form.finals_end,
+      weekEndOffset
     )
-  }, [form.start_date, form.end_date, form.spring_break_start, form.spring_break_end, form.finals_start, form.finals_end])
+  }, [form.start_date, form.end_date, form.spring_break_start, form.spring_break_end, form.finals_start, form.finals_end, weekEndOffset])
 
   const normalWeekCount = weekPreview.filter(w => w.type === 'normal').length
 
@@ -4053,7 +4061,7 @@ function ClassesSection() {
             {form.start_date && form.end_date && form.tracking_type !== 'None' && (
               <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
                 <Calendar size={13} aria-hidden="true" />
-                Start/End dates determine the weekly lab tracker weeks. Weeks run Monday–Thursday.
+                Start/End dates determine the weekly lab tracker weeks. Weeks run Monday–{weekEndDayName(weekEndOffset)} (set by Lab Open Days).
               </div>
             )}
 
@@ -4151,7 +4159,7 @@ function ClassesSection() {
               </thead>
               <tbody className="divide-y divide-surface-100">
                 {displayedClasses.map(cls => {
-                  const wks = countClassWeeks(cls)
+                  const wks = countClassWeeks(cls, weekEndOffset)
                   const enrolledStudents = enrollmentMap[cls.course_id] || []
                   const activeStudents = enrolledStudents.filter(s => !s.archived)
                   const formerStudents = enrolledStudents.filter(s => s.archived)
@@ -4396,6 +4404,9 @@ function ClassArchiveConfirmModal({ confirm, saving, onCancel, onConfirm }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
+  // Live lab-open days — keeps this modal's Week Preview consistent with the
+  // Classes-tab preview and the actual tracker weeks.
+  const { weekEndOffset } = useLabVisibleDays()
   const [form, setForm] = useState({
     semester: '',
     start_date: '',
@@ -4418,9 +4429,10 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
     return calculateWeeks(
       form.start_date, form.end_date,
       form.spring_break_start, form.spring_break_end,
-      form.finals_start, form.finals_end
+      form.finals_start, form.finals_end,
+      weekEndOffset
     )
-  }, [form.start_date, form.end_date, form.spring_break_start, form.spring_break_end, form.finals_start, form.finals_end])
+  }, [form.start_date, form.end_date, form.spring_break_start, form.spring_break_end, form.finals_start, form.finals_end, weekEndOffset])
 
   const normalWeekCount = weekPreview.filter(w => w.type === 'normal').length
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { parseLabVisibleDays, DEFAULT_LAB_DAYS } from '@/hooks/useLabDays'
 import toast from 'react-hot-toast'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -80,13 +81,30 @@ function toDateStr(d) {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
 }
 
+// ─── School days follow the lab_visible_days setting ─────────────────────────
+// Historically Mon–Thu was hardcoded; school days now mirror the Lab Open Days
+// setting (e.g. Mon–Fri when Friday is enabled). Both compute paths fetch the
+// setting and call setSchoolDaysFromSetting() BEFORE any counting runs, so the
+// set below is always current for the computation in flight. Kept module-level
+// (rather than threaded through every countSchoolDays call) to avoid touching
+// ~20 call sites.
+let SCHOOL_DAY_SET = new Set(DEFAULT_LAB_DAYS)
+let SCHOOL_DAYS_PER_WEEK = DEFAULT_LAB_DAYS.length
+
+function setSchoolDaysFromSetting(settingValue) {
+  const days = parseLabVisibleDays(settingValue)
+  SCHOOL_DAY_SET = new Set(days)
+  SCHOOL_DAYS_PER_WEEK = days.length
+}
+
 /**
- * Check if a date is a school day (Mon-Thu, not a holiday, not a custom closed day)
+ * Check if a date is a school day (a lab-open day per lab_visible_days,
+ * not a holiday, not a custom closed day)
  */
 function isSchoolDay(date, holidays, closedDays) {
   const dow = date.getDay()
-  // Only Mon(1)-Thu(4) are school days
-  if (dow === 0 || dow === 5 || dow === 6) return false
+  // Only lab-open days count as school days (default Mon–Thu)
+  if (!SCHOOL_DAY_SET.has(dow)) return false
 
   const dateMs = toDateOnly(date).getTime()
 
@@ -449,7 +467,7 @@ function calculateScore(user, ctx) {
   const hoursPerWeek = role === 'Work Study'
     ? config.workStudyHoursPerWeek
     : config.studentHoursPerWeek
-  const schoolWeeksInRange = schoolDaysInRange / 4   // 4 school days per typical week
+  const schoolWeeksInRange = schoolDaysInRange / SCHOOL_DAYS_PER_WEEK   // open days per typical week (lab_visible_days)
   const activityHours = workLogByUser.get(emailLower) || 0
   let expectedHours, activityFactor
   if (hoursPerWeek <= 0) {
@@ -568,6 +586,7 @@ export async function computeStudentScoresForWindows(profile, windows) {
     supabase.from('settings').select('setting_key, setting_value')
       .in('setting_key', [
         'custom_closed_days',
+        'lab_visible_days',
         'woc_activity_hours_per_week_student',
         'woc_activity_hours_per_week_workstudy',
         'woc_closer_ack_bonus_pct',
@@ -594,6 +613,8 @@ export async function computeStudentScoresForWindows(profile, windows) {
   const settingsArr = settingsRes.data || []
   const settingsMap = new Map(settingsArr.map(r => [r.setting_key, r.setting_value]))
   const closedDays = parseClosedDays(settingsMap.get('custom_closed_days'))
+  // Apply lab-open days BEFORE any school-day counting below
+  setSchoolDaysFromSetting(settingsMap.get('lab_visible_days'))
 
   const parseNum = (key, fallback) => {
     const v = settingsMap.get(key)
@@ -747,6 +768,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
         supabase.from('settings').select('setting_key, setting_value')
           .in('setting_key', [
             'custom_closed_days',
+            'lab_visible_days',
             'woc_activity_hours_per_week_student',
             'woc_activity_hours_per_week_workstudy',
             'woc_closer_ack_bonus_pct',
@@ -781,6 +803,8 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
 
       const closedDays = parseClosedDays(settingsMap.get('custom_closed_days'))
       setClosedDaysList(closedDays)
+      // Apply lab-open days BEFORE any school-day counting below
+      setSchoolDaysFromSetting(settingsMap.get('lab_visible_days'))
 
       // Build effective scoring config from settings (with defaults)
       const parseNum = (key, fallback) => {
@@ -1099,7 +1123,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, (payload) => {
         const key = payload.new?.setting_key || payload.old?.setting_key
         if (!key) return
-        if (key === 'custom_closed_days' || key.startsWith('woc_')) {
+        if (key === 'custom_closed_days' || key === 'lab_visible_days' || key.startsWith('woc_')) {
           fetchData()
         }
       })
