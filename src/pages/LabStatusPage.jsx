@@ -19,6 +19,8 @@
  *   • Instructor selects their name to unlock audio AND identify themselves
  *   • When acknowledging a help request, the selected instructor's name is
  *     written to acknowledged_by so all kiosks + TV Display show who is responding
+ *   • Tapping the "Signed in" chip in the footer reopens the picker in
+ *     switch mode (audio stays unlocked; Cancel/Escape keeps current sign-in)
  *
  * Weather
  *   • Open-Meteo API (free, no key) — St. Cloud, MN — refreshes every 10 min
@@ -186,22 +188,37 @@ function useAutoScroll(containerRef, itemCount, audioUnlocked) {
 
 // ─── Sound Unlock Overlay ───────────────────────────────────────────────────
 
-function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructor }) {
+function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructor, switching = false, currentInstructor = null, onCancel }) {
+  const dialogRef = useRef(null);
+
+  // Switching mode only: move focus into the dialog and allow Escape to cancel
+  useEffect(() => {
+    if (!switching) return;
+    dialogRef.current?.focus();
+    const onKey = (e) => { if (e.key === 'Escape' && onCancel) onCancel(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [switching, onCancel]);
+
+  const titleText = switching ? 'Switch instructor' : 'Select your name to enable alarm sounds';
+
   return (
-    <div role="dialog" aria-modal="true" aria-label="Select your name to enable alarm sounds" style={{
+    <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={titleText} style={{
       position: 'fixed', inset: 0, zIndex: 9999,
       background: 'rgba(10, 12, 18, 0.94)', backdropFilter: 'blur(8px)',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      gap: 28, userSelect: 'none',
+      gap: 28, userSelect: 'none', outline: 'none',
     }}>
       <div style={{ width: 88, height: 88, borderRadius: '50%', background: 'linear-gradient(135deg, #1e3a5f, #1971c2)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'overlayBellPulse 2s ease-in-out infinite' }}>
         <span className="material-icons" style={{ fontSize: '2.8rem', color: '#74c0fc' }}>notifications_active</span>
       </div>
       <div style={{ textAlign: 'center', padding: '0 60px' }}>
-        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e9ecef', marginBottom: 8 }}>Select your name to enable alarm sounds</div>
+        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e9ecef', marginBottom: 8 }}>{titleText}</div>
         <div style={{ fontSize: '0.88rem', color: '#6c757d', lineHeight: 1.6 }}>
-          This kiosk plays an audible alert when a student requests help. Your name will be shown when you respond to requests.
+          {switching
+            ? <>Currently signed in as <strong style={{ color: '#74c0fc' }}>{currentInstructor?.displayName || 'Unknown'}</strong>. Tap a name below to switch, or cancel to keep the current sign-in.</>
+            : 'This kiosk plays an audible alert when a student requests help. Your name will be shown when you respond to requests.'}
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: 420, padding: '0 40px' }}>
@@ -229,6 +246,20 @@ function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructo
             <span className="material-icons" style={{ color: '#4a5568', fontSize: '1.4rem' }}>arrow_forward</span>
           </button>
         ))}
+        {switching && (
+          <button onClick={onCancel} aria-label="Cancel — keep current instructor"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', minHeight: 52,
+              padding: '14px 24px', marginTop: 4, background: 'transparent', border: '2px solid #2d3748', borderRadius: 14,
+              cursor: 'pointer', color: '#adb5bd', fontWeight: 700, fontSize: '1rem',
+              transition: 'background 0.15s, border-color 0.15s, transform 0.1s',
+              WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
+            onPointerDown={e => { e.currentTarget.style.transform = 'scale(0.97)'; e.currentTarget.style.background = '#1c2333'; }}
+            onPointerUp={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+            onPointerLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.background = 'transparent'; }}>
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>close</span>
+            Cancel
+          </button>
+        )}
       </div>
       <style>{`@keyframes overlayBellPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(34,139,230,0.4); } 50% { box-shadow: 0 0 0 22px rgba(34,139,230,0); } }`}</style>
     </div>
@@ -382,7 +413,12 @@ export default function LabStatusPage() {
     loadInstructors();
   }, []);
 
-  const handleSelectInstructor = useCallback((inst) => { setSelectedInstructor(inst); setAudioUnlocked(true); }, []);
+  // Switch-instructor overlay (reopens the picker without re-locking audio)
+  const [switchingInstructor, setSwitchingInstructor] = useState(false);
+
+  const handleSelectInstructor = useCallback((inst) => { setSelectedInstructor(inst); setAudioUnlocked(true); setSwitchingInstructor(false); }, []);
+  const openSwitchInstructor   = useCallback(() => setSwitchingInstructor(true), []);
+  const cancelSwitchInstructor = useCallback(() => setSwitchingInstructor(false), []);
 
   // ── Auto-scroll ──
   const namesScrollRef = useRef(null);
@@ -643,7 +679,10 @@ export default function LabStatusPage() {
     <div style={{ width: '100vw', height: '100vh', background: '#0f1117', color: '#f0f4f8',
       fontFamily: "'Inter', system-ui, sans-serif", display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-      {!audioUnlocked && <SoundUnlockOverlay instructors={instructors} loadingInstructors={loadingInstructors} onSelectInstructor={handleSelectInstructor} />}
+      {(!audioUnlocked || switchingInstructor) && (
+        <SoundUnlockOverlay instructors={instructors} loadingInstructors={loadingInstructors} onSelectInstructor={handleSelectInstructor}
+          switching={audioUnlocked && switchingInstructor} currentInstructor={selectedInstructor} onCancel={cancelSwitchInstructor} />
+      )}
 
       {/* ══ HEADER 58px ══ */}
       <header style={{ display: 'flex', alignItems: 'center', padding: '0 20px', borderBottom: '1px solid #1e2433', background: '#141824', flexShrink: 0, height: 58, gap: 0 }}>
@@ -811,7 +850,16 @@ export default function LabStatusPage() {
       <footer style={{ height: 30, padding: '0 20px', background: '#141824', borderTop: '1px solid #1e2433', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
         <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>RICT CMMS · rict-cmms.vercel.app</span>
         {selectedInstructor ? (
-          <span style={{ fontSize: '0.6rem', color: '#228be6', fontWeight: 600 }}>Signed in: {selectedInstructor.displayName}</span>
+          <button onClick={openSwitchInstructor} className="footer-switch-btn"
+            aria-label={`Signed in as ${selectedInstructor.displayName} — tap to switch instructor`}
+            title="Tap to switch instructor"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.6rem', color: '#228be6', fontWeight: 600,
+              background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+              padding: '14px 10px', margin: '-14px -10px', minWidth: 44,
+              WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}>
+            Signed in: {selectedInstructor.displayName}
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem' }}>swap_horiz</span>
+          </button>
         ) : (
           <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>{lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : ''}</span>
         )}
@@ -829,6 +877,8 @@ export default function LabStatusPage() {
         @keyframes slideIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes cardPendingPulse { 0%, 100% { border-color: #b91c1c; background: rgba(127,29,29,0.18); } 50% { border-color: #ef4444; background: rgba(127,29,29,0.30); } }
         @keyframes awayPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.5); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }
+        .footer-switch-btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 6px; }
+        .footer-switch-btn:hover { color: #74c0fc; }
       `}</style>
     </div>
   );
