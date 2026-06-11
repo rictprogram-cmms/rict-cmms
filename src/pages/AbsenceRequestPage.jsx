@@ -93,9 +93,26 @@ function formatHours(h) {
   return n % 1 === 0 ? `${n}h` : `${n.toFixed(2)}h`
 }
 
+/**
+ * Fake-UTC convention: created_at stores local wall-clock time with a +00
+ * offset, so naive Date parsing treats it as true UTC and skews relative
+ * times by the timezone offset (~5-6h). Rebuild a local Date from the UTC
+ * accessors before comparing against now.
+ */
+function fakeUtcToLocalDate(isoStr) {
+  if (!isoStr) return null
+  const d = new Date(isoStr)
+  if (isNaN(d.getTime())) return null
+  return new Date(
+    d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
+    d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()
+  )
+}
+
 function timeAgo(dateStr) {
-  if (!dateStr) return ''
-  const diff = Date.now() - new Date(dateStr).getTime()
+  const local = fakeUtcToLocalDate(dateStr)
+  if (!local) return ''
+  const diff = Date.now() - local.getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`

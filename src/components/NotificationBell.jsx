@@ -712,6 +712,14 @@ export default function NotificationBell() {
           : '';
         const isOnBehalf = r.submitted_by_email &&
           r.submitted_by_email.toLowerCase() !== (r.user_email || '').toLowerCase();
+        // created_at is fake-UTC (local wall-clock stored as +00). Rebuild a
+        // local Date from the UTC accessors so the shared formatTime — which
+        // parses naively — shows the correct relative time. Same approach as
+        // the getUTCHours() reads used elsewhere in this file.
+        const cd = r.created_at ? new Date(r.created_at) : null;
+        const createdLocal = cd && !isNaN(cd.getTime())
+          ? new Date(cd.getUTCFullYear(), cd.getUTCMonth(), cd.getUTCDate(), cd.getUTCHours(), cd.getUTCMinutes(), cd.getUTCSeconds())
+          : null;
         _items.push({
           id: `absence-${r.request_id}`,
           type: 'absence',
@@ -719,7 +727,7 @@ export default function NotificationBell() {
           color: '#f59f00',
           title: `${r.user_name || r.user_email} — absence ${dateLabel}`,
           subtitle: `${cls ? cls + '  •  ' : ''}${r.hours_missed ? r.hours_missed + 'h missed' : 'Hours TBD'}${isOnBehalf ? '  •  filed by ' + (r.submitted_by_name || 'instructor') : ''}`,
-          date: r.created_at,
+          date: createdLocal || r.created_at,
           raw: r,
         });
       });
