@@ -64,6 +64,29 @@ function formatWeekLabel(weekStartStr) {
   return `Week of ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 }
 
+/**
+ * Semester label for a date-only string, matching the classes-table naming
+ * convention ("Spring 2026"). Derived from the date so every request gets a
+ * semester even when no class was selected: Jan-May = Spring, Jun-Aug = Summer,
+ * Sep-Dec = Fall.
+ */
+function semesterOf(dateStr) {
+  if (!dateStr) return null
+  const d = new Date(dateStr + 'T00:00:00')
+  if (isNaN(d.getTime())) return null
+  const m = d.getMonth()
+  const season = m <= 4 ? 'Spring' : m <= 7 ? 'Summer' : 'Fall'
+  return `${season} ${d.getFullYear()}`
+}
+
+// Sort key for "Season Year" labels — newest first when sorted descending.
+function semesterSortKey(label) {
+  if (!label) return 0
+  const [season, year] = label.split(' ')
+  const rank = season === 'Spring' ? 1 : season === 'Summer' ? 2 : 3
+  return (parseInt(year, 10) || 0) * 10 + rank
+}
+
 function formatHours(h) {
   const n = Number(h) || 0
   if (n <= 0) return '—'
@@ -822,6 +845,7 @@ export default function AbsenceRequestPage() {
 
   // Instructor filters
   const [statusFilter, setStatusFilter] = useState('Pending')
+  const [semesterFilter, setSemesterFilter] = useState(() => semesterOf(todayStr()) || 'All')
   const [weekFilter, setWeekFilter] = useState('All')
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -833,17 +857,31 @@ export default function AbsenceRequestPage() {
     [requests, myEmail]
   )
 
+  // Semesters present in the data, plus the current one so the default
+  // selection always exists even before any requests this term.
+  const semesterOptions = useMemo(() => {
+    const set = new Set(requests.map(r => semesterOf(r.absence_date)).filter(Boolean))
+    const current = semesterOf(todayStr())
+    if (current) set.add(current)
+    return [...set].sort((a, b) => semesterSortKey(b) - semesterSortKey(a)) // newest first
+  }, [requests])
+
+  // Week dropdown scoped to the selected semester so it stays short.
   const weekOptions = useMemo(() => {
-    const weeks = [...new Set(requests.map(r => r.week_start).filter(Boolean))]
+    const inSemester = semesterFilter === 'All'
+      ? requests
+      : requests.filter(r => semesterOf(r.absence_date) === semesterFilter)
+    const weeks = [...new Set(inSemester.map(r => r.week_start).filter(Boolean))]
     weeks.sort((a, b) => (a < b ? 1 : -1)) // newest first
     return weeks
-  }, [requests])
+  }, [requests, semesterFilter])
 
   const filteredRequests = useMemo(() => {
     if (!isReviewer) return []
     const term = searchTerm.trim().toLowerCase()
     return requests.filter(r => {
       if (statusFilter !== 'All' && r.status !== statusFilter) return false
+      if (semesterFilter !== 'All' && semesterOf(r.absence_date) !== semesterFilter) return false
       if (weekFilter !== 'All' && r.week_start !== weekFilter) return false
       if (term) {
         const hay = `${r.user_name || ''} ${r.user_email || ''} ${r.course_id || ''} ${r.class_id || ''} ${r.request_id || ''}`.toLowerCase()
@@ -851,7 +889,7 @@ export default function AbsenceRequestPage() {
       }
       return true
     })
-  }, [requests, isReviewer, statusFilter, weekFilter, searchTerm])
+  }, [requests, isReviewer, statusFilter, semesterFilter, weekFilter, searchTerm])
 
   const pendingCount = useMemo(() => requests.filter(r => r.status === 'Pending').length, [requests])
 
@@ -988,6 +1026,21 @@ export default function AbsenceRequestPage() {
                 <option value="Approved">Approved</option>
                 <option value="Rejected">Rejected</option>
                 <option value="All">All Statuses</option>
+              </select>
+
+              {/* Semester filter — keeps the list manageable across terms */}
+              <label htmlFor="filter-semester" className="sr-only">Filter by semester</label>
+              <select
+                id="filter-semester"
+                value={semesterFilter}
+                onChange={e => { setSemesterFilter(e.target.value); setWeekFilter('All') }}
+                className="px-3 py-2 border border-surface-200 rounded-lg text-xs bg-white min-h-[44px] sm:min-h-0
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              >
+                {semesterOptions.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+                <option value="All">All Semesters</option>
               </select>
 
               {/* Week filter — the grading lookup */}
