@@ -408,7 +408,7 @@ export default function NetworkMapPage() {
             Network Map
           </h1>
           <p className="text-xs text-surface-500 mt-0.5">
-            RICT lab network {NETWORK_CONFIG.networkCidr} · Gateway {NETWORK_CONFIG.gateway}
+            RICT lab network {NETWORK_CONFIG.networkCidr} · Subnet Mask {NETWORK_CONFIG.subnetMask} · Gateway {NETWORK_CONFIG.gateway}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

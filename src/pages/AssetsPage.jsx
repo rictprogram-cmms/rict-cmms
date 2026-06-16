@@ -19,6 +19,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { generateSafeAssetId } from '@/lib/generateSafeAssetId'
+import { NETWORK_CONFIG } from '@/lib/networkConfig'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import {
@@ -1344,8 +1345,12 @@ export default function AssetsPage() {
                               <div style={{ fontFamily: 'monospace', fontWeight: 600, color: '#0f172a', marginTop: 2 }}>{nd.ip_address}</div>
                             </div>
                             <div>
-                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Subnet</div>
-                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{nd.subnet}</div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Subnet Mask</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{NETWORK_CONFIG.subnetMask}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Gateway</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{NETWORK_CONFIG.gateway}</div>
                             </div>
                             <div>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>MAC Address</div>
