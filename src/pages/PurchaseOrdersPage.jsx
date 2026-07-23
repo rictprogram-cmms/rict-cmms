@@ -708,6 +708,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   const [addInvSearch, setAddInvSearch] = useState('')
   const [addInvResults, setAddInvResults] = useState([])
   const [addSaving, setAddSaving] = useState(false)
+  const addInvSearchRef = useRef(null)
 
   // Permission-based action checks
   const canApprove = hasPerm('approve_po')
@@ -732,6 +733,11 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
       }
     }
   }, [autoReceive, order, lineItems, canReceive])
+
+  // Auto-focus the inventory search when the Add Line Item panel opens
+  useEffect(() => {
+    if (showAddLine && addInvSearchRef.current) addInvSearchRef.current.focus()
+  }, [showAddLine])
 
   if (loading) return <div className="text-center py-12 text-surface-400">Loading...</div>
   if (!order) return <div className="text-center py-12 text-surface-400">Order not found</div>
@@ -1377,6 +1383,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                     <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" />
                     <input
                       id="add-inv-search"
+                      ref={addInvSearchRef}
                       type="text"
                       value={addInvSearch}
                       onChange={e => { setAddInvSearch(e.target.value); searchInventoryForAdd(e.target.value) }}
@@ -1452,7 +1459,19 @@ function CreatePOTab({ onCreated, hasPerm }) {
   const [invSearch, setInvSearch] = useState('')
   const [invResults, setInvResults] = useState([])
 
+  // Refs for auto-focusing the Part Number field of a newly added line item
+  const partNumRefs = useRef([])
+  const pendingFocusIdx = useRef(null)
+
   const total = lines.reduce((sum, li) => sum + ((parseFloat(li.unitPrice) || 0) * (parseInt(li.quantity) || 0)), 0)
+
+  // After a new line is added, move focus into its Part Number field
+  useEffect(() => {
+    if (pendingFocusIdx.current != null) {
+      partNumRefs.current[pendingFocusIdx.current]?.focus()
+      pendingFocusIdx.current = null
+    }
+  }, [lines.length])
 
   const handleVendorChange = (vendorId) => {
     if (vendorId === 'OTHER') {
@@ -1463,7 +1482,10 @@ function CreatePOTab({ onCreated, hasPerm }) {
     }
   }
 
-  const addLine = () => setLines(l => [...l, { partNumber: '', description: '', link: '', unitPrice: '', quantity: 1, inventoryPartId: '' }])
+  const addLine = () => setLines(l => {
+    pendingFocusIdx.current = l.length
+    return [...l, { partNumber: '', description: '', link: '', unitPrice: '', quantity: 1, inventoryPartId: '' }]
+  })
   const removeLine = (i) => setLines(l => l.filter((_, idx) => idx !== i))
   const updateLine = (i, field, value) => setLines(l => l.map((li, idx) => idx === i ? { ...li, [field]: value } : li))
 
@@ -1536,12 +1558,22 @@ function CreatePOTab({ onCreated, hasPerm }) {
           <div key={i} className="border border-surface-200 rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-surface-500">Item {i + 1}</span>
-              {lines.length > 1 && <button onClick={() => removeLine(i)} className="text-red-400 hover:text-red-600"><Trash2 size={14} /></button>}
+              {lines.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeLine(i)}
+                  className="p-1 rounded text-red-400 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors"
+                  aria-label={li.description ? `Remove ${li.description}` : `Remove item ${i + 1}`}
+                  title="Remove line item"
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[10px] text-surface-400">Part Number</label>
-                <input value={li.partNumber} onChange={e => updateLine(i, 'partNumber', e.target.value)} className="input text-sm" placeholder="Part #" />
+                <input ref={el => (partNumRefs.current[i] = el)} value={li.partNumber} onChange={e => updateLine(i, 'partNumber', e.target.value)} className="input text-sm" placeholder="Part #" />
               </div>
               <div>
                 <label className="text-[10px] text-surface-400">Description</label>
@@ -1568,6 +1600,16 @@ function CreatePOTab({ onCreated, hasPerm }) {
             </div>
           </div>
         ))}
+
+        {/* Bottom Add Line button — avoids scrolling back to the top on long orders */}
+        <button
+          type="button"
+          onClick={addLine}
+          className="w-full min-h-[44px] border-2 border-dashed border-surface-300 rounded-lg text-sm text-brand-600 font-medium hover:border-brand-400 hover:bg-brand-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 transition-colors flex items-center justify-center gap-1.5"
+          aria-label="Add another line item"
+        >
+          <Plus size={14} aria-hidden="true" /> Add Line
+        </button>
 
         <div className="flex items-center justify-between pt-2 border-t border-surface-100">
           <span className="text-sm font-semibold text-surface-700">Total</span>
