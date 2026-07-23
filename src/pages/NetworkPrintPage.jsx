@@ -18,6 +18,12 @@
  *   - Layout: Portrait
  *   - Margins: Default (or "None")
  *   - Background graphics: ON (so the "Do Not Use" shading prints)
+ *   - Headers and footers: OFF (keeps framed sheets clean)
+ *
+ * Row sizing note: 64 rows + repeating header must fit one 17in sheet.
+ * line-height 1.2 + 3px cell padding ≈ 20px/row → ~14.9in total, leaving
+ * >1in of slack inside the 16.2in printable area. If rows are ever added
+ * per page or padding increased, re-check that a page still fits one sheet.
  *
  * WCAG 2.1 AA: semantic table per page, ≥ 4.5:1 contrast,
  * non-color-only "Do Not Use" indicator, h1 per page.
@@ -83,13 +89,18 @@ export default function NetworkPrintPage() {
 
   // Build the flat page list: 3 subnets × 4 chunks = 12 pages
   const allPages = useMemo(() => {
+    // One-pass lookup map — avoids devices.find() scanning the whole
+    // list for each of the 762 IPs (O(n) per IP → O(1) per IP).
+    const deviceByIp = new Map()
+    devices.forEach(d => deviceByIp.set(d.ip_address, d))
+
     const out = []
     NETWORK_CONFIG.subnets.forEach(subnet => {
       // Build 254 rows for this subnet
       const subnetRows = []
       for (let octet = 1; octet <= 254; octet++) {
         const ip = `${subnet.prefix}${octet}`
-        const device = devices.find(d => d.ip_address === ip) || null
+        const device = deviceByIp.get(ip) || null
         subnetRows.push({
           ip, octet, device,
           isReserved: device?.is_reserved || isDoNotUseIp(ip),
@@ -141,7 +152,7 @@ export default function NetworkPrintPage() {
         </button>
         <div style={{ fontSize: 13, color: '#64748b' }}>
           <strong style={{ color: '#0f172a' }}>Network Map — Print View ({allPages.length} pages).</strong>{' '}
-          Set paper size to <strong>Tabloid / 11×17</strong>, orientation <strong>Portrait</strong>, and enable <strong>Background graphics</strong>.
+          Set paper size to <strong>Tabloid / 11×17</strong>, orientation <strong>Portrait</strong>, enable <strong>Background graphics</strong>, and turn <strong>Headers and footers OFF</strong> for clean framed sheets.
         </div>
         <button onClick={() => window.print()} style={{ ...btnStyle, background: '#2563eb', color: '#fff', borderColor: '#2563eb' }}>
           <Printer size={14} aria-hidden="true" /> Print
@@ -226,6 +237,12 @@ export default function NetworkPrintPage() {
             min-height: auto;
             width: auto;
           }
+          .print-page table { line-height: 1.2; }
+          .print-page tr {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .print-page thead { display: table-header-group; }
         }
       `}</style>
     </div>
@@ -327,12 +344,14 @@ const pageBadgeStyle = {
 }
 const metaBlock = { fontSize: 10, color: '#334155', textAlign: 'right', lineHeight: 1.5 }
 const thStyle = {
-  padding: '5px 8px', textAlign: 'left',
+  padding: '4px 8px', textAlign: 'left',
   fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+  lineHeight: 1.2,
   borderBottom: '1px solid #1e3a8a',
 }
 const tdStyle = {
-  padding: '4px 8px',
+  padding: '3px 8px',
+  lineHeight: 1.2,
   borderBottom: '1px solid #e5e7eb',
   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
 }
