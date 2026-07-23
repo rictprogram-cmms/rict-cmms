@@ -85,6 +85,7 @@ export default function NetworkMapPage() {
     devices, changeRequests, loading, error,
     activeAssets, assetById, linkedAssetIds, assetDeviceCounts, effectiveDeviceName,
     devicesBySubnet, deviceByIp, pendingByDevice, pendingCount,
+    staleSheets, staleSheetCount,
     findDuplicateMac,
     addDevice, updateDevice, deleteDevice,
     submitChangeRequest, cancelChangeRequest,
@@ -421,6 +422,25 @@ export default function NetworkMapPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {/* Screen-reader announcement when sheets go stale (realtime) */}
+          <span className="sr-only" aria-live="polite">
+            {staleSheetCount > 0
+              ? `${staleSheetCount} printed wall ${staleSheetCount === 1 ? 'sheet is' : 'sheets are'} outdated`
+              : ''}
+          </span>
+          {canPrint && staleSheetCount > 0 && (
+            <button
+              onClick={() => navigate('/network-map/print')}
+              title={`Outdated: ${staleSheets.map(s => `sheet ${s.sheet_index}`).join(', ')}`}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg
+                bg-amber-50 border border-amber-300 text-amber-800
+                hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+              aria-label={`${staleSheetCount} printed wall ${staleSheetCount === 1 ? 'sheet' : 'sheets'} outdated — open print view`}
+            >
+              <AlertTriangle size={14} aria-hidden="true" />
+              {staleSheetCount} {staleSheetCount === 1 ? 'sheet' : 'sheets'} outdated
+            </button>
+          )}
           {canPrint && (
             <button
               onClick={() => navigate('/network-map/print')}

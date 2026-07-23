@@ -26,16 +26,26 @@
  * per page or padding increased, re-check that a page still fits one sheet.
  *
  * WCAG 2.1 AA: semantic table per page, ≥ 4.5:1 contrast,
- * non-color-only "Do Not Use" indicator, h1 per page.
+ * non-color-only "Do Not Use" indicator, h1 per page. Stale-sheet banner
+ * uses role="status" + aria-live; confirm modal uses useDialogA11y.
+ *
+ * Stale-sheet tracking: reads network_print_status (flagged by DB triggers
+ * on network_devices / assets). Screen-only banner lists outdated sheets
+ * with their PDF sheet numbers; after printing (or via the manual button),
+ * users with the 'print_map' permission can mark sheets printed, which
+ * stamps last_printed_at/by and clears the flags.
  *
  * File: src/pages/NetworkPrintPage.jsx
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
+import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { NETWORK_CONFIG, isDoNotUseIp } from '@/lib/networkConfig'
-import { Printer, ArrowLeft, Loader2 } from 'lucide-react'
+import { Printer, ArrowLeft, Loader2, AlertTriangle, CheckCircle2, X } from 'lucide-react'
 
 const GATEWAY = NETWORK_CONFIG.gateway
 const PAGES_PER_SUBNET = 4
@@ -43,25 +53,38 @@ const ROWS_PER_PAGE = Math.ceil(254 / PAGES_PER_SUBNET) // 64
 
 export default function NetworkPrintPage() {
   const navigate = useNavigate()
+  const { profile } = useAuth()
+  const { hasPerm } = usePermissions('Network Map')
   const [devices, setDevices] = useState([])
   const [assets, setAssets] = useState([])
+  const [printStatus, setPrintStatus] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [printedAt] = useState(() => new Date())
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [marking, setMarking] = useState(false)
+  const [markError, setMarkError] = useState(null)
+  const [justMarked, setJustMarked] = useState(false)
+
+  // Whoever can print can mark sheets as printed (decision: same permission).
+  const canMarkPrinted = hasPerm('print_map')
 
   useEffect(() => {
     let cancelled = false
     async function load() {
       try {
-        const [devRes, assetRes] = await Promise.all([
+        const [devRes, assetRes, printRes] = await Promise.all([
           supabase.from('network_devices').select('*').order('ip_address', { ascending: true }),
           supabase.from('assets').select('asset_id, name, status').eq('status', 'Active'),
+          supabase.from('network_print_status').select('*').order('sheet_index', { ascending: true }),
         ])
         if (cancelled) return
         if (devRes.error) { setError(devRes.error.message); return }
         if (assetRes.error) { setError(assetRes.error.message); return }
+        if (printRes.error) { setError(printRes.error.message); return }
         setDevices(devRes.data || [])
         setAssets(assetRes.data || [])
+        setPrintStatus(printRes.data || [])
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -69,6 +92,106 @@ export default function NetworkPrintPage() {
     load()
     return () => { cancelled = true }
   }, [])
+
+  // ── Stale sheet tracking ──────────────────────────────────────────────
+  // A sheet is stale when it changed after it was last printed.
+  const staleSheets = useMemo(() =>
+    printStatus
+      .filter(s =>
+        s.last_changed_at &&
+        (!s.last_printed_at || new Date(s.last_changed_at) > new Date(s.last_printed_at))
+      )
+      .sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0)),
+    [printStatus]
+  )
+
+  const staleIndexSet = useMemo(
+    () => new Set(staleSheets.map(s => s.sheet_index)),
+    [staleSheets]
+  )
+
+  // "2, 5, 9" — paste straight into the browser Pages field to print only
+  // the outdated sheets.
+  const pagesFieldValue = useMemo(
+    () => staleSheets.map(s => s.sheet_index).join(', '),
+    [staleSheets]
+  )
+
+  // Most recent print stamp across all sheets (shown when nothing is stale)
+  const lastPrintedInfo = useMemo(() => {
+    let best = null
+    printStatus.forEach(s => {
+      if (s.last_printed_at && (!best || new Date(s.last_printed_at) > new Date(best.last_printed_at))) {
+        best = s
+      }
+    })
+    return best
+  }, [printStatus])
+
+  const actorName = useCallback(() => {
+    if (!profile) return 'Unknown'
+    const first = profile.first_name || ''
+    const lastInitial = (profile.last_name || '').charAt(0)
+    return lastInitial ? `${first} ${lastInitial}.` : first || profile.email || 'Unknown'
+  }, [profile])
+
+  // Mark the currently-stale sheets as printed. .select() row-count guard
+  // catches silent RLS blocks.
+  const markAllPrinted = useCallback(async () => {
+    const ids = staleSheets.map(s => s.sheet_id)
+    if (ids.length === 0) return
+    setMarking(true)
+    setMarkError(null)
+    try {
+      const { data, error: upErr } = await supabase
+        .from('network_print_status')
+        .update({
+          last_printed_at: new Date().toISOString(),
+          last_printed_by: actorName(),
+        })
+        .in('sheet_id', ids)
+        .select()
+      if (upErr) throw new Error(upErr.message)
+      if (!data || data.length !== ids.length) {
+        throw new Error(`Updated ${data?.length || 0} of ${ids.length} sheets — check permissions.`)
+      }
+      // Merge updated rows into local state
+      setPrintStatus(prev => {
+        const byId = new Map(prev.map(s => [s.sheet_id, s]))
+        data.forEach(s => byId.set(s.sheet_id, s))
+        return Array.from(byId.values()).sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0))
+      })
+      // Audit — non-critical
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile?.email || '',
+          user_name: `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim(),
+          action: 'Mark Printed',
+          entity_type: 'Network Print Sheet',
+          entity_id: ids.join(', '),
+          details: `Marked ${ids.length} wall sheet${ids.length === 1 ? '' : 's'} as printed`,
+        })
+      } catch (auditErr) {
+        console.warn('[NetworkPrintPage] Audit log write failed:', auditErr.message)
+      }
+      setShowConfirm(false)
+      setJustMarked(true)
+      setTimeout(() => setJustMarked(false), 4000)
+    } catch (e) {
+      setMarkError(e.message)
+    } finally {
+      setMarking(false)
+    }
+  }, [staleSheets, profile, actorName])
+
+  // Print, then (if permitted and sheets were stale) offer to clear the flags.
+  // window.print() blocks until the browser dialog closes; we can't know
+  // whether the user actually printed, so we ask instead of assuming.
+  const handlePrint = useCallback(() => {
+    const hadStale = staleSheets.length > 0
+    window.print()
+    if (hadStale && canMarkPrinted) setShowConfirm(true)
+  }, [staleSheets, canMarkPrinted])
 
   // Effective name resolver — if a device is linked to an active asset,
   // use the asset's current name; otherwise use the device_name snapshot.
@@ -154,10 +277,79 @@ export default function NetworkPrintPage() {
           <strong style={{ color: '#0f172a' }}>Network Map — Print View ({allPages.length} pages).</strong>{' '}
           Set paper size to <strong>Tabloid / 11×17</strong>, orientation <strong>Portrait</strong>, enable <strong>Background graphics</strong>, and turn <strong>Headers and footers OFF</strong> for clean framed sheets.
         </div>
-        <button onClick={() => window.print()} style={{ ...btnStyle, background: '#2563eb', color: '#fff', borderColor: '#2563eb' }}>
+        <button onClick={handlePrint} style={{ ...btnStyle, background: '#2563eb', color: '#fff', borderColor: '#2563eb' }}>
           <Printer size={14} aria-hidden="true" /> Print
         </button>
       </div>
+
+      {/* Screen-only stale-sheet banner */}
+      {staleSheets.length > 0 ? (
+        <div
+          className="no-print"
+          role="status"
+          aria-live="polite"
+          style={{
+            margin: '12px auto', maxWidth: '11in',
+            background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10,
+            padding: '12px 16px', display: 'flex', gap: 12, alignItems: 'flex-start',
+          }}
+        >
+          <AlertTriangle size={18} style={{ color: '#b45309', flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
+          <div style={{ flex: 1, fontSize: 13, color: '#78350f' }}>
+            <strong>
+              {staleSheets.length} wall {staleSheets.length === 1 ? 'sheet has' : 'sheets have'} changed since last print:
+            </strong>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+              {staleSheets.map(s => (
+                <li key={s.sheet_id} style={{ marginBottom: 2 }}>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{s.subnet_id}</span>
+                  {' '}page {s.page_number} (.{s.start_octet}–.{s.end_octet}) — <strong>PDF sheet {s.sheet_index}</strong>
+                  {s.last_changed_by && <span style={{ color: '#92400e' }}> · changed by {s.last_changed_by}</span>}
+                </li>
+              ))}
+            </ul>
+            <p style={{ margin: '8px 0 0' }}>
+              To reprint only these, enter <strong style={{ fontFamily: 'monospace' }}>{pagesFieldValue}</strong>{' '}
+              in the print dialog's <strong>Pages</strong> field.
+            </p>
+          </div>
+          {canMarkPrinted && (
+            <button
+              onClick={() => { setMarkError(null); setShowConfirm(true) }}
+              style={{
+                ...btnStyle, flexShrink: 0,
+                background: '#b45309', color: '#fff', borderColor: '#b45309',
+              }}
+            >
+              <CheckCircle2 size={14} aria-hidden="true" /> Mark as printed
+            </button>
+          )}
+        </div>
+      ) : (
+        <div
+          className="no-print"
+          role="status"
+          style={{
+            margin: '12px auto', maxWidth: '11in',
+            background: justMarked ? '#ecfdf5' : '#f8fafc',
+            border: `1px solid ${justMarked ? '#6ee7b7' : '#e2e8f0'}`,
+            borderRadius: 10, padding: '10px 16px',
+            display: 'flex', gap: 10, alignItems: 'center',
+            fontSize: 13, color: justMarked ? '#065f46' : '#475569',
+          }}
+        >
+          <CheckCircle2 size={16} style={{ color: '#059669', flexShrink: 0 }} aria-hidden="true" />
+          <span>
+            {justMarked ? 'Sheets marked as printed. ' : ''}
+            All wall sheets are up to date
+            {lastPrintedInfo?.last_printed_at && (
+              <> · last printed {new Date(lastPrintedInfo.last_printed_at).toLocaleString('en-US', {
+                month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+              })}{lastPrintedInfo.last_printed_by ? ` by ${lastPrintedInfo.last_printed_by}` : ''}</>
+            )}.
+          </span>
+        </div>
+      )}
 
       {allPages.map((page, idx) => (
         <section
@@ -180,6 +372,12 @@ export default function NetworkPrintPage() {
                 <span style={pageBadgeStyle}>
                   Page {page.pageNumber} of {page.totalPages}
                 </span>
+                {staleIndexSet.has(idx + 1) && (
+                  <span className="no-print" style={changedRibbonStyle}>
+                    <AlertTriangle size={10} aria-hidden="true" style={{ marginRight: 4, verticalAlign: '-1px' }} />
+                    Changed since last print
+                  </span>
+                )}
               </p>
             </div>
             <div style={metaBlock}>
@@ -199,6 +397,17 @@ export default function NetworkPrintPage() {
           <PrintTable rows={page.rows} effectiveDeviceName={effectiveDeviceName} />
         </section>
       ))}
+
+      {showConfirm && (
+        <ConfirmPrintedModal
+          count={staleSheets.length}
+          sheets={staleSheets}
+          saving={marking}
+          error={markError}
+          onConfirm={markAllPrinted}
+          onClose={() => { if (!marking) { setShowConfirm(false); setMarkError(null) } }}
+        />
+      )}
 
       <style>{`
         .network-print-root {
@@ -245,6 +454,98 @@ export default function NetworkPrintPage() {
           .print-page thead { display: table-header-group; }
         }
       `}</style>
+    </div>
+  )
+}
+
+// ── Confirm "mark as printed" modal ───────────────────────────────────────
+// Themed to match the app's ModalShell look (white rounded-2xl card, surface
+// header, footer actions). useDialogA11y provides focus trap, Escape-to-close
+// and focus restore per the standing modal requirement.
+function ConfirmPrintedModal({ count, sheets, saving, error, onConfirm, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
+  const titleId = 'np-confirm-title'
+  const descId = 'np-confirm-desc'
+
+  return (
+    <div
+      className="no-print fixed inset-0 z-[2000] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.5)' }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-white rounded-2xl w-full max-w-sm shadow-xl overflow-hidden flex flex-col"
+      >
+        <div className="px-5 py-3 border-b border-surface-200 flex items-start gap-3 bg-surface-50">
+          <Printer size={18} className="text-brand-600 mt-0.5 flex-shrink-0" aria-hidden="true" />
+          <div className="flex-1 min-w-0">
+            <h2 id={titleId} className="text-base font-bold text-surface-900">Mark sheets as printed?</h2>
+            <p id={descId} className="text-xs text-surface-500 mt-0.5">
+              This clears the outdated flag for {count} {count === 1 ? 'sheet' : 'sheets'} and records who printed and when.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            aria-label="Close dialog"
+            className="p-1.5 rounded-lg text-surface-400 hover:bg-surface-200 hover:text-surface-700
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-3">
+          <ul className="text-sm text-surface-700 space-y-1">
+            {sheets.map(s => (
+              <li key={s.sheet_id} className="flex items-center gap-2">
+                <CheckCircle2 size={14} className="text-amber-600 flex-shrink-0" aria-hidden="true" />
+                <span className="font-mono">{s.subnet_id}</span> page {s.page_number}
+                <span className="text-surface-400 text-xs ml-auto">sheet {s.sheet_index}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-surface-500">
+            Only confirm if the sheets actually printed — if the dialog was cancelled, choose "Not yet".
+          </p>
+          {error && (
+            <div role="alert" className="p-2.5 rounded-lg bg-red-50 border border-red-200 flex items-start gap-2">
+              <AlertTriangle size={14} className="text-red-500 mt-0.5 flex-shrink-0" aria-hidden="true" />
+              <p className="text-xs text-red-700">{error}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-200 bg-surface-50 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg
+              hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          >
+            Not yet
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700
+              disabled:opacity-50 flex items-center gap-2
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+          >
+            {saving
+              ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Saving…</>
+              : <><CheckCircle2 size={14} aria-hidden="true" /> Mark {count === 1 ? 'sheet' : `${count} sheets`} printed</>}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -339,6 +640,14 @@ const pageBadgeStyle = {
   display: 'inline-block',
   padding: '2px 8px', borderRadius: 4,
   background: '#1e3a8a', color: '#fff',
+  fontSize: 10, fontWeight: 700, fontFamily: 'Helvetica Neue, Arial, sans-serif',
+  textTransform: 'uppercase', letterSpacing: '0.05em',
+}
+const changedRibbonStyle = {
+  display: 'inline-block',
+  padding: '2px 8px', borderRadius: 4,
+  background: '#fef3c7', color: '#92400e',
+  border: '1px solid #fcd34d',
   fontSize: 10, fontWeight: 700, fontFamily: 'Helvetica Neue, Arial, sans-serif',
   textTransform: 'uppercase', letterSpacing: '0.05em',
 }
