@@ -8,6 +8,7 @@ import {
   StickyNote, Sun, PlusCircle, Copy,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROGRAMS = [
@@ -911,6 +912,8 @@ export default function ProgramPlannerPage() {
   const [expandedNoteId,setExpandedNoteId]=useState(null)
   const [noteText,setNoteText]=useState('')
   const [sortOrder,setSortOrder]=useState(()=>localStorage.getItem('plannerSortOrder')||'recent')
+  const [confirmDeletePlan,setConfirmDeletePlan]=useState(null) // plan pending delete confirmation
+  const [deleting,setDeleting]=useState(false)
   const autoOpenDismissedRef = useRef(false)
 
   const handleSortChange = val => { setSortOrder(val); localStorage.setItem('plannerSortOrder',val) }
@@ -953,11 +956,14 @@ export default function ProgramPlannerPage() {
     setEditing(null); loadPlans()
   }
 
-  const handleDeletePlan = async (planId) => {
-    if(!window.confirm('Delete this plan? This cannot be undone.')) return
-    const {error}=await supabase.from('student_program_plans').delete().eq('plan_id',planId)
+  const handleDeletePlanConfirmed = async () => {
+    if(!confirmDeletePlan) return
+    setDeleting(true)
+    const {data,error}=await supabase.from('student_program_plans').delete().eq('plan_id',confirmDeletePlan.plan_id).select()
+    setDeleting(false)
     if(error){toast.error('Delete failed: '+error.message);return}
-    toast.success('Plan deleted'); loadPlans()
+    if(!data||data.length===0){toast.error('Delete blocked — no rows removed (check permissions)');return}
+    toast.success('Plan deleted'); setConfirmDeletePlan(null); loadPlans()
   }
 
   const handleDuplicatePlan = async (plan) => {
@@ -1236,7 +1242,7 @@ export default function ProgramPlannerPage() {
                       className="p-1.5 border border-surface-200 rounded-lg text-surface-500 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200 transition-colors" title="Duplicate plan">
                       <Copy size={12}/>
                     </button>
-                    <button onClick={()=>handleDeletePlan(plan.plan_id)}
+                    <button onClick={()=>setConfirmDeletePlan(plan)}
                       className="p-1.5 text-surface-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Delete plan">
                       <Trash2 size={12}/>
                     </button>
@@ -1269,6 +1275,25 @@ export default function ProgramPlannerPage() {
       {showNew&&<NewPlanModal onCreated={loadPlans} onClose={()=>setShowNew(false)}/>}
       {editing&&<PlanEditorModal plan={editing} onSave={newSems=>handleSavePlan(editing.plan_id,newSems)} onClose={()=>setEditing(null)}/>}
       {viewing&&<StudentPlanView plan={viewing} onClose={()=>setViewing(null)}/>}
+
+      {confirmDeletePlan&&(
+        <ConfirmDialog
+          open
+          variant="danger"
+          title="Delete plan?"
+          message={
+            <>
+              Delete <strong>{confirmDeletePlan.plan_name}</strong> for{' '}
+              <strong>{confirmDeletePlan.student_name}</strong>? This cannot be undone.
+            </>
+          }
+          confirmLabel="Delete plan"
+          cancelLabel="Keep plan"
+          busy={deleting}
+          onConfirm={handleDeletePlanConfirmed}
+          onClose={()=>setConfirmDeletePlan(null)}
+        />
+      )}
     </div>
   )
 }
