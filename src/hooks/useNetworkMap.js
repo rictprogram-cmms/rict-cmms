@@ -1,9 +1,10 @@
 /**
  * RICT CMMS — useNetworkMap Hook
  *
- * Loads all network_devices + network_change_requests and keeps them in sync
- * via Supabase realtime. Exposes CRUD helpers for direct edits (instructor)
- * and for student/work-study "suggest change" submissions.
+ * Loads all network_devices + network_change_requests + network_print_status
+ * and keeps them in sync via Supabase realtime. Exposes CRUD helpers for
+ * direct edits (instructor), student/work-study "suggest change" submissions,
+ * and stale wall-sheet print tracking (staleSheets / markSheetsPrinted).
  *
  * Writes are guarded at the UI layer via usePermissions; this hook only does
  * the data work.
@@ -72,6 +73,7 @@ export function useNetworkMap() {
   const [devices, setDevices] = useState([])
   const [changeRequests, setChangeRequests] = useState([])
   const [activeAssets, setActiveAssets] = useState([])
+  const [printStatus, setPrintStatus] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -89,18 +91,21 @@ export function useNetworkMap() {
     setLoading(true)
     setError(null)
     try {
-      const [devRes, ncrRes, assetRes] = await Promise.all([
+      const [devRes, ncrRes, assetRes, printRes] = await Promise.all([
         supabase.from('network_devices').select('*').order('ip_address', { ascending: true }),
         supabase.from('network_change_requests').select('*').order('submitted_date', { ascending: false }),
         supabase.from('assets').select('asset_id, name, status').eq('status', 'Active').order('name', { ascending: true }),
+        supabase.from('network_print_status').select('*').order('sheet_index', { ascending: true }),
       ])
       if (devRes.error) throw devRes.error
       if (ncrRes.error) throw ncrRes.error
       if (assetRes.error) throw assetRes.error
+      if (printRes.error) throw printRes.error
       if (!mountedRef.current) return
       setDevices(devRes.data || [])
       setChangeRequests(ncrRes.data || [])
       setActiveAssets(assetRes.data || [])
+      setPrintStatus(printRes.data || [])
     } catch (e) {
       console.error('[useNetworkMap] Fetch failed:', e)
       if (mountedRef.current) setError(e.message || 'Failed to load network map')
@@ -155,6 +160,19 @@ export function useNetworkMap() {
           return next
         })
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'network_print_status' }, (payload) => {
+        // Trigger-driven flag updates + mark-as-printed clears, live.
+        setPrintStatus(prev => {
+          if (payload.eventType === 'DELETE') {
+            return prev.filter(s => s.sheet_id !== payload.old.sheet_id)
+          }
+          const incoming = payload.new
+          const next = prev.filter(s => s.sheet_id !== incoming.sheet_id)
+          next.push(incoming)
+          next.sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0))
+          return next
+        })
+      })
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
@@ -195,6 +213,54 @@ export function useNetworkMap() {
     changeRequests.filter(r => r.status === 'Pending').length,
     [changeRequests]
   )
+
+  // ── Print status (stale wall sheets) ────────────────────────────────────
+  // A sheet is stale when it changed after it was last printed (or has
+  // changed and was never printed). Sorted by sheet_index (PDF sheet #).
+  const staleSheets = useMemo(() =>
+    printStatus
+      .filter(s =>
+        s.last_changed_at &&
+        (!s.last_printed_at || new Date(s.last_changed_at) > new Date(s.last_printed_at))
+      )
+      .sort((a, b) => (a.sheet_index || 0) - (b.sheet_index || 0)),
+    [printStatus]
+  )
+
+  const staleSheetCount = staleSheets.length
+
+  /**
+   * Mark sheets as printed (clears their stale flag).
+   * Gate at the UI with hasPerm('print_map') — whoever can print can clear.
+   * Pass an array of sheet_ids; defaults to clearing ALL currently stale
+   * sheets when called with no argument.
+   */
+  const markSheetsPrinted = useCallback(async (sheetIds = null) => {
+    if (!profile?.email) throw new Error('Not signed in.')
+    const ids = sheetIds ?? staleSheets.map(s => s.sheet_id)
+    if (ids.length === 0) return []
+
+    const { data, error } = await supabase
+      .from('network_print_status')
+      .update({
+        last_printed_at: new Date().toISOString(),
+        last_printed_by: senderDisplayName(profile),
+      })
+      .in('sheet_id', ids)
+      .select()
+    if (error) throw new Error(error.message)
+    // RLS silent-failure guard: zero rows back means the update was blocked.
+    if (!data || data.length !== ids.length) {
+      throw new Error(
+        `Mark-as-printed updated ${data?.length || 0} of ${ids.length} sheets — check permissions.`
+      )
+    }
+
+    await writeAudit(profile, 'Mark Printed', 'Network Print Sheet', ids.join(', '),
+      `Marked ${ids.length} wall sheet${ids.length === 1 ? '' : 's'} as printed`)
+
+    return data
+  }, [profile, staleSheets])
 
   // Find duplicate MAC users (for warnings)
   const findDuplicateMac = useCallback((mac, excludeDeviceId = null) => {
@@ -566,6 +632,7 @@ export function useNetworkMap() {
     devices,
     changeRequests,
     activeAssets,
+    printStatus,
     loading,
     error,
     // derived
@@ -573,6 +640,8 @@ export function useNetworkMap() {
     deviceByIp,
     pendingByDevice,
     pendingCount,
+    staleSheets,
+    staleSheetCount,
     findDuplicateMac,
     assetById,
     linkedAssetIds,
@@ -583,6 +652,8 @@ export function useNetworkMap() {
     addDevice,
     updateDevice,
     deleteDevice,
+    // print tracking
+    markSheetsPrinted,
     // change requests
     submitChangeRequest,
     cancelChangeRequest,
