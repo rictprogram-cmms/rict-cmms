@@ -2,7 +2,9 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useLabVisibleDays } from '@/hooks/useLabDays'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import {
   useAllEquipmentList,
   useAssetPickerData,
@@ -819,18 +821,19 @@ function EditBookingModal({ booking, onClose, onCancelBooking, onUpdatePurpose, 
   const [reassigning, setReassigning] = useState(false)
   const [selectedUser, setSelectedUser] = useState(null)
   const { students, loading: studentsLoading } = useEquipmentStudentsList()
-  const modalRef = useRef(null)
   const firstFocusRef = useRef(null)
 
-  // Focus trap: focus first input when modal opens + ESC to close
+  // WCAG 2.1 AA: focus trap, Escape-to-close, focus restore, stacked-dialog aware
+  const dialogRef = useDialogA11y(true, onClose)
+
+  // Preserve original initial-focus target (the Purpose input). Declared AFTER
+  // useDialogA11y so this setTimeout(0) fires after the hook's default
+  // first-focusable focus and wins. No-op if the input is disabled — the
+  // hook's default (first focusable element) then applies.
   useEffect(() => {
-    firstFocusRef.current?.focus()
-    function onKey(e) {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+    const t = setTimeout(() => firstFocusRef.current?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [])
 
   const parts = (booking.date || '').split('-')
   const dt = parts.length === 3
@@ -857,14 +860,14 @@ function EditBookingModal({ booking, onClose, onCancelBooking, onUpdatePurpose, 
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="edit-booking-title"
       className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/50 p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div
-        ref={modalRef}
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-booking-title"
         className="bg-white rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-xl"
       >
         {/* Header */}
@@ -1057,6 +1060,7 @@ function MyBookingsTab({ hasPerm }) {
   const { bookings, loading, refresh } = useMyEquipmentBookings()
   const { cancelBooking, updateBookingPurpose, saving } = useEquipmentBookingActions()
   const [editBooking, setEditBooking] = useState(null)
+  const [confirmCancel, setConfirmCancel] = useState(null) // booking pending cancel confirmation
 
   async function handleCancel(bookingId) {
     const result = await cancelBooking(bookingId)
@@ -1153,11 +1157,7 @@ function MyBookingsTab({ hasPerm }) {
                     )}
                     {canCancel && (
                       <button
-                        onClick={() => {
-                          if (window.confirm(`Cancel ${b.dateDisplay} ${b.startTimeDisplay} on ${b.equipmentName}?`)) {
-                            handleCancel(b.bookingId)
-                          }
-                        }}
+                        onClick={() => setConfirmCancel(b)}
                         disabled={saving}
                         className="p-1.5 rounded text-surface-500 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-600 disabled:opacity-60"
                         aria-label={`Cancel booking on ${b.equipmentName}, ${b.dateDisplay}, ${b.startTimeDisplay}`}
@@ -1181,6 +1181,29 @@ function MyBookingsTab({ hasPerm }) {
           onUpdatePurpose={handleUpdatePurpose}
           onReassign={() => {}}
           saving={saving}
+        />
+      )}
+
+      {confirmCancel && (
+        <ConfirmDialog
+          open
+          variant="danger"
+          title="Cancel booking?"
+          message={
+            <>
+              Cancel <strong>{confirmCancel.dateDisplay} {confirmCancel.startTimeDisplay}</strong> on{' '}
+              <strong>{confirmCancel.equipmentName}</strong>? This frees up the slot for others and
+              can&apos;t be undone.
+            </>
+          }
+          confirmLabel="Yes, cancel booking"
+          cancelLabel="Keep booking"
+          busy={saving}
+          onConfirm={async () => {
+            await handleCancel(confirmCancel.bookingId)
+            setConfirmCancel(null)
+          }}
+          onClose={() => setConfirmCancel(null)}
         />
       )}
     </>
@@ -1328,6 +1351,7 @@ function ManageEquipmentTab() {
   const { addEquipment, updateEquipment, retireEquipment, saving } = useEquipmentManagement()
   const [showAdd, setShowAdd] = useState(false)
   const [editing, setEditing] = useState(null) // existing equipment row
+  const [confirmRetire, setConfirmRetire] = useState(null) // { equipmentId, name } pending confirmation
 
   async function handleAdd({ assetId, status, notes }) {
     const result = await addEquipment({ assetId, status, notes })
@@ -1339,10 +1363,11 @@ function ManageEquipmentTab() {
     if (result.success) { setEditing(null); refresh() }
   }
 
-  async function handleRetire(equipmentId, name) {
-    if (!window.confirm(`Retire ${name}? It will be hidden from scheduling but existing bookings remain.`)) return
-    const result = await retireEquipment(equipmentId)
+  async function handleRetireConfirmed() {
+    if (!confirmRetire) return
+    const result = await retireEquipment(confirmRetire.equipmentId)
     if (result.success) refresh()
+    setConfirmRetire(null)
   }
 
   if (loading) {
@@ -1420,7 +1445,7 @@ function ManageEquipmentTab() {
                         </button>
                         {p.status !== 'Retired' && (
                           <button
-                            onClick={() => handleRetire(p.equipmentId, p.name)}
+                            onClick={() => setConfirmRetire({ equipmentId: p.equipmentId, name: p.name })}
                             disabled={saving}
                             className="p-1.5 rounded text-surface-500 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-600 disabled:opacity-60"
                             aria-label={`Retire ${p.name}`}
@@ -1454,6 +1479,26 @@ function ManageEquipmentTab() {
           onClose={() => setEditing(null)}
           onSave={handleUpdate}
           saving={saving}
+        />
+      )}
+
+      {/* Retire confirmation */}
+      {confirmRetire && (
+        <ConfirmDialog
+          open
+          variant="danger"
+          title="Retire equipment?"
+          message={
+            <>
+              Retire <strong>{confirmRetire.name}</strong>? It will be hidden from scheduling but
+              existing bookings remain.
+            </>
+          }
+          confirmLabel="Retire equipment"
+          cancelLabel="Keep active"
+          busy={saving}
+          onConfirm={handleRetireConfirmed}
+          onClose={() => setConfirmRetire(null)}
         />
       )}
     </>
@@ -1507,12 +1552,16 @@ function AddEquipmentModal({ onClose, onAdd, saving }) {
   const [notes, setNotes] = useState('')
   const searchRef = useRef(null)
 
+  // WCAG 2.1 AA: focus trap, Escape-to-close, focus restore, stacked-dialog aware
+  const dialogRef = useDialogA11y(true, onClose)
+
+  // Preserve original initial-focus target (the search input). Declared AFTER
+  // useDialogA11y so this setTimeout(0) fires after the hook's default
+  // first-focusable focus and wins.
   useEffect(() => {
-    searchRef.current?.focus()
-    function onKey(e) { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+    const t = setTimeout(() => searchRef.current?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -1535,13 +1584,16 @@ function AddEquipmentModal({ onClose, onAdd, saving }) {
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="add-equipment-title"
       className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/50 p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="add-equipment-title"
+        className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl"
+      >
         {/* Header */}
         <div className="flex items-start justify-between p-4 border-b border-surface-200 flex-shrink-0">
           <div>
@@ -1724,12 +1776,16 @@ function EditEquipmentModal({ equipment, onClose, onSave, saving }) {
   const [notes, setNotes] = useState(equipment.notes || '')
   const firstFocusRef = useRef(null)
 
+  // WCAG 2.1 AA: focus trap, Escape-to-close, focus restore, stacked-dialog aware
+  const dialogRef = useDialogA11y(true, onClose)
+
+  // Preserve original initial-focus target (the status select). Declared AFTER
+  // useDialogA11y so this setTimeout(0) fires after the hook's default
+  // first-focusable focus and wins.
   useEffect(() => {
-    firstFocusRef.current?.focus()
-    function onKey(e) { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
+    const t = setTimeout(() => firstFocusRef.current?.focus(), 0)
+    return () => clearTimeout(t)
+  }, [])
 
   function handleSubmit() {
     onSave({ status, notes })
@@ -1739,13 +1795,16 @@ function EditEquipmentModal({ equipment, onClose, onSave, saving }) {
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="edit-equipment-title"
       className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/50 p-4"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-white rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-equipment-title"
+        className="bg-white rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-xl"
+      >
         {/* Header */}
         <div className="flex items-start justify-between p-4 border-b border-surface-200">
           <div>
