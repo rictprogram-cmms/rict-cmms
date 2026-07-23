@@ -349,6 +349,17 @@ function AppRoutes() {
               </ProtectedRoute>
             }
           />
+          {/* Print view lives OUTSIDE AppLayout: the layout's h-screen +
+              overflow-y-auto scroll container clips printed output to a
+              single page. Standalone = full document flow, all pages print. */}
+          <Route
+            path="/network-map/print"
+            element={
+              <ProtectedRoute>
+                <NetworkPrintPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Protected routes */}
           <Route
@@ -367,7 +378,6 @@ function AppRoutes() {
             <Route path="/sops" element={<SOPsPage />} />
             <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
             <Route path="/network-map" element={<NetworkMapPage />} />
-            <Route path="/network-map/print" element={<NetworkPrintPage />} />
 
             {/* Scheduling */}
             <Route path="/pm-schedules" element={<PMPage />} />

@@ -93,7 +93,7 @@ export default function NetworkMapPage() {
 
   const [activeTab, setActiveTab] = useState(DEFAULT_SUBNET)
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState('all') // all | assigned | available | reserved
+  const [filter, setFilter] = useState('all') // all | assigned | available | reserved (shown as "Do Not Use only")
   const [toast, setToast] = useState(null)    // { msg, type }
 
   // Modals
@@ -225,19 +225,28 @@ export default function NetworkMapPage() {
   }, [isSearching, filteredRows])
 
   // ── Subnet summary counts ────────────────────────────────────────────
+  // Walks every IP (1–254) per subnet so counts always sum to 254:
+  //   doNotUse  — device flagged is_reserved OR config-level Do Not Use range
+  //   assigned  — a device row exists (a static reservation)
+  //   available — everything else
   const subnetSummaries = useMemo(() => {
     return NETWORK_CONFIG.subnets.map(s => {
-      const list = devicesBySubnet[s.id] || []
-      const assigned = list.filter(d => !d.is_reserved).length
-      const reserved = list.filter(d => d.is_reserved).length
+      let assigned = 0
+      let doNotUse = 0
+      for (let octet = 1; octet <= 254; octet++) {
+        const ip = `${s.prefix}${octet}`
+        const device = deviceByIp.get(ip) || null
+        if (device?.is_reserved || isDoNotUseIp(ip)) doNotUse++
+        else if (device) assigned++
+      }
       return {
         ...s,
         assigned,
-        reserved,
-        available: 254 - assigned - reserved,
+        doNotUse,
+        available: 254 - assigned - doNotUse,
       }
     })
-  }, [devicesBySubnet])
+  }, [deviceByIp])
 
   // ── Pending requests filtered for "My Requests" vs All ──────────────
   const visiblePending = useMemo(() => {
@@ -349,7 +358,7 @@ export default function NetworkMapPage() {
         for (let octet = 1; octet <= 254; octet++) {
           const ip = `${subnet.prefix}${octet}`
           const d = list.find(x => x.last_octet === octet)
-          const status = (d?.is_reserved || isDoNotUseIp(ip)) ? 'Reserved'
+          const status = (d?.is_reserved || isDoNotUseIp(ip)) ? 'Do Not Use'
                        : d ? 'Assigned' : 'Available'
           rows.push([
             effectiveDeviceName(d) || (isDoNotUseIp(ip) ? 'Do Not Use' : ''),
@@ -562,7 +571,7 @@ export default function NetworkMapPage() {
             <option value="all">All rows</option>
             <option value="assigned">Assigned only</option>
             <option value="available">Available only</option>
-            <option value="reserved">Reserved only</option>
+            <option value="reserved">Do Not Use only</option>
           </select>
         </div>
         <div aria-live="polite" className="text-xs text-surface-500 ml-auto">
@@ -788,12 +797,12 @@ function InfoCard({ title, subtitle, body, bg, color }) {
 }
 
 function SubnetCard({ subnet, active, onClick }) {
-  const pct = Math.round(((subnet.assigned + subnet.reserved) / 254) * 100)
+  const pct = Math.round(((subnet.assigned + subnet.doNotUse) / 254) * 100)
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={`${subnet.name} — ${subnet.assigned} assigned, ${subnet.available} available`}
+      aria-label={`Subnet ${subnet.name}: ${subnet.assigned} assigned, ${subnet.available} available, ${subnet.doNotUse} do not use`}
       className={`text-left rounded-xl border p-3 transition-all
         focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
         active
@@ -807,7 +816,7 @@ function SubnetCard({ subnet, active, onClick }) {
         <div className="h-full bg-brand-500" style={{ width: `${pct}%` }} />
       </div>
       <p className="text-[11px] text-surface-500 mt-1">
-        {subnet.available} available · {subnet.reserved} reserved
+        {subnet.assigned} assigned · {subnet.available} available · {subnet.doNotUse} do not use
       </p>
     </button>
   )
