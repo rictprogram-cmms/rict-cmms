@@ -710,7 +710,7 @@ function calcHours(labCredits, semesterLength) {
 
 // ─── Step 1: Course Catalog Select ────────────────────────────────────────────
 // Pulls from syllabus_courses (catalog only — NOT the CMMS classes table)
-function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExists, onDuplicate }) {
+function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExists, otherSemesters = [], onDuplicate }) {
   const { user } = useAuth()
   const [mode, setMode] = useState('existing')
   const [showDuplicate, setShowDuplicate] = useState(false)
@@ -811,11 +811,47 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
         </select>
 
         {data.course_id && (
-          <div className={`border rounded-lg p-3 text-sm ${savedExists ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-brand-50 border-brand-100 text-brand-700'}`}>
-            <Check size={14} className="inline mr-1.5" />
+          <div role="status" className={`border rounded-lg p-3 text-sm ${savedExists ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-brand-50 border-brand-100 text-brand-700'}`}>
+            <Check size={14} className="inline mr-1.5" aria-hidden="true" />
             {savedExists
-              ? 'Saved syllabus loaded — verify details and step through each section.'
-              : 'No saved syllabus found for this course + semester — starting fresh.'}
+              ? `Saved syllabus loaded for ${data.semester} — verify details and step through each section.`
+              : `No saved syllabus found for ${data.course_id} in ${data.semester} — starting fresh.`}
+          </div>
+        )}
+
+        {/* Saved drafts exist under other semesters — surface them so work is never "lost" */}
+        {data.course_id && !savedExists && otherSemesters.length > 0 && (
+          <div className="border border-amber-200 bg-amber-50 rounded-lg p-3" role="status">
+            <p className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
+              <AlertCircle size={14} aria-hidden="true" />
+              Saved syllabi found for {data.course_id} under other semesters
+            </p>
+            <p className="text-xs text-amber-700 mt-1">
+              Select one below to load it, or stay on {data.semester} to start fresh. You can also load one and use
+              &ldquo;Duplicate to New Semester&rdquo; to carry it forward.
+            </p>
+            <ul className="mt-2 space-y-1.5">
+              {otherSemesters.map(o => (
+                <li key={o.semester} className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-amber-800">
+                    {o.semester}
+                    {o.updated_at && (
+                      <span className="text-xs text-amber-600 ml-2">
+                        last saved {new Date(o.updated_at).toLocaleDateString()}
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => update('semester', o.semester)}
+                    aria-label={`Load saved syllabus for ${data.course_id}, ${o.semester}`}
+                    className="min-h-[36px] px-3 py-1.5 text-xs font-semibold text-amber-800 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+                  >
+                    Load {o.semester}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -2168,6 +2204,7 @@ export default function SyllabusWizard({ onClose }) {
   const [saving, setSaving] = useState(false)
   const [loadingData, setLoadingData] = useState(false)
   const [savedExists, setSavedExists] = useState(false)
+  const [otherSemesters, setOtherSemesters] = useState([]) // saved drafts for this course under OTHER semesters
   const [showCreateClass, setShowCreateClass] = useState(false) // post-PDF CMMS prompt
 
   const update = useCallback((field, value) => setData(prev => ({ ...prev, [field]: value })), [])
@@ -2193,7 +2230,16 @@ export default function SyllabusWizard({ onClose }) {
       supabase.from('syllabus_courses')
         .select('course_description,student_outcomes,prerequisites')
         .eq('course_id', data.course_id).maybeSingle(),
-    ]).then(([{ data: row }, { data: catalogRow }]) => {
+      // All saved semesters for this course — used to surface drafts saved under a
+      // different semester so instructors never think their work was lost
+      supabase.from('syllabus_templates')
+        .select('semester,updated_at')
+        .eq('course_id', data.course_id),
+    ]).then(([{ data: row }, { data: catalogRow }, { data: allRows }]) => {
+      const others = (allRows || [])
+        .filter(r => r.semester !== data.semester)
+        .sort((a, b) => SEMESTERS.indexOf(a.semester) - SEMESTERS.indexOf(b.semester))
+      setOtherSemesters(others)
       if (row) {
         setSavedExists(true)
         setData(prev => ({
@@ -2243,12 +2289,17 @@ export default function SyllabusWizard({ onClose }) {
       created_by:  data.created_by || user?.email || '',
     }
     delete payload.id
-    const { error } = await supabase.from('syllabus_templates')
+    const { data: savedRows, error } = await supabase.from('syllabus_templates')
       .upsert(payload, { onConflict: 'course_id,semester' }).select()
     setSaving(false)
     if (error) { toast.error('Save failed: ' + error.message); return false }
+    // RLS silent-failure guard: a blocked write returns no error but zero rows
+    if (!savedRows || savedRows.length === 0) {
+      toast.error('Save was blocked — no rows written. Check permissions or contact an administrator.')
+      return false
+    }
     setSavedExists(true)
-    toast.success('Draft saved!')
+    toast.success(`Draft saved for ${data.course_id} · ${data.semester}`)
     return true
   }, [data, user])
 
@@ -2285,9 +2336,13 @@ export default function SyllabusWizard({ onClose }) {
     }
     const payload = { ...newData, updated_at: new Date().toISOString(), updated_by: user?.email || '' }
     delete payload.id
-    const { error } = await supabase.from('syllabus_templates')
+    const { data: dupRows, error } = await supabase.from('syllabus_templates')
       .upsert(payload, { onConflict: 'course_id,semester' }).select()
     if (error) { toast.error('Duplicate failed: ' + error.message); return }
+    if (!dupRows || dupRows.length === 0) {
+      toast.error('Duplicate was blocked — no rows written. Check permissions or contact an administrator.')
+      return
+    }
     setData(newData)
     setSavedExists(false)
     toast.success(`Duplicated to ${targetSemester} — dates cleared.`)
@@ -2298,7 +2353,7 @@ export default function SyllabusWizard({ onClose }) {
 
   const stepContent = () => {
     switch (step) {
-      case 1: return <Step1CourseSelect data={data} update={update} courseCatalog={courseCatalog} setCatalog={setCourseCatalog} savedExists={savedExists} onDuplicate={handleDuplicate} />
+      case 1: return <Step1CourseSelect data={data} update={update} courseCatalog={courseCatalog} setCatalog={setCourseCatalog} savedExists={savedExists} otherSemesters={otherSemesters} onDuplicate={handleDuplicate} />
       case 2: return <Step2Instructor data={data} update={update} commonSections={commonSections} />
       case 3: return <Step3CourseInfo data={data} update={update} />
       case 4: return <Step4Dates data={data} update={update} />
