@@ -2194,11 +2194,18 @@ function StepProgress({ current, onClickStep }) {
 }
 
 // ─── Main Wizard ──────────────────────────────────────────────────────────────
-export default function SyllabusWizard({ onClose }) {
+// initialCourseId / initialSemester: optional — when provided (e.g. launched from
+// the Syllabus Library), the wizard opens preloaded to that course + semester.
+// Defaults preserve the original blank-start behavior exactly.
+export default function SyllabusWizard({ onClose, initialCourseId = null, initialSemester = null }) {
   const { user } = useAuth()
   const [step, setStep] = useState(1)
   const [catalogRefreshKey, setCatalogRefreshKey] = useState(0)
-  const [data, setData] = useState(EMPTY_SYLLABUS)
+  const [data, setData] = useState(() => ({
+    ...EMPTY_SYLLABUS,
+    ...(initialCourseId ? { course_id: initialCourseId } : {}),
+    ...(initialSemester ? { semester: initialSemester } : {}),
+  }))
   const [courseCatalog, setCourseCatalog] = useState([])  // from syllabus_courses, NOT classes
   const [commonSections, setCommonSections] = useState([])
   const [saving, setSaving] = useState(false)
@@ -2231,10 +2238,12 @@ export default function SyllabusWizard({ onClose }) {
         .select('course_description,student_outcomes,prerequisites')
         .eq('course_id', data.course_id).maybeSingle(),
       // All saved semesters for this course — used to surface drafts saved under a
-      // different semester so instructors never think their work was lost
+      // different semester so instructors never think their work was lost.
+      // Archived templates are excluded (restore them via the Syllabus Library).
       supabase.from('syllabus_templates')
         .select('semester,updated_at')
-        .eq('course_id', data.course_id),
+        .eq('course_id', data.course_id)
+        .neq('status', 'archived'),
     ]).then(([{ data: row }, { data: catalogRow }, { data: allRows }]) => {
       const others = (allRows || [])
         .filter(r => r.semester !== data.semester)
@@ -2328,6 +2337,7 @@ export default function SyllabusWizard({ onClose }) {
   const handleDuplicate = async (targetSemester) => {
     const newData = {
       ...data, id: null, semester: targetSemester,
+      status: 'active',   // a duplicate is fresh working copy, even if the source was archived
       begin_date: '', end_date: '', last_drop_date: '', last_withdraw_date: '',
       spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: '',
       pdf_generated_at: null, pdf_generated_count: 0,

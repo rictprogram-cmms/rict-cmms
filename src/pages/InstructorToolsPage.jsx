@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive } from 'lucide-react'
+import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive, Library } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import SyllabusWizard, { DEFAULT_COMMON_SECTIONS } from './SyllabusWizard'
+import SyllabusLibraryModal from '@/components/SyllabusLibraryModal'
 import CourseProposalWizard, { DEFAULT_COLLEGE_OUTCOMES } from './CourseProposalWizard'
 import { useCourseProposals } from '@/hooks/useCourseProposals'
 import ProgramRevisionWizard, { DEFAULT_REVISION_SETTINGS, useRevisionSettings } from './ProgramRevisionWizard'
@@ -304,6 +305,19 @@ const tiles = [
     hasSettings: true,
   },
   {
+    key: 'syllabus-library',
+    title: 'Syllabus Library',
+    description: 'Every saved syllabus by course and semester — open any of them in the wizard, or archive old semesters.',
+    icon: Library,
+    iconBg: 'bg-sky-50',
+    iconColor: 'text-sky-600',
+    accentFrom: 'from-sky-400',
+    accentTo: 'to-sky-600',
+    badgeColor: 'bg-sky-50 text-sky-600',
+    badge: 'Active',
+    clickable: true,
+  },
+  {
     key: 'program-cost',
     title: 'Program Cost',
     description: 'Full cost breakdown by semester, course, and category — tuition, tools, materials, software, and more.',
@@ -449,7 +463,7 @@ function Tile({ tile, onOpen, onSettings }) {
           {tile.clickable ? (
             <div className={`flex items-center gap-1.5 text-xs font-medium ${tile.key === 'required-tools' ? 'text-amber-600' : 'text-brand-600'}`}>
               <ChevronRight size={13} />
-              <span>{tile.key === 'required-tools' ? 'Open catalog' : tile.key === 'new-course-proposal' ? 'Open Course Proposal Wizard' : tile.key === 'course-revision' ? 'Open Revision Wizards' : tile.key === 'program-planner' ? 'Open Program Planner' : tile.key === 'program-cost' ? 'Open Program Cost' : tile.key === 'course-outline-export' ? 'Open Course Outline Export' : tile.key === 'course-end-date' ? 'Open Course End Date' : 'Open Syllabus Generator'}</span>
+              <span>{tile.key === 'required-tools' ? 'Open catalog' : tile.key === 'syllabus-library' ? 'Open Syllabus Library' : tile.key === 'new-course-proposal' ? 'Open Course Proposal Wizard' : tile.key === 'course-revision' ? 'Open Revision Wizards' : tile.key === 'program-planner' ? 'Open Program Planner' : tile.key === 'program-cost' ? 'Open Program Cost' : tile.key === 'course-outline-export' ? 'Open Course Outline Export' : tile.key === 'course-end-date' ? 'Open Course End Date' : 'Open Syllabus Generator'}</span>
             </div>
           ) : (
             <div className="flex items-center gap-1.5 text-xs text-surface-400">
@@ -1479,6 +1493,8 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
 export default function InstructorToolsPage() {
   const navigate = useNavigate()
   const [showWizard, setShowWizard]             = useState(false)
+  const [wizardInitial, setWizardInitial]       = useState(null)  // { course_id, semester } when launched from Library
+  const [showLibrary, setShowLibrary]           = useState(false)
   const [showCommonSections, setShowCommonSections] = useState(false)
   const [showCollegeOutcomes, setShowCollegeOutcomes] = useState(false)
   const [activePanel, setActivePanel]           = useState(null)
@@ -1531,7 +1547,8 @@ export default function InstructorToolsPage() {
   }
 
   function handleOpen(key) {
-    if (key === 'syllabus')               setShowWizard(true)
+    if (key === 'syllabus')               { setWizardInitial(null); setShowWizard(true) }
+    else if (key === 'syllabus-library')  setShowLibrary(true)
     else if (key === 'required-tools')    setActivePanel('required-tools')
     else if (key === 'new-course-proposal') { setEditProposal(null); setShowProposal(true) }
     else if (key === 'course-revision')      { setEditRevision(null); setShowRevision(true) }
@@ -1619,7 +1636,24 @@ export default function InstructorToolsPage() {
       </div>
 
       {/* Modals */}
-      {showWizard && <SyllabusWizard onClose={() => setShowWizard(false)} />}
+      {showWizard && (
+        <SyllabusWizard
+          key={wizardInitial ? `${wizardInitial.course_id}|${wizardInitial.semester}` : 'blank'}
+          initialCourseId={wizardInitial?.course_id || null}
+          initialSemester={wizardInitial?.semester || null}
+          onClose={() => { setShowWizard(false); setWizardInitial(null) }}
+        />
+      )}
+      {showLibrary && (
+        <SyllabusLibraryModal
+          onClose={() => setShowLibrary(false)}
+          onOpenSyllabus={(course_id, semester) => {
+            setShowLibrary(false)
+            setWizardInitial({ course_id, semester })
+            setShowWizard(true)
+          }}
+        />
+      )}
       {showCommonSections && <CommonSectionsModal onClose={() => setShowCommonSections(false)} />}
       {showProposal && (
         <CourseProposalWizard
