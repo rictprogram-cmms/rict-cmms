@@ -395,7 +395,7 @@ export function generateSyllabusHTML(data, commonSections) {
   <div class="sec-head">Grading</div>
   <div class="sub-head">Assignments &amp; Points</div>
   <div class="block">
-    <p>All students are expected to put in <strong>${escHtml(String(data.volunteer_hours_required))} hours of volunteer hours</strong>. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.</p>
+    ${(parseInt(data.volunteer_hours_required) || 0) > 0 ? `<p>All students are expected to put in <strong>${escHtml(String(data.volunteer_hours_required))} hours of volunteer hours</strong>. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.</p>` : ''}
     <p>Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need <strong>${escHtml(String(data.required_hours_per_week))} hours a week</strong> of lab time.</p>
     <br>
     <table class="grade-table">
@@ -665,8 +665,8 @@ function TI({ value, onChange, placeholder, type = 'text', className = '' }) {
   return <input type={type} value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder}
     className={`w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 ${className}`} />
 }
-function NI({ value, onChange, min, max, step = 1 }) {
-  return <input type="number" value={value ?? ''} onChange={e => onChange(e.target.value)} min={min} max={max} step={step}
+function NI({ value, onChange, min, max, step = 1, ariaLabel }) {
+  return <input type="number" value={value ?? ''} onChange={e => onChange(e.target.value)} min={min} max={max} step={step} aria-label={ariaLabel}
     className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400" />
 }
 function TA({ value, onChange, rows = 4, placeholder }) {
@@ -1946,6 +1946,26 @@ function Step6Description({ data, update }) {
 
 function Step7Grading({ data, update }) {
   const totalPoints = (data.assessments || []).reduce((s, a) => s + (parseInt(a.points) || 0), 0)
+
+  // ── Volunteer hours toggle ───────────────────────────────────────────────────
+  // No new DB column: "no volunteer hours" is expressed as volunteer_hours_required = 0.
+  // Drafts saved with 0 automatically load with the checkbox checked; older drafts
+  // (5, 6, etc.) load unchecked with their saved value intact.
+  const noVolunteerHours = (parseInt(data.volunteer_hours_required) || 0) === 0
+  // Remember the last non-zero value so unchecking the box restores what was there.
+  const lastVolunteerHours = useRef(
+    (parseInt(data.volunteer_hours_required) || 0) > 0 ? parseInt(data.volunteer_hours_required) : 5
+  )
+  const toggleNoVolunteer = (checked) => {
+    if (checked) {
+      const current = parseInt(data.volunteer_hours_required) || 0
+      if (current > 0) lastVolunteerHours.current = current
+      update('volunteer_hours_required', 0)
+    } else {
+      update('volunteer_hours_required', lastVolunteerHours.current || 5)
+    }
+  }
+
   const addA    = () => update('assessments', [...(data.assessments||[]), { id: Date.now(), name: '', points: 0, description: '' }])
   const removeA = (id) => update('assessments', (data.assessments||[]).filter(a => a.id !== id))
   const updateA = (id, f, v) => update('assessments', (data.assessments||[]).map(a => a.id === id ? { ...a, [f]: v } : a))
@@ -2015,8 +2035,30 @@ function Step7Grading({ data, update }) {
         <Field label="Grade B Minimum %"><NI value={data.grading_b_min} onChange={v => update('grading_b_min', parseInt(v)||80)} min={40} max={99} /></Field>
         <Field label="Grade C Minimum %"><NI value={data.grading_c_min} onChange={v => update('grading_c_min', parseInt(v)||70)} min={30} max={99} /></Field>
       </div>
-      <div className="border-t border-surface-100 pt-4">
-        <Field label="Volunteer Hours Required"><NI value={data.volunteer_hours_required} onChange={v => update('volunteer_hours_required', parseInt(v)||5)} min={0} max={50} /></Field>
+      <div className="border-t border-surface-100 pt-4 space-y-3">
+        <div className="flex items-center gap-2.5 min-h-[44px]">
+          <input
+            type="checkbox"
+            id="syllabus-no-volunteer-hours"
+            checked={noVolunteerHours}
+            onChange={e => toggleNoVolunteer(e.target.checked)}
+            className="h-4 w-4 rounded border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 cursor-pointer"
+          />
+          <label htmlFor="syllabus-no-volunteer-hours" className="text-sm text-surface-700 cursor-pointer select-none py-2">
+            This course does <span className="font-semibold">not</span> require volunteer hours
+            <span className="block text-xs text-surface-400 font-normal">Check for online or hybrid courses without a volunteer requirement — the volunteer hours paragraph is omitted from the syllabus.</span>
+          </label>
+        </div>
+        {!noVolunteerHours && (
+          <Field label="Volunteer Hours Required">
+            <NI
+              value={data.volunteer_hours_required}
+              onChange={v => update('volunteer_hours_required', parseInt(v)||5)}
+              min={1} max={50}
+              ariaLabel="Volunteer hours required"
+            />
+          </Field>
+        )}
       </div>
       <Field label="Time Commitment Note" hint="Leave blank to auto-generate based on credit hours">
         <TA value={data.time_commitment_notes} onChange={v => update('time_commitment_notes', v)} rows={3} placeholder="Leave blank to auto-generate…" />
