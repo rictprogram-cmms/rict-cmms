@@ -215,7 +215,16 @@ const DEFAULT_PERMISSIONS = [
   ['P0B2', 'Announcements', 'view_sent', false, false, true, 'Can view sent message history'],
   ['P0B3', 'Announcements', 'manage_templates', false, false, true, 'Can create and edit message templates'],
   ['P0B4', 'Announcements', 'manage_holds',     false, false, true, 'Can manage student holds from the Announcements page'],
-  ['P170', 'Announcements', 'manage_tv_slides', false, false, true, 'Can manage TV display slides from the Announcements page'],
+  ['P175', 'Announcements', 'manage_tv_slides', false, false, true, 'Can manage TV display slides from the Announcements page'],
+
+  // Absence Requests — IDs match the live DB rows (P170–P174).
+  // NOTE: the role flags below are the intended defaults; live toggles in the
+  // DB are authoritative and are NOT overwritten by Add Missing / Verify.
+  ['P174', 'Absence Requests', 'view_page',            true,  true,  true,  'Can access Absence Requests page'],
+  ['P170', 'Absence Requests', 'submit_request',       true,  true,  true,  'Can submit an absence request'],
+  ['P171', 'Absence Requests', 'review_requests',      false, false, true,  'Can approve or reject absence requests'],
+  ['P172', 'Absence Requests', 'submit_on_behalf',     false, false, true,  'Can submit an absence request on behalf of a student'],
+  ['P173', 'Absence Requests', 'mark_makeup_complete', false, false, true,  'Can mark absence make-up hours complete'],
 
   // Program Budget
   // NOTE: Some Program Budget IDs use the "PB##" naming pattern instead of "P0C#".
