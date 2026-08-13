@@ -380,9 +380,9 @@ export function useChangelog() {
       // The original dedup guarded against duplicate rows that the data
       // migration created for the same (version, request_id) pair. Manual
       // entries have request_id=null and are intentionally distinct —
-      // multiple "no-bump" entries can legitimately share a version, and
-      // since release_date is stored as a DATE (no time component), they
-      // can also share a release_date. Including manual entries in the
+      // multiple "no-bump" entries can legitimately share a version.
+      // (release_date is now a timestamptz — pre-migration rows may still
+      // share a midnight timestamp.) Including manual entries in the
       // dedup caused the later entry to silently hide the earlier one.
       const seen = new Set()
       const deduped = (data || []).filter(e => {

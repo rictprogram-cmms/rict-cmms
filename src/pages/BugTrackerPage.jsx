@@ -486,7 +486,8 @@ function ChangelogTable({ entries, onItemClick }) {
     )
     // Within each version, sort by release_date descending (newest first).
     // Falls back to title for stable ordering when release_dates collide
-    // (release_date is stored as DATE, so multiple same-day entries tie).
+    // (release_date is a timestamptz; only pre-migration rows, which share
+    // a midnight timestamp, can still tie).
     return versions.map(v => ({
       version: v,
       items: [...map[v]].sort((a, b) => {
