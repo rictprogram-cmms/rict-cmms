@@ -215,6 +215,7 @@ const DEFAULT_PERMISSIONS = [
   ['P0B2', 'Announcements', 'view_sent', false, false, true, 'Can view sent message history'],
   ['P0B3', 'Announcements', 'manage_templates', false, false, true, 'Can create and edit message templates'],
   ['P0B4', 'Announcements', 'manage_holds',     false, false, true, 'Can manage student holds from the Announcements page'],
+  ['P170', 'Announcements', 'manage_tv_slides', false, false, true, 'Can manage TV display slides from the Announcements page'],
 
   // Program Budget
   // NOTE: Some Program Budget IDs use the "PB##" naming pattern instead of "P0C#".

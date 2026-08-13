@@ -69,6 +69,24 @@ const FALLBACK_POLL_MS = 5 * 60 * 1000
 // ════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ════════════════════════════════════════════════════════════════════
+// Small rotation-position indicator shown in the left panel header.
+// Dot 1 is always Open Work Orders; the rest are slides in order.
+function SlideDots({ count, active }) {
+  if (count <= 1) return null
+  return (
+    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}
+      aria-label={`Panel ${active + 1} of ${count}`}>
+      {Array.from({ length: count }).map((_, i) => (
+        <span key={i} style={{
+          width: 10, height: 10, borderRadius: '50%',
+          background: i === active ? '#3b82f6' : '#475569',
+          transition: 'background 0.3s',
+        }} />
+      ))}
+    </div>
+  )
+}
+
 export default function TVDisplayPage() {
   const [clock, setClock] = useState('')
   const [dateStr, setDateStr] = useState('')
@@ -80,6 +98,13 @@ export default function TVDisplayPage() {
   const [lastUpdated, setLastUpdated] = useState('--')
   const [instructorAway, setInstructorAway] = useState(false)
   const [awayReturnTime, setAwayReturnTime] = useState('')
+  // ── TV slide rotation ──
+  // slides: active tv_slides rows within their date window, ordered.
+  // rotationSeconds: global dwell from settings (per-slide duration_seconds overrides).
+  // slideIndex: 0 = Open Work Orders panel; 1..n = slides[n-1].
+  const [slides, setSlides] = useState([])
+  const [rotationSeconds, setRotationSeconds] = useState(30)
+  const [slideIndex, setSlideIndex] = useState(0)
   // Today's hour-level lab closures (e.g. "2-3pm Faculty Meeting")
   // Each entry: { startMin, endMin, startStr, endStr, reason, isCurrent, isUpcoming }
   const [todayClosures, setTodayClosures] = useState([])
@@ -136,6 +161,85 @@ export default function TVDisplayPage() {
 
     return () => { supabase.removeChannel(channel) }
   }, [])
+
+  // ── TV slides + rotation setting ───────────────────────────────
+  // Active slides within their optional date window, plus the global dwell
+  // time. Realtime on both tables so edits at a desk reach the Pis in
+  // seconds without a reboot. Failure-safe: any error leaves slides empty
+  // and the display behaves exactly as it did before this feature.
+  useEffect(() => {
+    async function loadSlides() {
+      try {
+        const todayStr = (() => {
+          const t = new Date()
+          return t.getFullYear() + '-' +
+            String(t.getMonth() + 1).padStart(2, '0') + '-' +
+            String(t.getDate()).padStart(2, '0')
+        })()
+        const { data } = await supabase
+          .from('tv_slides')
+          .select('*')
+          .eq('status', 'active')
+          .order('display_order', { ascending: true })
+          .order('slide_id', { ascending: true })
+        const inWindow = (data || []).filter(sl =>
+          (!sl.start_date || sl.start_date <= todayStr) &&
+          (!sl.end_date || sl.end_date >= todayStr)
+        )
+        setSlides(inWindow)
+      } catch { setSlides([]) }
+    }
+    async function loadRotationSetting() {
+      try {
+        const { data } = await supabase
+          .from('settings')
+          .select('setting_value')
+          .eq('setting_key', 'tv_rotation_seconds')
+          .maybeSingle()
+        const v = parseInt(data?.setting_value, 10)
+        if (!isNaN(v) && v >= 5) setRotationSeconds(v)
+      } catch { /* keep default */ }
+    }
+    loadSlides()
+    loadRotationSetting()
+
+    const channel = supabase
+      .channel('tv-slides-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tv_slides' }, () => { loadSlides() })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'settings',
+        filter: 'setting_key=eq.tv_rotation_seconds',
+      }, (p) => {
+        const v = parseInt(p.new?.setting_value, 10)
+        if (!isNaN(v) && v >= 5) setRotationSeconds(v)
+      })
+      .subscribe()
+
+    // Date windows are checked against "today" — re-evaluate every 10 minutes
+    // so slides expire / appear on schedule without a reboot.
+    const windowTimer = setInterval(loadSlides, 600_000)
+    return () => { supabase.removeChannel(channel); clearInterval(windowTimer) }
+  }, [])
+
+  // ── Rotation timer ─────────────────────────────────────────────
+  // Panel 0 is always Open Work Orders. With zero slides there is nothing to
+  // rotate: the index pins to 0 and no timer runs (pre-feature behavior).
+  // Instructor Away Mode pins the display to Work Orders and pauses rotation.
+  useEffect(() => {
+    const count = 1 + slides.length
+    if (instructorAway || count <= 1) {
+      setSlideIndex(0)
+      return
+    }
+    // Clamp if slides were removed while we were past the end
+    setSlideIndex(i => (i >= count ? 0 : i))
+    const current = slideIndex === 0 ? null : slides[slideIndex - 1]
+    const dwell = (current?.duration_seconds || rotationSeconds) * 1000
+    const t = setTimeout(() => {
+      setSlideIndex(i => (i + 1) % (1 + slides.length))
+    }, dwell)
+    return () => clearTimeout(t)
+  }, [slideIndex, slides, rotationSeconds, instructorAway])
 
   // ── Clock tick ──────────────────────────────────────────────────
   useEffect(() => {
@@ -616,11 +720,14 @@ export default function TVDisplayPage() {
           return { marginTop: 80 + offset, height: `calc(100vh - ${80 + offset}px)` }
         })() : {})
       }}>
-        {/* LEFT — Work Orders */}
-        <div style={S.woPanel}>
+        {/* LEFT — rotates between Open Work Orders (index 0) and TV slides */}
+        {slideIndex === 0 ? (
+        <div style={S.woPanel} key="wo-panel">
+          <div style={{ ...S.woPanelInner, animation: 'slideFade 0.6s ease' }}>
           <div style={S.panelHeader}>
             <span style={S.panelIcon}>📋</span>
             <h2 style={S.panelTitle}>Open Work Orders</h2>
+            <SlideDots count={1 + slides.length} active={slideIndex} />
           </div>
           <div style={S.woList}>
             <div ref={woScrollRef} style={S.woScroll}>
@@ -664,7 +771,51 @@ export default function TVDisplayPage() {
               )}
             </div>
           </div>
+          </div>
         </div>
+        ) : (() => {
+          const sl = slides[slideIndex - 1]
+          if (!sl) return null
+          const isImageFull = sl.layout === 'image_full' && sl.image_url
+          return (
+            <div style={S.woPanel} key={`slide-${sl.slide_id}`} role="region" aria-label={`Announcement slide: ${sl.title || 'image'}`}>
+              <div style={{ ...S.woPanelInner, animation: 'slideFade 0.6s ease' }}>
+              {isImageFull ? (
+                <div style={S.slideImageFullWrap}>
+                  <img src={sl.image_url} alt={sl.title || 'Announcement'} style={S.slideImageFull} />
+                  <div style={S.slideDotsOverlay}>
+                    <SlideDots count={1 + slides.length} active={slideIndex} />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ ...S.panelHeader, borderBottom: '3px solid #a855f7' }}>
+                    <span style={S.panelIcon}>📣</span>
+                    <h2 style={S.panelTitle}>{sl.title || 'Announcement'}</h2>
+                    <SlideDots count={1 + slides.length} active={slideIndex} />
+                  </div>
+                  <div style={S.slideBodyWrap}>
+                    {sl.body && (
+                      <div style={S.slideBody}>
+                        {sl.body.split('\n').map((line, li) =>
+                          line.trim()
+                            ? <p key={li} style={S.slideBodyLine}>{line}</p>
+                            : <div key={li} style={{ height: 14 }} />
+                        )}
+                      </div>
+                    )}
+                    {sl.image_url && (
+                      <div style={S.slideSideImageWrap}>
+                        <img src={sl.image_url} alt="" style={S.slideSideImage} />
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+              </div>
+            </div>
+          )
+        })()}
 
         {/* RIGHT — Stats + People */}
         <div style={S.rightPanel}>
@@ -832,6 +983,10 @@ export default function TVDisplayPage() {
 // CSS KEYFRAMES
 // ════════════════════════════════════════════════════════════════════
 const KEYFRAMES = `
+@keyframes slideFade {
+  0%   { opacity: 0; }
+  100% { opacity: 1; }
+}
 @keyframes scrollUp {
   0%   { transform: translateY(0); }
   100% { transform: translateY(-50%); }
@@ -949,6 +1104,27 @@ const S = {
   woDue: { textAlign: 'right' },
   woDueDate: { fontSize: '1.2rem', fontWeight: 600, color: '#94a3b8' },
   woLateBadge: { fontSize: '1rem', color: '#fbbf24', marginTop: 4 },
+
+  // ── TV slides (left panel rotation) ──
+  woPanelInner: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+  slideBodyWrap: {
+    flex: 1, minHeight: 0, display: 'flex', gap: 24, padding: 32, overflow: 'hidden',
+  },
+  slideBody: { flex: 1, minWidth: 0, overflow: 'hidden' },
+  slideBodyLine: { fontSize: '1.6rem', lineHeight: 1.5, margin: '0 0 10px 0', color: '#e2e8f0' },
+  slideSideImageWrap: {
+    flexShrink: 0, maxWidth: '45%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  slideSideImage: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 12 },
+  slideImageFullWrap: {
+    flex: 1, minHeight: 0, position: 'relative',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f172a',
+  },
+  slideImageFull: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' },
+  slideDotsOverlay: {
+    position: 'absolute', bottom: 16, left: 0, right: 0,
+    display: 'flex', justifyContent: 'center',
+  },
 
   // ── Right panel ──
   rightPanel: { display: 'flex', flexDirection: 'column', gap: 16 },

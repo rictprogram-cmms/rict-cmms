@@ -115,6 +115,18 @@ const SETTING_META = {
   // Note: notification_email was retired in the audit pass — outbound emails
   // are addressed per-user (the Edge Function reads `to` from the request
   // payload, not from a global setting).
+  // ── TV Display ──
+  tv_rotation_seconds: {
+    label: 'TV Slide Rotation (seconds)',
+    type: 'number', category: 'TV Display',
+    desc: 'How long each TV display panel (Open Work Orders and each slide) stays on screen.',
+    details: {
+      what: 'Global dwell time for the TV display left-panel rotation. The Open Work Orders panel and every slide use this unless a slide sets its own "Seconds On Screen" override.',
+      where: 'TV Display page (/tv-display). Slides are managed on the Announcements page → TV Slides tab.',
+      effect: 'Typical values: 15 to 45 seconds. With no active slides the TV does not rotate at all. Changes reach the TVs within seconds — no kiosk reboot needed. Instructor Away Mode pins the display to Open Work Orders and pauses rotation.',
+    },
+  },
+
   notif_poll_interval: {
     label: 'Notification Poll Interval (seconds)',
     type: 'number', category: 'Notifications',

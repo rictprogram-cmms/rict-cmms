@@ -7,8 +7,10 @@ import {
   Megaphone, Search, Send, Trash2, RotateCcw, X, Loader2,
   CheckCircle2, Mail, MailOpen, Clock, Users, ChevronDown, ChevronUp,
   Bell, RefreshCw, Plus, FileText, Save, Edit3, Eye, EyeOff, Archive, Undo2, Pin, Inbox,
-  ShieldAlert, Info
+  ShieldAlert, Info,
+  MonitorPlay, ImagePlus, ArrowUp, ArrowDown, ImageIcon, CalendarDays,
 } from 'lucide-react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import StudentHoldsTab from '@/components/holds/StudentHoldsTab'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +113,7 @@ export default function AnnouncementsPage() {
   const canViewSent = hasPerm('view_sent')
   const canManageTemplates = hasPerm('manage_templates')
   const canManageHolds = hasPerm('manage_holds')
+  const canManageTVSlides = hasPerm('manage_tv_slides')
   const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin'
   // Non-instructors with compose permission still get a Sent tab — but it's
   // filtered to only their own sent messages (handled inside SentHistoryTab).
@@ -160,6 +163,9 @@ export default function AnnouncementsPage() {
     ...(canManageHolds ? [
       { id: 'holds', label: 'Student Holds', icon: ShieldAlert },
     ] : []),
+    ...(canManageTVSlides ? [
+      { id: 'tvslides', label: 'TV Slides', icon: MonitorPlay },
+    ] : []),
   ]
 
   return (
@@ -208,6 +214,7 @@ export default function AnnouncementsPage() {
       )}
       {tab === 'templates' && canManageTemplates && <TemplatesTab />}
       {tab === 'holds' && canManageHolds && <StudentHoldsTab />}
+      {tab === 'tvslides' && canManageTVSlides && <TVSlidesTab />}
 
       {/* Compose Modal */}
       {showCompose && (
@@ -1683,4 +1690,568 @@ function formatDate(dateStr) {
   } catch {
     return dateStr
   }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TV SLIDES TAB  (Instructors — permission: manage_tv_slides)
+// Manages the tv_slides table shown in the TV Display left-panel rotation.
+// Panel 1 on the TV is always Open Work Orders; these slides follow in order.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SLIDE_PREFIX = 'SLD'
+const SLIDE_PAD = 4
+
+// Collision-safe slide ID: get_next_id RPC first, MAX+1 fallback with
+// counter write-back (standard CMMS ID pattern).
+async function generateSlideId() {
+  let id = null
+  let numericId = NaN
+  try {
+    const { data: counter } = await supabase.rpc('get_next_id', { p_type: 'tv_slide' })
+    if (counter) { id = counter; numericId = parseInt(String(counter).replace(/\D/g, ''), 10) }
+  } catch { /* fall through to fallback */ }
+
+  if (!id || !Number.isFinite(numericId)) {
+    const { data: rows } = await supabase.from('tv_slides').select('slide_id').like('slide_id', `${SLIDE_PREFIX}%`)
+    let maxNum = 0
+    for (const r of rows || []) {
+      const n = parseInt(String(r.slide_id || '').replace(/\D/g, ''), 10)
+      if (Number.isFinite(n) && n > maxNum) maxNum = n
+    }
+    numericId = Math.max(maxNum, 1000) + 1
+    id = SLIDE_PREFIX + String(numericId).padStart(SLIDE_PAD, '0')
+    // Write the corrected value back so the counter recovers from drift
+    try {
+      await supabase.from('counters')
+        .update({ current_value: numericId, updated_at: new Date().toISOString() })
+        .eq('counter_name', 'tv_slide')
+    } catch { /* non-fatal */ }
+  }
+  return id
+}
+
+function TVSlidesTab() {
+  const { profile } = useAuth()
+  const [slides, setSlides] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [editing, setEditing] = useState(null)      // null | {} (new) | slide row
+  const [deleting, setDeleting] = useState(null)    // slide row pending delete confirm
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('tv_slides')
+      .select('*')
+      .order('display_order', { ascending: true })
+      .order('slide_id', { ascending: true })
+    if (!error) setSlides(data || [])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // Realtime — unique channel per mount
+  useEffect(() => {
+    const channel = supabase
+      .channel(`tv-slides-tab-${Date.now()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tv_slides' }, () => { load() })
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [load])
+
+  const audit = async (action, slideId, details) => {
+    try {
+      await supabase.from('audit_log').insert({
+        user_email: profile?.email || '',
+        user_name: profile ? `${profile.first_name} ${profile.last_name}` : '',
+        action,
+        entity_type: 'TV Slide',
+        entity_id: slideId,
+        details,
+      })
+    } catch { /* non-fatal */ }
+  }
+
+  const toggleStatus = async (sl) => {
+    const next = sl.status === 'active' ? 'inactive' : 'active'
+    const { data: rows, error } = await supabase.from('tv_slides')
+      .update({ status: next, updated_at: new Date().toISOString(), updated_by: profile?.email || '' })
+      .eq('slide_id', sl.slide_id)
+      .select()
+    if (error || !rows || rows.length === 0) {
+      toast.error('Update failed — you may not have permission.')
+      return
+    }
+    audit(next === 'active' ? 'Activated TV slide' : 'Deactivated TV slide', sl.slide_id, sl.title)
+    load()
+  }
+
+  // Swap display_order with the neighbor above/below
+  const move = async (idx, dir) => {
+    const a = slides[idx]
+    const b = slides[idx + dir]
+    if (!a || !b) return
+    // Ensure distinct order values even if both defaulted to 0
+    const aOrder = b.display_order === a.display_order ? a.display_order + dir : b.display_order
+    const bOrder = a.display_order
+    const now = new Date().toISOString()
+    const [r1, r2] = await Promise.all([
+      supabase.from('tv_slides').update({ display_order: aOrder, updated_at: now, updated_by: profile?.email || '' }).eq('slide_id', a.slide_id).select(),
+      supabase.from('tv_slides').update({ display_order: bOrder, updated_at: now, updated_by: profile?.email || '' }).eq('slide_id', b.slide_id).select(),
+    ])
+    if (r1.error || r2.error || !r1.data?.length || !r2.data?.length) {
+      toast.error('Reorder failed — you may not have permission.')
+    }
+    load()
+  }
+
+  const confirmDelete = async () => {
+    const sl = deleting
+    if (!sl) return
+    setBusy(true)
+    const { data: rows, error } = await supabase.from('tv_slides')
+      .delete().eq('slide_id', sl.slide_id).select()
+    if (error || !rows || rows.length === 0) {
+      toast.error('Delete failed — you may not have permission.')
+      setBusy(false)
+      return
+    }
+    // Best-effort cleanup of the stored image
+    if (sl.image_url && sl.image_url.includes('/tv-slides/')) {
+      try {
+        const path = sl.image_url.split('/tv-slides/')[1]
+        if (path) await supabase.storage.from('tv-slides').remove([decodeURIComponent(path)])
+      } catch { /* non-fatal */ }
+    }
+    audit('Deleted TV slide', sl.slide_id, sl.title)
+    toast.success('Slide deleted')
+    setDeleting(null)
+    setBusy(false)
+    load()
+  }
+
+  const fmtDateRange = (sl) => {
+    if (!sl.start_date && !sl.end_date) return null
+    const f = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '\u2026'
+    return `${f(sl.start_date)} \u2013 ${f(sl.end_date)}`
+  }
+
+  const todayStr = (() => {
+    const t = new Date()
+    return t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0')
+  })()
+  const isLive = (sl) => sl.status === 'active' &&
+    (!sl.start_date || sl.start_date <= todayStr) &&
+    (!sl.end_date || sl.end_date >= todayStr)
+
+  return (
+    <div className="space-y-3">
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-surface-500">
+          Slides rotate on the TV display after the Open Work Orders panel, in the order below.
+          Scheduled slides only show within their date window.
+        </p>
+        <button onClick={() => setEditing({})}
+          className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 flex items-center gap-1.5 shadow-sm shrink-0"
+          aria-label="Add new TV slide">
+          <Plus size={14} aria-hidden="true" /> New Slide
+        </button>
+      </div>
+
+      {/* Slide list */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12 text-surface-400 text-sm gap-2">
+          <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading…
+        </div>
+      ) : slides.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-xl border border-surface-200">
+          <MonitorPlay size={32} className="mx-auto text-surface-300 mb-2" aria-hidden="true" />
+          <p className="text-sm text-surface-500">No slides yet — the TV shows only Open Work Orders.</p>
+          <p className="text-xs text-surface-400 mt-1">Add a slide for lunch menus, job postings, or announcements.</p>
+        </div>
+      ) : (
+        <ul className="space-y-2" aria-label="TV slides in rotation order">
+          {slides.map((sl, idx) => (
+            <li key={sl.slide_id}
+              className={`bg-white rounded-xl border p-3 flex items-center gap-3 ${isLive(sl) ? 'border-surface-200' : 'border-surface-200 opacity-60'}`}>
+              {/* Reorder */}
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <button onClick={() => move(idx, -1)} disabled={idx === 0}
+                  aria-label={`Move slide "${sl.title || sl.slide_id}" up`}
+                  className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-surface-600 disabled:opacity-30 disabled:cursor-not-allowed">
+                  <ArrowUp size={13} aria-hidden="true" />
+                </button>
+                <button onClick={() => move(idx, 1)} disabled={idx === slides.length - 1}
+                  aria-label={`Move slide "${sl.title || sl.slide_id}" down`}
+                  className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-surface-600 disabled:opacity-30 disabled:cursor-not-allowed">
+                  <ArrowDown size={13} aria-hidden="true" />
+                </button>
+              </div>
+
+              {/* Thumb */}
+              <div className="w-16 h-10 rounded-lg bg-surface-900 flex items-center justify-center overflow-hidden shrink-0">
+                {sl.image_url
+                  ? <img src={sl.image_url} alt="" className="w-full h-full object-cover" />
+                  : <ImageIcon size={16} className="text-surface-600" aria-hidden="true" />}
+              </div>
+
+              {/* Info */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-surface-900 truncate">{sl.title || '(untitled image slide)'}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-500 shrink-0">
+                    {sl.layout === 'image_full' ? 'Full image' : 'Standard'}
+                  </span>
+                  {sl.duration_seconds && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 shrink-0">{sl.duration_seconds}s</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-0.5 text-xs text-surface-400">
+                  <span>{sl.slide_id}</span>
+                  {fmtDateRange(sl) && (
+                    <span className="flex items-center gap-1"><CalendarDays size={11} aria-hidden="true" />{fmtDateRange(sl)}</span>
+                  )}
+                  {sl.status === 'active' && !isLive(sl) && (
+                    <span className="text-amber-500">outside date window</span>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button onClick={() => toggleStatus(sl)}
+                  role="switch" aria-checked={sl.status === 'active'}
+                  aria-label={`Slide "${sl.title || sl.slide_id}" active`}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                    sl.status === 'active' ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' : 'bg-surface-100 text-surface-400 hover:bg-surface-200'
+                  }`}>
+                  {sl.status === 'active' ? 'Active' : 'Inactive'}
+                </button>
+                <button onClick={() => setEditing(sl)}
+                  aria-label={`Edit slide "${sl.title || sl.slide_id}"`}
+                  className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600 transition-colors">
+                  <Edit3 size={14} aria-hidden="true" />
+                </button>
+                <button onClick={() => setDeleting(sl)}
+                  aria-label={`Delete slide "${sl.title || sl.slide_id}"`}
+                  className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-500 transition-colors">
+                  <Trash2 size={14} aria-hidden="true" />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Edit / New modal */}
+      {editing !== null && (
+        <SlideEditModal
+          slide={editing.slide_id ? editing : null}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load() }}
+          audit={audit}
+        />
+      )}
+
+      {/* Delete confirm */}
+      {deleting && (
+        <SlideDeleteConfirm
+          slide={deleting}
+          busy={busy}
+          onCancel={() => setDeleting(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Slide Edit / New Modal ───────────────────────────────────────────────────
+function SlideEditModal({ slide, onClose, onSaved, audit }) {
+  const { profile } = useAuth()
+  const dialogRef = useDialogA11y(true, onClose)
+  const isEdit = Boolean(slide)
+  const [form, setForm] = useState(() => ({
+    title: slide?.title || '',
+    body: slide?.body || '',
+    layout: slide?.layout || 'standard',
+    duration_seconds: slide?.duration_seconds ? String(slide.duration_seconds) : '',
+    start_date: slide?.start_date || '',
+    end_date: slide?.end_date || '',
+    status: slide?.status || 'active',
+    image_url: slide?.image_url || '',
+  }))
+  const [uploading, setUploading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleImage = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) { toast.error('Please choose an image file.'); return }
+    if (file.size > 2_000_000) { toast.error('Image too large — please use an image under 2 MB.'); return }
+    setUploading(true)
+    try {
+      const ext = (file.name.split('.').pop() || 'png').toLowerCase()
+      const path = `slide-${Date.now()}.${ext}`
+      const { error: upErr } = await supabase.storage.from('tv-slides')
+        .upload(path, file, { contentType: file.type, upsert: false })
+      if (upErr) throw upErr
+      const { data: urlData } = supabase.storage.from('tv-slides').getPublicUrl(path)
+      set('image_url', urlData?.publicUrl || '')
+      toast.success('Image uploaded')
+    } catch (err) {
+      console.error('Slide image upload error:', err)
+      toast.error('Image upload failed')
+    }
+    setUploading(false)
+    e.target.value = ''
+  }
+
+  const handleSave = async () => {
+    if (form.layout === 'image_full' && !form.image_url) {
+      toast.error('Full-image layout needs an image.')
+      return
+    }
+    if (form.layout === 'standard' && !form.title.trim() && !form.body.trim()) {
+      toast.error('Add a title or some body text.')
+      return
+    }
+    if (form.start_date && form.end_date && form.end_date < form.start_date) {
+      toast.error('End date is before start date.')
+      return
+    }
+    const dur = form.duration_seconds === '' ? null : parseInt(form.duration_seconds, 10)
+    if (dur !== null && (isNaN(dur) || dur < 5 || dur > 600)) {
+      toast.error('Duration must be between 5 and 600 seconds (or blank for default).')
+      return
+    }
+    setSaving(true)
+    const now = new Date().toISOString()
+    const payload = {
+      title: form.title.trim(),
+      body: form.body,
+      layout: form.layout,
+      duration_seconds: dur,
+      start_date: form.start_date || null,
+      end_date: form.end_date || null,
+      status: form.status,
+      image_url: form.image_url || null,
+      updated_at: now,
+      updated_by: profile?.email || '',
+    }
+    if (isEdit) {
+      const { data: rows, error } = await supabase.from('tv_slides')
+        .update(payload).eq('slide_id', slide.slide_id).select()
+      if (error || !rows || rows.length === 0) {
+        toast.error('Save failed — you may not have permission.')
+        setSaving(false)
+        return
+      }
+      audit('Updated TV slide', slide.slide_id, form.title)
+      toast.success('Slide updated')
+    } else {
+      const slideId = await generateSlideId()
+      const { data: ordRows } = await supabase.from('tv_slides').select('display_order')
+      const nextOrder = ((ordRows || []).reduce((m, r) => Math.max(m, r.display_order || 0), 0)) + 1
+      const { data: rows, error } = await supabase.from('tv_slides')
+        .insert({ slide_id: slideId, display_order: nextOrder, created_at: now, created_by: profile?.email || '', ...payload })
+        .select()
+      if (error || !rows || rows.length === 0) {
+        toast.error('Save failed — you may not have permission.')
+        setSaving(false)
+        return
+      }
+      audit('Created TV slide', slideId, form.title)
+      toast.success('Slide created')
+    }
+    setSaving(false)
+    onSaved()
+  }
+
+  const inputCls = 'w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400'
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="slide-edit-title"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
+              <MonitorPlay size={15} className="text-blue-600" aria-hidden="true" />
+            </div>
+            <h2 id="slide-edit-title" className="text-base font-bold text-surface-900">
+              {isEdit ? 'Edit TV Slide' : 'New TV Slide'}
+            </h2>
+          </div>
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+            <X size={18} className="text-surface-400" aria-hidden="true" />
+          </button>
+        </div>
+
+        {/* Body: form + live preview */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 grid md:grid-cols-2 gap-6">
+          {/* Form column */}
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="slide-layout" className="block text-xs font-semibold text-surface-700 mb-1.5">Layout</label>
+              <select id="slide-layout" value={form.layout} onChange={e => set('layout', e.target.value)} className={`${inputCls} bg-white`}>
+                <option value="standard">Standard — title + text (+ optional image)</option>
+                <option value="image_full">Full image — image fills the panel</option>
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="slide-title" className="block text-xs font-semibold text-surface-700 mb-1.5">
+                Title {form.layout === 'image_full' && <span className="font-normal text-surface-400">(optional — used for the list here)</span>}
+              </label>
+              <input id="slide-title" value={form.title} onChange={e => set('title', e.target.value)}
+                placeholder="e.g. This Week’s Lunch Menu" className={inputCls} />
+            </div>
+
+            {form.layout === 'standard' && (
+              <div>
+                <label htmlFor="slide-body" className="block text-xs font-semibold text-surface-700 mb-1.5">Body Text</label>
+                <textarea id="slide-body" rows={6} value={form.body} onChange={e => set('body', e.target.value)}
+                  placeholder={'Monday \u2014 Walking Tacos\nTuesday \u2014 Chicken Alfredo\n\u2026'}
+                  className={`${inputCls} resize-none font-mono leading-relaxed`} />
+                <p className="text-[11px] text-surface-400 mt-1">Line breaks are kept. Keep it large-screen friendly — a few short lines beats a paragraph.</p>
+              </div>
+            )}
+
+            <div>
+              <span className="block text-xs font-semibold text-surface-700 mb-1.5">
+                Image {form.layout === 'image_full' ? <span className="text-red-500">*</span> : <span className="font-normal text-surface-400">(optional, shown beside the text)</span>}
+              </span>
+              <div className="flex items-center gap-2">
+                <label className="px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg hover:bg-surface-50 cursor-pointer flex items-center gap-1.5 text-surface-600">
+                  <ImagePlus size={14} aria-hidden="true" /> {uploading ? 'Uploading\u2026' : (form.image_url ? 'Replace Image' : 'Upload Image')}
+                  <input type="file" accept="image/*" onChange={handleImage} className="sr-only" aria-label="Upload slide image" disabled={uploading} />
+                </label>
+                {form.image_url && (
+                  <button onClick={() => set('image_url', '')}
+                    className="text-xs text-surface-400 hover:text-red-500 underline" type="button">
+                    Remove
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-surface-400 mt-1">PNG or JPG under 2 MB. TVs are 1280×720 — landscape images look best.</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="slide-start" className="block text-xs font-semibold text-surface-700 mb-1.5">
+                  Show From <span className="font-normal text-surface-400">(optional)</span>
+                </label>
+                <input id="slide-start" type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} className={inputCls} />
+              </div>
+              <div>
+                <label htmlFor="slide-end" className="block text-xs font-semibold text-surface-700 mb-1.5">
+                  Show Until <span className="font-normal text-surface-400">(optional)</span>
+                </label>
+                <input id="slide-end" type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} className={inputCls} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="slide-duration" className="block text-xs font-semibold text-surface-700 mb-1.5">
+                  Seconds On Screen <span className="font-normal text-surface-400">(blank = default)</span>
+                </label>
+                <input id="slide-duration" type="number" min="5" max="600" value={form.duration_seconds}
+                  onChange={e => set('duration_seconds', e.target.value)} placeholder="Default" className={inputCls} />
+              </div>
+              <div>
+                <label htmlFor="slide-status" className="block text-xs font-semibold text-surface-700 mb-1.5">Status</label>
+                <select id="slide-status" value={form.status} onChange={e => set('status', e.target.value)} className={`${inputCls} bg-white`}>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Preview column */}
+          <div>
+            <p className="text-xs font-semibold text-surface-700 mb-1.5">TV Preview <span className="font-normal text-surface-400">(approximate)</span></p>
+            <div className="rounded-xl overflow-hidden border border-surface-200 bg-[#1e293b] aspect-video flex flex-col" aria-hidden="true">
+              {form.layout === 'image_full' ? (
+                form.image_url
+                  ? <div className="flex-1 flex items-center justify-center bg-[#0f172a]"><img src={form.image_url} alt="" className="max-w-full max-h-full object-contain" /></div>
+                  : <div className="flex-1 flex items-center justify-center text-surface-500 text-xs">Upload an image to preview</div>
+              ) : (
+                <>
+                  <div className="px-3 py-2 bg-[#334155] border-b-2 border-purple-500 flex items-center gap-2">
+                    <span className="text-sm">📣</span>
+                    <span className="text-white text-xs font-semibold truncate">{form.title || 'Announcement'}</span>
+                  </div>
+                  <div className="flex-1 p-3 flex gap-2 overflow-hidden">
+                    <div className="flex-1 min-w-0 text-slate-200 text-[10px] leading-relaxed whitespace-pre-wrap overflow-hidden">
+                      {form.body || 'Body text appears here\u2026'}
+                    </div>
+                    {form.image_url && (
+                      <img src={form.image_url} alt="" className="max-w-[45%] object-contain rounded self-center" />
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            <p className="text-[11px] text-surface-400 mt-2">
+              The TV shows this in the left panel, rotating with Open Work Orders. Text renders much larger on the actual display.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-surface-100 px-6 py-3.5 flex justify-end gap-2 shrink-0">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving || uploading}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
+            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
+            {saving ? 'Saving\u2026' : (isEdit ? 'Save Changes' : 'Create Slide')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Delete confirm ───────────────────────────────────────────────────────────
+function SlideDeleteConfirm({ slide, busy, onCancel, onConfirm }) {
+  const dialogRef = useDialogA11y(true, onCancel)
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="slide-delete-title"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
+            <Trash2 size={17} className="text-red-500" aria-hidden="true" />
+          </div>
+          <div>
+            <h3 id="slide-delete-title" className="font-bold text-surface-900 text-sm">Delete Slide?</h3>
+            <p className="text-sm text-surface-500 mt-0.5">
+              Delete <span className="font-semibold text-surface-700">"{slide.title || slide.slide_id}"</span>?
+              It will disappear from the TV rotation immediately. This cannot be undone.
+            </p>
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button onClick={onCancel} disabled={busy}
+            className="px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors">
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={busy}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50">
+            {busy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Trash2 size={13} aria-hidden="true" />} Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
