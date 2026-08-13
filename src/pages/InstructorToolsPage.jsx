@@ -448,6 +448,7 @@ function Tile({ tile, onOpen, onSettings }) {
             {tile.hasSettings && (
               <button
                 onClick={e => { e.stopPropagation(); onSettings() }}
+                aria-label="Edit common sections"
                 title="Edit common sections"
                 className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
               >
@@ -502,6 +503,8 @@ const BLANK_FORM = { item_name: '', item_type: 'Tool', part_number: '', cost: ''
 
 // ─── Add / Edit modal ──────────────────────────────────────────────────────────
 function ToolModal({ tool, onSave, onClose, saving }) {
+  // WCAG 2.1 AA — focus trap, Escape-to-close (same as Cancel), focus restore
+  const dialogRef = useDialogA11y(true, onClose)
   const isEdit = Boolean(tool?.tool_id)
   const [form, setForm] = useState(() =>
     isEdit
@@ -522,61 +525,63 @@ function ToolModal({ tool, onSave, onClose, saving }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="tool-modal-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-md flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-200">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center">
-              <Wrench size={15} className="text-amber-600" />
+              <Wrench size={15} className="text-amber-600" aria-hidden="true" />
             </div>
-            <h2 className="text-base font-bold text-surface-900">{isEdit ? 'Edit Item' : 'Add Item'}</h2>
+            <h2 id="tool-modal-title" className="text-base font-bold text-surface-900">{isEdit ? 'Edit Item' : 'Add Item'}</h2>
           </div>
-          <button onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-surface-100 flex items-center justify-center transition-colors">
-            <X size={15} className="text-surface-500" />
+          <button onClick={onClose} aria-label="Close dialog" className="w-7 h-7 rounded-lg hover:bg-surface-100 flex items-center justify-center transition-colors">
+            <X size={15} className="text-surface-500" aria-hidden="true" />
           </button>
         </div>
 
         <div className="p-6 space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">
+            <label htmlFor="tool-item-name" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">
               Item Name <span className="text-red-500">*</span>
             </label>
-            <input type="text" value={form.item_name} onChange={e => set('item_name', e.target.value)}
+            <input id="tool-item-name" type="text" value={form.item_name} onChange={e => set('item_name', e.target.value)}
               placeholder="e.g. Wire Stripper — Needle Nose"
+              aria-required="true" aria-invalid={errors.item_name ? 'true' : undefined} aria-describedby={errors.item_name ? 'tool-item-name-error' : undefined}
               className={`w-full px-3 py-2 text-sm border rounded-lg outline-none transition-colors ${errors.item_name ? 'border-red-300 bg-red-50' : 'border-surface-200 focus:border-brand-400'}`} />
-            {errors.item_name && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertCircle size={11} />{errors.item_name}</p>}
+            {errors.item_name && <p id="tool-item-name-error" role="alert" className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertCircle size={11} aria-hidden="true" />{errors.item_name}</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">Type</label>
-              <select value={form.item_type} onChange={e => set('item_type', e.target.value)}
+              <label htmlFor="tool-item-type" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">Type</label>
+              <select id="tool-item-type" value={form.item_type} onChange={e => set('item_type', e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white">
                 <option>Tool</option><option>Material</option><option>Supply</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">ISBN Number</label>
-              <input type="text" value={form.part_number} onChange={e => set('part_number', e.target.value)}
+              <label htmlFor="tool-part-number" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">ISBN Number</label>
+              <input id="tool-part-number" type="text" value={form.part_number} onChange={e => set('part_number', e.target.value)}
                 placeholder="e.g. 12120-N"
                 className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400" />
             </div>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">
+            <label htmlFor="tool-cost" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">
               Cost <span className="font-normal text-surface-400">(optional)</span>
             </label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-surface-400 select-none">$</span>
-              <input type="number" step="0.01" min="0" value={form.cost} onChange={e => set('cost', e.target.value)}
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-surface-400 select-none" aria-hidden="true">$</span>
+              <input id="tool-cost" type="number" step="0.01" min="0" value={form.cost} onChange={e => set('cost', e.target.value)}
                 placeholder="0.00"
+                aria-invalid={errors.cost ? 'true' : undefined} aria-describedby={errors.cost ? 'tool-cost-error' : undefined}
                 className={`w-full pl-7 pr-3 py-2 text-sm border rounded-lg outline-none transition-colors ${errors.cost ? 'border-red-300 bg-red-50' : 'border-surface-200 focus:border-brand-400'}`} />
             </div>
-            {errors.cost && <p className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertCircle size={11} />{errors.cost}</p>}
+            {errors.cost && <p id="tool-cost-error" role="alert" className="mt-1 text-xs text-red-500 flex items-center gap-1"><AlertCircle size={11} aria-hidden="true" />{errors.cost}</p>}
           </div>
           <div>
-            <label className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">
+            <label htmlFor="tool-notes" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">
               Notes <span className="font-normal text-surface-400">(optional)</span>
             </label>
-            <textarea rows={2} value={form.notes} onChange={e => set('notes', e.target.value)}
+            <textarea id="tool-notes" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)}
               placeholder="Where to purchase, specifications, etc."
               className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 resize-none" />
           </div>
@@ -599,15 +604,17 @@ function ToolModal({ tool, onSave, onClose, saving }) {
 
 // ─── Delete confirm modal ──────────────────────────────────────────────────────
 function DeleteModal({ tool, onConfirm, onClose, saving }) {
+  // WCAG 2.1 AA — focus trap, Escape-to-close (same as Cancel), focus restore
+  const dialogRef = useDialogA11y(true, onClose)
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="delete-tool-modal-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
         <div className="flex items-start gap-3 mb-4">
           <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
-            <Trash2 size={17} className="text-red-500" />
+            <Trash2 size={17} className="text-red-500" aria-hidden="true" />
           </div>
           <div>
-            <h3 className="font-bold text-surface-900 text-sm">Delete Item?</h3>
+            <h3 id="delete-tool-modal-title" className="font-bold text-surface-900 text-sm">Delete Item?</h3>
             <p className="text-sm text-surface-500 mt-0.5">
               Are you sure you want to delete <span className="font-semibold text-surface-700">"{tool.item_name}"</span>? This cannot be undone.
             </p>
@@ -982,6 +989,7 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
             {onSettings && (
               <button
                 onClick={e => { e.stopPropagation(); onSettings() }}
+                aria-label="Edit college outcomes"
                 title="Edit college outcomes"
                 className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
               >
@@ -1058,6 +1066,8 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
 // ─── College Outcomes Settings Modal ─────────────────────────────────────────
 function CollegeOutcomesModal({ onClose }) {
   const { user } = useAuth()
+  // WCAG 2.1 AA — focus trap, Escape-to-close (same as Cancel), focus restore
+  const dialogRef = useDialogA11y(true, onClose)
   const [groups, setGroups] = useState([])
   const [saving, setSaving]   = useState(false)
   const [loading, setLoading] = useState(true)
@@ -1103,7 +1113,7 @@ function CollegeOutcomesModal({ onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="college-outcomes-modal-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
@@ -1112,12 +1122,12 @@ function CollegeOutcomesModal({ onClose }) {
               <Settings size={15} className="text-violet-600" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">College Outcomes & Competencies</h2>
+              <h2 id="college-outcomes-modal-title" className="text-base font-bold text-surface-900">College Outcomes & Competencies</h2>
               <p className="text-xs text-surface-400">Used as dropdown options in the Course Proposal wizard</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-            <X size={18} className="text-surface-400" />
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+            <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
 
@@ -1135,25 +1145,27 @@ function CollegeOutcomesModal({ onClose }) {
                   value={group.outcome}
                   onChange={e => updOutcome(gi, e.target.value)}
                   placeholder="College Outcome name…"
+                  aria-label={`College outcome name, group ${gi + 1}`}
                   className="flex-1 bg-transparent text-sm font-semibold text-violet-800 placeholder-violet-300 outline-none"
                 />
-                <button onClick={() => removeGroup(gi)} className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors flex-shrink-0">
-                  <Trash2 size={13} />
+                <button onClick={() => removeGroup(gi)} aria-label={group.outcome ? `Remove outcome group: ${group.outcome}` : `Remove outcome group ${gi + 1}`} className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors flex-shrink-0">
+                  <Trash2 size={13} aria-hidden="true" />
                 </button>
               </div>
               {/* Competencies */}
               <div className="px-3 py-2 space-y-1.5">
                 {group.competencies.map((comp, ci) => (
                   <div key={ci} className="flex items-center gap-2">
-                    <span className="text-surface-300 text-xs shrink-0">↳</span>
+                    <span className="text-surface-300 text-xs shrink-0" aria-hidden="true">↳</span>
                     <input
                       value={comp}
                       onChange={e => updComp(gi, ci, e.target.value)}
                       placeholder="Competency…"
+                      aria-label={`Competency ${ci + 1}, group ${gi + 1}`}
                       className="flex-1 px-2 py-1 text-xs border border-surface-200 rounded-md focus:outline-none focus:ring-1 focus:ring-violet-400"
                     />
-                    <button onClick={() => removeComp(gi, ci)} className="p-1 hover:bg-red-50 rounded text-surface-200 hover:text-red-400 transition-colors flex-shrink-0">
-                      <X size={11} />
+                    <button onClick={() => removeComp(gi, ci)} aria-label={`Remove competency ${ci + 1}, group ${gi + 1}`} className="p-1 hover:bg-red-50 rounded text-surface-200 hover:text-red-400 transition-colors flex-shrink-0">
+                      <X size={11} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -1194,6 +1206,8 @@ function CollegeOutcomesModal({ onClose }) {
 // ─── Program Revision Settings Modal ─────────────────────────────────────────
 function ProgramRevisionSettingsModal({ onClose }) {
   const { user } = useAuth()
+  // WCAG 2.1 AA — focus trap, Escape-to-close (same as Cancel), focus restore
+  const dialogRef = useDialogA11y(true, onClose)
   const [settings, setSettings] = useState({...DEFAULT_REVISION_SETTINGS})
   const [saving, setSaving]   = useState(false)
   const [loading, setLoading] = useState(true)
@@ -1238,19 +1252,19 @@ function ProgramRevisionSettingsModal({ onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="revision-settings-modal-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-lg flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-rose-50 rounded-lg flex items-center justify-center">
               <Settings size={15} className="text-rose-600"/>
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">Revision Program Settings</h2>
+              <h2 id="revision-settings-modal-title" className="text-base font-bold text-surface-900">Revision Program Settings</h2>
               <p className="text-xs text-surface-400">Default values pre-filled in every new revision</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-            <X size={18} className="text-surface-400"/>
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+            <X size={18} className="text-surface-400" aria-hidden="true"/>
           </button>
         </div>
         <div className="px-6 py-5 space-y-4">
@@ -1258,8 +1272,8 @@ function ProgramRevisionSettingsModal({ onClose }) {
             ? <div className="flex items-center justify-center py-8 text-surface-400 text-sm gap-2"><Loader2 size={16} className="animate-spin"/>Loading…</div>
             : FIELDS.map(({key,label,placeholder})=>(
               <div key={key}>
-                <label className="block text-xs font-semibold text-surface-700 mb-1.5">{label}</label>
-                <input value={settings[key]||''} onChange={e=>upd(key,e.target.value)}
+                <label htmlFor={`rev-setting-${key}`} className="block text-xs font-semibold text-surface-700 mb-1.5">{label}</label>
+                <input id={`rev-setting-${key}`} value={settings[key]||''} onChange={e=>upd(key,e.target.value)}
                   placeholder={placeholder}
                   className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500"/>
               </div>
@@ -1410,6 +1424,7 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
             {onSettings && (
               <button
                 onClick={e => { e.stopPropagation(); onSettings() }}
+                aria-label="Program revision settings"
                 title="Program revision settings"
                 className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
               >
