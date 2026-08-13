@@ -378,11 +378,11 @@ More information and guidelines are available at www.sctcc.edu/accessibility.
 
 This syllabus is available in alternate formats upon request by contacting Accessibility Services at 320-308-5757, 1-800-222-1009, or acc@sctcc.edu. TTY users may call MN Relay Service at 711 to contact the college. Discrimination against individuals on the grounds of disability is prohibited.`
 
-const DIVERSITY = `The entire class will benefit from the wealth of diversity brought by each individual, so you are asked to extend every courtesy and respect that you in turn would expect from the class.
+// Formerly the "Statement of Diversity" — the college replaced it with the
+// "Nondiscrimination and Title IX" section on the 2026 syllabus/outline templates.
+const NONDISCRIMINATION_TITLE_IX = `SCTCC is committed to creating a safe, supportive learning and working environment for all members of our campus community.
 
-This college is committed to creating a positive, supportive environment, which welcomes diversity of opinions and ideas for students. There will be no tolerance of race discrimination/harassment, sexual discrimination/ harassment, or discrimination/harassment based on age, disability, color, creed, national origin religion, sexual orientation, marital status, status with regard to public assistance or member in a local commission.
-
-Please refer to the Student Handbook for the complete list of Student Rights, Responsibilities, and Procedures.`
+College policy prohibits discrimination on the basis of age, color, creed, disability, familial status, gender identity, local human rights commission activity, marital status, national origin, public assistance status, race, religion, sex (including pregnancy), and/or sexual orientation in admission and access to, and treatment and employment in, its educational programs and activities. College policy also prohibits sexual misconduct, including dating, intimate partner, and relationship violence; non-forcible sex acts; sexual assault; sexual exploitation; stalking; Title IX sexual harassment and/or related retaliation.`
 
 function policyParas(text, indent=720) {
   return text.split('\n').filter(l=>l.trim()).map(line=>
@@ -547,9 +547,9 @@ async function buildDocx(d) {
       {indent:{left:360},spacing:{before:40,after:40}}),
     ...policyParas(ACCOMMODATIONS),
     dsp(60),
-    dp([dr('3.'),dr('   '),drb('STATEMENT OF DIVERSITY:')],
+    dp([dr('3.'),dr('   '),drb('NONDISCRIMINATION AND TITLE IX:')],
       {indent:{left:360},spacing:{before:40,after:40}}),
-    ...policyParas(DIVERSITY),
+    ...policyParas(NONDISCRIMINATION_TITLE_IX),
     dsp(80),
 
     dp([drb('VII.  PREPARED BY: '),dr(d.faculty_name||'')],{spacing:{before:80,after:60}}),

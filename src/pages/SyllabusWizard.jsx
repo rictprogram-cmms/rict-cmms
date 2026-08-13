@@ -124,15 +124,15 @@ More information and guidelines are available at www.sctcc.edu/accessibility.
 This syllabus is available in alternate formats upon request by contacting Accessibility Services at 320-308-5757, 1-800-222-1009, or acc@sctcc.edu. TTY users may call MN Relay Service at 711 to contact the college. Discrimination against individuals on the grounds of disability is prohibited.`,
   },
   diversity: {
-    title: 'Statement of Diversity',
+    // NOTE: section_key stays 'diversity' for compatibility with existing
+    // syllabus_common_sections rows in the database — only the DISPLAY title
+    // changed when the college replaced "Statement of Diversity" with the
+    // "Nondiscrimination and Title IX" section (2026 syllabus template update).
+    title: 'Nondiscrimination and Title IX',
     order: 3,
-    content: `The entire class will benefit from the wealth of diversity brought by each individual, so students are asked to extend every courtesy and respect that they, in turn, would expect from the class.
+    content: `SCTCC is committed to creating a safe, supportive learning and working environment for all members of our campus community.
 
-This college is committed to creating a positive, supportive environment that welcomes diversity of opinions and ideas for students. There will be no tolerance of race discrimination/harassment, sexual discrimination/harassment, or discrimination/harassment based on age, disability, color, creed, national origin, religion, sexual orientation, marital status, status with regard to public assistance, or membership in a local commission.
-
-I am happy to work with you if you share that you are experiencing a pregnancy, related condition or parenting situation. Once you share this information, I will connect you with Title IX Pregnant & Parenting Student Resources.
-
-I am happy to work with you if you share that you have a disability or underlying condition. Once you share this information, I will connect you with Accessibility Services so that you have the opportunity to obtain reasonable accommodations.`,
+College policy prohibits discrimination on the basis of age, color, creed, disability, familial status, gender identity, local human rights commission activity, marital status, national origin, public assistance status, race, religion, sex (including pregnancy), and/or sexual orientation in admission and access to, and treatment and employment in, its educational programs and activities. College policy also prohibits sexual misconduct, including dating, intimate partner, and relationship violence; non-forcible sex acts; sexual assault; sexual exploitation; stalking; Title IX sexual harassment and/or related retaliation.`,
   },
   attendance: {
     title: 'Attendance Policy',
@@ -387,7 +387,7 @@ export function generateSyllabusHTML(data, commonSections) {
   <div class="sec-head">College Policies &amp; Procedures</div>
   <div class="sub-head">Academic Integrity</div><div class="block">${renderSection(get('academic_integrity'))}</div>
   <div class="sub-head">Accommodations</div><div class="block">${renderSection(get('accommodations'))}</div>
-  <div class="sub-head">Statement of Diversity</div><div class="block">${renderSection(get('diversity'))}</div>
+  <div class="sub-head">Nondiscrimination and Title IX</div><div class="block">${renderSection(get('diversity'))}</div>
   <div class="sec-head">Course Policies &amp; Procedures</div>
   <div class="sub-head">Attendance</div><div class="block">${renderSection(get('attendance'))}</div>
   <div class="sub-head">Navigating D2L &amp; Technical Support</div><div class="block">${renderSection(get('d2l'))}</div>

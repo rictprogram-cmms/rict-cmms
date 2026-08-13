@@ -13,10 +13,14 @@ import CourseOutlineRevisionWizard from './CourseOutlineRevisionWizard'
 import { useProgramRevisions } from '@/hooks/useProgramRevisions'
 import CourseEndDateWizard from './CourseEndDateWizard'
 import { useCourseEndDates } from '@/hooks/useCourseEndDates'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 
 // ─── Common Sections Modal (Settings Gear) ────────────────────────────────────
 function CommonSectionsModal({ onClose }) {
   const { user } = useAuth()
+  // WCAG 2.1 AA — focus trap, Escape-to-close, focus restore (same semantics
+  // as the Cancel button: closes without saving)
+  const dialogRef = useDialogA11y(true, onClose)
   const [sections, setSections] = useState({})
   const [sharedLogo, setSharedLogo] = useState('')   // stored separately — it's an image, not text
   const [activeKey, setActiveKey] = useState('shared_logo')
@@ -94,21 +98,27 @@ function CommonSectionsModal({ onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="common-sections-modal-title"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+      >
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-surface-100 rounded-lg flex items-center justify-center">
-              <Settings size={16} className="text-surface-600" />
+              <Settings size={16} className="text-surface-600" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">Syllabus Common Sections</h2>
+              <h2 id="common-sections-modal-title" className="text-base font-bold text-surface-900">Syllabus Common Sections</h2>
               <p className="text-xs text-surface-400">Shared settings and boilerplate that appear in all syllabi</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-            <X size={18} className="text-surface-400" />
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+            <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
 
@@ -246,16 +256,18 @@ function CommonSectionsModal({ onClose }) {
               /* ── Text section editor ── */
               <>
                 <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-surface-700">
+                  <h3 id="common-section-editor-heading" className="text-sm font-semibold text-surface-700">
                     {DEFAULT_COMMON_SECTIONS[activeKey]?.title}
                   </h3>
-                  <span className="text-xs text-surface-400">
+                  <span id="common-section-editor-hint" className="text-xs text-surface-400">
                     Use • for bullet points, 1. 2. 3. for numbered lists
                   </span>
                 </div>
                 <textarea
                   value={sections[activeKey] || ''}
                   onChange={e => setSections(prev => ({ ...prev, [activeKey]: e.target.value }))}
+                  aria-labelledby="common-section-editor-heading"
+                  aria-describedby="common-section-editor-hint"
                   className="flex-1 w-full px-3 py-3 border border-surface-200 rounded-xl text-sm font-mono leading-relaxed focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 resize-none"
                   spellCheck={false}
                 />
