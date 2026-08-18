@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { downloadSyllabusDocx } from './syllabusDocx'
 import toast from 'react-hot-toast'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 
 // ─── Step Definitions ──────────────────────────────────────────────────────────
 const STEPS = [
@@ -453,11 +454,96 @@ export function generateSyllabusHTML(data, commonSections) {
 
 // ─── Create CMMS Class Modal ───────────────────────────────────────────────────
 // Shown after PDF is generated — offers to create the class in the CMMS classes table
+
+/**
+ * Two-tier class ID generator (matches generateLookupId in useSettings.js).
+ *
+ * Tier 1 (default): atomic `get_next_id` RPC with p_type='class'. Race-safe at
+ *   the DB level. Returns the full prefixed ID (e.g. "CLS1019").
+ *
+ * Tier 2 (fallback / drift recovery): drift-resistant client-side max scan.
+ *   Reads `counters` AND the actual MAX numeric class_id from the classes
+ *   table, uses `MAX(counter, table_max) + 1`, and heals the counter row.
+ *   Used when the RPC fails or when the caller passes `forceClient: true`
+ *   (used for retry-after-23505 unique violations).
+ *
+ * Never uses Date.now() for IDs (project rule).
+ */
+async function generateClassId(options = {}) {
+  const { forceClient = false } = options
+
+  // ── Tier 1: atomic RPC ─────────────────────────────────────────────────────
+  if (!forceClient) {
+    try {
+      const { data: rpcId, error: rpcErr } = await supabase.rpc('get_next_id', { p_type: 'class' })
+      if (!rpcErr && rpcId) return rpcId
+      if (rpcErr) console.warn('generateClassId: RPC error, falling through:', rpcErr.message)
+    } catch (e) {
+      console.warn('generateClassId: RPC threw, falling through:', e.message)
+    }
+  }
+
+  // ── Tier 2: drift-resistant client-side ────────────────────────────────────
+  let counterVal = 1000
+  let prefix = 'CLS'
+  try {
+    const { data: counter } = await supabase
+      .from('counters')
+      .select('current_value, prefix')
+      .eq('counter_name', 'class')
+      .maybeSingle()
+    if (counter) {
+      counterVal = counter.current_value || 1000
+      prefix = counter.prefix || 'CLS'
+    }
+  } catch (e) {
+    console.warn('generateClassId: counter read failed, using defaults:', e.message)
+  }
+
+  // Numeric max scan of existing class_ids (lex-sort is unsafe, e.g. CLS9999 > CLS10000)
+  let tableMax = 0
+  try {
+    const { data: rows } = await supabase.from('classes').select('class_id')
+    if (rows && rows.length > 0) {
+      for (const r of rows) {
+        const digits = (r.class_id || '').toString().replace(/\D/g, '')
+        const n = digits ? parseInt(digits, 10) : 0
+        if (Number.isFinite(n) && n > tableMax) tableMax = n
+      }
+    }
+  } catch (e) {
+    console.warn('generateClassId: max scan failed, using counter only:', e.message)
+  }
+
+  const nextVal = Math.max(counterVal, tableMax) + 1
+
+  // Heal the counter row so future RPC calls return correct values (non-fatal)
+  try {
+    await supabase.from('counters').update({
+      current_value: nextVal,
+      updated_at: new Date().toISOString(),
+    }).eq('counter_name', 'class')
+  } catch (e) {
+    console.warn('generateClassId: counter heal failed:', e.message)
+  }
+
+  return `${prefix}${nextVal}`
+}
+
 function CreateCMSSClassModal({ syllabusData, onClose }) {
-  const { user } = useAuth()
+  const { user, profile } = useAuth()
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState(false)
+  const [createdClassId, setCreatedClassId] = useState('')
   const [alreadyExists, setAlreadyExists] = useState(false)
+  const [confirmDuplicate, setConfirmDuplicate] = useState(false)
+
+  // WCAG 2.1 AA — focus trap, Escape-to-close, focus restore (SC 2.1.1, 2.4.3)
+  const dialogRef = useDialogA11y(true, onClose)
+
+  const userName = profile
+    ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
+    : (user?.email || 'Unknown')
 
   // Class fields — pre-filled from syllabus data
   const semLen = syllabusData.semester_length || '16'
@@ -490,49 +576,107 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
   }, [syllabusData.course_id, syllabusData.semester])
 
   const handleCreate = async () => {
+    // Duplicate guard — an existing course+semester class requires explicit opt-in
+    if (alreadyExists && !confirmDuplicate) return
+
     setCreating(true)
-    const { error } = await supabase.from('classes').insert({
-      course_id:          classData.course_id,
-      course_name:        classData.course_name,
-      required_hours:     parseFloat(classData.required_hours) || 4,
-      instructor:         classData.instructor,
-      semester:           classData.semester,
-      status:             classData.status,
-      start_date:         classData.start_date || null,
-      end_date:           classData.end_date || null,
-      spring_break_start: classData.spring_break_start || null,
-      spring_break_end:   classData.spring_break_end || null,
-      finals_start:       classData.finals_start || null,
-      finals_end:         classData.finals_end || null,
-      created_at:         new Date().toISOString(),
-    })
-    setCreating(false)
-    if (error) {
-      toast.error('Failed to create class: ' + error.message)
-    } else {
+    try {
+      // Insert with retry-on-duplicate-key. On a 23505 collision, switch to the
+      // drift-resistant client ID path (which heals the counter) and retry.
+      const maxAttempts = 3
+      let insertedRows = null
+      let lastError = null
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const classId = await generateClassId({ forceClient: attempt > 0 })
+        if (!classId) {
+          lastError = new Error('Could not generate a class ID — the "class" counter may be missing.')
+          break
+        }
+
+        const { data: rows, error } = await supabase.from('classes').insert({
+          class_id:           classId,
+          course_id:          classData.course_id,
+          course_name:        classData.course_name,
+          required_hours:     parseFloat(classData.required_hours) || 4,
+          instructor:         classData.instructor,
+          semester:           classData.semester,
+          status:             classData.status,
+          start_date:         classData.start_date || null,
+          end_date:           classData.end_date || null,
+          spring_break_start: classData.spring_break_start || null,
+          spring_break_end:   classData.spring_break_end || null,
+          finals_start:       classData.finals_start || null,
+          finals_end:         classData.finals_end || null,
+          created_at:         new Date().toISOString(),
+        }).select()
+
+        if (!error) {
+          if (!rows || rows.length === 0) {
+            // RLS silently blocked the insert — surface it as a real failure
+            lastError = new Error('Insert was blocked — you may not have permission to create classes.')
+            break
+          }
+          insertedRows = rows
+          setCreatedClassId(classId)
+          break
+        }
+
+        lastError = error
+        // 23505 = unique_violation — retry with the forced client path
+        if (error.code !== '23505') break
+      }
+
+      if (!insertedRows) {
+        toast.error('Failed to create class: ' + (lastError?.message || 'Unknown error'))
+        return
+      }
+
+      // Audit log (non-critical)
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile?.email || user?.email,
+          user_name: userName,
+          action: 'Create',
+          entity_type: 'classes',
+          entity_id: insertedRows[0].class_id,
+          details: `Created class ${classData.course_id} – ${classData.course_name} (${classData.semester}) from Syllabus Generator`,
+        })
+      } catch (e) { console.log('Audit log error (non-critical):', e) }
+
       setCreated(true)
       toast.success(`${classData.course_id} added to CMMS — ready for student enrollment!`)
+    } finally {
+      setCreating(false)
     }
   }
 
   if (created) {
     return (
       <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 text-center">
+        <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="ccm-success-title"
+          className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 text-center">
           <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Check size={28} className="text-emerald-600" />
+            <Check size={28} className="text-emerald-600" aria-hidden="true" />
           </div>
-          <h3 className="text-lg font-bold text-surface-900 mb-2">Class Created!</h3>
-          <p className="text-sm text-surface-500 mb-1">
-            <strong>{classData.course_id} – {classData.course_name}</strong>
-          </p>
-          <p className="text-sm text-surface-500 mb-6">
-            {classData.semester} · {classData.instructor}
-          </p>
+          <h3 id="ccm-success-title" className="text-lg font-bold text-surface-900 mb-2">Class Created!</h3>
+          <div role="status">
+            <p className="text-sm text-surface-500 mb-1">
+              <strong>{classData.course_id} – {classData.course_name}</strong>
+            </p>
+            <p className="text-sm text-surface-500 mb-2">
+              {classData.semester} · {classData.instructor}
+            </p>
+            {createdClassId && (
+              <p className="text-xs font-semibold text-surface-500 mb-4">
+                Class ID: <span className="font-mono text-surface-700">{createdClassId}</span>
+              </p>
+            )}
+          </div>
           <p className="text-xs text-surface-400 mb-6">
             The class is now visible in the CMMS. Go to Settings to enroll students.
           </p>
-          <button onClick={onClose} className="w-full py-2.5 bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors">
+          <button onClick={onClose} className="w-full py-2.5 min-h-[44px] bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
             Done
           </button>
         </div>
@@ -540,32 +684,43 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
     )
   }
 
+  const createDisabled = creating || !classData.course_id || (alreadyExists && !confirmDuplicate)
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="ccm-title" aria-describedby="ccm-desc"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center">
-              <GraduationCap size={16} className="text-emerald-600" />
+              <GraduationCap size={16} className="text-emerald-600" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">Create CMMS Class</h2>
-              <p className="text-xs text-surface-400">Add this course to the CMMS for student enrollment</p>
+              <h2 id="ccm-title" className="text-base font-bold text-surface-900">Create CMMS Class</h2>
+              <p id="ccm-desc" className="text-xs text-surface-400">Add this course to the CMMS for student enrollment</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-            <X size={18} className="text-surface-400" />
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
+            <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
 
           {alreadyExists && (
-            <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm text-amber-700">
-              <AlertCircle size={15} className="shrink-0 mt-0.5" />
-              <span>A CMMS class for <strong>{syllabusData.course_id}</strong> in <strong>{syllabusData.semester}</strong> already exists. Creating again will add a duplicate — proceed only if needed.</span>
+            <div className="bg-amber-50 border border-amber-100 rounded-lg p-3 text-sm text-amber-700" aria-live="polite">
+              <div className="flex items-start gap-2">
+                <AlertCircle size={15} className="shrink-0 mt-0.5" aria-hidden="true" />
+                <span>A CMMS class for <strong>{syllabusData.course_id}</strong> in <strong>{syllabusData.semester}</strong> already exists. Duplicate classes ripple into the time clock, lab signup, and weekly tracker — manage the existing class from the Settings page instead.</span>
+              </div>
+              <label htmlFor="ccm-confirm-dup" className="mt-2.5 flex items-start gap-2 cursor-pointer font-medium">
+                <input id="ccm-confirm-dup" type="checkbox" checked={confirmDuplicate}
+                  onChange={e => setConfirmDuplicate(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus-visible:ring-2 focus-visible:ring-amber-500/60" />
+                <span>I understand this will create a duplicate class and I want to proceed anyway.</span>
+              </label>
             </div>
           )}
 
@@ -578,36 +733,37 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Course ID</label>
-                <input value={classData.course_id} onChange={e => upd('course_id', e.target.value)}
+                <label htmlFor="ccm-course-id" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Course ID</label>
+                <input id="ccm-course-id" value={classData.course_id} onChange={e => upd('course_id', e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Course Name</label>
-                <input value={classData.course_name} onChange={e => upd('course_name', e.target.value)}
+                <label htmlFor="ccm-course-name" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Course Name</label>
+                <input id="ccm-course-name" value={classData.course_name} onChange={e => upd('course_name', e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Instructor</label>
-                <input value={classData.instructor} onChange={e => upd('instructor', e.target.value)}
+                <label htmlFor="ccm-instructor" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Instructor</label>
+                <input id="ccm-instructor" value={classData.instructor} onChange={e => upd('instructor', e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Semester</label>
-                <input value={classData.semester} readOnly
+                <label htmlFor="ccm-semester" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Semester</label>
+                <input id="ccm-semester" value={classData.semester} readOnly
                   className="w-full px-3 py-2 border border-surface-100 rounded-lg text-sm bg-surface-50 text-surface-500" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Required Hours/Week</label>
-                <input type="number" value={classData.required_hours} onChange={e => upd('required_hours', e.target.value)} min={1} max={40}
+                <label htmlFor="ccm-hours" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Required Hours/Week</label>
+                <input id="ccm-hours" type="number" value={classData.required_hours} onChange={e => upd('required_hours', e.target.value)} min={1} max={40}
+                  aria-describedby="ccm-hours-hint"
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
-                <p className="text-[10px] text-surface-400 mt-1">
+                <p id="ccm-hours-hint" className="text-[10px] text-surface-400 mt-1">
                   Formula: {syllabusData.credits_lab || 1} lab cr × {semLen === '8' ? '4' : '2'} ({semLen}-wk) = {calcHours(syllabusData.credits_lab || 1, semLen)} hrs/wk
                 </p>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Status</label>
-                <select value={classData.status} onChange={e => upd('status', e.target.value)}
+                <label htmlFor="ccm-status" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Status</label>
+                <select id="ccm-status" value={classData.status} onChange={e => upd('status', e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40">
                   <option>Active</option>
                   <option>Inactive</option>
@@ -615,35 +771,35 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Start Date</label>
-                <input type="date" value={classData.start_date} onChange={e => upd('start_date', e.target.value)}
+                <label htmlFor="ccm-start" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Start Date</label>
+                <input id="ccm-start" type="date" value={classData.start_date} onChange={e => upd('start_date', e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">End Date</label>
-                <input type="date" value={classData.end_date} onChange={e => upd('end_date', e.target.value)}
+                <label htmlFor="ccm-end" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">End Date</label>
+                <input id="ccm-end" type="date" value={classData.end_date} onChange={e => upd('end_date', e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               {(syllabusData.spring_break_start || syllabusData.finals_start) && (
                 <>
                   <div>
-                    <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Spring Break Start</label>
-                    <input type="date" value={classData.spring_break_start} onChange={e => upd('spring_break_start', e.target.value)}
+                    <label htmlFor="ccm-sb-start" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Spring Break Start</label>
+                    <input id="ccm-sb-start" type="date" value={classData.spring_break_start} onChange={e => upd('spring_break_start', e.target.value)}
                       className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Spring Break End</label>
-                    <input type="date" value={classData.spring_break_end} onChange={e => upd('spring_break_end', e.target.value)}
+                    <label htmlFor="ccm-sb-end" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Spring Break End</label>
+                    <input id="ccm-sb-end" type="date" value={classData.spring_break_end} onChange={e => upd('spring_break_end', e.target.value)}
                       className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Finals Start</label>
-                    <input type="date" value={classData.finals_start} onChange={e => upd('finals_start', e.target.value)}
+                    <label htmlFor="ccm-finals-start" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Finals Start</label>
+                    <input id="ccm-finals-start" type="date" value={classData.finals_start} onChange={e => upd('finals_start', e.target.value)}
                       className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Finals End</label>
-                    <input type="date" value={classData.finals_end} onChange={e => upd('finals_end', e.target.value)}
+                    <label htmlFor="ccm-finals-end" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Finals End</label>
+                    <input id="ccm-finals-end" type="date" value={classData.finals_end} onChange={e => upd('finals_end', e.target.value)}
                       className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
                   </div>
                 </>
@@ -657,12 +813,12 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
         </div>
 
         <div className="border-t border-surface-100 px-6 py-4 flex gap-3">
-          <button onClick={onClose} className="flex-1 py-2.5 border border-surface-200 text-sm font-medium text-surface-600 rounded-xl hover:bg-surface-50 transition-colors">
+          <button onClick={onClose} className="flex-1 py-2.5 min-h-[44px] border border-surface-200 text-sm font-medium text-surface-600 rounded-xl hover:bg-surface-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
             Skip for Now
           </button>
-          <button onClick={handleCreate} disabled={creating || !classData.course_id}
-            className="flex-1 py-2.5 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
-            <PlusCircle size={15} />
+          <button onClick={handleCreate} disabled={createDisabled}
+            className="flex-1 py-2.5 min-h-[44px] bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60">
+            <PlusCircle size={15} aria-hidden="true" />
             {creating ? 'Creating…' : 'Create CMMS Class'}
           </button>
         </div>
