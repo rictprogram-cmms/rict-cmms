@@ -2477,10 +2477,14 @@ function StepProgress({ current, onClickStep }) {
 // ─── Main Wizard ──────────────────────────────────────────────────────────────
 // initialCourseId / initialSemester: optional — when provided (e.g. launched from
 // the Syllabus Library), the wizard opens preloaded to that course + semester.
+// initialStep: which step to land on when the wizard opens. The Syllabus
+// Library passes 8 (Review & export) for already-saved syllabi so instructors
+// go straight to the finished document; the step bar and Back buttons still
+// allow walking backward through the wizard from there.
 // Defaults preserve the original blank-start behavior exactly.
-export default function SyllabusWizard({ onClose, initialCourseId = null, initialSemester = null }) {
+export default function SyllabusWizard({ onClose, initialCourseId = null, initialSemester = null, initialStep = 1 }) {
   const { user } = useAuth()
-  const [step, setStep] = useState(1)
+  const [step, setStep] = useState(initialStep)
   const [catalogRefreshKey, setCatalogRefreshKey] = useState(0)
   const [data, setData] = useState(() => ({
     ...EMPTY_SYLLABUS,

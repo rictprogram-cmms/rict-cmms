@@ -8,8 +8,10 @@
  *   • Rows = courses, columns = semesters (chronological), cells = saved drafts
  *   • Cell shows last-saved date, saved-by, PDF-generated badge, and whether
  *     semester dates have been entered
- *   • Click a filled active cell → opens the Syllabus Wizard preloaded to that
- *     course + semester (via onOpenSyllabus callback)
+ *   • Click "Open →" on a filled active cell → opens the Syllabus Wizard at
+ *     the Review & export step (the syllabus already went through the wizard);
+ *     "Edit in wizard" opens the same syllabus at step 1 for a full walkthrough
+ *     (via onOpenSyllabus(course_id, semester, mode) — mode 'review' | 'edit')
  *   • Instructors: archive (with confirm) and restore
  *   • Super admin only: permanent delete (with danger confirm)
  *   • "Show archived" toggle reveals archived drafts (muted, restore-able)
@@ -187,14 +189,28 @@ export default function SyllabusLibraryModal({ onClose, onOpenSyllabus }) {
               Archived
             </p>
           ) : (
-            <button
-              type="button"
-              onClick={() => onOpenSyllabus(row.course_id, row.semester)}
-              aria-label={`Open syllabus for ${row.course_id}, ${row.semester}, in the Syllabus Wizard`}
-              className="w-full min-h-[44px] text-left text-sm font-semibold text-brand-700 hover:text-brand-800 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
-            >
-              Open →
-            </button>
+            /* Open → jumps straight to the Review & export step (the syllabus
+               has already been through the wizard); "Edit in wizard" is the
+               secondary path that walks through from step 1. */
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onOpenSyllabus(row.course_id, row.semester, 'review')}
+                aria-label={`Open syllabus for ${row.course_id}, ${row.semester}, at the review and export step`}
+                className="min-h-[44px] flex-1 min-w-0 text-left text-sm font-semibold text-brand-700 hover:text-brand-800 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
+              >
+                Open →
+              </button>
+              <span aria-hidden="true" className="text-surface-200 select-none">|</span>
+              <button
+                type="button"
+                onClick={() => onOpenSyllabus(row.course_id, row.semester, 'edit')}
+                aria-label={`Edit syllabus for ${row.course_id}, ${row.semester}, step by step in the wizard`}
+                className="min-h-[44px] shrink-0 text-[11px] font-medium text-surface-400 hover:text-brand-700 underline-offset-2 hover:underline rounded px-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
+              >
+                Edit in wizard
+              </button>
+            </div>
           )}
 
           {/* Metadata */}
@@ -336,7 +352,7 @@ export default function SyllabusLibraryModal({ onClose, onOpenSyllabus }) {
               )}
             </label>
             <p className="text-xs text-surface-400">
-              Click <span className="font-semibold text-brand-600">Open →</span> to load a syllabus in the wizard
+              <span className="font-semibold text-brand-600">Open →</span> jumps to Review &amp; export · <span className="font-semibold text-brand-600">Edit in wizard</span> walks through the steps
             </p>
           </div>
 

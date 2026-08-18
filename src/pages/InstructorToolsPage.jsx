@@ -1674,15 +1674,19 @@ export default function InstructorToolsPage() {
           key={wizardInitial ? `${wizardInitial.course_id}|${wizardInitial.semester}` : 'blank'}
           initialCourseId={wizardInitial?.course_id || null}
           initialSemester={wizardInitial?.semester || null}
+          initialStep={wizardInitial?.step || 1}
           onClose={() => { setShowWizard(false); setWizardInitial(null) }}
         />
       )}
       {showLibrary && (
         <SyllabusLibraryModal
           onClose={() => setShowLibrary(false)}
-          onOpenSyllabus={(course_id, semester) => {
+          onOpenSyllabus={(course_id, semester, mode = 'edit') => {
             setShowLibrary(false)
-            setWizardInitial({ course_id, semester })
+            // 'review' lands on step 8 (Review & export) — the syllabus has
+            // already been through the wizard, so open it as a document first.
+            // 'edit' (default) starts at step 1 for the full walkthrough.
+            setWizardInitial({ course_id, semester, step: mode === 'review' ? 8 : 1 })
             setShowWizard(true)
           }}
         />
