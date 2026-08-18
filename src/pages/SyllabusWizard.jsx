@@ -5,8 +5,10 @@ import {
   X, ChevronRight, ChevronLeft, Plus, Trash2,
   BookOpen, Printer, Save, Check, AlertCircle,
   Copy, Upload, RefreshCw, Eye, Clock,
-  UserPlus, User, GraduationCap, PlusCircle, Search, Pencil
+  UserPlus, User, GraduationCap, PlusCircle, Search, Pencil,
+  FileText, Download
 } from 'lucide-react'
+import { downloadSyllabusDocx } from './syllabusDocx'
 import toast from 'react-hot-toast'
 
 // ─── Step Definitions ──────────────────────────────────────────────────────────
@@ -228,16 +230,29 @@ function fmtDateShort(d) {
   if (!d) return ''
   return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' })
 }
+// Accessibility: consecutive bullet/numbered lines are wrapped in real <ul>/<ol>
+// elements (loose <li> is invalid HTML and produces broken PDF list tags), and
+// ALL-CAPS mini-headings render as real <h4> elements so tagged PDFs expose
+// proper heading structure to assistive technology.
 function renderSection(text) {
   if (!text) return ''
-  return text.split('\n').map(line => {
+  const out = []
+  let listType = null // 'ul' | 'ol' | null
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null } }
+  const openList = (type) => {
+    if (listType !== type) { closeList(); out.push(`<${type}>`); listType = type }
+  }
+  text.split('\n').forEach(line => {
     const t = line.replace(/\u00a0/g, ' ').trim()
-    if (!t) return '<br>'
-    if (t.startsWith('•')) return `<li>${escHtml(t.slice(1).trim())}</li>`
-    if (/^\d+\.\s/.test(t)) return `<li>${escHtml(t.replace(/^\d+\.\s/, ''))}</li>`
-    if (t === t.toUpperCase() && t.length > 3) return `<p class="subsub-head">${escHtml(t)}</p>`
-    return `<p>${escHtml(t)}</p>`
-  }).join('\n')
+    if (!t) { closeList(); out.push('<br>'); return }
+    if (t.startsWith('•')) { openList('ul'); out.push(`<li>${escHtml(t.slice(1).trim())}</li>`); return }
+    if (/^\d+\.\s/.test(t)) { openList('ol'); out.push(`<li>${escHtml(t.replace(/^\d+\.\s/, ''))}</li>`); return }
+    closeList()
+    if (t === t.toUpperCase() && t.length > 3) { out.push(`<h4 class="subsub-head">${escHtml(t)}</h4>`); return }
+    out.push(`<p>${escHtml(t)}</p>`)
+  })
+  closeList()
+  return out.join('\n')
 }
 
 export function generateSyllabusHTML(data, commonSections) {
@@ -261,21 +276,22 @@ export function generateSyllabusHTML(data, commonSections) {
   const finalsNote = (data.finals_start && data.finals_end) ? `<p>The Final will be taken the week of ${fmtDateShort(data.finals_start)}\u2013${fmtDateShort(data.finals_end)} during class.</p>` : ''
   const timeNote = data.time_commitment_notes || `You should expect to spend two hours outside of class for each hour of lecture and one hour outside of class for each hour of lab. For this course, that means a total expectation of ${(parseInt(data.credits_lecture) || 0) * 2 + (parseInt(data.credits_lab) || 0)} hours per week outside of the classroom. If you do not feel you can fulfill this expectation, you should consider whether this class best fits this term for you.`
   const assessmentRows = (data.assessments || []).map(a => `<tr><td>${escHtml(a.name)}${a.description ? ` &ndash; <em>${escHtml(a.description)}</em>` : ''}</td><td class="pts">${a.points > 0 ? a.points + ' pts' : '&ndash;'}</td></tr>`).join('\n')
-  const outcomesHtml = (data.student_outcomes || []).length > 0 ? `<p><strong>Student Learning Outcomes:</strong></p>` + (data.student_outcomes || []).map((o, i) => `<p class="outcome">${i + 1}.&nbsp; ${escHtml(o)}</p>`).join('\n') : ''
+  // Accessibility: real ordered list so screen readers announce list semantics
+  const outcomesHtml = (data.student_outcomes || []).length > 0 ? `<p><strong>Student Learning Outcomes:</strong></p>\n<ol class="outcomes">` + (data.student_outcomes || []).map(o => `<li>${escHtml(o)}</li>`).join('\n') + `</ol>` : ''
   // Strip " (Part #: ...)" suffix — part numbers are for the catalog, not the PDF
   const materialsHtml = (data.required_materials || []).length > 0 ? `<ul>${(data.required_materials || []).map(m => `<li>${escHtml(m.replace(/ \(Part #:.*?\)$/i, '').trim())}</li>`).join('\n')}</ul>` : '<p>None</p>'
   const techHtml = `<ul>${(data.required_technology || []).map(t => `<li>${escHtml(t)}</li>`).join('\n')}</ul>`
   const footerText = get('college_footer').replace(/\n/g, '<br>')
-  const logoHtml = data.logo_url ? `<img src="${escHtml(data.logo_url)}" alt="SCTCC Logo" style="width:64px;height:auto;display:block;margin-bottom:6px;">` : ''
+  const logoHtml = data.logo_url ? `<img src="${escHtml(data.logo_url)}" alt="St. Cloud Technical &amp; Community College logo" style="width:64px;height:auto;display:block;margin-bottom:6px;">` : ''
   const coursePhotoHtml = data.course_photo_url
-    ? `<img src="${escHtml(data.course_photo_url)}" alt="Course photo" style="float:right;width:180px;height:auto;max-height:140px;object-fit:cover;border-radius:4px;margin:0 0 8px 16px;border:1px solid #dde4f0;">`
+    ? `<img src="${escHtml(data.course_photo_url)}" alt="Course photo for ${escHtml(data.course_id)}: ${escHtml(data.course_name)}" style="float:right;width:180px;height:auto;max-height:140px;object-fit:cover;border-radius:4px;margin:0 0 8px 16px;border:1px solid #dde4f0;">`
     : ''
   const coursePhotoClear = data.course_photo_url ? '<div style="clear:both"></div>' : ''  
   const hasInstructor2 = data.instructor2_enabled && data.instructor2_name
   const instructor2Html = hasInstructor2 ? `
-  <div class="sub-head">Co-Instructor Office &amp; Office Hours</div>
+  <h3 class="sub-head">Co-Instructor Office &amp; Office Hours</h3>
   <div class="block"><p>${escHtml(data.instructor2_office || '')}</p><p>${escHtml(data.instructor2_office_hours || '')}</p></div>
-  <div class="sub-head">Co-Instructor Contact</div>
+  <h3 class="sub-head">Co-Instructor Contact</h3>
   <div class="block">
     <p>${escHtml(data.instructor2_name)}</p>
     ${data.instructor2_email ? `<p><a href="mailto:${escHtml(data.instructor2_email)}">${escHtml(data.instructor2_email)}</a></p>` : ''}
@@ -307,12 +323,14 @@ export function generateSyllabusHTML(data, commonSections) {
     .course-title { font-size: 15pt; font-weight: 700; font-variant: small-caps; letter-spacing: 0.04em; }
     .semester-label { font-size: 10.5pt; font-variant: small-caps; font-weight: 600; letter-spacing: 0.02em; margin: 3px 0 8px; }
     .official-notice { font-size: 9.5pt; font-weight: 700; margin-bottom: 6px; }
-    .nav-line { font-size: 8.5pt; color: #1155cc; text-decoration: underline; }
+    .nav-line { font-size: 8.5pt; }
+    .nav-line a { color: #1155cc; text-decoration: underline; }
+    h1, h2, h3, h4 { font-weight: inherit; }
     .sec-head { font-size: 11.5pt; font-weight: 700; font-variant: small-caps; letter-spacing: 0.05em; color: #1a3a5c; border-bottom: 1.5px solid #1a3a5c; padding-bottom: 2px; margin-top: 18px; margin-bottom: 8px; page-break-after: avoid; }
     .sub-head { font-size: 9.5pt; font-weight: 600; font-variant: small-caps; color: #1a3a5c; text-decoration: underline; margin-top: 10px; margin-bottom: 3px; page-break-after: avoid; }
     .subsub-head { font-size: 9.5pt; font-weight: 700; margin-top: 7px; margin-bottom: 3px; }
     p { margin-bottom: 5px; } ul, ol { margin-left: 20px; margin-bottom: 5px; } li { margin-bottom: 2px; }
-    .block { margin-left: 16px; } .outcome { margin-left: 14px; margin-bottom: 3px; }
+    .block { margin-left: 16px; } ol.outcomes { margin-left: 34px; } ol.outcomes li { margin-bottom: 3px; }
     .grade-table { width: 58%; border-collapse: collapse; margin: 8px 0; font-size: 10pt; }
     .grade-table th { background: #1a3a5c; color: #fff; font-weight: 600; font-variant: small-caps; padding: 5px 10px; text-align: left; }
     .grade-table th.r, .grade-table .pts { text-align: right; min-width: 70px; }
@@ -334,16 +352,16 @@ export function generateSyllabusHTML(data, commonSections) {
       <div class="sidebar-mission"><em>We provide the education, training, and support necessary for equitable participation in our society, economy, and democracy.</em></div>
     </div>
     <div class="title-center">
-      <div class="course-title">${escHtml(data.course_id)}: ${escHtml(data.course_name)}</div>
+      <h1 class="course-title">${escHtml(data.course_id)}: ${escHtml(data.course_name)}</h1>
       <div class="semester-label">${escHtml(data.semester)}</div>
       <p class="official-notice">This syllabus is the official course document. The instructor${hasInstructor2 ? 's reserve' : ' reserves'} the right to make changes to this document. Students will be notified when changes are made.</p>
-      <div class="nav-line">Instructor Information / Course Information / College Policies &amp; Procedures / Course Policies &amp; Procedures / Grading</div>
+      <nav class="nav-line" aria-label="Syllabus sections"><a href="#sec-instructor">Instructor Information</a> / <a href="#sec-course">Course Information</a> / <a href="#sec-college-policies">College Policies &amp; Procedures</a> / <a href="#sec-course-policies">Course Policies &amp; Procedures</a> / <a href="#sec-grading">Grading</a></nav>
     </div>
   </div>
-  <div class="sec-head">Instructor Information</div>
-  <div class="sub-head">Office &amp; Office Hours</div>
+  <h2 class="sec-head" id="sec-instructor">Instructor Information</h2>
+  <h3 class="sub-head">Office &amp; Office Hours</h3>
   <div class="block"><p>${escHtml(data.instructor_office)}</p><p>${escHtml(data.instructor_office_hours)}</p></div>
-  <div class="sub-head">Contact Information</div>
+  <h3 class="sub-head">Contact Information</h3>
   <div class="block">
     ${coursePhotoHtml}
     <p>${escHtml(data.instructor_name)}</p>
@@ -354,8 +372,8 @@ export function generateSyllabusHTML(data, commonSections) {
     ${coursePhotoClear}
   </div>
   ${instructor2Html}
-  <div class="sec-head">Course Information</div>
-  <div class="sub-head">General Information</div>
+  <h2 class="sec-head" id="sec-course">Course Information</h2>
+  <h3 class="sub-head">General Information</h3>
   <div class="block">
     <p><strong>${escHtml(data.course_id)}: ${escHtml(data.course_name)}</strong></p>
     <p>${escHtml(creditsStr)}</p>
@@ -370,56 +388,56 @@ export function generateSyllabusHTML(data, commonSections) {
     <p>Students who do not meet outlined participation requirements in this class for two consecutive weeks during the semester shall be administratively withdrawn from the class; this action is based on federal financial aid regulations.</p>
     ${springBreakNote}
   </div>
-  <div class="sub-head">Materials</div>
+  <h3 class="sub-head">Materials</h3>
   <div class="block">
     <p><strong>Required</strong></p>${materialsHtml}
     <p><strong>Required Technology</strong></p>${techHtml}
     <p><strong>Suggested Technical Skills</strong></p>
     <p>Microsoft Training is available for free at your convenience.</p>
   </div>
-  <div class="sub-head">Pre/Co-Requisites</div>
+  <h3 class="sub-head">Pre/Co-Requisites</h3>
   <div class="block">
     <p>${escHtml(data.prerequisites) || 'None'}</p>
     ${data.restricted_to ? `<p>Restricted to the following major(s): ${escHtml(data.restricted_to)}</p>` : ''}
   </div>
-  <div class="sub-head">Course Description &amp; Outcomes</div>
+  <h3 class="sub-head">Course Description &amp; Outcomes</h3>
   <div class="block"><p>${escHtml(data.course_description)}</p>${outcomesHtml}</div>
-  <div class="sec-head">College Policies &amp; Procedures</div>
-  <div class="sub-head">Academic Integrity</div><div class="block">${renderSection(get('academic_integrity'))}</div>
-  <div class="sub-head">Accommodations</div><div class="block">${renderSection(get('accommodations'))}</div>
-  <div class="sub-head">Nondiscrimination and Title IX</div><div class="block">${renderSection(get('diversity'))}</div>
-  <div class="sec-head">Course Policies &amp; Procedures</div>
-  <div class="sub-head">Attendance</div><div class="block">${renderSection(get('attendance'))}</div>
-  <div class="sub-head">Navigating D2L &amp; Technical Support</div><div class="block">${renderSection(get('d2l'))}</div>
-  <div class="sub-head">Class Environment</div><div class="block">${renderSection(get('class_environment'))}</div>
-  <div class="sec-head">Grading</div>
-  <div class="sub-head">Assignments &amp; Points</div>
+  <h2 class="sec-head" id="sec-college-policies">College Policies &amp; Procedures</h2>
+  <h3 class="sub-head">Academic Integrity</h3><div class="block">${renderSection(get('academic_integrity'))}</div>
+  <h3 class="sub-head">Accommodations</h3><div class="block">${renderSection(get('accommodations'))}</div>
+  <h3 class="sub-head">Nondiscrimination and Title IX</h3><div class="block">${renderSection(get('diversity'))}</div>
+  <h2 class="sec-head" id="sec-course-policies">Course Policies &amp; Procedures</h2>
+  <h3 class="sub-head">Attendance</h3><div class="block">${renderSection(get('attendance'))}</div>
+  <h3 class="sub-head">Navigating D2L &amp; Technical Support</h3><div class="block">${renderSection(get('d2l'))}</div>
+  <h3 class="sub-head">Class Environment</h3><div class="block">${renderSection(get('class_environment'))}</div>
+  <h2 class="sec-head" id="sec-grading">Grading</h2>
+  <h3 class="sub-head">Assignments &amp; Points</h3>
   <div class="block">
     ${(parseInt(data.volunteer_hours_required) || 0) > 0 ? `<p>All students are expected to put in <strong>${escHtml(String(data.volunteer_hours_required))} hours of volunteer hours</strong>. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.</p>` : ''}
     <p>Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need <strong>${escHtml(String(data.required_hours_per_week))} hours a week</strong> of lab time.</p>
     <br>
     <table class="grade-table">
-      <thead><tr><th>Assessment</th><th class="r">Points</th></tr></thead>
+      <thead><tr><th scope="col">Assessment</th><th scope="col" class="r">Points</th></tr></thead>
       <tbody>${assessmentRows}<tr class="total"><td>Total Points</td><td class="pts">${totalPoints} pts</td></tr></tbody>
     </table>
     <p class="note">(Subject to change depending on course content)</p>
   </div>
-  <div class="sub-head">Grading Scale</div>
+  <h3 class="sub-head">Grading Scale</h3>
   <div class="block">
     <p>A = ${data.grading_a_min}\u2013100% = ${aMin}\u2013${totalPoints} points</p>
     <p>B = ${data.grading_b_min}\u2013${data.grading_a_min - 1}% = ${bMin}\u2013${aMin - 1} points</p>
     <p>C = ${data.grading_c_min}\u2013${data.grading_b_min - 1}% = ${cMin}\u2013${bMin - 1} points</p>
     <p>F = ${data.grading_c_min - 1} and below = &lt;${cMin} points</p>
   </div>
-  <div class="sub-head">Grades</div>
+  <h3 class="sub-head">Grades</h3>
   <div class="block">
     <p>You can check your grade through D2L Brightspace ASSESSMENTS/GRADES at any point during the semester.</p>
     <p>You can expect to have graded assignments returned within 3\u20135 days of the due date of the assignment.</p>
     <p>Your grade will reflect how well you have mastered the material, not how hard you have worked.</p>
   </div>
-  <div class="sub-head">Time Commitment</div>
+  <h3 class="sub-head">Time Commitment</h3>
   <div class="block"><p>${escHtml(timeNote)}</p></div>
-  <div class="sub-head">Course Calendar</div>
+  <h3 class="sub-head">Course Calendar</h3>
   <div class="block">
     <p>A detailed schedule is available on D2L. Instructors may adjust or change. Notifications will be given in class prior to change.</p>
     ${finalsNote}
@@ -2068,7 +2086,7 @@ function Step7Grading({ data, update }) {
 }
 
 // ─── Step 8: Preview ──────────────────────────────────────────────────────────
-function Step8Review({ data, commonSections, onGenerate, saving, onCreateClass }) {
+function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving, docxBusy, onCreateClass }) {
   const totalPoints = (data.assessments||[]).reduce((s, a) => s + (parseInt(a.points)||0), 0)
   const blobRef = useRef(null)
   const [previewUrl, setPreviewUrl] = useState('')
@@ -2155,13 +2173,20 @@ function Step8Review({ data, commonSections, onGenerate, saving, onCreateClass }
           </div>
         </div>
         <div className="p-4 border-t border-surface-100 space-y-2">
-          <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-700 leading-snug">
-            <Printer size={11} className="inline mr-1" />
-            Opens a new tab — choose <strong>Save as PDF</strong> in the print dialog.
+          <div className="bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 text-xs text-blue-700 leading-snug" role="note">
+            <FileText size={11} className="inline mr-1" aria-hidden="true" />
+            <strong>For a fully accessible PDF (required for D2L/Ally compliance):</strong> download
+            the Word file, open it in Microsoft Word, then choose <strong>File → Save As → PDF</strong>.
+            Word embeds the heading and list structure that accessibility checkers require —
+            the browser Print option below cannot.
           </div>
-          <button onClick={onGenerate} disabled={saving}
+          <button onClick={onDownloadDocx} disabled={saving || docxBusy}
             className="w-full py-2.5 bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm">
-            <Printer size={15} />{saving ? 'Saving…' : 'Generate & Print PDF'}
+            <Download size={15} aria-hidden="true" />{docxBusy ? 'Building Word file…' : 'Download Accessible Word (.docx)'}
+          </button>
+          <button onClick={onGenerate} disabled={saving || docxBusy}
+            className="w-full py-2.5 bg-white text-surface-700 font-semibold rounded-xl border border-surface-200 hover:bg-surface-50 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm">
+            <Printer size={15} aria-hidden="true" />{saving ? 'Saving…' : 'Print PDF (browser — not fully accessible)'}
           </button>
 
           {/* CMMS class prompt — only shown after at least one PDF has been generated */}
@@ -2354,6 +2379,28 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     return true
   }, [data, user])
 
+  const [docxBusy, setDocxBusy] = useState(false)
+
+  // Accessible Word export — the compliant path to a 100% Ally-scored PDF.
+  // Saves the draft and bumps the export counter (same tracking as the print
+  // path) so the "Add to CMMS" prompt and export history keep working.
+  const handleDownloadDocx = async () => {
+    const now = new Date().toISOString()
+    const newCount = (data.pdf_generated_count || 0) + 1
+    const ok = await handleSave({ pdf_generated_at: now, pdf_generated_count: newCount })
+    if (!ok) return
+    setData(prev => ({ ...prev, pdf_generated_at: now, pdf_generated_count: newCount }))
+    setDocxBusy(true)
+    try {
+      await downloadSyllabusDocx(data, commonSections, DEFAULT_COMMON_SECTIONS)
+      toast.success('Word file downloaded — open in Word, then File → Save As → PDF for the accessible PDF.', { duration: 6000 })
+    } catch (e) {
+      toast.error('Word export failed: ' + (e?.message || String(e)))
+    } finally {
+      setDocxBusy(false)
+    }
+  }
+
   const handleGenerate = async () => {
     const now = new Date().toISOString()
     const newCount = (data.pdf_generated_count || 0) + 1
@@ -2412,7 +2459,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
       case 5: return <Step5Materials data={data} update={update} catalogRefreshKey={catalogRefreshKey} />
       case 6: return <Step6Description data={data} update={update} />
       case 7: return <Step7Grading data={data} update={update} />
-      case 8: return <Step8Review data={data} commonSections={commonSections} onGenerate={handleGenerate} saving={saving} onCreateClass={() => setShowCreateClass(true)} />
+      case 8: return <Step8Review data={data} commonSections={commonSections} onGenerate={handleGenerate} onDownloadDocx={handleDownloadDocx} saving={saving} docxBusy={docxBusy} onCreateClass={() => setShowCreateClass(true)} />
       default: return null
     }
   }
