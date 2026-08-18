@@ -2436,8 +2436,14 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     setData(prev => ({ ...prev, pdf_generated_at: now, pdf_generated_count: newCount }))
     setDocxBusy(true)
     try {
-      await downloadSyllabusDocx(data, commonSections, DEFAULT_COMMON_SECTIONS)
+      const result = await downloadSyllabusDocx(data, commonSections, DEFAULT_COMMON_SECTIONS)
       toast.success('Word file downloaded — open in Word, then File → Save As → PDF for the accessible PDF.', { duration: 6000 })
+      if (result?.logoMissing) {
+        toast.error(`The college logo could not be embedded in the Word file (${result.logoStatus || 'unknown reason'}). Re-uploading the logo as a PNG in the Settings gear will fix it.`, { duration: 12000 })
+      }
+      if (result?.photoMissing) {
+        toast.error(`The course photo could not be embedded in the Word file (${result.photoStatus || 'unknown reason'}). Try re-uploading the image.`, { duration: 12000 })
+      }
     } catch (e) {
       toast.error('Word export failed: ' + (e?.message || String(e)))
     } finally {

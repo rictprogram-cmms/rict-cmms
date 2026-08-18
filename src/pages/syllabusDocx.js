@@ -222,6 +222,31 @@ async function rasterizeToPng(blob) {
   }
 }
 
+// Final-resort rasterizer: point an <img> element at the ORIGINAL url string,
+// exactly like the wizard preview does, and capture it via canvas. If the
+// preview can render the image, this can too (the only exception is a
+// cross-origin URL without CORS headers, which taints the canvas).
+async function rasterizeFromUrl(url) {
+  const img = await new Promise((resolve, reject) => {
+    const el = new Image()
+    if (!url.startsWith('data:')) el.crossOrigin = 'anonymous'
+    el.onload = () => resolve(el)
+    el.onerror = () => reject(new Error('img element could not decode the source'))
+    el.src = url
+  })
+  const w = img.naturalWidth || 512
+  const h = img.naturalHeight || 512
+  const scale = Math.min(1024 / w, 1024 / h, 4)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(w * scale))
+  canvas.height = Math.max(1, Math.round(h * scale))
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+  const outBlob = await new Promise(res => canvas.toBlob(res, 'image/png'))
+  if (!outBlob || outBlob.size < 100) throw new Error('canvas produced an empty image')
+  const data = new Uint8Array(await outBlob.arrayBuffer())
+  return { data, type: 'png', w, h }
+}
+
 // Decode a data: URL without fetch() — immune to service-worker interception,
 // CSP connect-src restrictions, and any other fetch-layer quirks. Uploaded
 // logos and photos are stored as data: URLs, so this is the primary path.
@@ -258,35 +283,51 @@ function sniffBytes(bytes) {
   return null
 }
 
+// Returns { image, status }: image is the embeddable { data, type, w, h } (or
+// null), status is a short human-readable trail of what happened — surfaced
+// in the export toast so failures self-diagnose without needing DevTools.
 async function loadImage(url) {
-  if (!url) return null
+  if (!url) return { image: null, status: 'no image set' }
+  const notes = []
+  // ── Path 1: read the bytes and identify them by signature ──────────────────
   try {
     let blob
     if (url.startsWith('data:')) {
       blob = dataUrlToBlob(url)
-      if (!blob) { console.warn('[syllabusDocx] Malformed data URL'); return null }
+      if (!blob) throw new Error('malformed data URL')
     } else {
       const res = await fetch(url)
-      if (!res.ok) { console.warn('[syllabusDocx] Image fetch failed:', res.status, url.slice(0, 80)); return null }
+      if (!res.ok) throw new Error(`fetch returned ${res.status}`)
       blob = await res.blob()
     }
     const bytes = new Uint8Array(await blob.arrayBuffer())
     const kind = sniffBytes(bytes)
-    console.warn('[syllabusDocx] Image loaded:', bytes.length, 'bytes, detected type:', kind || 'other', '(declared:', blob.type || 'none', ')')
-    // Genuine PNG and JPEG bytes embed natively in Word
+    notes.push(`${bytes.length} bytes, content: ${kind || 'other'}, declared: ${blob.type || 'none'}`)
     if (kind === 'png' || kind === 'jpg') {
       const size = getImageSize(bytes, kind)
-      if (size.w > 1 && size.h > 1) return { data: bytes, type: kind, ...size }
-      console.warn('[syllabusDocx] Dimension parse failed — rasterizing instead')
+      if (size.w > 1 && size.h > 1) {
+        return { image: { data: bytes, type: kind, ...size }, status: `embedded natively (${kind} ${size.w}×${size.h})` }
+      }
+      notes.push('dimension parse failed')
     }
-    // Everything else (SVG, WebP, GIF, mislabeled data) → rasterize to PNG
     let rasterBlob = new Blob([bytes], { type: kind === 'svg' ? 'image/svg+xml' : (blob.type || 'application/octet-stream') })
     if (kind === 'svg') rasterBlob = await normalizeSvgBlob(rasterBlob)
-    return await rasterizeToPng(rasterBlob)
+    const raster = await rasterizeToPng(rasterBlob)
+    if (raster) return { image: raster, status: `rasterized to PNG (${raster.w}×${raster.h}) — ${notes.join('; ')}` }
+    notes.push('blob rasterization failed')
   } catch (e) {
-    console.warn('[syllabusDocx] Image load failed:', e?.message || e, String(url).slice(0, 80))
-    return null // caller warns the user via toast
+    notes.push(e?.message || String(e))
   }
+  // ── Path 2: decode via an <img> element, exactly like the wizard preview ───
+  try {
+    const raster = await rasterizeFromUrl(url)
+    return { image: raster, status: `captured via img element (${raster.w}×${raster.h}) — ${notes.join('; ')}` }
+  } catch (e) {
+    notes.push(`img-element path: ${e?.message || e}`)
+  }
+  const status = notes.join('; ')
+  console.warn('[syllabusDocx] Image embed failed:', status, String(url).slice(0, 80))
+  return { image: null, status }
 }
 
 // Scale to a target CSS-pixel width, capping height, preserving aspect ratio
@@ -599,10 +640,12 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
 // when an image URL was set but could not be embedded (e.g. a cross-site URL
 // that blocks fetch access).
 export async function downloadSyllabusDocx(data, commonSections, defaultSections) {
-  const [logo, photo] = await Promise.all([
+  const [logoRes, photoRes] = await Promise.all([
     loadImage(data.logo_url),
     loadImage(data.course_photo_url),
   ])
+  const logo = logoRes.image
+  const photo = photoRes.image
   const doc = buildSyllabusDoc(data, commonSections, defaultSections, { logo, photo })
   const blob = await Packer.toBlob(doc)
   const url = URL.createObjectURL(blob)
@@ -617,5 +660,7 @@ export async function downloadSyllabusDocx(data, commonSections, defaultSections
   return {
     logoMissing: !!data.logo_url && !logo,
     photoMissing: !!data.course_photo_url && !photo,
+    logoStatus: logoRes.status,
+    photoStatus: photoRes.status,
   }
 }
