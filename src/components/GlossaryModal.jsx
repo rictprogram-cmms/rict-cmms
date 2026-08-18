@@ -23,7 +23,7 @@
 import { useState, useEffect, useMemo, useId } from 'react'
 import {
   BookOpen, Search, X, Plus, Pencil, Trash2, Tags, ArrowLeft,
-  Loader2, EyeOff, Eye, AlertTriangle,
+  Loader2, EyeOff, Eye, AlertTriangle, Upload, Download, CheckCircle2,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -58,6 +58,7 @@ export default function GlossaryModal({ open, onClose }) {
     terms, categories, loading, error, fetchGlossary,
     addTerm, updateTerm, deleteTerm,
     addCategory, updateCategory, toggleCategoryStatus, deleteCategory,
+    importTerms,
   } = useGlossary()
 
   const dialogRef = useDialogA11y(open, onClose)
@@ -66,7 +67,7 @@ export default function GlossaryModal({ open, onClose }) {
   const searchId = useId()
   const filterId = useId()
 
-  // view: 'browse' | 'term-form' | 'categories'
+  // view: 'browse' | 'term-form' | 'categories' | 'import'
   const [view, setView] = useState('browse')
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -88,6 +89,13 @@ export default function GlossaryModal({ open, onClose }) {
   const [deleteTermTarget, setDeleteTermTarget] = useState(null)
   const [deleteCatTarget, setDeleteCatTarget] = useState(null)
 
+  // Import state
+  const [importPreview, setImportPreview] = useState(null) // { valid, invalid, dupInFile, existing, newCategories }
+  const [importFileName, setImportFileName] = useState('')
+  const [importParsing, setImportParsing] = useState(false)
+  const [updateExisting, setUpdateExisting] = useState(false)
+  const [importResult, setImportResult] = useState(null)   // { added, updated, skipped, categoriesCreated }
+
   // Fetch on open; reset transient state on close
   useEffect(() => {
     if (open) {
@@ -99,6 +107,10 @@ export default function GlossaryModal({ open, onClose }) {
       setFormError('')
       setEditingTerm(null)
       setEditingCat(null)
+      setImportPreview(null)
+      setImportFileName('')
+      setImportResult(null)
+      setUpdateExisting(false)
     }
   }, [open, fetchGlossary])
 
@@ -243,6 +255,149 @@ export default function GlossaryModal({ open, onClose }) {
     }
   }
 
+  // ── Import helpers ───────────────────────────────────────────────────────
+
+  /** Quote-aware CSV parser (same approach as useProgramBudget). */
+  const parseCSVText = (text) => {
+    const lines = text.split(/\r?\n/)
+    return lines.map(line => {
+      const cells = []
+      let inQuote = false
+      let cell = ''
+      for (const ch of line) {
+        if (ch === '"') { inQuote = !inQuote; continue }
+        if (ch === ',' && !inQuote) { cells.push(cell.trim()); cell = ''; continue }
+        cell += ch
+      }
+      cells.push(cell.trim())
+      return cells
+    })
+  }
+
+  const downloadTemplate = () => {
+    const csv = [
+      'term,definition,category',
+      '"PLC","Programmable Logic Controller — an industrial computer used to control machinery and processes.","PLC"',
+      '"E-Stop","Emergency stop — a fail-safe button that immediately halts a machine.","Safety"',
+    ].join('\r\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'glossary_template.csv'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file
+    if (!file) return
+
+    setImportParsing(true)
+    setImportPreview(null)
+    setImportResult(null)
+    setFormError('')
+    setImportFileName(file.name)
+
+    try {
+      const ext = file.name.split('.').pop().toLowerCase()
+      let rawData
+
+      if (ext === 'csv') {
+        const text = await file.text()
+        rawData = parseCSVText(text)
+      } else if (['xls', 'xlsx'].includes(ext)) {
+        // Dynamic import for SheetJS (same source as Program Budget import)
+        const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
+        const buffer = await file.arrayBuffer()
+        const wb = XLSX.read(buffer, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        rawData = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: false })
+      } else {
+        throw new Error('Unsupported file type. Please use .csv, .xls, or .xlsx')
+      }
+
+      // Locate columns from the header row (any order; category optional)
+      const headerRow = (rawData[0] || []).map(c => String(c || '').trim().toLowerCase())
+      const termCol = headerRow.indexOf('term')
+      const defCol = headerRow.findIndex(h => h === 'definition' || h === 'description')
+      const catCol = headerRow.indexOf('category')
+      if (termCol === -1 || defCol === -1) {
+        throw new Error('Header row must include "term" and "definition" columns. Download the template for the expected format.')
+      }
+
+      const valid = []
+      const invalid = []
+      const dupInFile = []
+      const seen = new Set()
+      const existingLower = new Set(terms.map(t => t.term.toLowerCase()))
+
+      rawData.slice(1).forEach((row, i) => {
+        const lineNo = i + 2 // 1-based, after header
+        if (!row || row.every(c => !String(c || '').trim())) return // blank line
+        const term = String(row[termCol] || '').trim()
+        const definition = String(row[defCol] || '').trim()
+        const categoryName = catCol !== -1 ? String(row[catCol] || '').trim() : ''
+
+        if (!term || !definition) {
+          invalid.push({ lineNo, term: term || '(empty)', reason: !term ? 'Missing term' : 'Missing definition' })
+          return
+        }
+        const lower = term.toLowerCase()
+        if (seen.has(lower)) {
+          dupInFile.push({ lineNo, term })
+          return
+        }
+        seen.add(lower)
+        valid.push({ term, definition, categoryName, existsInDb: existingLower.has(lower) })
+      })
+
+      if (valid.length === 0 && invalid.length === 0 && dupInFile.length === 0) {
+        throw new Error('No data rows found below the header.')
+      }
+
+      const catLower = new Set(categories.map(c => c.category_name.toLowerCase()))
+      const newCategories = [...new Set(
+        valid.map(r => r.categoryName).filter(Boolean)
+          .filter(name => !catLower.has(name.toLowerCase()))
+      )]
+
+      setImportPreview({
+        valid,
+        invalid,
+        dupInFile,
+        existingCount: valid.filter(r => r.existsInDb).length,
+        newCategories,
+      })
+    } catch (err) {
+      console.error('Import parse failed:', err)
+      setFormError(err.message || 'Could not read the file.')
+      setImportFileName('')
+    } finally {
+      setImportParsing(false)
+    }
+  }
+
+  const runImport = async () => {
+    if (!importPreview || importPreview.valid.length === 0) return
+    setSaving(true)
+    setFormError('')
+    try {
+      const result = await importTerms(importPreview.valid, { updateExisting }, profile?.email)
+      setImportResult(result)
+      setImportPreview(null)
+      setImportFileName('')
+    } catch (err) {
+      console.error('Import failed:', err)
+      setFormError(err.message || 'Import failed. Please try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div
@@ -275,14 +430,18 @@ export default function GlossaryModal({ open, onClose }) {
                 ? (editingTerm ? 'Edit Term' : 'Add Term')
                 : view === 'categories'
                   ? 'Manage Categories'
-                  : 'Program Glossary'}
+                  : view === 'import'
+                    ? 'Import Terms'
+                    : 'Program Glossary'}
             </h2>
             <p id={descId} className="text-xs text-surface-500 m-0">
               {view === 'browse'
                 ? 'Search terms used in the RICT program.'
                 : view === 'categories'
                   ? 'Add, rename, deactivate, or delete categories.'
-                  : 'Term and definition are required.'}
+                  : view === 'import'
+                    ? 'Bulk-add terms from a CSV or Excel file.'
+                    : 'Term and definition are required.'}
             </p>
           </div>
           <button
@@ -413,6 +572,9 @@ export default function GlossaryModal({ open, onClose }) {
                 </button>
                 <button onClick={() => { setView('categories'); setFormError(''); openAddCat() }} className={btnSecondary}>
                   <Tags size={16} aria-hidden="true" /> Manage Categories
+                </button>
+                <button onClick={() => { setView('import'); setFormError(''); setImportResult(null) }} className={btnSecondary}>
+                  <Upload size={16} aria-hidden="true" /> Import
                 </button>
               </div>
             )}
@@ -592,6 +754,151 @@ export default function GlossaryModal({ open, onClose }) {
                   )
                 })}
               </ul>
+            )}
+          </div>
+        )}
+
+        {/* ── IMPORT VIEW ─────────────────────────────────────────────────── */}
+        {view === 'import' && (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {/* Success summary */}
+            {importResult && (
+              <div role="status" aria-live="polite" className="flex items-start gap-2 mb-4 px-3 py-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-800">
+                <CheckCircle2 size={18} className="shrink-0 mt-0.5" aria-hidden="true" />
+                <div>
+                  <strong>Import complete.</strong>{' '}
+                  {importResult.added} added
+                  {importResult.updated > 0 && <>, {importResult.updated} updated</>}
+                  {importResult.skipped > 0 && <>, {importResult.skipped} skipped (already exist)</>}
+                  {importResult.categoriesCreated > 0 && <>, {importResult.categoriesCreated} new categor{importResult.categoriesCreated === 1 ? 'y' : 'ies'} created</>}.
+                </div>
+              </div>
+            )}
+
+            {/* Step 1: template + file picker */}
+            <div className="rounded-lg border border-surface-200 bg-surface-50 p-4 mb-4">
+              <h3 className="text-sm font-semibold text-surface-900 m-0 mb-1">1. Prepare your file</h3>
+              <p className="text-xs text-surface-500 m-0 mb-3">
+                Columns: <code className="bg-surface-200 px-1 rounded">term</code>,{' '}
+                <code className="bg-surface-200 px-1 rounded">definition</code>, and optional{' '}
+                <code className="bg-surface-200 px-1 rounded">category</code>. Header row required; column order doesn't matter.
+              </p>
+              <button onClick={downloadTemplate} className={btnSecondary}>
+                <Download size={16} aria-hidden="true" /> Download Template (.csv)
+              </button>
+            </div>
+
+            <div className="rounded-lg border border-surface-200 bg-surface-50 p-4 mb-4">
+              <h3 className="text-sm font-semibold text-surface-900 m-0 mb-3">2. Choose your file</h3>
+              <label
+                htmlFor="gl-import-file"
+                className={`${btnPrimary} cursor-pointer`}
+              >
+                <Upload size={16} aria-hidden="true" />
+                {importFileName ? 'Choose a Different File' : 'Choose File'}
+              </label>
+              <input
+                id="gl-import-file"
+                type="file"
+                accept=".csv,.xls,.xlsx"
+                onChange={handleImportFile}
+                className="sr-only"
+                aria-describedby="gl-import-file-hint"
+              />
+              <p id="gl-import-file-hint" className="text-xs text-surface-500 m-0 mt-2">
+                Accepts .csv, .xls, or .xlsx
+                {importFileName && <> — selected: <strong>{importFileName}</strong></>}
+              </p>
+              {importParsing && (
+                <div className="flex items-center gap-2 mt-2 text-sm text-surface-500" role="status" aria-live="polite">
+                  <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Reading file…
+                </div>
+              )}
+            </div>
+
+            {/* Step 3: preview */}
+            {importPreview && (
+              <div className="rounded-lg border border-surface-200 p-4">
+                <h3 className="text-sm font-semibold text-surface-900 m-0 mb-2">3. Review and import</h3>
+
+                <ul className="m-0 mb-3 p-0 list-none space-y-1 text-sm text-surface-700">
+                  <li><strong>{importPreview.valid.length}</strong> valid row{importPreview.valid.length === 1 ? '' : 's'} ready to import</li>
+                  {importPreview.existingCount > 0 && (
+                    <li className="text-amber-700">
+                      <strong>{importPreview.existingCount}</strong> already exist in the glossary — {updateExisting ? 'their definitions will be updated' : 'they will be skipped'}
+                    </li>
+                  )}
+                  {importPreview.newCategories.length > 0 && (
+                    <li>New categories to be created: <strong>{importPreview.newCategories.join(', ')}</strong></li>
+                  )}
+                  {importPreview.dupInFile.length > 0 && (
+                    <li className="text-amber-700">
+                      {importPreview.dupInFile.length} duplicate{importPreview.dupInFile.length === 1 ? '' : 's'} inside the file (first occurrence kept): {importPreview.dupInFile.slice(0, 5).map(d => d.term).join(', ')}{importPreview.dupInFile.length > 5 ? '…' : ''}
+                    </li>
+                  )}
+                  {importPreview.invalid.length > 0 && (
+                    <li className="text-red-700">
+                      {importPreview.invalid.length} row{importPreview.invalid.length === 1 ? '' : 's'} skipped: {importPreview.invalid.slice(0, 5).map(r => `line ${r.lineNo} (${r.reason})`).join(', ')}{importPreview.invalid.length > 5 ? '…' : ''}
+                    </li>
+                  )}
+                </ul>
+
+                {importPreview.existingCount > 0 && (
+                  <label htmlFor="gl-update-existing" className="flex items-center gap-2 mb-3 text-sm text-surface-700 cursor-pointer min-h-[44px]">
+                    <input
+                      id="gl-update-existing"
+                      type="checkbox"
+                      checked={updateExisting}
+                      onChange={(e) => setUpdateExisting(e.target.checked)}
+                      className="w-4 h-4 rounded border-surface-300 text-brand-600 focus-visible:ring-2 focus-visible:ring-brand-500"
+                    />
+                    Update existing terms with definitions from this file (instead of skipping)
+                  </label>
+                )}
+
+                {/* Preview table — first rows */}
+                {importPreview.valid.length > 0 && (
+                  <div className="border border-surface-200 rounded-lg overflow-hidden mb-3">
+                    <table className="w-full text-sm border-collapse">
+                      <caption className="sr-only">Preview of terms to be imported</caption>
+                      <thead>
+                        <tr className="bg-surface-50 text-left">
+                          <th scope="col" className="px-3 py-2 font-semibold text-surface-700">Term</th>
+                          <th scope="col" className="px-3 py-2 font-semibold text-surface-700">Definition</th>
+                          <th scope="col" className="px-3 py-2 font-semibold text-surface-700">Category</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importPreview.valid.slice(0, 8).map((r, i) => (
+                          <tr key={i} className="border-t border-surface-100">
+                            <td className="px-3 py-2 text-surface-900 font-medium whitespace-nowrap">
+                              {r.term}
+                              {r.existsInDb && <span className="ml-1.5 text-[11px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">exists</span>}
+                            </td>
+                            <td className="px-3 py-2 text-surface-600">{r.definition.length > 90 ? r.definition.slice(0, 90) + '…' : r.definition}</td>
+                            <td className="px-3 py-2 text-surface-600 whitespace-nowrap">{r.categoryName || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {importPreview.valid.length > 8 && (
+                      <div className="px-3 py-2 text-xs text-surface-500 bg-surface-50 border-t border-surface-100">
+                        …and {importPreview.valid.length - 8} more row{importPreview.valid.length - 8 === 1 ? '' : 's'}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button onClick={runImport} disabled={saving || importPreview.valid.length === 0} className={btnPrimary}>
+                    {saving && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
+                    Import {importPreview.valid.length} Term{importPreview.valid.length === 1 ? '' : 's'}
+                  </button>
+                  <button onClick={() => { setImportPreview(null); setImportFileName('') }} disabled={saving} className={btnSecondary}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         )}

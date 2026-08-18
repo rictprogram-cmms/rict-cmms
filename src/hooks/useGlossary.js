@@ -99,6 +99,74 @@ async function generateSafeGlossaryId(kind) {
   return `${cfg.prefix}${numericId}-${Date.now().toString().slice(-4)}`
 }
 
+/**
+ * Reserve a batch of collision-safe term IDs (GL####) for bulk import.
+ * One counter read + one collision query instead of N round-trips.
+ * Syncs the counter to the final max so subsequent single adds continue
+ * from the right number.
+ */
+async function reserveTermIdBatch(count) {
+  if (count <= 0) return []
+
+  let startNum = null
+
+  // Prefer the counter value as the starting point
+  try {
+    const { data: counterRow } = await supabase
+      .from('counters')
+      .select('current_value')
+      .eq('counter_name', 'glossary_term')
+      .maybeSingle()
+    if (counterRow?.current_value != null) startNum = counterRow.current_value + 1
+  } catch (e) {
+    // fall through to table max
+  }
+
+  // Cross-check against the true table max (whichever is higher wins)
+  try {
+    const { data: maxRow } = await supabase
+      .from('glossary')
+      .select('term_id')
+      .order('term_id', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const maxNum = maxRow?.term_id ? parseInt(maxRow.term_id.replace(/\D/g, ''), 10) : 1000
+    if (startNum === null || maxNum + 1 > startNum) startNum = maxNum + 1
+  } catch (e) {
+    if (startNum === null) startNum = parseInt(Date.now().toString().slice(-6), 10)
+  }
+
+  // Build the candidate range, then verify none exist (single IN query).
+  // If any collide, shift the whole range past the highest collision and
+  // re-check (bounded retries).
+  const MAX_RETRIES = 5
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const ids = Array.from({ length: count }, (_, i) => `GL${startNum + i}`)
+    const { data: existing, error: err } = await supabase
+      .from('glossary')
+      .select('term_id')
+      .in('term_id', ids)
+    if (err) throw err
+    if (!existing || existing.length === 0) {
+      // Sync counter to the end of the reserved range
+      try {
+        await supabase
+          .from('counters')
+          .update({ current_value: startNum + count - 1, updated_at: new Date().toISOString() })
+          .eq('counter_name', 'glossary_term')
+      } catch (e) {
+        console.warn('Glossary counter sync failed (non-critical):', e)
+      }
+      return ids
+    }
+    const highestCollision = Math.max(
+      ...existing.map(r => parseInt(r.term_id.replace(/\D/g, ''), 10))
+    )
+    startNum = highestCollision + 1
+  }
+  throw new Error('Could not reserve a safe ID range for import. Please try again.')
+}
+
 export default function useGlossary() {
   const [terms, setTerms] = useState([])
   const [categories, setCategories] = useState([])
@@ -252,6 +320,118 @@ export default function useGlossary() {
     await fetchGlossary()
   }, [fetchGlossary])
 
+  /**
+   * Bulk import from parsed spreadsheet rows.
+   *
+   * rows: [{ term, definition, categoryName }] — already validated/deduped
+   *       by the caller (GlossaryModal preview step)
+   * options.updateExisting: when true, rows matching an existing term
+   *       (case-insensitive) update that term's definition/category instead
+   *       of being skipped
+   *
+   * Returns { added, updated, skipped, categoriesCreated } counts.
+   * All writes validate returned row counts (RLS silent-failure guard).
+   */
+  const importTerms = useCallback(async (rows, { updateExisting = false } = {}, userEmail) => {
+    if (!rows || rows.length === 0) return { added: 0, updated: 0, skipped: 0, categoriesCreated: 0 }
+    const nowIso = localToUtcIso(new Date())
+
+    // ── 1. Resolve categories: reuse existing (case-insensitive), create new ──
+    const catByLower = {}
+    categories.forEach(c => { catByLower[c.category_name.toLowerCase()] = c.category_id })
+
+    const neededNames = [...new Set(
+      rows.map(r => (r.categoryName || '').trim()).filter(Boolean)
+        .filter(name => !catByLower[name.toLowerCase()])
+    )]
+
+    let categoriesCreated = 0
+    for (const name of neededNames) {
+      const categoryId = await generateSafeGlossaryId('category')
+      const { data, error: err } = await supabase
+        .from('glossary_categories')
+        .insert({
+          category_id: categoryId,
+          category_name: name,
+          status: 'Active',
+          created_at: nowIso,
+          created_by: userEmail,
+        })
+        .select()
+      if (err) throw err
+      if (!data || data.length === 0) throw new Error('Category insert blocked (0 rows) — check RLS.')
+      catByLower[name.toLowerCase()] = categoryId
+      categoriesCreated += 1
+    }
+
+    // ── 2. Split rows into inserts vs updates vs skips ──
+    const existingByLower = {}
+    terms.forEach(t => { existingByLower[t.term.toLowerCase()] = t })
+
+    const toInsert = []
+    const toUpdate = []
+    let skipped = 0
+
+    rows.forEach(r => {
+      const catId = r.categoryName ? (catByLower[r.categoryName.trim().toLowerCase()] || null) : null
+      const existing = existingByLower[r.term.trim().toLowerCase()]
+      if (existing) {
+        if (updateExisting) {
+          toUpdate.push({ termId: existing.term_id, definition: r.definition.trim(), categoryId: catId })
+        } else {
+          skipped += 1
+        }
+      } else {
+        toInsert.push({ term: r.term.trim(), definition: r.definition.trim(), categoryId: catId })
+      }
+    })
+
+    // ── 3. Batch insert new terms with reserved IDs ──
+    let added = 0
+    if (toInsert.length > 0) {
+      const ids = await reserveTermIdBatch(toInsert.length)
+      const insertRows = toInsert.map((r, i) => ({
+        term_id: ids[i],
+        term: r.term,
+        definition: r.definition,
+        category_id: r.categoryId,
+        status: 'Active',
+        created_at: nowIso,
+        created_by: userEmail,
+      }))
+      const { data, error: err } = await supabase
+        .from('glossary')
+        .insert(insertRows)
+        .select()
+      if (err) throw err
+      if (!data || data.length !== insertRows.length) {
+        throw new Error(`Import incomplete: expected ${insertRows.length} inserts, got ${data?.length || 0}. Check RLS.`)
+      }
+      added = data.length
+    }
+
+    // ── 4. Updates (per-row — different values per row) ──
+    let updated = 0
+    for (const u of toUpdate) {
+      const { data, error: err } = await supabase
+        .from('glossary')
+        .update({
+          definition: u.definition,
+          category_id: u.categoryId,
+          updated_at: nowIso,
+          updated_by: userEmail,
+        })
+        .eq('term_id', u.termId)
+        .select()
+      if (err) throw err
+      if (!data || data.length === 0) throw new Error('Update blocked (0 rows) — check RLS.')
+      updated += 1
+    }
+
+    await fetchGlossary()
+    return { added, updated, skipped, categoriesCreated }
+  }, [terms, categories, fetchGlossary])
+
   return {
     terms,
     categories,
@@ -265,5 +445,6 @@ export default function useGlossary() {
     updateCategory,
     toggleCategoryStatus,
     deleteCategory,
+    importTerms,
   }
 }
