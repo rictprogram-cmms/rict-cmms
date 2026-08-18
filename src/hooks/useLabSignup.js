@@ -3,6 +3,24 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/**
+ * Pre-semester signup lead window (days).
+ *
+ * A student's class appears in the Lab Signup picker starting this many days
+ * BEFORE the class's start_date, so students can book week-1 lab slots ahead
+ * of the semester. Previously classes were hidden until start_date itself,
+ * which locked everyone out of signup during the week before classes began.
+ *
+ * This only controls picker visibility — the lab calendar remains the gate
+ * on which days/slots are actually open, and the weekly deadline / approval
+ * flow is unchanged. Other pages (Time Clock, Dashboard, Weekly Labs,
+ * Volunteer Hours) intentionally still hide classes until start_date, since
+ * hours can't be earned before a class begins.
+ */
+export const SIGNUP_LEAD_DAYS = 14
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function formatDateKey(d) {
@@ -420,13 +438,20 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
       const userClasses = (profile.classes || '').split(',').map(c => c.trim()).filter(Boolean)
 
       if (userClasses.length > 0 && profile.role !== 'Instructor') {
-        const todayStr = new Date().toISOString().substring(0, 10)
+        // Lead window: include classes starting up to SIGNUP_LEAD_DAYS from
+        // now so students can sign up before the semester begins. Cutoff is
+        // built from LOCAL date parts (project convention for date-only
+        // strings) — toISOString() is real UTC and rolls a day ahead in the
+        // evening.
+        const cutoff = new Date()
+        cutoff.setDate(cutoff.getDate() + SIGNUP_LEAD_DAYS)
+        const cutoffStr = formatDateKey(cutoff)
         const { data: classData } = await supabase
           .from('classes')
           .select('class_id, course_id, course_name, required_hours')
           .in('course_id', userClasses)
           .eq('status', 'Active')
-          .or(`start_date.is.null,start_date.lte.${todayStr}`)
+          .or(`start_date.is.null,start_date.lte.${cutoffStr}`)
 
         classes = (classData || []).map(c => ({
           classId: c.class_id,
