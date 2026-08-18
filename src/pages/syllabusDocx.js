@@ -167,6 +167,30 @@ function getImageSize(bytes, type) {
 // parsing its dimensions. Cross-origin URLs without CORS headers cannot be
 // read by canvas either, so those still return null — the caller surfaces a
 // warning telling the instructor to upload the image file instead.
+// SVGs saved without explicit pixel width/height have no intrinsic size in
+// some browsers (naturalWidth reports 0), which makes canvas rasterization
+// produce a blank or zero-size image — an invisible logo with no error. This
+// injects explicit dimensions (taken from the viewBox when present) into the
+// SVG root before rasterizing.
+async function normalizeSvgBlob(blob) {
+  try {
+    const text = await blob.text()
+    const m = text.match(/<svg[^>]*>/i)
+    if (!m) return blob
+    const tag = m[0]
+    const hasW = /\swidth\s*=/i.test(tag)
+    const hasH = /\sheight\s*=/i.test(tag)
+    if (hasW && hasH) return blob
+    const vb = tag.match(/viewBox\s*=\s*["']\s*[\d.eE+-]+[\s,]+[\d.eE+-]+[\s,]+([\d.eE+-]+)[\s,]+([\d.eE+-]+)/i)
+    const w = Math.max(1, Math.round(vb ? parseFloat(vb[1]) : 512)) || 512
+    const h = Math.max(1, Math.round(vb ? parseFloat(vb[2]) : 512)) || 512
+    const newTag = tag.replace(/<svg/i, `<svg width="${w}" height="${h}"`)
+    return new Blob([text.replace(tag, newTag)], { type: 'image/svg+xml' })
+  } catch {
+    return blob
+  }
+}
+
 async function rasterizeToPng(blob) {
   const url = URL.createObjectURL(blob)
   try {
@@ -176,17 +200,21 @@ async function rasterizeToPng(blob) {
       el.onerror = () => reject(new Error('Image decode failed'))
       el.src = url
     })
-    const w = img.naturalWidth || 300
-    const h = img.naturalHeight || 300
+    const w = img.naturalWidth || 512
+    const h = img.naturalHeight || 512
     // Render above display size (up to 4x, capped at 1024px) so vector logos
     // stay crisp when Word scales the bitmap for print.
     const scale = Math.min(1024 / w, 1024 / h, 4)
     const canvas = document.createElement('canvas')
     canvas.width = Math.max(1, Math.round(w * scale))
     canvas.height = Math.max(1, Math.round(h * scale))
-    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
     const outBlob = await new Promise(res => canvas.toBlob(res, 'image/png'))
-    if (!outBlob) return null
+    if (!outBlob || outBlob.size < 100) {
+      console.warn('[syllabusDocx] Rasterization produced an empty image')
+      return null
+    }
     const data = new Uint8Array(await outBlob.arrayBuffer())
     return { data, type: 'png', w, h } // natural dimensions preserve aspect ratio
   } finally {
@@ -194,24 +222,52 @@ async function rasterizeToPng(blob) {
   }
 }
 
+// Decode a data: URL without fetch() — immune to service-worker interception,
+// CSP connect-src restrictions, and any other fetch-layer quirks. Uploaded
+// logos and photos are stored as data: URLs, so this is the primary path.
+function dataUrlToBlob(url) {
+  const comma = url.indexOf(',')
+  if (comma < 0) return null
+  const header = url.slice(5, comma) // strip "data:"
+  const body = url.slice(comma + 1)
+  const mime = (header.split(';')[0] || 'application/octet-stream').trim()
+  let bytes
+  if (/;base64/i.test(header)) {
+    const bin = atob(body)
+    bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  } else {
+    bytes = new TextEncoder().encode(decodeURIComponent(body))
+  }
+  return new Blob([bytes], { type: mime })
+}
+
 async function loadImage(url) {
   if (!url) return null
   try {
-    const res = await fetch(url) // works for https and data: URLs alike
-    if (!res.ok) return null
-    const blob = await res.blob()
+    let blob
+    if (url.startsWith('data:')) {
+      blob = dataUrlToBlob(url)
+      if (!blob) { console.warn('[syllabusDocx] Malformed data URL'); return null }
+    } else {
+      const res = await fetch(url)
+      if (!res.ok) { console.warn('[syllabusDocx] Image fetch failed:', res.status, url.slice(0, 80)); return null }
+      blob = await res.blob()
+    }
     const mime = (blob.type || '').toLowerCase()
     // PNG and JPEG embed natively in Word; everything else is rasterized.
-    if (mime.includes('png') || mime.includes('jpeg') || mime.includes('jpg')) {
+    if (mime.includes('png') || (mime.includes('jpeg') || mime.includes('jpg')) && !mime.includes('svg')) {
       const type = mime.includes('png') ? 'png' : 'jpg'
       const data = new Uint8Array(await blob.arrayBuffer())
       const size = getImageSize(data, type)
       if (size.w > 1 && size.h > 1) return { data, type, ...size }
       // Dimension parse failed — fall through to the canvas path
     }
+    if (mime.includes('svg')) blob = await normalizeSvgBlob(blob)
     return await rasterizeToPng(blob)
-  } catch {
-    return null // fetch blocked (CORS) or undecodable — caller warns the user
+  } catch (e) {
+    console.warn('[syllabusDocx] Image load failed:', e?.message || e, String(url).slice(0, 80))
+    return null // caller warns the user via toast
   }
 }
 
