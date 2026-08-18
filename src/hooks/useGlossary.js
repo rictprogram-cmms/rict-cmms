@@ -26,6 +26,24 @@ function localToUtcIso(date) {
 }
 
 /**
+ * Translate a Postgres unique-violation (23505) from the case-insensitive
+ * unique indexes into a friendly duplicate message. Any other error is
+ * rethrown unchanged. This is the backstop for race conditions — the UI
+ * also warns live, but two people saving the same term at the same moment
+ * land here.
+ */
+function throwFriendly(err, kind, value) {
+  if (err?.code === '23505') {
+    throw new Error(
+      kind === 'category'
+        ? `A category named "${value}" already exists (names are not case-sensitive).`
+        : `The term "${value}" is already in the glossary (terms are not case-sensitive).`
+    )
+  }
+  throw err
+}
+
+/**
  * Collision-safe ID generation for glossary rows.
  * kind: 'term' → counter 'glossary_term', prefix GL, table glossary
  *       'category' → counter 'glossary_category', prefix GLC, table glossary_categories
@@ -209,7 +227,7 @@ export default function useGlossary() {
         created_by: userEmail,
       })
       .select()
-    if (err) throw err
+    if (err) throwFriendly(err, 'term', term.trim())
     if (!data || data.length === 0) throw new Error('Insert blocked (0 rows returned) — check RLS.')
     await fetchGlossary()
     return data[0]
@@ -227,7 +245,7 @@ export default function useGlossary() {
       })
       .eq('term_id', termId)
       .select()
-    if (err) throw err
+    if (err) throwFriendly(err, 'term', term.trim())
     if (!data || data.length === 0) throw new Error('Update blocked (0 rows returned) — check RLS.')
     await fetchGlossary()
     return data[0]
@@ -258,7 +276,7 @@ export default function useGlossary() {
         created_by: userEmail,
       })
       .select()
-    if (err) throw err
+    if (err) throwFriendly(err, 'category', name.trim())
     if (!data || data.length === 0) throw new Error('Insert blocked (0 rows returned) — check RLS.')
     await fetchGlossary()
     return data[0]
@@ -275,7 +293,7 @@ export default function useGlossary() {
       })
       .eq('category_id', categoryId)
       .select()
-    if (err) throw err
+    if (err) throwFriendly(err, 'category', name.trim())
     if (!data || data.length === 0) throw new Error('Update blocked (0 rows returned) — check RLS.')
     await fetchGlossary()
     return data[0]
@@ -358,7 +376,7 @@ export default function useGlossary() {
           created_by: userEmail,
         })
         .select()
-      if (err) throw err
+      if (err) throwFriendly(err, 'category', name)
       if (!data || data.length === 0) throw new Error('Category insert blocked (0 rows) — check RLS.')
       catByLower[name.toLowerCase()] = categoryId
       categoriesCreated += 1

@@ -149,6 +149,29 @@ export default function GlossaryModal({ open, onClose }) {
     return Object.keys(groups).sort().map(letter => ({ letter, items: groups[letter] }))
   }, [filteredTerms])
 
+  // Live duplicate detection (case-insensitive) for the term form.
+  // Excludes the term being edited so renaming "PLC" → "PLC " style tweaks
+  // don't flag against itself. The DB unique index is the hard backstop;
+  // this just catches it before save.
+  const duplicateTerm = useMemo(() => {
+    const t = termText.trim().toLowerCase()
+    if (!t) return null
+    return terms.find(x =>
+      x.term.toLowerCase() === t &&
+      (!editingTerm || x.term_id !== editingTerm.term_id)
+    ) || null
+  }, [termText, terms, editingTerm])
+
+  // Same for the category form.
+  const duplicateCat = useMemo(() => {
+    const n = catName.trim().toLowerCase()
+    if (!n) return null
+    return categories.find(x =>
+      x.category_name.toLowerCase() === n &&
+      (!editingCat || x.category_id !== editingCat.category_id)
+    ) || null
+  }, [catName, categories, editingCat])
+
   if (!open) return null
 
   // ── Handlers ─────────────────────────────────────────────────────────────
@@ -173,6 +196,7 @@ export default function GlossaryModal({ open, onClose }) {
   const saveTerm = async () => {
     if (!termText.trim()) { setFormError('Term is required.'); return }
     if (!defText.trim()) { setFormError('Definition is required.'); return }
+    if (duplicateTerm) { setFormError(`"${duplicateTerm.term}" is already in the glossary. Edit the existing term instead.`); return }
     setSaving(true)
     setFormError('')
     try {
@@ -221,6 +245,7 @@ export default function GlossaryModal({ open, onClose }) {
 
   const saveCategory = async () => {
     if (!catName.trim()) { setFormError('Category name is required.'); return }
+    if (duplicateCat) { setFormError(`A category named "${duplicateCat.category_name}" already exists.`); return }
     setSaving(true)
     setFormError('')
     try {
@@ -596,7 +621,18 @@ export default function GlossaryModal({ open, onClose }) {
                 className={inputCls}
                 required
                 autoFocus
+                aria-invalid={duplicateTerm ? 'true' : undefined}
+                aria-describedby={duplicateTerm ? 'gl-term-dup' : undefined}
               />
+              {duplicateTerm && (
+                <p id="gl-term-dup" role="alert" className="flex items-center gap-1.5 text-xs text-amber-700 mt-1 m-0">
+                  <AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
+                  "{duplicateTerm.term}" is already in the glossary
+                  {duplicateTerm.category_id && categoryNameById[duplicateTerm.category_id]
+                    ? ` (${categoryNameById[duplicateTerm.category_id]})`
+                    : ''}. Edit the existing term instead.
+                </p>
+              )}
             </div>
             <div>
               <label htmlFor="gl-definition" className="block text-sm font-medium text-surface-700 mb-1">
@@ -633,7 +669,7 @@ export default function GlossaryModal({ open, onClose }) {
               )}
             </div>
             <div className="flex gap-2 pt-2">
-              <button onClick={saveTerm} disabled={saving} className={btnPrimary}>
+              <button onClick={saveTerm} disabled={saving || !!duplicateTerm} className={btnPrimary}>
                 {saving && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
                 {editingTerm ? 'Save Changes' : 'Add Term'}
               </button>
@@ -664,7 +700,16 @@ export default function GlossaryModal({ open, onClose }) {
                     onChange={(e) => setCatName(e.target.value)}
                     className={inputCls}
                     required
+                    aria-invalid={duplicateCat ? 'true' : undefined}
+                    aria-describedby={duplicateCat ? 'gl-cat-dup' : undefined}
                   />
+                  {duplicateCat && (
+                    <p id="gl-cat-dup" role="alert" className="flex items-center gap-1.5 text-xs text-amber-700 mt-1 m-0">
+                      <AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
+                      A category named "{duplicateCat.category_name}" already exists
+                      {duplicateCat.status !== 'Active' ? ' (currently Inactive — you can reactivate it below)' : ''}.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label htmlFor="gl-cat-desc" className="block text-sm font-medium text-surface-700 mb-1">
@@ -679,7 +724,7 @@ export default function GlossaryModal({ open, onClose }) {
                   />
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={saveCategory} disabled={saving} className={btnPrimary}>
+                  <button onClick={saveCategory} disabled={saving || !!duplicateCat} className={btnPrimary}>
                     {saving && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
                     {editingCat ? 'Save Changes' : 'Add Category'}
                   </button>
