@@ -81,12 +81,18 @@ function CommonSectionsModal({ onClose }) {
       updated_by:    user?.email || '',
     })
 
-    const { error } = await supabase
+    // RLS silent-failure guard: a blocked upsert returns no error but writes
+    // zero rows — .select() + row-count check makes that visible instead of
+    // showing a false "saved" success.
+    const { data: savedRows, error } = await supabase
       .from('syllabus_common_sections')
       .upsert(textRows, { onConflict: 'section_key' })
+      .select('section_key')
 
     if (error) {
       toast.error('Save failed: ' + error.message)
+    } else if (!savedRows || savedRows.length < textRows.length) {
+      toast.error(`Save was blocked — only ${savedRows?.length ?? 0} of ${textRows.length} sections were written. Check permissions or contact an administrator.`)
     } else {
       toast.success('Settings saved!')
       onClose()

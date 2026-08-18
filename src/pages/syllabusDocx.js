@@ -258,7 +258,9 @@ function dataUrlToBlob(url) {
   const mime = (header.split(';')[0] || 'application/octet-stream').trim()
   let bytes
   if (/;base64/i.test(header)) {
-    const bin = atob(body)
+    // Strip whitespace/newlines — a data URL that was ever copy-pasted or
+    // stored with line wrapping will otherwise make atob() throw.
+    const bin = atob(body.replace(/\s+/g, ''))
     bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
   } else {
@@ -286,19 +288,44 @@ function sniffBytes(bytes) {
 // Returns { image, status }: image is the embeddable { data, type, w, h } (or
 // null), status is a short human-readable trail of what happened — surfaced
 // in the export toast so failures self-diagnose without needing DevTools.
-async function loadImage(url) {
+async function loadImage(rawUrl) {
+  const url = String(rawUrl ?? '').trim()
   if (!url) return { image: null, status: 'no image set' }
   const notes = []
+  const isDataUrl = /^data:/i.test(url)
+  // Lead the status trail with WHAT the source is, so a failure toast
+  // immediately reveals whether a stale web/blob URL is in play.
+  notes.push(isDataUrl
+    ? `source: data URL (${url.length} chars)`
+    : `source: "${url.slice(0, 48)}${url.length > 48 ? '\u2026' : ''}"`)
   // ── Path 1: read the bytes and identify them by signature ──────────────────
   try {
     let blob
-    if (url.startsWith('data:')) {
-      blob = dataUrlToBlob(url)
-      if (!blob) throw new Error('malformed data URL')
+    if (isDataUrl) {
+      try {
+        blob = dataUrlToBlob(url)
+        if (!blob) throw new Error('malformed data URL')
+      } catch (e) {
+        // atob can still choke on unusual encodings; fetch() natively decodes
+        // data: URLs, so give it one shot before declaring the URL unreadable.
+        notes.push(`data-URL decode failed (${e?.message || e}), retrying via fetch`)
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`fetch returned ${res.status}`)
+        blob = await res.blob()
+      }
     } else {
-      const res = await fetch(url)
-      if (!res.ok) throw new Error(`fetch returned ${res.status}`)
-      blob = await res.blob()
+      try {
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`fetch returned ${res.status}`)
+        blob = await res.blob()
+      } catch (e) {
+        const msg = e?.message || String(e)
+        // "Failed to fetch" is the browser's opaque CORS/network error —
+        // translate it so the toast tells the instructor what to actually do.
+        throw new Error(/failed to fetch/i.test(msg)
+          ? 'this is a link to an image on another website, which blocks cross-site access \u2014 upload the image file itself instead of linking to it'
+          : msg)
+      }
     }
     const bytes = new Uint8Array(await blob.arrayBuffer())
     const kind = sniffBytes(bytes)
@@ -636,14 +663,36 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
 }
 
 // ─── Browser download entry point ────────────────────────────────────────────
-// Returns { logoMissing, photoMissing } so the caller can warn the instructor
-// when an image URL was set but could not be embedded (e.g. a cross-site URL
-// that blocks fetch access).
+// Returns { logoMissing, photoMissing, logoUsedFallback } so the caller can
+// warn the instructor when an image URL was set but could not be embedded
+// (e.g. a cross-site URL that blocks fetch access).
+//
+// Logo resolution is a fallback chain: the per-course logo_url is tried
+// first; if it cannot be embedded and a shared logo exists in
+// syllabus_common_sections (section_key 'shared_logo'), the shared logo is
+// embedded instead. A stale per-course value (dead link, revoked blob URL,
+// cross-origin link) therefore degrades to the college logo rather than a
+// blank box, and logoUsedFallback lets the wizard tell the instructor to
+// reset the stale override.
 export async function downloadSyllabusDocx(data, commonSections, defaultSections) {
-  const [logoRes, photoRes] = await Promise.all([
+  const sharedLogoUrl = String(
+    (commonSections || []).find(s => s.section_key === 'shared_logo')?.content ?? ''
+  ).trim()
+  const [logoPrimary, photoRes] = await Promise.all([
     loadImage(data.logo_url),
     loadImage(data.course_photo_url),
   ])
+  let logoRes = logoPrimary
+  let logoUsedFallback = false
+  if (!logoPrimary.image && sharedLogoUrl && sharedLogoUrl !== String(data.logo_url ?? '').trim()) {
+    const fb = await loadImage(sharedLogoUrl)
+    if (fb.image) {
+      logoRes = { image: fb.image, status: `course logo failed (${logoPrimary.status}) \u2014 used the shared college logo instead` }
+      logoUsedFallback = true
+    } else {
+      logoRes = { image: null, status: `${logoPrimary.status}; shared-logo fallback also failed (${fb.status})` }
+    }
+  }
   const logo = logoRes.image
   const photo = photoRes.image
   const doc = buildSyllabusDoc(data, commonSections, defaultSections, { logo, photo })
@@ -659,6 +708,7 @@ export async function downloadSyllabusDocx(data, commonSections, defaultSections
   setTimeout(() => URL.revokeObjectURL(url), 30_000)
   return {
     logoMissing: !!data.logo_url && !logo,
+    logoUsedFallback,
     photoMissing: !!data.course_photo_url && !photo,
     logoStatus: logoRes.status,
     photoStatus: photoRes.status,

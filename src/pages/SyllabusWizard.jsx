@@ -1137,9 +1137,12 @@ function Step2Instructor({ data, update, commonSections }) {
 
   const activeLogoUrl = logoSource === 'shared' ? sharedLogo : data.logo_url
 
-  // Auto-apply shared logo if no per-course value is set yet
+  // Auto-apply shared logo if no per-course value is set yet. Also heal
+  // blob: URLs — they only live as long as the browser session that created
+  // them, so a saved draft holding one is always dead after a reload.
   useEffect(() => {
-    if (!data.logo_url && sharedLogo) {
+    const cur = String(data.logo_url || '').trim()
+    if (sharedLogo && (!cur || cur.startsWith('blob:'))) {
       update('logo_url', sharedLogo)
     }
   }, [sharedLogo]) // eslint-disable-line
@@ -1250,6 +1253,28 @@ function Step2Instructor({ data, update, commonSections }) {
               <button onClick={removeLogo} className="p-1.5 text-surface-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors shrink-0" title="Remove logo">
                 <Trash2 size={14} />
               </button>
+            </div>
+          )}
+
+          {/* Web-link logo warning — cross-site image links render fine in the
+              browser preview but almost always fail to embed in the Word
+              export (other sites block cross-origin pixel access). Surface
+              that mismatch here instead of letting it fail silently at export. */}
+          {logoSource === 'custom' && data.logo_url && !/^data:/i.test(String(data.logo_url).trim()) && (
+            <div role="alert" className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+              <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+              <span>
+                This course's logo is a <strong>web link</strong>. It may display in the preview but
+                usually cannot be embedded in the Word export, because other websites block
+                cross-site image access. Upload the image file itself instead
+                {sharedLogo && (
+                  <>, or{' '}
+                    <button onClick={resetToShared} className="underline font-semibold hover:no-underline">
+                      switch to the shared college logo
+                    </button>
+                  </>
+                )}.
+              </span>
             </div>
           )}
 
@@ -2594,7 +2619,9 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     try {
       const result = await downloadSyllabusDocx(data, commonSections, DEFAULT_COMMON_SECTIONS)
       toast.success('Word file downloaded — open in Word, then File → Save As → PDF for the accessible PDF.', { duration: 6000 })
-      if (result?.logoMissing) {
+      if (result?.logoUsedFallback) {
+        toast(`This course's saved logo could not be embedded, so the shared college logo was used instead. On the Instructor step, choose "Reset to shared logo" to clear the old value. (${result.logoStatus || ''})`, { icon: '⚠️', duration: 12000 })
+      } else if (result?.logoMissing) {
         toast.error(`The college logo could not be embedded in the Word file (${result.logoStatus || 'unknown reason'}). Re-uploading the logo as a PNG in the Settings gear will fix it.`, { duration: 12000 })
       }
       if (result?.photoMissing) {
