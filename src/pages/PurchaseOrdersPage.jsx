@@ -1245,26 +1245,24 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
         onClose={() => { if (editSavingId !== deleteLineTarget?.line_id) setDeleteLineTarget(null) }}
       />
 
-      {/* Delete Confirmation */}
-      {showDeleteConfirm && (
-        <div className="bg-white rounded-xl border-2 border-red-300 p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Trash2 size={16} className="text-red-600" />
-            <h4 className="text-sm font-semibold text-red-700">Permanently Delete {orderId}?</h4>
-          </div>
-          <p className="text-xs text-surface-600 mb-3">
+      {/* Delete PO Confirmation */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        variant="danger"
+        title={`Permanently delete ${orderId}?`}
+        message={
+          <>
             This will permanently remove this purchase order and <strong>all related records</strong> including
-            line items, work log entries, audit log entries, and program budget entries. This cannot be undone.
-          </p>
-          <div className="flex gap-2">
-            <button onClick={handleDelete} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700 flex items-center gap-1" disabled={actions.saving}>
-              {actions.saving ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-              {actions.saving ? 'Deleting...' : 'Yes, Delete Everything'}
-            </button>
-            <button onClick={() => setShowDeleteConfirm(false)} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs">Cancel</button>
-          </div>
-        </div>
-      )}
+            line items, work log entries, audit log entries, and program budget entries.{' '}
+            <strong>This cannot be undone.</strong>
+          </>
+        }
+        confirmLabel="Yes, Delete Everything"
+        cancelLabel="Keep Order"
+        busy={actions.saving}
+        onConfirm={handleDelete}
+        onClose={() => { if (!actions.saving) setShowDeleteConfirm(false) }}
+      />
 
       {/* Order Info */}
       <div className="bg-white rounded-xl border border-surface-200 p-4">
