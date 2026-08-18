@@ -150,17 +150,21 @@ export default function GlossaryModal({ open, onClose }) {
   }, [filteredTerms])
 
   // Live duplicate detection (case-insensitive) for the term form.
-  // Excludes the term being edited so renaming "PLC" → "PLC " style tweaks
-  // don't flag against itself. The DB unique index is the hard backstop;
-  // this just catches it before save.
+  // Duplicates are scoped PER CATEGORY: the same term may exist in different
+  // categories (e.g. "Alarm log" in both a Fanuc course and a PLC course),
+  // but not twice in the same category. Uncategorized counts as its own
+  // category. Excludes the term being edited. The composite DB unique index
+  // is the hard backstop; this just catches it before save.
   const duplicateTerm = useMemo(() => {
     const t = termText.trim().toLowerCase()
     if (!t) return null
+    const cat = termCategory || ''
     return terms.find(x =>
       x.term.toLowerCase() === t &&
+      (x.category_id || '') === cat &&
       (!editingTerm || x.term_id !== editingTerm.term_id)
     ) || null
-  }, [termText, terms, editingTerm])
+  }, [termText, termCategory, terms, editingTerm])
 
   // Same for the category form.
   const duplicateCat = useMemo(() => {
@@ -171,6 +175,21 @@ export default function GlossaryModal({ open, onClose }) {
       (!editingCat || x.category_id !== editingCat.category_id)
     ) || null
   }, [catName, categories, editingCat])
+
+  // Cross-reference map for browse view: lower(term) → all copies of it.
+  // A term that exists in multiple categories gets a small "Also in: …"
+  // line under each copy so readers know the other definitions exist even
+  // when a category filter or search hides them. Display-only.
+  const termCopiesByLower = useMemo(() => {
+    const map = {}
+    terms.forEach(t => {
+      if (t.status === 'Inactive') return
+      const key = t.term.toLowerCase()
+      if (!map[key]) map[key] = []
+      map[key].push(t)
+    })
+    return map
+  }, [terms])
 
   if (!open) return null
 
@@ -196,7 +215,7 @@ export default function GlossaryModal({ open, onClose }) {
   const saveTerm = async () => {
     if (!termText.trim()) { setFormError('Term is required.'); return }
     if (!defText.trim()) { setFormError('Definition is required.'); return }
-    if (duplicateTerm) { setFormError(`"${duplicateTerm.term}" is already in the glossary. Edit the existing term instead.`); return }
+    if (duplicateTerm) { setFormError(`"${duplicateTerm.term}" already exists in that category. Edit the existing term, or choose a different category.`); return }
     setSaving(true)
     setFormError('')
     try {
@@ -358,7 +377,15 @@ export default function GlossaryModal({ open, onClose }) {
       const invalid = []
       const dupInFile = []
       const seen = new Set()
-      const existingLower = new Set(terms.map(t => t.term.toLowerCase()))
+
+      // Duplicates are scoped per category: composite key "term|categoryName"
+      // (both lowercased; uncategorized = empty string). Existing DB terms are
+      // keyed by their category's NAME so file rows can match before new
+      // category IDs exist.
+      const existingKeys = new Set(terms.map(t => {
+        const catName = t.category_id ? (categoryNameById[t.category_id] || '') : ''
+        return `${t.term.toLowerCase()}|${catName.toLowerCase()}`
+      }))
 
       rawData.slice(1).forEach((row, i) => {
         const lineNo = i + 2 // 1-based, after header
@@ -371,13 +398,13 @@ export default function GlossaryModal({ open, onClose }) {
           invalid.push({ lineNo, term: term || '(empty)', reason: !term ? 'Missing term' : 'Missing definition' })
           return
         }
-        const lower = term.toLowerCase()
-        if (seen.has(lower)) {
+        const key = `${term.toLowerCase()}|${categoryName.toLowerCase()}`
+        if (seen.has(key)) {
           dupInFile.push({ lineNo, term })
           return
         }
-        seen.add(lower)
-        valid.push({ term, definition, categoryName, existsInDb: existingLower.has(lower) })
+        seen.add(key)
+        valid.push({ term, definition, categoryName, existsInDb: existingKeys.has(key) })
       })
 
       if (valid.length === 0 && invalid.length === 0 && dupInFile.length === 0) {
@@ -562,6 +589,21 @@ export default function GlossaryModal({ open, onClose }) {
                               )}
                             </div>
                             <p className="text-sm text-surface-600 m-0 mt-0.5 whitespace-pre-wrap">{t.definition}</p>
+                            {(() => {
+                              const siblings = (termCopiesByLower[t.term.toLowerCase()] || [])
+                                .filter(s => s.term_id !== t.term_id)
+                              if (siblings.length === 0) return null
+                              const names = siblings.map(s =>
+                                s.category_id && categoryNameById[s.category_id]
+                                  ? categoryNameById[s.category_id]
+                                  : 'Uncategorized'
+                              )
+                              return (
+                                <p className="text-xs text-surface-400 m-0 mt-1">
+                                  Also in: {names.join(', ')}
+                                </p>
+                              )
+                            })()}
                           </div>
                           {canManage && (
                             <div className="flex shrink-0">
@@ -627,10 +669,9 @@ export default function GlossaryModal({ open, onClose }) {
               {duplicateTerm && (
                 <p id="gl-term-dup" role="alert" className="flex items-center gap-1.5 text-xs text-amber-700 mt-1 m-0">
                   <AlertTriangle size={13} className="shrink-0" aria-hidden="true" />
-                  "{duplicateTerm.term}" is already in the glossary
-                  {duplicateTerm.category_id && categoryNameById[duplicateTerm.category_id]
-                    ? ` (${categoryNameById[duplicateTerm.category_id]})`
-                    : ''}. Edit the existing term instead.
+                  "{duplicateTerm.term}" already exists in {duplicateTerm.category_id && categoryNameById[duplicateTerm.category_id]
+                    ? `the "${categoryNameById[duplicateTerm.category_id]}" category`
+                    : 'the uncategorized list'}. Edit the existing term, or pick a different category to add it there.
                 </p>
               )}
             </div>
@@ -870,7 +911,7 @@ export default function GlossaryModal({ open, onClose }) {
                   <li><strong>{importPreview.valid.length}</strong> valid row{importPreview.valid.length === 1 ? '' : 's'} ready to import</li>
                   {importPreview.existingCount > 0 && (
                     <li className="text-amber-700">
-                      <strong>{importPreview.existingCount}</strong> already exist in the glossary — {updateExisting ? 'their definitions will be updated' : 'they will be skipped'}
+                      <strong>{importPreview.existingCount}</strong> already exist in the same category — {updateExisting ? 'their definitions will be updated' : 'they will be skipped'}. (The same term in a different category imports normally.)
                     </li>
                   )}
                   {importPreview.newCategories.length > 0 && (

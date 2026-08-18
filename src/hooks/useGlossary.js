@@ -37,7 +37,7 @@ function throwFriendly(err, kind, value) {
     throw new Error(
       kind === 'category'
         ? `A category named "${value}" already exists (names are not case-sensitive).`
-        : `The term "${value}" is already in the glossary (terms are not case-sensitive).`
+        : `The term "${value}" already exists in that category (terms are not case-sensitive; the same term in a different category is allowed).`
     )
   }
   throw err
@@ -383,8 +383,13 @@ export default function useGlossary() {
     }
 
     // ── 2. Split rows into inserts vs updates vs skips ──
-    const existingByLower = {}
-    terms.forEach(t => { existingByLower[t.term.toLowerCase()] = t })
+    // Duplicate scope is (term, category): the same term in a DIFFERENT
+    // category is a normal insert. Key on term + resolved category_id
+    // (uncategorized = empty string), matching the composite unique index.
+    const existingByKey = {}
+    terms.forEach(t => {
+      existingByKey[`${t.term.toLowerCase()}|${t.category_id || ''}`] = t
+    })
 
     const toInsert = []
     const toUpdate = []
@@ -392,7 +397,7 @@ export default function useGlossary() {
 
     rows.forEach(r => {
       const catId = r.categoryName ? (catByLower[r.categoryName.trim().toLowerCase()] || null) : null
-      const existing = existingByLower[r.term.trim().toLowerCase()]
+      const existing = existingByKey[`${r.term.trim().toLowerCase()}|${catId || ''}`]
       if (existing) {
         if (updateExisting) {
           toUpdate.push({ termId: existing.term_id, definition: r.definition.trim(), categoryId: catId })
