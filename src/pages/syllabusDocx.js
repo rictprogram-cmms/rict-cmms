@@ -29,6 +29,9 @@ import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, ShadingType, BorderStyle, HeadingLevel,
   LevelFormat, ExternalHyperlink, ImageRun, Footer, PageNumber, TabStopType,
+  FrameAnchorType, HorizontalPositionAlign, VerticalPositionAlign, FrameWrap,
+  HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom,
+  TextWrappingType, TextWrappingSide,
 } from 'docx'
 
 // ─── Layout constants (US Letter, 1" side margins to match the print CSS) ────
@@ -239,26 +242,47 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(p([r(`Revised: ${revisedStr}`, { size: 17, color: '444444' })], { alignment: AlignmentType.RIGHT, spacing: { after: 120 } }))
 
   // ── Masthead ───────────────────────────────────────────────────────────────
-  // Rendered vertically (logo, college identity, then the centered title)
-  // rather than in a side-by-side layout table: layout tables export to PDF as
-  // data tables without headers, which accessibility checkers flag.
+  // Side-by-side layout matching the print template: the college identity
+  // block sits in a bordered sidebar frame on the left and the title block
+  // flows beside it. Word paragraph FRAMES are used instead of a layout table
+  // because frames remain real paragraphs — correct reading order for screen
+  // readers, and no headerless-table flag in the tagged PDF. (The college's
+  // own official template achieves this layout with floating text boxes;
+  // frames are the more accessible equivalent.) Consecutive paragraphs with
+  // identical frame settings merge into a single frame in Word.
+  const sideFrame = {
+    type: 'alignment',
+    width: 2100, // ~140px, matching the print CSS sidebar width
+    anchor: { horizontal: FrameAnchorType.MARGIN, vertical: FrameAnchorType.TEXT },
+    alignment: { x: HorizontalPositionAlign.LEFT, y: VerticalPositionAlign.INLINE },
+    wrap: FrameWrap.AROUND,
+  }
+  const sbLine = { style: BorderStyle.SINGLE, size: 4, color: 'C0CDE0', space: 8 }
+  const sbShade = { fill: 'F4F7FC', type: ShadingType.CLEAR }
+  const sbFirst = { top: sbLine, left: sbLine, right: sbLine }
+  const sbMid = { left: sbLine, right: sbLine }
+  const sbLast = { bottom: sbLine, left: sbLine, right: sbLine }
   if (images.logo) {
     const dims = scaleTo(images.logo, 64)
     c.push(new Paragraph({
-      spacing: { after: 40 },
+      frame: sideFrame, shading: sbShade, border: sbFirst, spacing: { after: 40 },
       children: [new ImageRun({
         data: images.logo.data, type: images.logo.type, transformation: dims,
         altText: { title: 'College logo', description: 'St. Cloud Technical & Community College logo', name: 'SCTCC logo' },
       })],
     }))
   }
-  c.push(p([rb('St. Cloud Technical & Community College', { size: 19, color: NAVY, allCaps: true })], { spacing: { after: 20 } }))
-  c.push(p([ri('A member of Minnesota State', { size: 15, color: '555555' })], { spacing: { after: 40 } }))
-  c.push(p([ri('We provide the education, training, and support necessary for equitable participation in our society, economy, and democracy.', { size: 15, color: '555555' })], { spacing: { after: 160 } }))
+  c.push(p([rb('St. Cloud Technical & Community College', { size: 19, color: NAVY, allCaps: true })], { frame: sideFrame, shading: sbShade, border: images.logo ? sbMid : sbFirst, spacing: { after: 20 } }))
+  c.push(p([ri('A member of Minnesota State', { size: 15, color: '555555' })], { frame: sideFrame, shading: sbShade, border: sbMid, spacing: { after: 40 } }))
+  c.push(p([ri('We provide the education, training, and support necessary for equitable participation in our society, economy, and democracy.', { size: 15, color: '555555' })], { frame: sideFrame, shading: sbShade, border: sbLast, spacing: { after: 0 } }))
   c.push(h1(`${data.course_id}: ${data.course_name}`))
   c.push(p([new TextRun({ text: data.semester, font: 'Calibri', size: 21, bold: true, smallCaps: true })], { alignment: AlignmentType.CENTER, spacing: { after: 120 } }))
   c.push(p([rb(`This syllabus is the official course document. The instructor${hasInstructor2 ? 's reserve' : ' reserves'} the right to make changes to this document. Students will be notified when changes are made.`, { size: 19 })], { alignment: AlignmentType.CENTER, spacing: { after: 60 } }))
   c.push(p([r('Instructor Information / Course Information / College Policies & Procedures / Course Policies & Procedures / Grading', { size: 17, color: NAVY })], { alignment: AlignmentType.CENTER, spacing: { after: 160 } }))
+  // Clear the sidebar frame: spacer so the first section heading starts
+  // full-width below the masthead, matching the print layout. The sidebar is
+  // taller when a logo is present, so the spacer scales with it.
+  c.push(new Paragraph({ spacing: { before: images.logo ? 900 : 200, after: 0 }, children: [r('', { size: 2 })] }))
 
   // ── Instructor Information ─────────────────────────────────────────────────
   c.push(h2('Instructor Information'))
@@ -266,20 +290,27 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(p(data.instructor_office))
   c.push(p(data.instructor_office_hours))
   c.push(h3('Contact Information'))
+  // Course photo floats to the right of the contact block, matching the print
+  // layout. Floating anchored images with alt text are exactly how the
+  // college's own template places its images — fully accessible.
+  const nameChildren = [r(data.instructor_name)]
   if (images.photo) {
     const dims = scaleTo(images.photo, 180, 140)
     // Accessibility: prefer the instructor-written alt text; fall back to a
     // generated description so the image always carries alternative text.
     const photoAlt = (data.course_photo_alt || '').trim() || `Course photo for ${data.course_id}: ${data.course_name}`
-    c.push(new Paragraph({
-      spacing: { after: 60 },
-      children: [new ImageRun({
-        data: images.photo.data, type: images.photo.type, transformation: dims,
-        altText: { title: 'Course photo', description: photoAlt, name: 'Course photo' },
-      })],
+    nameChildren.unshift(new ImageRun({
+      data: images.photo.data, type: images.photo.type, transformation: dims,
+      altText: { title: 'Course photo', description: photoAlt, name: 'Course photo' },
+      floating: {
+        horizontalPosition: { relative: HorizontalPositionRelativeFrom.MARGIN, align: HorizontalPositionAlign.RIGHT },
+        verticalPosition: { relative: VerticalPositionRelativeFrom.PARAGRAPH, offset: 0 },
+        wrap: { type: TextWrappingType.SQUARE, side: TextWrappingSide.LEFT },
+        margins: { left: 182880, bottom: 91440 }, // 0.2in left, 0.1in below
+      },
     }))
   }
-  c.push(p(data.instructor_name))
+  c.push(new Paragraph({ spacing: { after: 100 }, children: nameChildren }))
   if (data.instructor_email) c.push(new Paragraph({ spacing: { after: 100 }, children: [link(data.instructor_email, `mailto:${data.instructor_email}`)] }))
   if (data.instructor_phone) c.push(p(data.instructor_phone))
   c.push(p([r('The best way to contact us is by '), rb('email/telephone/text'), r('.')]))

@@ -1187,22 +1187,25 @@ function Step2Instructor({ data, update, commonSections }) {
           {data.course_photo_url && (
             <div className="space-y-1.5 pt-1">
               <label htmlFor="syl-course-photo-alt" className="text-xs font-semibold text-surface-600">
-                Photo description (alt text) <span className="font-normal text-surface-400">— required for accessibility</span>
+                Photo description (alt text) <span className="text-red-500" aria-hidden="true">*</span>
+                <span className="font-normal text-surface-400"> — required for accessibility</span>
               </label>
               <input
                 id="syl-course-photo-alt"
                 type="text"
+                required
+                aria-required="true"
                 maxLength={250}
                 value={data.course_photo_alt || ''}
                 onChange={e => update('course_photo_alt', e.target.value)}
                 placeholder={`e.g. "Allen-Bradley PLC trainer with wired input and output modules"`}
-                className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+                className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 ${(data.course_photo_alt || '').trim() ? 'border-surface-200' : 'border-amber-300 bg-amber-50/40'}`}
                 aria-describedby="syl-course-photo-alt-hint"
               />
               <p id="syl-course-photo-alt-hint" className="text-xs text-surface-400 leading-snug">
                 Describe what the photo shows for students using a screen reader — the equipment,
                 the activity, the scene. Avoid starting with "Photo of" or "Image of."
-                If left blank, a generic description is used.
+                The syllabus cannot be exported until this is filled in.
               </p>
             </div>
           )}
@@ -2130,6 +2133,8 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
     { label: 'Course description',  ok: !!data.course_description },
     { label: 'Student outcomes',    ok: (data.student_outcomes||[]).length > 0 },
     { label: 'Assessments',         ok: (data.assessments||[]).length > 0 && totalPoints > 0 },
+    // Federal accessibility requirement: a course photo must have a description
+    ...(data.course_photo_url ? [{ label: 'Photo description (alt text)', ok: !!(data.course_photo_alt || '').trim() }] : []),
   ]
 
   const refresh = useCallback(() => {
@@ -2409,10 +2414,21 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
 
   const [docxBusy, setDocxBusy] = useState(false)
 
+  // Federal accessibility requirement: a course photo may not be exported
+  // without a written description (alt text). Both export paths call this.
+  const photoAltMissing = () => {
+    if (data.course_photo_url && !(data.course_photo_alt || '').trim()) {
+      toast.error('The course photo needs a description (alt text) before exporting — see the Course Photo section on the Instructor step.', { duration: 6000 })
+      return true
+    }
+    return false
+  }
+
   // Accessible Word export — the compliant path to a 100% Ally-scored PDF.
   // Saves the draft and bumps the export counter (same tracking as the print
   // path) so the "Add to CMMS" prompt and export history keep working.
   const handleDownloadDocx = async () => {
+    if (photoAltMissing()) return
     const now = new Date().toISOString()
     const newCount = (data.pdf_generated_count || 0) + 1
     const ok = await handleSave({ pdf_generated_at: now, pdf_generated_count: newCount })
@@ -2430,6 +2446,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
   }
 
   const handleGenerate = async () => {
+    if (photoAltMissing()) return
     const now = new Date().toISOString()
     const newCount = (data.pdf_generated_count || 0) + 1
     const ok = await handleSave({ pdf_generated_at: now, pdf_generated_count: newCount })
