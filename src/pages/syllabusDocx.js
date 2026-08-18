@@ -242,6 +242,22 @@ function dataUrlToBlob(url) {
   return new Blob([bytes], { type: mime })
 }
 
+// Identify the image by its actual BYTES, never by its declared MIME type —
+// data URLs can carry a mislabeled type (e.g. SVG markup stored as image/png)
+// and the browser <img> tag content-sniffs its way past that, which is why
+// the preview can show a logo the Word export chokes on.
+function sniffBytes(bytes) {
+  if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'png'
+  if (bytes.length > 3 && bytes[0] === 0xFF && bytes[1] === 0xD8) return 'jpg'
+  // SVG is XML text: look for an <svg tag near the start (allowing BOM,
+  // whitespace, XML declaration, comments)
+  try {
+    const head = new TextDecoder().decode(bytes.slice(0, 512)).toLowerCase()
+    if (head.includes('<svg')) return 'svg'
+  } catch { /* binary — not svg */ }
+  return null
+}
+
 async function loadImage(url) {
   if (!url) return null
   try {
@@ -254,17 +270,19 @@ async function loadImage(url) {
       if (!res.ok) { console.warn('[syllabusDocx] Image fetch failed:', res.status, url.slice(0, 80)); return null }
       blob = await res.blob()
     }
-    const mime = (blob.type || '').toLowerCase()
-    // PNG and JPEG embed natively in Word; everything else is rasterized.
-    if (mime.includes('png') || (mime.includes('jpeg') || mime.includes('jpg')) && !mime.includes('svg')) {
-      const type = mime.includes('png') ? 'png' : 'jpg'
-      const data = new Uint8Array(await blob.arrayBuffer())
-      const size = getImageSize(data, type)
-      if (size.w > 1 && size.h > 1) return { data, type, ...size }
-      // Dimension parse failed — fall through to the canvas path
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const kind = sniffBytes(bytes)
+    console.warn('[syllabusDocx] Image loaded:', bytes.length, 'bytes, detected type:', kind || 'other', '(declared:', blob.type || 'none', ')')
+    // Genuine PNG and JPEG bytes embed natively in Word
+    if (kind === 'png' || kind === 'jpg') {
+      const size = getImageSize(bytes, kind)
+      if (size.w > 1 && size.h > 1) return { data: bytes, type: kind, ...size }
+      console.warn('[syllabusDocx] Dimension parse failed — rasterizing instead')
     }
-    if (mime.includes('svg')) blob = await normalizeSvgBlob(blob)
-    return await rasterizeToPng(blob)
+    // Everything else (SVG, WebP, GIF, mislabeled data) → rasterize to PNG
+    let rasterBlob = new Blob([bytes], { type: kind === 'svg' ? 'image/svg+xml' : (blob.type || 'application/octet-stream') })
+    if (kind === 'svg') rasterBlob = await normalizeSvgBlob(rasterBlob)
+    return await rasterizeToPng(rasterBlob)
   } catch (e) {
     console.warn('[syllabusDocx] Image load failed:', e?.message || e, String(url).slice(0, 80))
     return null // caller warns the user via toast
