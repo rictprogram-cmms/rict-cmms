@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { withNetworkRetry } from '@/lib/supabaseRetry'
 import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import toast from 'react-hot-toast'
@@ -1508,20 +1509,26 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       const weekStartDate = new Date(Date.UTC(piDate.getUTCFullYear(), piDate.getUTCMonth(), piDate.getUTCDate() + mondayOffset))
       const weekStart = `${weekStartDate.getUTCFullYear()}-${String(weekStartDate.getUTCMonth()+1).padStart(2,'0')}-${String(weekStartDate.getUTCDate()).padStart(2,'0')}`
 
-      const { error } = await supabase.from('time_clock').insert({
-        record_id: recordId,
-        user_id: userId,
-        user_name: uName,
-        user_email: user.email,
-        class_id: classId,
-        course_id: courseName,
-        punch_in: piDate.toISOString(),
-        punch_out: poDate?.toISOString() || null,
-        total_hours: totalHours,
-        status: poDate ? 'Punched Out' : 'Punched In',
-        week_start: weekStart
+      // Retry-safe: recordId was generated above, so a retry of an insert
+      // that secretly succeeded hits the primary key instead of duplicating.
+      await withNetworkRetry(async () => {
+        const { error } = await supabase.from('time_clock').insert({
+          record_id: recordId,
+          user_id: userId,
+          user_name: uName,
+          user_email: user.email,
+          class_id: classId,
+          course_id: courseName,
+          punch_in: piDate.toISOString(),
+          punch_out: poDate?.toISOString() || null,
+          total_hours: totalHours,
+          status: poDate ? 'Punched Out' : 'Punched In',
+          week_start: weekStart
+        })
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — the time entry was not saved. Please check your signal and try again.',
       })
-      if (error) throw error
 
       toast.success('Time entry added')
       return { success: true, recordId, totalHours }
@@ -1564,23 +1571,28 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       }
       const requestId = `TER${String(nextNum).padStart(6, '0')}`
 
-      const { error } = await supabase.from('time_entry_requests').insert({
-        request_id: requestId,
-        user_name: userName,
-        user_email: profile.email,
-        class_id: classId,
-        course_id: courseName,
-        requested_date: date,
-        start_time: startTime + ':00',
-        end_time: endTime + ':00',
-        total_hours: totalHours,
-        entry_type: 'New',
-        reason: reason || '',
-        status: 'Pending',
-        created_at: new Date().toISOString()
+      // Retry-safe: requestId was computed above, so a retry of an insert
+      // that secretly succeeded hits the primary key instead of duplicating.
+      await withNetworkRetry(async () => {
+        const { error } = await supabase.from('time_entry_requests').insert({
+          request_id: requestId,
+          user_name: userName,
+          user_email: profile.email,
+          class_id: classId,
+          course_id: courseName,
+          requested_date: date,
+          start_time: startTime + ':00',
+          end_time: endTime + ':00',
+          total_hours: totalHours,
+          entry_type: 'New',
+          reason: reason || '',
+          status: 'Pending',
+          created_at: new Date().toISOString()
+        })
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — the request was not submitted. Please check your signal and try again.',
       })
-
-      if (error) throw error
 
       toast.success('Time entry request submitted for approval')
       return { success: true, requestId }
@@ -1649,24 +1661,28 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       }
       const requestId = `TER${String(nextNum).padStart(6, '0')}`
 
-      const { error } = await supabase.from('time_entry_requests').insert({
-        request_id: requestId,
-        user_name: userName,
-        user_email: profile.email,
-        class_id: entry.class_id || '',
-        course_id: entry.course_id || '',
-        requested_date: entryDate,
-        start_time: newStartTime + ':00',
-        end_time: isStillIn ? null : newEndTime + ':00',
-        total_hours: totalHours,
-        entry_type: 'Edit',
-        reason: reason || '',
-        status: 'Pending',
-        created_at: new Date().toISOString(),
-        time_clock_record_id: entry.record_id
+      // Retry-safe: requestId was computed above (see note in submitTimeRequest).
+      await withNetworkRetry(async () => {
+        const { error } = await supabase.from('time_entry_requests').insert({
+          request_id: requestId,
+          user_name: userName,
+          user_email: profile.email,
+          class_id: entry.class_id || '',
+          course_id: entry.course_id || '',
+          requested_date: entryDate,
+          start_time: newStartTime + ':00',
+          end_time: isStillIn ? null : newEndTime + ':00',
+          total_hours: totalHours,
+          entry_type: 'Edit',
+          reason: reason || '',
+          status: 'Pending',
+          created_at: new Date().toISOString(),
+          time_clock_record_id: entry.record_id
+        })
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — the edit request was not submitted. Please check your signal and try again.',
       })
-
-      if (error) throw error
 
       toast.success('Edit request submitted — an instructor will review it')
       return { success: true, requestId }
@@ -1686,18 +1702,23 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       const poDate = updates.punch_out ? new Date(updates.punch_out) : null
       const totalHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
 
-      const { error } = await supabase
-        .from('time_clock')
-        .update({
-          punch_in: piDate.toISOString(),
-          punch_out: poDate?.toISOString() || null,
-          total_hours: totalHours,
-          status: poDate ? 'Punched Out' : 'Punched In',
-          ...(updates.class_id && { class_id: updates.class_id }),
-          ...(updates.course_id && { course_id: updates.course_id })
-        })
-        .eq('record_id', recordId)
-      if (error) throw error
+      // Retry-safe: idempotent update by record_id.
+      await withNetworkRetry(async () => {
+        const { error } = await supabase
+          .from('time_clock')
+          .update({
+            punch_in: piDate.toISOString(),
+            punch_out: poDate?.toISOString() || null,
+            total_hours: totalHours,
+            status: poDate ? 'Punched Out' : 'Punched In',
+            ...(updates.class_id && { class_id: updates.class_id }),
+            ...(updates.course_id && { course_id: updates.course_id })
+          })
+          .eq('record_id', recordId)
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — the time entry was not updated. Please check your signal and try again.',
+      })
 
       toast.success('Time entry updated')
       return { success: true, totalHours }
@@ -1712,11 +1733,16 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     if (!canEdit) { toast.error('Not authorized'); return }
     setSaving(true)
     try {
-      const { error } = await supabase
-        .from('time_clock')
-        .delete()
-        .eq('record_id', recordId)
-      if (error) throw error
+      // Retry-safe: deleting an already-deleted row is a no-op.
+      await withNetworkRetry(async () => {
+        const { error } = await supabase
+          .from('time_clock')
+          .delete()
+          .eq('record_id', recordId)
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — the time entry was not deleted. Please check your signal and try again.',
+      })
       toast.success('Time entry deleted')
       return { success: true }
     } catch (err) {
@@ -1738,15 +1764,21 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         now.getHours(), now.getMinutes(), now.getSeconds())
       const totalHours = roundToMinute((nowFakeUtcMs - piDate.getTime()) / 3600000)
 
-      const { error } = await supabase
-        .from('time_clock')
-        .update({
-          punch_out: localToUtcIso(now),
-          total_hours: totalHours,
-          status: 'Punched Out',
-        })
-        .eq('record_id', recordId)
-      if (error) throw error
+      // Retry-safe: idempotent update by record_id. This one matters most on
+      // phones — a lost punch-out is the failure students actually notice.
+      await withNetworkRetry(async () => {
+        const { error } = await supabase
+          .from('time_clock')
+          .update({
+            punch_out: localToUtcIso(now),
+            total_hours: totalHours,
+            status: 'Punched Out',
+          })
+          .eq('record_id', recordId)
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — the punch-out was not saved. Please check your signal and try again.',
+      })
 
       toast.success(`Punched out — ${totalHours}h recorded. You can edit the time if needed.`)
       return { success: true, totalHours }
@@ -1791,20 +1823,25 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
         const uName = `${reqUser.first_name} ${(reqUser.last_name || '').charAt(0)}.`
 
-        const { error: insertErr } = await supabase.from('time_clock').insert({
-          record_id: recordId,
-          user_id: reqUser.user_id,
-          user_name: uName,
-          user_email: reqUser.email,
-          class_id: request.class_id || '',
-          course_id: request.course_id || '',
-          punch_in: piStr,
-          punch_out: poStr,
-          total_hours: totalHours,
-          status: poDate ? 'Punched Out' : 'Punched In',
-          week_start: weekStart,
+        // Retry-safe: recordId generated above (see note in addEntry).
+        await withNetworkRetry(async () => {
+          const { error: insertErr } = await supabase.from('time_clock').insert({
+            record_id: recordId,
+            user_id: reqUser.user_id,
+            user_name: uName,
+            user_email: reqUser.email,
+            class_id: request.class_id || '',
+            course_id: request.course_id || '',
+            punch_in: piStr,
+            punch_out: poStr,
+            total_hours: totalHours,
+            status: poDate ? 'Punched Out' : 'Punched In',
+            week_start: weekStart,
+          })
+          if (insertErr) throw insertErr
+        }, {
+          failureMessage: 'Connection problem — the time entry was not created. Please check your signal and try approving again.',
         })
-        if (insertErr) throw insertErr
 
       } else if (request.entry_type === 'Edit') {
         // ── EDIT request: update the existing time_clock entry ──
@@ -1829,23 +1866,33 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
           updateFields.punch_out = poStr
         }
 
-        const { error: updateErr } = await supabase
-          .from('time_clock')
-          .update(updateFields)
-          .eq('record_id', request.time_clock_record_id)
-        if (updateErr) throw updateErr
+        // Retry-safe: idempotent update by record_id.
+        await withNetworkRetry(async () => {
+          const { error: updateErr } = await supabase
+            .from('time_clock')
+            .update(updateFields)
+            .eq('record_id', request.time_clock_record_id)
+          if (updateErr) throw updateErr
+        }, {
+          failureMessage: 'Connection problem — the time entry was not updated. Please check your signal and try approving again.',
+        })
       }
 
       // ── Mark the request as Approved ──
-      const { error: statusErr } = await supabase
-        .from('time_entry_requests')
-        .update({
-          status: 'Approved',
-          reviewed_by: userName,
-          review_date: new Date().toISOString(),
-        })
-        .eq('request_id', request.request_id)
-      if (statusErr) throw statusErr
+      // Retry-safe: idempotent status flip by request_id.
+      await withNetworkRetry(async () => {
+        const { error: statusErr } = await supabase
+          .from('time_entry_requests')
+          .update({
+            status: 'Approved',
+            reviewed_by: userName,
+            review_date: new Date().toISOString(),
+          })
+          .eq('request_id', request.request_id)
+        if (statusErr) throw statusErr
+      }, {
+        failureMessage: 'Connection problem — the request status was not updated. Please check your signal and try approving again.',
+      })
 
       // ── Audit log ──
       try {
@@ -1876,18 +1923,23 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     if (!canEdit) { toast.error('Not authorized'); return }
     setSaving(true)
     try {
-      const { data: rejRows, error } = await supabase
-        .from('time_entry_requests')
-        .update({
-          status: 'Rejected',
-          rejection_reason: reason,
-          reviewed_by: userName,
-          review_date: new Date().toISOString(),
-        })
-        .eq('request_id', requestId)
-        .select()
-
-      if (error) throw error
+      // Retry-safe: idempotent status flip by request_id.
+      const rejRows = await withNetworkRetry(async () => {
+        const { data: rows, error } = await supabase
+          .from('time_entry_requests')
+          .update({
+            status: 'Rejected',
+            rejection_reason: reason,
+            reviewed_by: userName,
+            review_date: new Date().toISOString(),
+          })
+          .eq('request_id', requestId)
+          .select()
+        if (error) throw error
+        return rows
+      }, {
+        failureMessage: 'Connection problem — the rejection was not recorded. Please check your signal and try again.',
+      })
       if (!rejRows || rejRows.length === 0) {
         toast.error('Reject failed — you may not have permission.')
         setSaving(false)

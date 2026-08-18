@@ -32,6 +32,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { withNetworkRetry, warmSession } from '@/lib/supabaseRetry'
 import toast from 'react-hot-toast'
 
 /* ── Constants ────────────────────────────────────────────────────── */
@@ -330,10 +331,15 @@ export function useUserPendingAcknowledgments(userEmail) {
     return () => clearInterval(id)
   }, [])
 
-  // Refresh on tab focus (in case rows were expired/acknowledged elsewhere)
+  // Refresh on tab focus (in case rows were expired/acknowledged elsewhere).
+  // warmSession() forces the auth token refresh NOW — on iOS Safari the
+  // first fetch after resume often dies ("TypeError: Load failed"), and the
+  // token refresh is usually that first fetch. Warming it here means the
+  // student's Confirm tap rides a fresh connection + valid session.
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === 'visible') {
+        warmSession()
         setNow(Date.now())
         refresh()
       }
@@ -415,20 +421,28 @@ export function useCheckoutActions() {
       const requestedDate = new Date()
       const expiresDate   = new Date(requestedDate.getTime() + expiryHours * 60 * 60 * 1000)
 
-      const { data, error } = await supabase.rpc('request_asset_checkout', {
-        p_asset_id:            asset.asset_id,
-        p_asset_name:          asset.name || '',
-        p_asset_serial_number: asset.serial_number || null,
-        p_user_id:             user.user_id || null,
-        p_user_email:          user.email,
-        p_user_name:           user.name || user.email,
-        p_expected_return:     expectedReturn ? localToUtcIso(expectedReturn) : null,
-        p_condition:           condition || 'Good',
-        p_notes:               notes || '',
-        p_expires_at:          localToUtcIso(expiresDate),
-        p_requested_at:        localToUtcIso(requestedDate),
+      // Retry-safe: the RPC re-checks the partial unique index on every
+      // attempt, so a retry of a write that secretly succeeded errors
+      // loudly instead of double-reserving the asset.
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('request_asset_checkout', {
+          p_asset_id:            asset.asset_id,
+          p_asset_name:          asset.name || '',
+          p_asset_serial_number: asset.serial_number || null,
+          p_user_id:             user.user_id || null,
+          p_user_email:          user.email,
+          p_user_name:           user.name || user.email,
+          p_expected_return:     expectedReturn ? localToUtcIso(expectedReturn) : null,
+          p_condition:           condition || 'Good',
+          p_notes:               notes || '',
+          p_expires_at:          localToUtcIso(expiresDate),
+          p_requested_at:        localToUtcIso(requestedDate),
+        })
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — the request was not sent. Please check your signal and try again.',
       })
-      if (error) throw error
 
       toast.success(`Sent to ${user.name || user.email} for acknowledgment`)
       return data
@@ -453,12 +467,20 @@ export function useCheckoutActions() {
     setSaving(true)
     try {
       const ackAt = localToUtcIso(new Date())
-      const { data, error } = await supabase.rpc('acknowledge_asset_checkout', {
-        p_checkout_id:         checkoutId,
-        p_acknowledgment_name: acknowledgmentName.trim(),
-        p_acknowledgment_at:   ackAt,
+      // Retry-safe: status-flip RPC. If a "failed" attempt actually landed,
+      // the retry gets the server's "no longer pending" answer rather than
+      // signing twice.
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('acknowledge_asset_checkout', {
+          p_checkout_id:         checkoutId,
+          p_acknowledgment_name: acknowledgmentName.trim(),
+          p_acknowledgment_at:   ackAt,
+        })
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — your signature was not recorded. Please check your signal and tap Confirm again. The request is still pending.',
       })
-      if (error) throw error
 
       toast.success('Checkout acknowledged')
       return data
@@ -481,12 +503,17 @@ export function useCheckoutActions() {
     setSaving(true)
     try {
       const at = localToUtcIso(new Date())
-      const { data, error } = await supabase.rpc('decline_asset_checkout', {
-        p_checkout_id: checkoutId,
-        p_reason:      reason || '',
-        p_at:          at,
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('decline_asset_checkout', {
+          p_checkout_id: checkoutId,
+          p_reason:      reason || '',
+          p_at:          at,
+        })
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — the decline was not recorded. Please check your signal and try again.',
       })
-      if (error) throw error
 
       toast.success('Checkout declined')
       return data
@@ -508,11 +535,16 @@ export function useCheckoutActions() {
     setSaving(true)
     try {
       const at = localToUtcIso(new Date())
-      const { data, error } = await supabase.rpc('cancel_pending_checkout', {
-        p_checkout_id: checkoutId,
-        p_at:          at,
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('cancel_pending_checkout', {
+          p_checkout_id: checkoutId,
+          p_at:          at,
+        })
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — the cancellation was not recorded. Please check your signal and try again.',
       })
-      if (error) throw error
 
       toast.success('Pending request cancelled')
       return data
@@ -619,8 +651,16 @@ export function useCheckoutActions() {
         requested_at:        nowIso,
       }
 
-      const { data, error } = await supabase.from('asset_checkouts').insert(insertRow).select().single()
-      if (error) throw error
+      // Retry-safe: checkout_id was generated above, so a retry of an
+      // insert that secretly succeeded hits the primary key and errors
+      // loudly instead of double-inserting.
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.from('asset_checkouts').insert(insertRow).select().single()
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — the checkout was not saved. Please check your signal and try again.',
+      })
 
       // Audit log (non-critical)
       try {
@@ -684,13 +724,18 @@ export function useCheckoutActions() {
         status:           'returned',
       }
 
-      const { data, error } = await supabase
-        .from('asset_checkouts')
-        .update(update)
-        .eq('checkout_id', checkoutId)
-        .select()
-        .single()
-      if (error) throw error
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase
+          .from('asset_checkouts')
+          .update(update)
+          .eq('checkout_id', checkoutId)
+          .select()
+          .single()
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — the return was not saved. Please check your signal and try again.',
+      })
 
       try {
         await supabase.from('audit_log').insert({
@@ -721,13 +766,18 @@ export function useCheckoutActions() {
     if (!checkoutId) throw new Error('Checkout ID is required')
     setSaving(true)
     try {
-      const { data, error } = await supabase
-        .from('asset_checkouts')
-        .update({ expected_return: newDueDate ? localToUtcIso(newDueDate) : null })
-        .eq('checkout_id', checkoutId)
-        .select()
-        .single()
-      if (error) throw error
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase
+          .from('asset_checkouts')
+          .update({ expected_return: newDueDate ? localToUtcIso(newDueDate) : null })
+          .eq('checkout_id', checkoutId)
+          .select()
+          .single()
+        if (error) throw error
+        return row
+      }, {
+        failureMessage: 'Connection problem — the due date was not updated. Please check your signal and try again.',
+      })
 
       try {
         await supabase.from('audit_log').insert({
