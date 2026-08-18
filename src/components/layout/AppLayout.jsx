@@ -8,6 +8,7 @@ import WhatsNewModal from '@/components/WhatsNewModal'
 import HoldLockoutModal from '@/components/holds/HoldLockoutModal'
 import HoldReminderModal from '@/components/holds/HoldReminderModal'
 import HoldNudgeBanner from '@/components/holds/HoldNudgeBanner'
+import GlossaryModal from '@/components/GlossaryModal'
 import useChangelog from '@/hooks/useChangelog'
 import {
   Wrench,
@@ -52,6 +53,7 @@ import {
   Printer,
   Network,
   History,
+  BookOpen,
 } from 'lucide-react'
 
 const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
@@ -1509,6 +1511,9 @@ export default function AppLayout() {
   // ── Change Password Modal State ──
   const [changePasswordOpen, setChangePasswordOpen] = useState(false)
 
+  // ── Glossary Modal State (all users) ──
+  const [glossaryOpen, setGlossaryOpen] = useState(false)
+
   // ── Instructor Away Mode (banner for students / work study) ──
   const [instructorAway, setInstructorAway] = useState(false)
   const [awayReturnTime, setAwayReturnTime] = useState('')
@@ -2017,6 +2022,16 @@ export default function AppLayout() {
             <h1 className="font-semibold text-surface-900 text-sm m-0">{currentPage}</h1>
           </div>
           <div className="ml-auto flex items-center gap-2">
+            {/* Glossary — available to all users */}
+            <button
+              onClick={() => setGlossaryOpen(true)}
+              className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              title="Program glossary"
+              aria-label="Open program glossary"
+              aria-haspopup="dialog"
+            >
+              <BookOpen size={18} aria-hidden="true" />
+            </button>
             <HelpButton profile={profile} />
             {/* Program Plan icon — students only */}
             {!isInstructor && (
@@ -2104,6 +2119,9 @@ export default function AppLayout() {
       {/* Lockout 9000 > Reminder 8500 > temp toast 5000 > ChangePassword 2000.  */}
       <HoldReminderModal />
       <HoldLockoutModal />
+
+      {/* ── Glossary Modal (all users; manage gated by P176) ──────────────── */}
+      <GlossaryModal open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
 
       {/* ── What's New popup ──────────────────────────────────────────────── */}
       {/* z-index 2000 — behind hold lockout/reminder by design. The hook gates */}

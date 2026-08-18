@@ -226,6 +226,11 @@ const DEFAULT_PERMISSIONS = [
   ['P172', 'Absence Requests', 'submit_on_behalf',     false, false, true,  'Can submit an absence request on behalf of a student'],
   ['P173', 'Absence Requests', 'mark_makeup_complete', false, false, true,  'Can mark absence make-up hours complete'],
 
+  // Glossary — popup opened from the header book icon. Viewing needs no
+  // permission (all logged-in users); P176 gates add/edit/delete of both
+  // terms and categories.
+  ['P176', 'Glossary', 'manage_glossary', false, false, true, 'Can add, edit, and delete glossary terms and categories'],
+
   // Program Budget
   // NOTE: Some Program Budget IDs use the "PB##" naming pattern instead of "P0C#".
   // Both formats coexist in the DB; both are kept here to match.
