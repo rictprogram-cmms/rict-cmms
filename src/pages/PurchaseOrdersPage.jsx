@@ -8,12 +8,13 @@ import { usePOBudgetSummary } from '@/hooks/usePOBudgetSummary'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   ShoppingCart, Plus, Search, Filter, Package, Truck, CheckCircle2,
   XCircle, Clock, DollarSign, AlertTriangle, ChevronRight, Eye,
   Printer, X, Check, Ban, Send, FileText, Link, Trash2, ArrowLeft,
   TrendingUp, BarChart3, Loader2, SlidersHorizontal, ScanLine,
-  Pencil, Wallet
+  Pencil, Wallet, PackageCheck
 } from 'lucide-react'
 
 const STATUS_COLORS = {
@@ -693,6 +694,9 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   const [showRejectModal, setShowRejectModal] = useState(false)
   const { sendRejectionNotification } = useRejectionNotification()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showReceiveAllConfirm, setShowReceiveAllConfirm] = useState(false)
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [deleteLineTarget, setDeleteLineTarget] = useState(null) // line item pending delete confirmation
   const autoReceiveTriggeredRef = useRef(false)
 
   // ── Edit mode state ──────────────────────────────────────────────
@@ -800,11 +804,15 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
     setEditSavingId(null)
     if (ok) refresh()
   }
-  const handleDeleteLine = async (lineId) => {
-    if (!confirm('Remove this line item?')) return
+  // Opens the themed ConfirmDialog for a line item removal
+  const requestDeleteLine = (li) => setDeleteLineTarget(li)
+  const handleDeleteLineConfirmed = async () => {
+    if (!deleteLineTarget) return
+    const lineId = deleteLineTarget.line_id
     setEditSavingId(lineId)
     const ok = await actions.deleteLineItem(orderId, lineId)
     setEditSavingId(null)
+    setDeleteLineTarget(null)
     if (ok) {
       // Remove from editValues
       setEditValues(prev => {
@@ -1049,9 +1057,23 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
     setRecQtys({})
     refresh()
   }
-  const handleCancel = async () => {
-    if (!confirm('Cancel this order?')) return
+  // Receive All — marks every line item as fully received (received qty = ordered qty).
+  // Uses the existing receiveItems action so inventory increments, per-WO status
+  // tracking, and order status rollup all behave exactly as a manual full receive.
+  const handleReceiveAllConfirmed = async () => {
+    const items = lineItems.map(li => ({
+      lineId: li.line_id,
+      receivedQty: parseInt(li.quantity) || 0
+    }))
+    await actions.receiveItems(orderId, items)
+    setShowReceiveAllConfirm(false)
+    setReceiveMode(false)
+    setRecQtys({})
+    refresh()
+  }
+  const handleCancelConfirmed = async () => {
     await actions.cancelOrder(orderId)
+    setShowCancelConfirm(false)
     refresh()
   }
   const handleDelete = async () => {
@@ -1138,7 +1160,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
           </button>
         )}
         {canCancel && !['Received', 'Cancelled', 'Rejected'].includes(order.status) && (
-          <button onClick={handleCancel} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200">
+          <button onClick={() => setShowCancelConfirm(true)} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200">
             <XCircle size={14} /> Cancel
           </button>
         )}
@@ -1165,6 +1187,62 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
         recipientName={order?.ordered_by || ''}
         onConfirm={handleReject}
         onClose={() => setShowRejectModal(false)}
+      />
+
+      {/* Receive All Confirmation */}
+      <ConfirmDialog
+        open={showReceiveAllConfirm}
+        variant="primary"
+        title="Receive all items?"
+        message={
+          <>
+            This will mark all <strong>{lineItems.length}</strong> line item{lineItems.length !== 1 ? 's' : ''} on{' '}
+            <strong>{orderId}</strong> as fully received, add received quantities to inventory for linked parts,
+            and set the order status to <strong>Received</strong>.
+          </>
+        }
+        confirmLabel="Receive All Items"
+        cancelLabel="Go Back"
+        busy={actions.saving}
+        onConfirm={handleReceiveAllConfirmed}
+        onClose={() => { if (!actions.saving) setShowReceiveAllConfirm(false) }}
+      />
+
+      {/* Cancel Order Confirmation */}
+      <ConfirmDialog
+        open={showCancelConfirm}
+        variant="danger"
+        title="Cancel this order?"
+        message={
+          <>
+            Cancel purchase order <strong>{orderId}</strong>
+            {order?.vendor_name || order?.other_vendor ? <> from <strong>{order.vendor_name || order.other_vendor}</strong></> : null}?
+            The order will be marked <strong>Cancelled</strong> and can no longer be received.
+          </>
+        }
+        confirmLabel="Cancel Order"
+        cancelLabel="Keep Order"
+        busy={actions.saving}
+        onConfirm={handleCancelConfirmed}
+        onClose={() => { if (!actions.saving) setShowCancelConfirm(false) }}
+      />
+
+      {/* Remove Line Item Confirmation */}
+      <ConfirmDialog
+        open={!!deleteLineTarget}
+        variant="danger"
+        title="Remove line item?"
+        message={
+          <>
+            Remove <strong>{deleteLineTarget?.description || deleteLineTarget?.part_number || 'this line item'}</strong>{' '}
+            from <strong>{orderId}</strong>? The order total will be recalculated.
+          </>
+        }
+        confirmLabel="Remove Item"
+        cancelLabel="Keep Item"
+        busy={editSavingId === deleteLineTarget?.line_id}
+        onConfirm={handleDeleteLineConfirmed}
+        onClose={() => { if (editSavingId !== deleteLineTarget?.line_id) setDeleteLineTarget(null) }}
       />
 
       {/* Delete Confirmation */}
@@ -1246,6 +1324,11 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             {/* Receive mode controls */}
             {receiveMode && (
               <>
+                <button onClick={() => setShowReceiveAllConfirm(true)}
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-1"
+                  disabled={actions.saving}>
+                  <PackageCheck size={14} aria-hidden="true" /> Receive All
+                </button>
                 <button onClick={handleReceive} className="btn-primary text-xs" disabled={actions.saving}>
                   {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
                 </button>
@@ -1340,7 +1423,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                             </button>
                           )}
                           <button
-                            onClick={() => handleDeleteLine(li.line_id)}
+                            onClick={() => requestDeleteLine(li)}
                             disabled={isSaving || lineItems.length <= 1}
                             className="p-1 rounded text-red-500 hover:bg-red-50 transition-colors disabled:opacity-30"
                             aria-label={`Remove ${li.description || li.part_number}`}
