@@ -47,6 +47,7 @@ const EMPTY_SYLLABUS = {
   instructor2_office_hours: '',
   logo_url: '',
   course_photo_url: '',   // course-specific photo shown next to contact info in PDF
+  course_photo_alt: '',   // instructor-written alt text for the course photo (accessibility)
   course_name: '',
   credits_lecture: 1,
   credits_lab: 1,
@@ -283,8 +284,11 @@ export function generateSyllabusHTML(data, commonSections) {
   const techHtml = `<ul>${(data.required_technology || []).map(t => `<li>${escHtml(t)}</li>`).join('\n')}</ul>`
   const footerText = get('college_footer').replace(/\n/g, '<br>')
   const logoHtml = data.logo_url ? `<img src="${escHtml(data.logo_url)}" alt="St. Cloud Technical &amp; Community College logo" style="width:64px;height:auto;display:block;margin-bottom:6px;">` : ''
+  // Accessibility: prefer the instructor-written alt text; fall back to a
+  // generated description so the image is never missing alternative text.
+  const coursePhotoAlt = (data.course_photo_alt || '').trim() || `Course photo for ${data.course_id}: ${data.course_name}`
   const coursePhotoHtml = data.course_photo_url
-    ? `<img src="${escHtml(data.course_photo_url)}" alt="Course photo for ${escHtml(data.course_id)}: ${escHtml(data.course_name)}" style="float:right;width:180px;height:auto;max-height:140px;object-fit:cover;border-radius:4px;margin:0 0 8px 16px;border:1px solid #dde4f0;">`
+    ? `<img src="${escHtml(data.course_photo_url)}" alt="${escHtml(coursePhotoAlt)}" style="float:right;width:180px;height:auto;max-height:140px;object-fit:cover;border-radius:4px;margin:0 0 8px 16px;border:1px solid #dde4f0;">`
     : ''
   const coursePhotoClear = data.course_photo_url ? '<div style="clear:both"></div>' : ''  
   const hasInstructor2 = data.instructor2_enabled && data.instructor2_name
@@ -1178,6 +1182,30 @@ function Step2Instructor({ data, update, commonSections }) {
               placeholder="https://…"
               className="flex-1 min-w-0 px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
           </div>
+
+          {/* Alt text — federal accessibility requirement for meaningful images */}
+          {data.course_photo_url && (
+            <div className="space-y-1.5 pt-1">
+              <label htmlFor="syl-course-photo-alt" className="text-xs font-semibold text-surface-600">
+                Photo description (alt text) <span className="font-normal text-surface-400">— required for accessibility</span>
+              </label>
+              <input
+                id="syl-course-photo-alt"
+                type="text"
+                maxLength={250}
+                value={data.course_photo_alt || ''}
+                onChange={e => update('course_photo_alt', e.target.value)}
+                placeholder={`e.g. "Allen-Bradley PLC trainer with wired input and output modules"`}
+                className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40"
+                aria-describedby="syl-course-photo-alt-hint"
+              />
+              <p id="syl-course-photo-alt-hint" className="text-xs text-surface-400 leading-snug">
+                Describe what the photo shows for students using a screen reader — the equipment,
+                the activity, the scene. Avoid starting with "Photo of" or "Image of."
+                If left blank, a generic description is used.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

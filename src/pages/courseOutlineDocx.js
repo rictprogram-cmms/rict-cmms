@@ -15,6 +15,7 @@
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, ShadingType, BorderStyle, UnderlineType, PageBreak,
+  HeadingLevel, LevelFormat,
 } from 'docx'
 
 // ─── Layout constants (US Letter, 1" margins) ─────────────────────────────────
@@ -35,6 +36,56 @@ const dr  = (t, o = {}) =>
 const drb = (t, o = {}) => dr(t, { bold: true, ...o })
 const dri = (t, o = {}) => dr(t, { italics: true, ...o })
 const dsp = (s) => new Paragraph({ spacing: { before: s, after: 0 }, children: [dr('')] })
+
+// ─── Accessibility: shared numbering config ───────────────────────────────────
+// Native Word lists (rather than literal "*" / "\u2022" characters typed into
+// paragraphs) are what give the exported PDF the tagged <L>/<LI>/<Lbl> list
+// structure that accessibility checkers (Anthology Ally, Acrobat) require.
+// Every Document that embeds buildCourseOutline output MUST spread this into
+// its config: new Document({ numbering: OUTLINE_NUMBERING, ... })
+export const OUTLINE_NUMBERING = {
+  config: [
+    {
+      reference: 'outline-star', // SLOs use the official form's "*" marker
+      levels: [{
+        level: 0, format: LevelFormat.BULLET, text: '*', alignment: AlignmentType.LEFT,
+        style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+      }],
+    },
+    {
+      reference: 'outline-bullet', // topics & materials use "\u2022"
+      levels: [{
+        level: 0, format: LevelFormat.BULLET, text: '\u2022', alignment: AlignmentType.LEFT,
+        style: { paragraph: { indent: { left: 720, hanging: 360 } } },
+      }],
+    },
+  ],
+}
+
+// ─── Accessibility: heading + list-item builders ──────────────────────────────
+// Real Word heading styles (H1/H2/H3) tag the exported PDF with a navigable
+// heading structure. Run formatting is set explicitly so the document keeps
+// the official form's plain bold-Arial look instead of Word's default blue.
+const dh1 = (runs, opts = {}) => new Paragraph({
+  heading: HeadingLevel.HEADING_1, keepNext: true,
+  children: Array.isArray(runs) ? runs : [drb(runs)], ...opts,
+})
+const dh2 = (runs, opts = {}) => new Paragraph({
+  heading: HeadingLevel.HEADING_2, keepNext: true,
+  children: Array.isArray(runs) ? runs : [drb(runs)], ...opts,
+})
+const dh3 = (runs, opts = {}) => new Paragraph({
+  heading: HeadingLevel.HEADING_3, keepNext: true,
+  children: Array.isArray(runs) ? runs : [drb(runs)], ...opts,
+})
+const dstar = (t) => new Paragraph({
+  numbering: { reference: 'outline-star', level: 0 },
+  spacing: { before: 20, after: 0 }, children: [dr(t)],
+})
+const dbul = (t) => new Paragraph({
+  numbering: { reference: 'outline-bullet', level: 0 },
+  spacing: { before: 20, after: 0 }, children: [dr(t)],
+})
 
 // ─── Full SCTCC boilerplate text ──────────────────────────────────────────────
 const ACADEMIC_INTEGRITY_TEXT = [
@@ -83,20 +134,28 @@ export function buildCourseOutline(d) {
   const children = []
 
   // ── Header box ──────────────────────────────────────────────────────────────
-  children.push(new Table({
-    width: { size: FW, type: WidthType.DXA }, columnWidths: [FW],
-    rows: [new TableRow({ children: [
-      new TableCell({
-        borders: TH_B, shading: LGRAY,
-        width: { size: FW, type: WidthType.DXA },
-        margins: { top: 80, bottom: 80, left: 160, right: 160 },
-        children: [
-          dp([drb('St. Cloud Technical & Community College', { size: 24 })], { alignment: AlignmentType.CENTER }),
-          dp([drb('Course Outline', { size: 28 })], { alignment: AlignmentType.CENTER, spacing: { before: 40, after: 40 } }),
-          dp([drb('Course Subject and Number: '), dr(d.outline_course_num || LINE(20)), dr('   '), drb('Course Title: '), dr(d.outline_title || LINE(30))]),
-        ],
-      }),
-    ]})]
+  // Accessibility: rendered as shaded, bordered paragraphs instead of a
+  // single-cell layout table — layout tables export to PDF as data tables
+  // without header rows, which accessibility checkers flag. "Course Outline"
+  // is a real Heading 1 so the document has a top-level heading.
+  const boxSide = { style: BorderStyle.SINGLE, size: 8, color: '000000', space: 8 }
+  const boxTop = { top: boxSide, left: boxSide, right: boxSide }
+  const boxMid = { left: boxSide, right: boxSide }
+  const boxBot = { bottom: boxSide, left: boxSide, right: boxSide }
+  const boxShade = { fill: 'D9D9D9', type: ShadingType.CLEAR }
+  children.push(new Paragraph({
+    shading: boxShade, border: boxTop, alignment: AlignmentType.CENTER,
+    spacing: { before: 0, after: 0 },
+    children: [drb('St. Cloud Technical & Community College', { size: 24 })],
+  }))
+  children.push(dh1([drb('Course Outline', { size: 28 })], {
+    shading: boxShade, border: boxMid, alignment: AlignmentType.CENTER,
+    spacing: { before: 40, after: 40 },
+  }))
+  children.push(new Paragraph({
+    shading: boxShade, border: boxBot,
+    spacing: { before: 0, after: 0 },
+    children: [drb('Course Subject and Number: '), dr(d.outline_course_num || LINE(20)), dr('   '), drb('Course Title: '), dr(d.outline_title || LINE(30))],
   }))
   children.push(dsp(40))
 
@@ -128,7 +187,7 @@ export function buildCourseOutline(d) {
   // ══ Block 1: Section I – III ═════════════════════════════════════════════════
 
   // I. Course Description
-  children.push(dp([drb('I.   COURSE DESCRIPTION:')], { spacing: { before: 40, after: 20 } }))
+  children.push(dh2([drb('I.   COURSE DESCRIPTION:')], { spacing: { before: 40, after: 20 } }))
   if (d.outline_description) {
     children.push(dp([dr(d.outline_description)], { indent: { left: 360 }, spacing: { before: 0, after: 60 } }))
   } else {
@@ -138,59 +197,57 @@ export function buildCourseOutline(d) {
   }
 
   // II. Student Learning Outcomes
-  children.push(dp([drb('II.   STUDENT LEARNING OUTCOMES:')], { spacing: { before: 40, after: 20 } }))
+  children.push(dh2([drb('II.   STUDENT LEARNING OUTCOMES:')], { spacing: { before: 40, after: 20 } }))
   const slos = (d.outline_slos || []).filter(s => String(s || '').trim())
   if (slos.length > 0) {
-    slos.forEach(slo => children.push(dp([dr(`* ${slo}`)], { indent: { left: 360 }, spacing: { before: 20, after: 0 } })))
+    slos.forEach(slo => children.push(dstar(slo)))
   } else {
-    ;['* ' + LINE(80), '* ' + LINE(80), '* ' + LINE(80)].forEach(l =>
-      children.push(dp([dr(l)], { indent: { left: 360 }, spacing: { before: 20, after: 0 } })))
+    ;[LINE(80), LINE(80), LINE(80)].forEach(l => children.push(dstar(l)))
   }
   children.push(dsp(40))
 
   // III. Course Content / Topics
-  children.push(dp([drb('III.   COURSE CONTENT / TOPICS: (use list format)')], { spacing: { before: 40, after: 20 } }))
+  children.push(dh2([drb('III.   COURSE CONTENT / TOPICS: (use list format)')], { spacing: { before: 40, after: 20 } }))
   const topics = (d.outline_topics || []).filter(t => String(t || '').trim())
   if (topics.length > 0) {
-    topics.forEach(t => children.push(dp([dr(`\u2022  ${t}`)], { indent: { left: 360 }, spacing: { before: 20, after: 0 } })))
+    topics.forEach(t => children.push(dbul(t)))
   } else {
-    ;['\u2022  ' + LINE(80), '\u2022  ' + LINE(80)].forEach(l =>
-      children.push(dp([dr(l)], { indent: { left: 360 }, spacing: { before: 20, after: 0 } })))
+    ;[LINE(80), LINE(80)].forEach(l => children.push(dbul(l)))
   }
   children.push(dsp(40))
 
   // ══ Block 2: Section I – III (roman numeral restart per template) ════════════
 
   // I. Suggested Course Materials
-  children.push(dp([drb('I.   SUGGESTED COURSE MATERIALS:')], { spacing: { before: 40, after: 20 } }))
+  children.push(dh2([drb('I.   SUGGESTED COURSE MATERIALS:')], { spacing: { before: 40, after: 20 } }))
   const mats = (d.outline_materials || []).filter(m => String(m || '').trim())
   if (mats.length > 0) {
-    mats.forEach(m => children.push(dp([dr(`\u2022  ${m}`)], { indent: { left: 360 }, spacing: { before: 20, after: 0 } })))
+    mats.forEach(m => children.push(dbul(m)))
   } else {
-    children.push(dp([dr('\u2022  ' + LINE(80))], { indent: { left: 360 }, spacing: { before: 20, after: 0 } }))
+    children.push(dbul(LINE(80)))
   }
   children.push(dsp(40))
 
   // II. Grading Methods
-  children.push(dp([drb('II.   GRADING METHODS: '), dr(gradingCheckboxLabel(d.outline_grading))], { spacing: { before: 40, after: 60 } }))
+  children.push(dh2([drb('II.   GRADING METHODS: '), dr(gradingCheckboxLabel(d.outline_grading))], { spacing: { before: 40, after: 60 } }))
 
   // III. Course Policies / Practices
-  children.push(dp([drb('III.   COURSE POLICIES / PRACTICES:')], { spacing: { before: 40, after: 20 } }))
+  children.push(dh2([drb('III.   COURSE POLICIES / PRACTICES:')], { spacing: { before: 40, after: 20 } }))
 
   // 1. Academic Integrity
-  children.push(dp([drb('1.   STATEMENT OF ACADEMIC INTEGRITY:')], { indent: { left: 360 }, spacing: { before: 20, after: 10 } }))
+  children.push(dh3([drb('1.   STATEMENT OF ACADEMIC INTEGRITY:')], { indent: { left: 360 }, spacing: { before: 20, after: 10 } }))
   ACADEMIC_INTEGRITY_TEXT.forEach(para =>
     children.push(dp([dr(para)], { indent: { left: 720 }, spacing: { before: 0, after: 16 } })))
   children.push(dsp(16))
 
   // 2. Accommodations
-  children.push(dp([drb('2.   STATEMENT OF ACCOMMODATIONS:')], { indent: { left: 360 }, spacing: { before: 20, after: 10 } }))
+  children.push(dh3([drb('2.   STATEMENT OF ACCOMMODATIONS:')], { indent: { left: 360 }, spacing: { before: 20, after: 10 } }))
   ACCOMMODATIONS_TEXT.forEach(para =>
     children.push(dp([dr(para)], { indent: { left: 720 }, spacing: { before: 0, after: 16 } })))
   children.push(dsp(16))
 
   // 3. Nondiscrimination and Title IX
-  children.push(dp([drb('3.   NONDISCRIMINATION AND TITLE IX:')], { indent: { left: 360 }, spacing: { before: 20, after: 10 } }))
+  children.push(dh3([drb('3.   NONDISCRIMINATION AND TITLE IX:')], { indent: { left: 360 }, spacing: { before: 20, after: 10 } }))
   NONDISCRIMINATION_TEXT.forEach(para =>
     children.push(dp([dr(para)], { indent: { left: 720 }, spacing: { before: 0, after: 16 } })))
   children.push(dsp(40))
@@ -215,10 +272,16 @@ export function buildCourseOutline(d) {
       new TableCell({ borders: TH_B, width: { size: oW2, type: WidthType.DXA }, margins: CM, children: [dp(boldRight ? [drb(right)] : [dr(right)])] }),
     ]})
 
+  // Accessibility: the first row is marked as the table header row so the
+  // exported PDF carries tagged <TH> cells instead of a headerless table.
+  const headerCells = (left, right) => new TableRow({ tableHeader: true, children: [
+    new TableCell({ borders: TH_B, width: { size: oW1, type: WidthType.DXA }, margins: CM, children: [dp([drb(left)])] }),
+    new TableCell({ borders: TH_B, width: { size: oW2, type: WidthType.DXA }, margins: CM, children: [dp([drb(right)])] }),
+  ]})
   children.push(new Table({
     width: { size: FW, type: WidthType.DXA }, columnWidths: [oW1, oW2],
     rows: [
-      makeRow(`Course Outline Signature Page  Subject/Number: ${d.outline_course_num || ''}`, 'OFFICIAL USE ONLY'),
+      headerCells(`Course Outline Signature Page  Subject/Number: ${d.outline_course_num || ''}`, 'OFFICIAL USE ONLY'),
       makeRow('Dean Action', ''),
       makeRow('Dean:', 'Recommended      Not Recommended\n\nDate:'),
       makeRow('AASC Action', ''),
@@ -295,6 +358,10 @@ export function normalizeRevisionRow(rev) {
 // ─── Standalone DOCX builder (no preceding revision pages) ───────────────────
 async function buildStandaloneOutlineDocx(d) {
   const doc = new Document({
+    title: `${d.outline_course_num || 'Course'}: ${d.outline_title || 'Course Outline'} \u2013 Course Outline`,
+    description: `SCTCC official course outline for ${d.outline_course_num || ''} ${d.outline_title || ''}`.trim(),
+    creator: d.outline_prepared_by || 'St. Cloud Technical & Community College',
+    numbering: OUTLINE_NUMBERING,
     sections: [{
       properties: { page: { size: { width: 12240, height: 15840 }, margin: MARGIN } },
       children: buildCourseOutline(d),
@@ -361,9 +428,11 @@ export function openOutlinePrintWindow(d) {
   const topics = (d.outline_topics || []).filter(t => String(t || '').trim())
   const mats   = (d.outline_materials || []).filter(m => String(m || '').trim())
 
-  const sloHTML   = slos.length   ? slos.map(s   => `<p class="item">* ${esc(s)}</p>`).join('')            : '<p class="blank">* _______________________________________________</p>'
-  const topicHTML = topics.length ? topics.map(t => `<p class="item">&bull;&nbsp; ${esc(t)}</p>`).join('') : '<p class="blank">&bull; _______________________________________________</p>'
-  const matHTML   = mats.length   ? mats.map(m   => `<p class="item">&bull;&nbsp; ${esc(m)}</p>`).join('') : '<p class="blank">&bull; _______________________________________________</p>'
+  // Accessibility: real <ul> lists so the tagged PDF exposes list semantics.
+  // SLOs keep the official form's "*" marker via CSS; topics/materials use bullets.
+  const sloHTML   = `<ul class="star-list">${(slos.length ? slos : ['_______________________________________________']).map(s => `<li>${esc(s)}</li>`).join('')}</ul>`
+  const topicHTML = `<ul class="item-list">${(topics.length ? topics : ['_______________________________________________']).map(t => `<li>${esc(t)}</li>`).join('')}</ul>`
+  const matHTML   = `<ul class="item-list">${(mats.length ? mats : ['_______________________________________________']).map(m => `<li>${esc(m)}</li>`).join('')}</ul>`
 
   function esc(s) {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -417,21 +486,26 @@ export function openOutlinePrintWindow(d) {
   b       { font-weight: bold; }
   .sp     { margin-top: 8px; }
 
-  .sec-head { font-weight: bold; margin: 10px 0 3px; }
-  .sub-head { font-weight: bold; margin: 8px 0 3px; padding-left: 24px; }
+  h1, h2, h3 { font-size: inherit; font-weight: bold; }
+  .sec-head { font-weight: bold; margin: 10px 0 3px; font-size: 10.5pt; }
+  .sub-head { font-weight: bold; margin: 8px 0 3px; padding-left: 24px; font-size: 10.5pt; }
   .item     { padding-left: 36px; margin: 1px 0; }
-  .blank    { padding-left: 36px; margin: 1px 0; }
+  ul.item-list, ul.star-list { margin: 1px 0 1px 52px; padding: 0; }
+  ul.item-list li, ul.star-list li { margin: 1px 0; }
+  ul.star-list { list-style-type: '*  '; }
   .policy   { padding-left: 48px; margin: 2px 0; font-size: 9.5pt; }
 
   .accred   { text-align: center; font-style: italic; font-size: 9pt; margin: 2px 0; }
 
   table.sig { width: 100%; border-collapse: collapse; margin-top: 10px; }
-  table.sig td {
+  table.sig td, table.sig th {
     border: 1.5px solid #000;
     padding: 5px 8px;
     font-weight: bold;
     vertical-align: top;
     width: 50%;
+    text-align: left;
+    font-size: 10.5pt;
   }
   .revised  { font-style: italic; margin-top: 6px; font-size: 9pt; }
 </style>
@@ -441,7 +515,7 @@ export function openOutlinePrintWindow(d) {
 
 <div class="header-box">
   <div class="college">St. Cloud Technical &amp; Community College</div>
-  <div class="doctype">Course Outline</div>
+  <h1 class="doctype">Course Outline</h1>
   <div class="courseid">
     <b>Course Subject and Number:</b> ${esc(courseNum)}
     &nbsp;&nbsp;&nbsp;
@@ -458,32 +532,32 @@ export function openOutlinePrintWindow(d) {
 <div class="field"><b>Suggested skills or background (default note on course in e-services):</b> ${esc(skills)}</div>
 <div class="sp"></div>
 
-<p class="sec-head">I.&nbsp;&nbsp; COURSE DESCRIPTION:</p>
+<h2 class="sec-head">I.&nbsp;&nbsp; COURSE DESCRIPTION:</h2>
 ${d.outline_description
   ? `<p class="item">${esc(d.outline_description)}</p>`
   : '<p class="blank">_______________________________________________</p>'}
 
-<p class="sec-head">II.&nbsp;&nbsp; STUDENT LEARNING OUTCOMES:</p>
+<h2 class="sec-head">II.&nbsp;&nbsp; STUDENT LEARNING OUTCOMES:</h2>
 ${sloHTML}
 
-<p class="sec-head">III.&nbsp;&nbsp; COURSE CONTENT / TOPICS: (use list format)</p>
+<h2 class="sec-head">III.&nbsp;&nbsp; COURSE CONTENT / TOPICS: (use list format)</h2>
 ${topicHTML}
 <div class="sp"></div>
 
-<p class="sec-head">I.&nbsp;&nbsp; SUGGESTED COURSE MATERIALS:</p>
+<h2 class="sec-head">I.&nbsp;&nbsp; SUGGESTED COURSE MATERIALS:</h2>
 ${matHTML}
 
-<p class="sec-head">II.&nbsp;&nbsp; GRADING METHODS: ${grading}</p>
+<h2 class="sec-head">II.&nbsp;&nbsp; GRADING METHODS: ${grading}</h2>
 
-<p class="sec-head">III.&nbsp;&nbsp; COURSE POLICIES / PRACTICES:</p>
+<h2 class="sec-head">III.&nbsp;&nbsp; COURSE POLICIES / PRACTICES:</h2>
 
-<p class="sub-head">1.&nbsp;&nbsp; STATEMENT OF ACADEMIC INTEGRITY:</p>
+<h3 class="sub-head">1.&nbsp;&nbsp; STATEMENT OF ACADEMIC INTEGRITY:</h3>
 ${policyHTML(ACADEMIC_INTEGRITY_TEXT)}
 
-<p class="sub-head">2.&nbsp;&nbsp; STATEMENT OF ACCOMMODATIONS:</p>
+<h3 class="sub-head">2.&nbsp;&nbsp; STATEMENT OF ACCOMMODATIONS:</h3>
 ${policyHTML(ACCOMMODATIONS_TEXT)}
 
-<p class="sub-head">3.&nbsp;&nbsp; NONDISCRIMINATION AND TITLE IX:</p>
+<h3 class="sub-head">3.&nbsp;&nbsp; NONDISCRIMINATION AND TITLE IX:</h3>
 ${policyHTML(NONDISCRIMINATION_TEXT)}
 <div class="sp"></div>
 
@@ -500,8 +574,8 @@ ${policyHTML(NONDISCRIMINATION_TEXT)}
 
 <table class="sig">
   <tr>
-    <td>Course Outline Signature Page&nbsp;&nbsp; Subject/Number: ${esc(courseNum)}</td>
-    <td>OFFICIAL USE ONLY</td>
+    <th scope="col">Course Outline Signature Page&nbsp;&nbsp; Subject/Number: ${esc(courseNum)}</th>
+    <th scope="col">OFFICIAL USE ONLY</th>
   </tr>
   <tr><td colspan="2">Dean Action</td></tr>
   <tr>

@@ -262,7 +262,11 @@ export default function CourseOutlineExportPage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">Course Outline Export</h1>
-            <p className="text-sm text-surface-500">Download course outlines as Word documents or PDF files.</p>
+            <p className="text-sm text-surface-500">
+              Download course outlines as Word documents or PDF files. For a fully accessible PDF,
+              download the Word file and use <strong>File &rarr; Save As &rarr; PDF</strong> in Word —
+              the browser Print option cannot produce a compliant PDF.
+            </p>
           </div>
         </div>
 
@@ -666,7 +670,7 @@ function CourseRow({ item, isSelected, onToggle, onDocx, onPdf, generating, isLa
         <button
           onClick={onDocx}
           disabled={generating}
-          title={`Download ${item.course_id} as Word document`}
+          title={`Download ${item.course_id} as an accessible Word document (recommended — use Word's Save As PDF for a compliant PDF)`}
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {generating
@@ -677,7 +681,7 @@ function CourseRow({ item, isSelected, onToggle, onDocx, onPdf, generating, isLa
         </button>
         <button
           onClick={onPdf}
-          title={`Open ${item.course_id} print / save as PDF`}
+          title={`Open ${item.course_id} print / save as PDF (browser print is not fully accessible — prefer the DOCX download)`}
           className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition-colors"
         >
           <FileText size={12} />

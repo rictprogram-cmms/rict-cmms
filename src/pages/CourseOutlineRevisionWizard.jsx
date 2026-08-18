@@ -13,7 +13,7 @@ import {
 import toast from 'react-hot-toast'
 import { PROGRAMS } from './ProgramRevisionWizard'
 import { DEFAULT_COLLEGE_OUTCOMES } from './CourseProposalWizard'
-import { buildCourseOutline } from './courseOutlineDocx'
+import { buildCourseOutline, OUTLINE_NUMBERING } from './courseOutlineDocx'
 
 // ─── Hook: load college outcomes from Supabase (falls back to defaults) ───────
 function useCollegeOutcomes() {
@@ -364,6 +364,12 @@ async function buildDocx(d) {
     ...buildCourseOutline(d),
   ]
   const doc = new Document({
+    title: `${d.outline_course_num || d.current_course_num || 'Course'} \u2013 Course Outline Revision Package`,
+    description: 'SCTCC course outline revision package',
+    creator: d.outline_prepared_by || 'St. Cloud Technical & Community College',
+    // Required: buildCourseOutline (page 4) emits native Word list items that
+    // reference this shared numbering config; without it the export fails.
+    numbering: OUTLINE_NUMBERING,
     sections:[{
       properties:{ page:{ size:{width:12240,height:15840}, margin:MARGIN } },
       children,

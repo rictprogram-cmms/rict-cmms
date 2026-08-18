@@ -268,11 +268,14 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(h3('Contact Information'))
   if (images.photo) {
     const dims = scaleTo(images.photo, 180, 140)
+    // Accessibility: prefer the instructor-written alt text; fall back to a
+    // generated description so the image always carries alternative text.
+    const photoAlt = (data.course_photo_alt || '').trim() || `Course photo for ${data.course_id}: ${data.course_name}`
     c.push(new Paragraph({
       spacing: { after: 60 },
       children: [new ImageRun({
         data: images.photo.data, type: images.photo.type, transformation: dims,
-        altText: { title: 'Course photo', description: `Course photo for ${data.course_id}: ${data.course_name}`, name: 'Course photo' },
+        altText: { title: 'Course photo', description: photoAlt, name: 'Course photo' },
       })],
     }))
   }
