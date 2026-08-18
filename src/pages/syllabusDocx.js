@@ -28,7 +28,8 @@
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, ShadingType, BorderStyle, HeadingLevel,
-  LevelFormat, ExternalHyperlink, ImageRun, Footer, PageNumber, TabStopType,
+  LevelFormat, ExternalHyperlink, InternalHyperlink, Bookmark, ImageRun,
+  Footer, PageNumber, TabStopType,
   FrameAnchorType, HorizontalPositionAlign, VerticalPositionAlign, FrameWrap,
   HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom,
   TextWrappingType, TextWrappingSide,
@@ -59,11 +60,21 @@ const h1 = (t) => new Paragraph({
   spacing: { before: 0, after: 60 },
   children: [new TextRun({ text: t, font: 'Calibri', size: 30, bold: true, smallCaps: true, color: '000000' })],
 })
-const h2 = (t) => new Paragraph({
-  heading: HeadingLevel.HEADING_2,
-  spacing: { before: 260, after: 120 }, keepNext: true,
-  border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 2 } },
-  children: [new TextRun({ text: t, font: 'Calibri', size: 23, bold: true, smallCaps: true, color: NAVY })],
+const h2 = (t, anchor) => {
+  const run = new TextRun({ text: t, font: 'Calibri', size: 23, bold: true, smallCaps: true, color: NAVY })
+  return new Paragraph({
+    heading: HeadingLevel.HEADING_2,
+    spacing: { before: 260, after: 120 }, keepNext: true,
+    border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 2 } },
+    // Bookmarked headings are the targets of the clickable navigation line
+    children: anchor ? [new Bookmark({ id: anchor, children: [run] })] : [run],
+  })
+}
+
+// Clickable in-document navigation link (blue + underlined, like the print template)
+const navLink = (text, anchor) => new InternalHyperlink({
+  anchor,
+  children: [new TextRun({ text, font: 'Calibri', size: 17, color: LINKBL, underline: {} })],
 })
 const h3 = (t) => new Paragraph({
   heading: HeadingLevel.HEADING_3,
@@ -150,20 +161,57 @@ function getImageSize(bytes, type) {
   return { w: 1, h: 1 }
 }
 
-async function fetchImage(url) {
+// Rasterize any browser-decodable image (SVG, GIF, WebP, ...) to PNG via a
+// canvas so it can be embedded in the Word document. Word cannot display SVG
+// (without a fallback) or WebP at all, and rasterizing GIF is simpler than
+// parsing its dimensions. Cross-origin URLs without CORS headers cannot be
+// read by canvas either, so those still return null — the caller surfaces a
+// warning telling the instructor to upload the image file instead.
+async function rasterizeToPng(blob) {
+  const url = URL.createObjectURL(blob)
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image()
+      el.onload = () => resolve(el)
+      el.onerror = () => reject(new Error('Image decode failed'))
+      el.src = url
+    })
+    const w = img.naturalWidth || 300
+    const h = img.naturalHeight || 300
+    // Render above display size (up to 4x, capped at 1024px) so vector logos
+    // stay crisp when Word scales the bitmap for print.
+    const scale = Math.min(1024 / w, 1024 / h, 4)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(w * scale))
+    canvas.height = Math.max(1, Math.round(h * scale))
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+    const outBlob = await new Promise(res => canvas.toBlob(res, 'image/png'))
+    if (!outBlob) return null
+    const data = new Uint8Array(await outBlob.arrayBuffer())
+    return { data, type: 'png', w, h } // natural dimensions preserve aspect ratio
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+async function loadImage(url) {
   if (!url) return null
   try {
-    const res = await fetch(url)
+    const res = await fetch(url) // works for https and data: URLs alike
     if (!res.ok) return null
-    const ct = (res.headers.get('content-type') || '').toLowerCase()
-    let type = 'png'
-    if (ct.includes('jpeg') || ct.includes('jpg') || /\.jpe?g(\?|$)/i.test(url)) type = 'jpg'
-    else if (ct.includes('gif') || /\.gif(\?|$)/i.test(url)) type = 'gif'
-    const data = new Uint8Array(await res.arrayBuffer())
-    const size = getImageSize(data, type)
-    return { data, type, ...size }
+    const blob = await res.blob()
+    const mime = (blob.type || '').toLowerCase()
+    // PNG and JPEG embed natively in Word; everything else is rasterized.
+    if (mime.includes('png') || mime.includes('jpeg') || mime.includes('jpg')) {
+      const type = mime.includes('png') ? 'png' : 'jpg'
+      const data = new Uint8Array(await blob.arrayBuffer())
+      const size = getImageSize(data, type)
+      if (size.w > 1 && size.h > 1) return { data, type, ...size }
+      // Dimension parse failed — fall through to the canvas path
+    }
+    return await rasterizeToPng(blob)
   } catch {
-    return null // image is decorative-adjacent; the document still builds without it
+    return null // fetch blocked (CORS) or undecodable — caller warns the user
   }
 }
 
@@ -278,14 +326,20 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(h1(`${data.course_id}: ${data.course_name}`))
   c.push(p([new TextRun({ text: data.semester, font: 'Calibri', size: 21, bold: true, smallCaps: true })], { alignment: AlignmentType.CENTER, spacing: { after: 120 } }))
   c.push(p([rb(`This syllabus is the official course document. The instructor${hasInstructor2 ? 's reserve' : ' reserves'} the right to make changes to this document. Students will be notified when changes are made.`, { size: 19 })], { alignment: AlignmentType.CENTER, spacing: { after: 60 } }))
-  c.push(p([r('Instructor Information / Course Information / College Policies & Procedures / Course Policies & Procedures / Grading', { size: 17, color: NAVY })], { alignment: AlignmentType.CENTER, spacing: { after: 160 } }))
+  c.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 160 }, children: [
+    navLink('Instructor Information', 'sec_instructor'), r(' / ', { size: 17 }),
+    navLink('Course Information', 'sec_course'), r(' / ', { size: 17 }),
+    navLink('College Policies & Procedures', 'sec_college_policies'), r(' / ', { size: 17 }),
+    navLink('Course Policies & Procedures', 'sec_course_policies'), r(' / ', { size: 17 }),
+    navLink('Grading', 'sec_grading'),
+  ]}))
   // Clear the sidebar frame: spacer so the first section heading starts
   // full-width below the masthead, matching the print layout. The sidebar is
   // taller when a logo is present, so the spacer scales with it.
   c.push(new Paragraph({ spacing: { before: images.logo ? 900 : 200, after: 0 }, children: [r('', { size: 2 })] }))
 
   // ── Instructor Information ─────────────────────────────────────────────────
-  c.push(h2('Instructor Information'))
+  c.push(h2('Instructor Information', 'sec_instructor'))
   c.push(h3('Office & Office Hours'))
   c.push(p(data.instructor_office))
   c.push(p(data.instructor_office_hours))
@@ -326,7 +380,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   }
 
   // ── Course Information ─────────────────────────────────────────────────────
-  c.push(h2('Course Information'))
+  c.push(h2('Course Information', 'sec_course'))
   c.push(h3('General Information'))
   c.push(p([rb(`${data.course_id}: ${data.course_name}`)]))
   c.push(p(creditsStr))
@@ -372,7 +426,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   }
 
   // ── College Policies & Procedures ──────────────────────────────────────────
-  c.push(h2('College Policies & Procedures'))
+  c.push(h2('College Policies & Procedures', 'sec_college_policies'))
   c.push(h3('Academic Integrity'))
   c.push(...sectionToDocx(get('academic_integrity'), numCtx))
   c.push(h3('Accommodations'))
@@ -381,7 +435,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(...sectionToDocx(get('diversity'), numCtx))
 
   // ── Course Policies & Procedures ───────────────────────────────────────────
-  c.push(h2('Course Policies & Procedures'))
+  c.push(h2('Course Policies & Procedures', 'sec_course_policies'))
   c.push(h3('Attendance'))
   c.push(...sectionToDocx(get('attendance'), numCtx))
   c.push(h3('Navigating D2L & Technical Support'))
@@ -390,7 +444,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(...sectionToDocx(get('class_environment'), numCtx))
 
   // ── Grading ────────────────────────────────────────────────────────────────
-  c.push(h2('Grading'))
+  c.push(h2('Grading', 'sec_grading'))
   c.push(h3('Assignments & Points'))
   if ((parseInt(data.volunteer_hours_required) || 0) > 0) {
     c.push(p([r('All students are expected to put in '), rb(`${data.volunteer_hours_required} hours of volunteer hours`), r('. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.')]))
@@ -467,10 +521,13 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
 }
 
 // ─── Browser download entry point ────────────────────────────────────────────
+// Returns { logoMissing, photoMissing } so the caller can warn the instructor
+// when an image URL was set but could not be embedded (e.g. a cross-site URL
+// that blocks fetch access).
 export async function downloadSyllabusDocx(data, commonSections, defaultSections) {
   const [logo, photo] = await Promise.all([
-    fetchImage(data.logo_url),
-    fetchImage(data.course_photo_url),
+    loadImage(data.logo_url),
+    loadImage(data.course_photo_url),
   ])
   const doc = buildSyllabusDoc(data, commonSections, defaultSections, { logo, photo })
   const blob = await Packer.toBlob(doc)
@@ -483,4 +540,8 @@ export async function downloadSyllabusDocx(data, commonSections, defaultSections
   a.click()
   document.body.removeChild(a)
   setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  return {
+    logoMissing: !!data.logo_url && !logo,
+    photoMissing: !!data.course_photo_url && !photo,
+  }
 }
