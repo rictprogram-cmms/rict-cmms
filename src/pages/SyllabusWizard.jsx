@@ -2298,25 +2298,31 @@ function Step7Grading({ data, update }) {
 }
 
 // ─── Step 8: Preview ──────────────────────────────────────────────────────────
-function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving, docxBusy, onCreateClass }) {
+function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving, docxBusy, onCreateClass, onJumpToStep }) {
   const totalPoints = (data.assessments||[]).reduce((s, a) => s + (parseInt(a.points)||0), 0)
   const blobRef = useRef(null)
   const [previewUrl, setPreviewUrl] = useState('')
   const [loading, setLoading] = useState(true)
   const [scale, setScale] = useState(72)
 
+  // Each check carries the wizard step where it can be fixed — the rows are
+  // clickable jumps, which matters now that the Syllabus Library opens
+  // completed syllabi directly on this step (instructors no longer pass
+  // through the earlier steps where a gap would have been noticed).
   const checks = [
-    { label: 'Course selected',    ok: !!data.course_id },
-    { label: 'Instructor name',     ok: !!data.instructor_name },
-    { label: 'Instructor email',    ok: !!data.instructor_email },
-    { label: 'Begin & end dates',   ok: !!data.begin_date && !!data.end_date },
-    { label: 'Drop/withdraw dates', ok: !!data.last_drop_date && !!data.last_withdraw_date },
-    { label: 'Course description',  ok: !!data.course_description },
-    { label: 'Student outcomes',    ok: (data.student_outcomes||[]).length > 0 },
-    { label: 'Assessments',         ok: (data.assessments||[]).length > 0 && totalPoints > 0 },
+    { label: 'Course selected',     ok: !!data.course_id,                                     step: 1 },
+    { label: 'Instructor name',     ok: !!data.instructor_name,                               step: 2 },
+    { label: 'Instructor email',    ok: !!data.instructor_email,                              step: 2 },
+    { label: 'Begin & end dates',   ok: !!data.begin_date && !!data.end_date,                 step: 4 },
+    { label: 'Drop/withdraw dates', ok: !!data.last_drop_date && !!data.last_withdraw_date,   step: 4 },
+    { label: 'Course description',  ok: !!data.course_description,                            step: 6 },
+    { label: 'Student outcomes',    ok: (data.student_outcomes||[]).length > 0,               step: 6 },
+    { label: 'Assessments',         ok: (data.assessments||[]).length > 0 && totalPoints > 0, step: 7 },
     // Federal accessibility requirement: a course photo must have a description
-    ...(data.course_photo_url ? [{ label: 'Photo description (alt text)', ok: !!(data.course_photo_alt || '').trim() }] : []),
+    ...(data.course_photo_url ? [{ label: 'Photo description (alt text)', ok: !!(data.course_photo_alt || '').trim(), step: 2 }] : []),
   ]
+  const missingCount = checks.filter(c => !c.ok).length
+  const stepLabel = (id) => STEPS.find(s => s.id === id)?.label || `step ${id}`
 
   const refresh = useCallback(() => {
     setLoading(true)
@@ -2345,13 +2351,33 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
       <div className="flex flex-col border-r border-surface-100 overflow-y-auto shrink-0" style={{ width: 272 }}>
         <div className="flex-1 px-5 pt-5 space-y-4">
           <div>
-            <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-2">Readiness</p>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide">Readiness</p>
+              {missingCount > 0 ? (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                  {missingCount} to fix
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                  All set
+                </span>
+              )}
+            </div>
             <div className="space-y-1">
               {checks.map(c => (
-                <div key={c.label} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs ${c.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
-                  {c.ok ? <Check size={11} className="shrink-0 text-emerald-500" /> : <AlertCircle size={11} className="shrink-0 text-amber-500" />}
-                  {c.label}
-                </div>
+                <button
+                  key={c.label}
+                  type="button"
+                  onClick={() => onJumpToStep && onJumpToStep(c.step)}
+                  aria-label={`${c.label}: ${c.ok ? 'complete' : 'needs attention'}. Go to the ${stepLabel(c.step)} step.`}
+                  className={`w-full min-h-[44px] flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50 ${c.ok
+                    ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                    : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}
+                >
+                  {c.ok ? <Check size={11} className="shrink-0 text-emerald-500" aria-hidden="true" /> : <AlertCircle size={11} className="shrink-0 text-amber-500" aria-hidden="true" />}
+                  <span className="flex-1">{c.label}</span>
+                  <ChevronRight size={11} className="shrink-0 opacity-40" aria-hidden="true" />
+                </button>
               ))}
             </div>
           </div>
@@ -2697,7 +2723,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
       case 5: return <Step5Materials data={data} update={update} catalogRefreshKey={catalogRefreshKey} />
       case 6: return <Step6Description data={data} update={update} />
       case 7: return <Step7Grading data={data} update={update} />
-      case 8: return <Step8Review data={data} commonSections={commonSections} onGenerate={handleGenerate} onDownloadDocx={handleDownloadDocx} saving={saving} docxBusy={docxBusy} onCreateClass={() => setShowCreateClass(true)} />
+      case 8: return <Step8Review data={data} commonSections={commonSections} onGenerate={handleGenerate} onDownloadDocx={handleDownloadDocx} saving={saving} docxBusy={docxBusy} onCreateClass={() => setShowCreateClass(true)} onJumpToStep={setStep} />
       default: return null
     }
   }
