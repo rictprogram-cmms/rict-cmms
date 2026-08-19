@@ -160,6 +160,47 @@ function SlideBodyAutoFit({ body, textSize }) {
   )
 }
 
+// ── Slide title auto-fit ────────────────────────────────────────────
+// Single-line width fit: larger for short titles, shrinking for long
+// ones, clamped 28–50px. Ellipsis remains as a fallback for extreme
+// cases. Bold glyphs are wider, hence the larger char-width factor.
+const SLIDE_TITLE_MIN_PX = 28
+const SLIDE_TITLE_MAX_PX = 50
+const SLIDE_TITLE_CHAR_W = 0.58
+
+function SlideTitleAutoFit({ title }) {
+  const ref = useRef(null)
+  const [fontPx, setFontPx] = useState(SLIDE_TITLE_MIN_PX)
+
+  useEffect(() => {
+    function fit() {
+      const el = ref.current
+      if (!el) return
+      const w = el.clientWidth
+      if (w <= 0) return
+      const chars = Math.max(1, (title || '').length)
+      const f = Math.floor(w / (chars * SLIDE_TITLE_CHAR_W))
+      setFontPx(Math.max(SLIDE_TITLE_MIN_PX, Math.min(SLIDE_TITLE_MAX_PX, f)))
+    }
+    fit()
+    let ro = null
+    if (typeof ResizeObserver !== 'undefined' && ref.current) {
+      ro = new ResizeObserver(fit)
+      ro.observe(ref.current)
+    } else {
+      window.addEventListener('resize', fit)
+    }
+    return () => {
+      if (ro) ro.disconnect()
+      else window.removeEventListener('resize', fit)
+    }
+  }, [title])
+
+  return (
+    <h2 ref={ref} style={{ ...S.panelTitle, ...S.slideTitle, fontSize: fontPx }}>{title}</h2>
+  )
+}
+
 export default function TVDisplayPage() {
   const [clock, setClock] = useState('')
   const [dateStr, setDateStr] = useState('')
@@ -864,7 +905,7 @@ export default function TVDisplayPage() {
                 <>
                   <div style={{ ...S.panelHeader, borderBottom: '3px solid #a855f7' }}>
                     <span style={S.panelIcon}>📣</span>
-                    <h2 style={{ ...S.panelTitle, ...S.slideTitle }}>{sl.title || 'Announcement'}</h2>
+                    <SlideTitleAutoFit title={sl.title || 'Announcement'} />
                     <SlideDots count={1 + slides.length} active={slideIndex} />
                   </div>
                   <div style={S.slideBodyWrap}>
@@ -1184,6 +1225,8 @@ const S = {
   // Base slide line style — fontSize / lineHeight / margin are overridden
   // per-render by SlideBodyAutoFit (auto-fit or per-slide preset).
   slideBodyLine: { fontSize: '1.6rem', lineHeight: 1.5, margin: '0 0 10px 0', color: '#e2e8f0' },
+  // Base slide title style — fontSize is overridden per-render by
+  // SlideTitleAutoFit (width-based fit, clamped 28-50px).
   slideTitle: {
     fontSize: '2rem', fontWeight: 700, flex: 1, minWidth: 0,
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

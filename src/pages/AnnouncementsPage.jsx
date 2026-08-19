@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
@@ -2043,6 +2043,7 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
     title: slide?.title || '',
     body: slide?.body || '',
     layout: slide?.layout || 'standard',
+    text_size: slide?.text_size || 'auto',
     duration_seconds: slide?.duration_seconds ? String(slide.duration_seconds) : '',
     start_date: slide?.start_date || '',
     end_date: slide?.end_date || '',
@@ -2100,6 +2101,7 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
       title: form.title.trim(),
       body: form.body,
       layout: form.layout,
+      text_size: form.text_size || 'auto',
       duration_seconds: dur,
       start_date: form.start_date || null,
       end_date: form.end_date || null,
