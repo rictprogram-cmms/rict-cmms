@@ -628,6 +628,32 @@ function useAutoSave(saveFn, debounceMs = 800) {
  *   bodyPadded       — wrap body in default padding (use for cards without rows)
  *   children         — body content (typically <SettingRow>s or padded content)
  */
+// ─── Build Info Card ──────────────────────────────────────────────────────────
+// Read-only deployment info: the build version baked into the bundle by
+// vite.config.js. Kiosk pages (TV Display, Time Clock) poll /version.json
+// and auto-reload within ~10 minutes when this differs from the deploy;
+// signed-in pages check once per login (AuthContext).
+function BuildInfoCard() {
+  const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev (no build stamp)'
+  return (
+    <SettingCard icon={Info} title="Build">
+      <div className="px-4 py-3 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <p className="text-sm font-medium text-surface-800">Deployed Build</p>
+          <p className="text-xs text-surface-500 mt-0.5">
+            Stamped at build time. TV displays and time clocks auto-update to new
+            builds within about 10 minutes (midnight refresh remains as a backstop);
+            signed-in pages check at login.
+          </p>
+        </div>
+        <code className="text-xs bg-surface-100 text-surface-700 px-2.5 py-1.5 rounded-lg break-all">
+          {buildVersion}
+        </code>
+      </div>
+    </SettingCard>
+  )
+}
+
 function SettingCard({ icon: Icon, title, count, accent, pill, actions, footer, bodyPadded, children }) {
   const cls = [
     'settings-card',
@@ -1614,6 +1640,9 @@ function GeneralSettings() {
           </SettingCard>
         )
       })}
+
+      {/* Deployment build info (read-only) */}
+      <BuildInfoCard />
 
       {settings.length === 0 && (
         <div className="settings-empty">

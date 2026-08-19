@@ -21,6 +21,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
+import { useVersionCheck } from '@/hooks/useVersionCheck'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -245,7 +246,11 @@ export default function TVDisplayPage() {
   const woScrollRef = useRef(null)
   const pplScrollRef = useRef(null)
 
-  // ── Auto-refresh page at midnight so deployed updates take effect ──
+  // ── Version check: reload within ~10 min of a new deploy ─────────
+  // (The midnight refresh below remains as a backstop.)
+  useVersionCheck({ label: 'TVDisplay' })
+
+  // ── Auto-refresh page at midnight so deployed updates take effect (backstop) ──
   useEffect(() => {
     function scheduleMidnightRefresh() {
       const now = new Date()

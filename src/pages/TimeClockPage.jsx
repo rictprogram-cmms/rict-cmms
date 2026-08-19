@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
+import { useVersionCheck } from '@/hooks/useVersionCheck'
 
 // ─── Standalone Supabase client (no auth needed for public page) ─────────────
 
@@ -860,7 +861,12 @@ export default function TimeClockPage() {
   // Cache classes data for course name lookups
   const classesDataRef = useRef(null)
 
-  // ── Auto-refresh page at midnight so deployed updates take effect ──
+  // ── Version check: reload within ~10 min of a new deploy ─────────
+  // Waits for 60s of no touch/key input so it never interrupts a punch.
+  // (The midnight refresh below remains as a backstop.)
+  useVersionCheck({ label: 'TimeClock', idleMs: 60_000 })
+
+  // ── Auto-refresh page at midnight so deployed updates take effect (backstop) ──
   useEffect(() => {
     function scheduleMidnightRefresh() {
       const now = new Date()
