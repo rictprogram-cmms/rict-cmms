@@ -14,6 +14,8 @@
  *  - Large text optimised for TV display
  *  - TV slide text auto-scales to fill the panel (per-slide override:
  *    small / medium / large via tv_slides.text_size, default 'auto')
+ *  - Rotation is interleaved: Open Work Orders shows between every
+ *    slide (WO, slide 1, WO, slide 2, WO, ... then repeat)
  *  - Green countdown bar along the panel bottom shows time until the
  *    next slide (hidden when rotation is paused/pinned)
  *  - Dark theme
@@ -244,6 +246,9 @@ export default function TVDisplayPage() {
   const [todayClosures, setTodayClosures] = useState([])
 
   const woScrollRef = useRef(null)
+  // 1-based index of the slide to show after the next Open Work Orders beat
+  // (rotation interleaves WO between every slide)
+  const nextSlideRef = useRef(1)
   const pplScrollRef = useRef(null)
 
   // ── Version check: reload within ~10 min of a new deploy ─────────
@@ -360,8 +365,11 @@ export default function TVDisplayPage() {
   }, [])
 
   // ── Rotation timer ─────────────────────────────────────────────
-  // Panel 0 is always Open Work Orders. With zero slides there is nothing to
-  // rotate: the index pins to 0 and no timer runs (pre-feature behavior).
+  // Panel 0 is always Open Work Orders. Rotation is INTERLEAVED: the WO
+  // board shows between every slide (WO, slide 1, WO, slide 2, WO, ...,
+  // then the slide cycle repeats). nextSlideRef remembers which slide is
+  // up next. With zero slides there is nothing to rotate: the index pins
+  // to 0 and no timer runs (pre-feature behavior).
   // Instructor Away Mode pins the display to Work Orders and pauses rotation.
   useEffect(() => {
     const count = 1 + slides.length
@@ -371,10 +379,20 @@ export default function TVDisplayPage() {
     }
     // Clamp if slides were removed while we were past the end
     setSlideIndex(i => (i >= count ? 0 : i))
+    if (nextSlideRef.current > slides.length) nextSlideRef.current = 1
     const current = slideIndex === 0 ? null : slides[slideIndex - 1]
     const dwell = (current?.duration_seconds || rotationSeconds) * 1000
     const t = setTimeout(() => {
-      setSlideIndex(i => (i + 1) % (1 + slides.length))
+      setSlideIndex(i => {
+        if (i === 0) {
+          // Leaving the WO board — show the next slide in the cycle
+          const next = Math.min(nextSlideRef.current, slides.length)
+          nextSlideRef.current = next >= slides.length ? 1 : next + 1
+          return next
+        }
+        // Leaving a slide — always return to Open Work Orders
+        return 0
+      })
     }, dwell)
     return () => clearTimeout(t)
   }, [slideIndex, slides, rotationSeconds, instructorAway])
