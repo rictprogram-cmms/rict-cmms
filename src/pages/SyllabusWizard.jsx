@@ -2419,6 +2419,9 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
             the Word file, open it in Microsoft Word, then choose <strong>File → Save As → PDF</strong>.
             Word embeds the heading and list structure that accessibility checkers require —
             the browser Print option below cannot.
+            {' '}<strong>Do not use the Acrobat tab (&quot;Create PDF&quot; / PDFMaker) or
+            Print → Adobe PDF</strong> — those converters strip the image alt text and the
+            syllabus will fail the Ally check.
           </div>
           <button onClick={onDownloadDocx} disabled={saving || docxBusy}
             className="w-full py-2.5 bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm">
@@ -2648,7 +2651,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     setDocxBusy(true)
     try {
       const result = await downloadSyllabusDocx(data, commonSections, DEFAULT_COMMON_SECTIONS)
-      toast.success('Word file downloaded — open in Word, then File → Save As → PDF for the accessible PDF.', { duration: 6000 })
+      toast.success('Word file downloaded — open in Word, then File → Save As → PDF (not the Acrobat tab, which strips alt text).', { duration: 8000 })
       if (result?.logoUsedFallback) {
         toast(`This course's saved logo could not be embedded, so the shared college logo was used instead. On the Instructor step, choose "Reset to shared logo" to clear the old value. (${result.logoStatus || ''})`, { icon: '⚠️', duration: 12000 })
       } else if (result?.logoMissing) {

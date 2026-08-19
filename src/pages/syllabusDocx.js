@@ -18,9 +18,17 @@
  *   - Alt text on the college logo and course photo
  *   - Document title / author metadata
  *   - Live hyperlinks (email, Academic Calendar, eServices)
+ *   - A post-build "finalize" pass (fflate) that repairs docx-library output:
+ *     unique drawing-object and bookmark IDs (the docx package emits every
+ *     wp:docPr and w:bookmarkStart with id="1", a spec violation that makes
+ *     Acrobat PDFMaker silently DROP image alt text — the direct cause of a
+ *     54% Ally score), named inner cNvPr elements, and an en-US document
+ *     language declaration in styles.xml.
  *
  * Instructors download the .docx, open it in Word, and use
- * File → Save As → PDF to produce the compliant PDF for D2L.
+ * File → Save As → PDF to produce the compliant PDF for D2L. They must NOT
+ * use the Acrobat ribbon ("Create PDF" / PDFMaker) or Print → Adobe PDF —
+ * both convert through a different engine that strips image alt text.
  *
  * Used by: SyllabusWizard.jsx (Step 8 — "Download Accessible Word (.docx)")
  * Patterns follow courseOutlineDocx.js.
@@ -34,6 +42,7 @@ import {
   HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom,
   TextWrappingType, TextWrappingSide,
 } from 'docx'
+import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate'
 
 // ─── Layout constants (US Letter, 1" side margins to match the print CSS) ────
 const FW     = 9360                                   // content width in DXA
@@ -662,6 +671,90 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   })
 }
 
+// ─── Post-build accessibility finalize pass ────────────────────────────────────────
+// The docx npm package (verified through v9.7.1) writes every image's
+// wp:docPr AND every bookmarkStart/bookmarkEnd with id="1". OOXML requires
+// these IDs to be unique per document. Word itself shrugs, but Acrobat
+// PDFMaker maps alt text by drawing ID, so the collision makes it drop the
+// alt text from EVERY image in the converted PDF — "Image needs a
+// description" is Ally's heaviest penalty, which is how a structurally
+// perfect syllabus scored 54%. The library also leaves the inner pic:cNvPr
+// name empty and emits no document language.
+//
+// This pass unzips the finished .docx in memory (fflate, already a project
+// dependency), repairs all of the above with targeted string surgery on
+// word/document.xml and word/styles.xml, and rezips. It never touches
+// content, layout, or paragraph structure — verified byte-for-byte against
+// the XSD validator with 0 paragraph changes.
+//
+// Fail-safe: downloadSyllabusDocx() wraps this in try/catch and falls back
+// to the unpatched blob, so a surprise in a future docx version can never
+// block an instructor from downloading their syllabus.
+async function finalizeDocxAccessibility(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  const files = unzipSync(bytes)
+
+  // ── word/document.xml: unique IDs ──
+  const DOC = 'word/document.xml'
+  if (files[DOC]) {
+    let xml = strFromU8(files[DOC])
+
+    // Drawing objects: renumber every wp:docPr sequentially (1, 2, 3, ...)
+    let drawingId = 0
+    xml = xml.replace(/(<wp:docPr )id="\d+"/g, (_m, pre) => {
+      drawingId += 1
+      return `${pre}id="${drawingId}"`
+    })
+
+    // Inner non-visual picture properties: the library emits
+    // <pic:cNvPr id="0" name="" descr=""/> — give each a unique id and a
+    // name so strict checkers stop flagging the empty attributes. Alt text
+    // itself lives on wp:docPr (set via ImageRun altText) and is untouched.
+    let picId = 0
+    xml = xml.replace(/<pic:cNvPr id="\d+" name=""( descr="")?\s*\/>/g, () => {
+      picId += 1
+      return `<pic:cNvPr id="${picId}" name="Image ${picId}"/>`
+    })
+
+    // Bookmarks: every Start/End pair shares id="1", which makes the pairing
+    // ambiguous and can break the in-document navigation links. Renumber
+    // with a stack so each End receives the id of its matching Start (safe
+    // even if bookmarks ever nest).
+    let bookmarkId = 0
+    const openIds = []
+    xml = xml.replace(/<w:bookmark(Start|End)\b([^>]*?)w:id="\d+"([^>]*)\/>/g, (_m, kind, pre, post) => {
+      let id
+      if (kind === 'Start') { bookmarkId += 1; id = bookmarkId; openIds.push(id) }
+      else { id = openIds.length ? openIds.pop() : ++bookmarkId }
+      return `<w:bookmark${kind}${pre}w:id="${id}"${post}/>`
+    })
+
+    files[DOC] = strToU8(xml)
+  }
+
+  // ── word/styles.xml: declare the document language ──
+  // The library emits an empty <w:rPrDefault/>, leaving the document with no
+  // language at all. Word, Acrobat, and screen readers derive the proofing /
+  // reading language from this default; setting it here also gives the
+  // converted PDF its /Lang entry without relying on the converter to guess.
+  const STY = 'word/styles.xml'
+  if (files[STY]) {
+    let sty = strFromU8(files[STY])
+    const LANG = '<w:lang w:val="en-US" w:eastAsia="en-US" w:bidi="ar-SA"/>'
+    if (!/<w:lang[\s/>]/.test(sty)) {
+      if (sty.includes('<w:rPrDefault/>')) {
+        sty = sty.replace('<w:rPrDefault/>', `<w:rPrDefault><w:rPr>${LANG}</w:rPr></w:rPrDefault>`)
+      } else if (/<w:rPrDefault><w:rPr>/.test(sty)) {
+        sty = sty.replace('<w:rPrDefault><w:rPr>', `<w:rPrDefault><w:rPr>${LANG}`)
+      }
+    }
+    files[STY] = strToU8(sty)
+  }
+
+  const out = zipSync(files)
+  return new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+}
+
 // ─── Browser download entry point ────────────────────────────────────────────
 // Returns { logoMissing, photoMissing, logoUsedFallback } so the caller can
 // warn the instructor when an image URL was set but could not be embedded
@@ -696,7 +789,14 @@ export async function downloadSyllabusDocx(data, commonSections, defaultSections
   const logo = logoRes.image
   const photo = photoRes.image
   const doc = buildSyllabusDoc(data, commonSections, defaultSections, { logo, photo })
-  const blob = await Packer.toBlob(doc)
+  let blob = await Packer.toBlob(doc)
+  try {
+    blob = await finalizeDocxAccessibility(blob)
+  } catch (err) {
+    // Never block the download — an unpatched file still opens fine in Word;
+    // it just reverts to the docx-library duplicate-ID quirks.
+    console.warn('[syllabusDocx] Accessibility finalize pass failed — downloading unpatched file', err)
+  }
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
