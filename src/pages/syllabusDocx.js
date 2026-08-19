@@ -16,6 +16,11 @@
  *     and any bulleted/numbered lines inside the common policy sections)
  *   - A data table with a marked header row for the assessment points
  *   - Alt text on the college logo and course photo
+ *   - A 9pt minimum font size on every visible run (Ally / federal
+ *     accessibility checkers flag any text below 9 points). Headings use
+ *     allCaps rather than smallCaps because Word renders small-caps
+ *     lowercase glyphs at ~80% of the declared size, which pushes them
+ *     back under the 9pt floor even when the run size passes.
  *   - Document title / author metadata
  *   - Live hyperlinks (email, Academic Calendar, eServices)
  *   - A post-build "finalize" pass (fflate) that repairs docx-library output:
@@ -67,10 +72,10 @@ const link = (text, url, o = {}) => new ExternalHyperlink({
 const h1 = (t) => new Paragraph({
   heading: HeadingLevel.HEADING_1, alignment: AlignmentType.CENTER,
   spacing: { before: 0, after: 60 },
-  children: [new TextRun({ text: t, font: 'Calibri', size: 30, bold: true, smallCaps: true, color: '000000' })],
+  children: [new TextRun({ text: t, font: 'Calibri', size: 30, bold: true, allCaps: true, color: '000000' })],
 })
 const h2 = (t, anchor) => {
-  const run = new TextRun({ text: t, font: 'Calibri', size: 23, bold: true, smallCaps: true, color: NAVY })
+  const run = new TextRun({ text: t, font: 'Calibri', size: 23, bold: true, allCaps: true, color: NAVY })
   return new Paragraph({
     heading: HeadingLevel.HEADING_2,
     spacing: { before: 260, after: 120 }, keepNext: true,
@@ -83,12 +88,12 @@ const h2 = (t, anchor) => {
 // Clickable in-document navigation link (blue + underlined, like the print template)
 const navLink = (text, anchor) => new InternalHyperlink({
   anchor,
-  children: [new TextRun({ text, font: 'Calibri', size: 17, color: LINKBL, underline: {} })],
+  children: [new TextRun({ text, font: 'Calibri', size: 18, color: LINKBL, underline: {} })],
 })
 const h3 = (t) => new Paragraph({
   heading: HeadingLevel.HEADING_3,
   spacing: { before: 160, after: 60 }, keepNext: true,
-  children: [new TextRun({ text: t, font: 'Calibri', size: 19, bold: true, smallCaps: true, color: NAVY, underline: {} })],
+  children: [new TextRun({ text: t, font: 'Calibri', size: 19, bold: true, allCaps: true, color: NAVY, underline: {} })],
 })
 const h4 = (t) => new Paragraph({
   heading: HeadingLevel.HEADING_4,
@@ -386,8 +391,8 @@ function buildGradeTable(assessments, totalPoints) {
   const headerRow = new TableRow({
     tableHeader: true,
     children: [
-      cell([p([new TextRun({ text: 'Assessment', font: 'Calibri', size: 20, bold: true, smallCaps: true, color: 'FFFFFF' })], { spacing: { after: 0 } })], { shading: { fill: NAVY, type: ShadingType.CLEAR }, width: { size: CW[0], type: WidthType.DXA } }),
-      cell([p([new TextRun({ text: 'Points', font: 'Calibri', size: 20, bold: true, smallCaps: true, color: 'FFFFFF' })], { alignment: AlignmentType.RIGHT, spacing: { after: 0 } })], { shading: { fill: NAVY, type: ShadingType.CLEAR }, width: { size: CW[1], type: WidthType.DXA } }),
+      cell([p([new TextRun({ text: 'Assessment', font: 'Calibri', size: 20, bold: true, allCaps: true, color: 'FFFFFF' })], { spacing: { after: 0 } })], { shading: { fill: NAVY, type: ShadingType.CLEAR }, width: { size: CW[0], type: WidthType.DXA } }),
+      cell([p([new TextRun({ text: 'Points', font: 'Calibri', size: 20, bold: true, allCaps: true, color: 'FFFFFF' })], { alignment: AlignmentType.RIGHT, spacing: { after: 0 } })], { shading: { fill: NAVY, type: ShadingType.CLEAR }, width: { size: CW[1], type: WidthType.DXA } }),
     ],
   })
   const rows = (assessments || []).map((a, i) => {
@@ -438,7 +443,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   const c = []
 
   // ── Revised date (top right) ───────────────────────────────────────────────
-  c.push(p([r(`Revised: ${revisedStr}`, { size: 17, color: '444444' })], { alignment: AlignmentType.RIGHT, spacing: { after: 120 } }))
+  c.push(p([r(`Revised: ${revisedStr}`, { size: 18, color: '444444' })], { alignment: AlignmentType.RIGHT, spacing: { after: 120 } }))
 
   // ── Masthead ───────────────────────────────────────────────────────────────
   // Side-by-side layout matching the print template: the college identity
@@ -472,16 +477,16 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
     }))
   }
   c.push(p([rb('St. Cloud Technical & Community College', { size: 19, color: NAVY, allCaps: true })], { frame: sideFrame, shading: sbShade, border: images.logo ? sbMid : sbFirst, spacing: { after: 20 } }))
-  c.push(p([ri('A member of Minnesota State', { size: 15, color: '555555' })], { frame: sideFrame, shading: sbShade, border: sbMid, spacing: { after: 40 } }))
-  c.push(p([ri('We provide the education, training, and support necessary for equitable participation in our society, economy, and democracy.', { size: 15, color: '555555' })], { frame: sideFrame, shading: sbShade, border: sbLast, spacing: { after: 0 } }))
+  c.push(p([ri('A member of Minnesota State', { size: 18, color: '555555' })], { frame: sideFrame, shading: sbShade, border: sbMid, spacing: { after: 40 } }))
+  c.push(p([ri('We provide the education, training, and support necessary for equitable participation in our society, economy, and democracy.', { size: 18, color: '555555' })], { frame: sideFrame, shading: sbShade, border: sbLast, spacing: { after: 0 } }))
   c.push(h1(`${data.course_id}: ${data.course_name}`))
-  c.push(p([new TextRun({ text: data.semester, font: 'Calibri', size: 21, bold: true, smallCaps: true })], { alignment: AlignmentType.CENTER, spacing: { after: 120 } }))
+  c.push(p([new TextRun({ text: data.semester, font: 'Calibri', size: 21, bold: true, allCaps: true })], { alignment: AlignmentType.CENTER, spacing: { after: 120 } }))
   c.push(p([rb(`This syllabus is the official course document. The instructor${hasInstructor2 ? 's reserve' : ' reserves'} the right to make changes to this document. Students will be notified when changes are made.`, { size: 19 })], { alignment: AlignmentType.CENTER, spacing: { after: 60 } }))
   c.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 160 }, children: [
-    navLink('Instructor Information', 'sec_instructor'), r(' / ', { size: 17 }),
-    navLink('Course Information', 'sec_course'), r(' / ', { size: 17 }),
-    navLink('College Policies & Procedures', 'sec_college_policies'), r(' / ', { size: 17 }),
-    navLink('Course Policies & Procedures', 'sec_course_policies'), r(' / ', { size: 17 }),
+    navLink('Instructor Information', 'sec_instructor'), r(' / ', { size: 18 }),
+    navLink('Course Information', 'sec_course'), r(' / ', { size: 18 }),
+    navLink('College Policies & Procedures', 'sec_college_policies'), r(' / ', { size: 18 }),
+    navLink('Course Policies & Procedures', 'sec_course_policies'), r(' / ', { size: 18 }),
     navLink('Grading', 'sec_grading'),
   ]}))
   // Clear the sidebar frame: spacer so the first section heading starts
@@ -602,7 +607,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   }
   c.push(p([r('Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need '), rb(`${data.required_hours_per_week} hours a week`), r(' of lab time.')], { spacing: { after: 160 } }))
   c.push(buildGradeTable(data.assessments, totalPoints))
-  c.push(p([r('(Subject to change depending on course content)', { size: 17, color: '666666' })], { spacing: { before: 60 } }))
+  c.push(p([r('(Subject to change depending on course content)', { size: 18, color: '666666' })], { spacing: { before: 60 } }))
   c.push(h3('Grading Scale'))
   c.push(p(`A = ${data.grading_a_min}\u2013100% = ${aMin}\u2013${totalPoints} points`))
   c.push(p(`B = ${data.grading_b_min}\u2013${data.grading_a_min - 1}% = ${bMin}\u2013${aMin - 1} points`))
@@ -625,18 +630,18 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(new Paragraph({
     spacing: { before: 320, after: 40 },
     border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'BBBBBB', space: 4 } },
-    children: [r(footerLines[0] || '', { size: 17, color: '444444' })],
+    children: [r(footerLines[0] || '', { size: 18, color: '444444' })],
   }))
-  footerLines.slice(1).forEach(line => c.push(p([r(line, { size: 17, color: '444444' })], { spacing: { after: 40 } })))
-  c.push(p([r(`Template Updated ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`, { size: 17, color: '444444' })], { spacing: { after: 0 } }))
+  footerLines.slice(1).forEach(line => c.push(p([r(line, { size: 18, color: '444444' })], { spacing: { after: 40 } })))
+  c.push(p([r(`Template Updated ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`, { size: 18, color: '444444' })], { spacing: { after: 0 } }))
 
   // ── Page footer: running title + page numbers ──────────────────────────────
   const pageFooter = new Footer({
     children: [new Paragraph({
       tabStops: [{ type: TabStopType.RIGHT, position: FW }],
       children: [
-        r(`St. Cloud Technical & Community College  ${data.course_id}: ${data.course_name} Course Syllabus`, { size: 15, color: '444444' }),
-        new TextRun({ font: 'Calibri', size: 15, color: '444444', children: ['\t', 'Page ', PageNumber.CURRENT, ' of ', PageNumber.TOTAL_PAGES] }),
+        r(`St. Cloud Technical & Community College  ${data.course_id}: ${data.course_name} Course Syllabus`, { size: 18, color: '444444' }),
+        new TextRun({ font: 'Calibri', size: 18, color: '444444', children: ['\t', 'Page ', PageNumber.CURRENT, ' of ', PageNumber.TOTAL_PAGES] }),
       ],
     })],
   })
@@ -727,6 +732,19 @@ async function finalizeDocxAccessibility(blob) {
       if (kind === 'Start') { bookmarkId += 1; id = bookmarkId; openIds.push(id) }
       else { id = openIds.length ? openIds.pop() : ++bookmarkId }
       return `<w:bookmark${kind}${pre}w:id="${id}"${post}/>`
+    })
+
+    // Paragraph borders: the docx library serializes <w:pBdr> children in its
+    // own fixed order (top, bottom, left, right), but the OOXML schema
+    // requires top, left, bottom, right, between, bar. Word forgives the
+    // wrong order; strict validators and some converters do not. Reorder the
+    // self-closing child elements of every pBdr block in place.
+    const PBDR_ORDER = ['w:top', 'w:left', 'w:bottom', 'w:right', 'w:between', 'w:bar']
+    xml = xml.replace(/<w:pBdr>([\s\S]*?)<\/w:pBdr>/g, (_m, inner) => {
+      const kids = inner.match(/<w:[a-zA-Z]+\b[^>]*\/>/g) || []
+      const rank = (el) => { const i = PBDR_ORDER.indexOf(el.match(/^<(w:[a-zA-Z]+)/)[1]); return i < 0 ? 99 : i }
+      kids.sort((a, b) => rank(a) - rank(b))
+      return `<w:pBdr>${kids.join('')}</w:pBdr>`
     })
 
     files[DOC] = strToU8(xml)
