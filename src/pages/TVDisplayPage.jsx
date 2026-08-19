@@ -14,6 +14,8 @@
  *  - Large text optimised for TV display
  *  - TV slide text auto-scales to fill the panel (per-slide override:
  *    small / medium / large via tv_slides.text_size, default 'auto')
+ *  - Green countdown bar along the panel bottom shows time until the
+ *    next slide (hidden when rotation is paused/pinned)
  *  - Dark theme
  */
 
@@ -198,6 +200,23 @@ function SlideTitleAutoFit({ title }) {
 
   return (
     <h2 ref={ref} style={{ ...S.panelTitle, ...S.slideTitle, fontSize: fontPx }}>{title}</h2>
+  )
+}
+
+// ── Rotation progress bar ───────────────────────────────────────────
+// Thin green bar along the bottom of the rotating panel that shrinks
+// over the panel's dwell time — when it runs out, the next panel shows.
+// Each panel remounts on rotation (keyed conditional render), so the
+// CSS animation restarts in sync with the rotation timer. scaleX is
+// GPU-composited — cheap on the Raspberry Pi. Decorative only.
+function RotationProgressBar({ durationMs }) {
+  return (
+    <div style={S.progressTrack} aria-hidden="true">
+      <div style={{
+        ...S.progressFill,
+        animation: `slideProgress ${durationMs}ms linear forwards`,
+      }} />
+    </div>
   )
 }
 
@@ -835,6 +854,7 @@ export default function TVDisplayPage() {
         })() : {})
       }}>
         {/* LEFT — rotates between Open Work Orders (index 0) and TV slides */}
+        {/* Rotation countdown: only meaningful when something rotates */}
         {slideIndex === 0 ? (
         <div style={S.woPanel} key="wo-panel">
           <div style={{ ...S.woPanelInner, animation: 'slideFade 0.6s ease' }}>
@@ -886,6 +906,9 @@ export default function TVDisplayPage() {
             </div>
           </div>
           </div>
+          {!instructorAway && slides.length > 0 && (
+            <RotationProgressBar durationMs={rotationSeconds * 1000} />
+          )}
         </div>
         ) : (() => {
           const sl = slides[slideIndex - 1]
@@ -921,6 +944,7 @@ export default function TVDisplayPage() {
                 </>
               )}
               </div>
+              <RotationProgressBar durationMs={(sl.duration_seconds || rotationSeconds) * 1000} />
             </div>
           )
         })()}
@@ -1091,6 +1115,10 @@ export default function TVDisplayPage() {
 // CSS KEYFRAMES
 // ════════════════════════════════════════════════════════════════════
 const KEYFRAMES = `
+@keyframes slideProgress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
 @keyframes slideFade {
   0%   { opacity: 0; }
   100% { opacity: 1; }
@@ -1192,7 +1220,7 @@ const S = {
   // ── Work Orders (left) ──
   woPanel: {
     background: '#1e293b', borderRadius: 16, overflow: 'hidden',
-    display: 'flex', flexDirection: 'column',
+    display: 'flex', flexDirection: 'column', position: 'relative',
   },
   woList: { flex: 1, overflow: 'hidden', position: 'relative' },
   woScroll: { position: 'absolute', top: 0, left: 0, right: 0 },
@@ -1215,6 +1243,15 @@ const S = {
 
   // ── TV slides (left panel rotation) ──
   woPanelInner: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+  // Rotation countdown bar (RotationProgressBar)
+  progressTrack: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, height: 6,
+    background: 'rgba(148, 163, 184, 0.15)', overflow: 'hidden',
+  },
+  progressFill: {
+    width: '100%', height: '100%', background: '#22c55e',
+    transformOrigin: 'left center',
+  },
   slideBodyWrap: {
     flex: 1, minHeight: 0, display: 'flex', gap: 24, padding: 32, overflow: 'hidden',
   },
