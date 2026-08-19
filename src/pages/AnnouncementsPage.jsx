@@ -1907,6 +1907,9 @@ function TVSlidesTab() {
                   {sl.duration_seconds && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 shrink-0">{sl.duration_seconds}s</span>
                   )}
+                  {sl.text_size && sl.text_size !== 'auto' && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-600 shrink-0 capitalize">Aa {sl.text_size}</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-surface-400">
                   <span>{sl.slide_id}</span>
@@ -1963,6 +1966,69 @@ function TVSlidesTab() {
           onCancel={() => setDeleting(null)}
           onConfirm={confirmDelete}
         />
+      )}
+    </div>
+  )
+}
+
+// ─── Slide preview body ───────────────────────────────────────────────────────
+// Mirrors the TV's auto-fit algorithm at preview scale so the preview is a
+// faithful (proportional) picture of what the TV will render. Presets are the
+// TV pixel sizes scaled by previewWidth / TV text-area width.
+const PREVIEW_TEXT_PRESETS = { small: 24, medium: 34, large: 46 }
+const PREVIEW_TV_BODY_W = 694   // approx TV slide text-area width in px (1280x720 layout)
+
+function SlidePreviewBody({ body, textSize }) {
+  const ref = useRef(null)
+  const [fontPx, setFontPx] = useState(10)
+
+  useEffect(() => {
+    function fit() {
+      const el = ref.current
+      if (!el) return
+      const w = el.clientWidth, h = el.clientHeight
+      if (w <= 0 || h <= 0) return
+      const scale = w / PREVIEW_TV_BODY_W
+      const preset = PREVIEW_TEXT_PRESETS[textSize]
+      if (preset) { setFontPx(Math.max(6, Math.round(preset * scale))); return }
+      // Auto: same search the TV runs (22–64px), at preview scale
+      const lines = (body || '').split('\n').map(l => l.trim())
+      if (lines.filter(Boolean).length === 0) { setFontPx(Math.max(8, Math.round(28 * scale))); return }
+      const minPx = Math.max(6, Math.round(22 * scale))
+      const maxPx = Math.max(minPx + 1, Math.round(64 * scale))
+      let chosen = minPx
+      for (let f = maxPx; f > minPx; f -= 1) {
+        let total = 0
+        for (const line of lines) {
+          if (!line) { total += f * 0.5; continue }
+          const wrapped = Math.max(1, Math.ceil((line.length * 0.54 * f) / w))
+          total += wrapped * f * 1.4 + f * 0.35
+        }
+        if (total <= h) { chosen = f; break }
+      }
+      setFontPx(chosen)
+    }
+    fit()
+    let ro = null
+    if (typeof ResizeObserver !== 'undefined' && ref.current) {
+      ro = new ResizeObserver(fit)
+      ro.observe(ref.current)
+    } else {
+      window.addEventListener('resize', fit)
+    }
+    return () => {
+      if (ro) ro.disconnect()
+      else window.removeEventListener('resize', fit)
+    }
+  }, [body, textSize])
+
+  const lines = (body || 'Body text appears here\u2026').split('\n')
+  return (
+    <div ref={ref} className="flex-1 min-w-0 overflow-hidden flex flex-col justify-center">
+      {lines.map((line, li) =>
+        line.trim()
+          ? <p key={li} className="text-slate-200" style={{ fontSize: fontPx, lineHeight: 1.4, margin: `0 0 ${Math.round(fontPx * 0.35)}px 0` }}>{line}</p>
+          : <div key={li} style={{ height: Math.round(fontPx * 0.5) }} />
       )}
     </div>
   )
@@ -2113,6 +2179,7 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
             </div>
 
             {form.layout === 'standard' && (
+              <>
               <div>
                 <label htmlFor="slide-body" className="block text-xs font-semibold text-surface-700 mb-1.5">Body Text</label>
                 <textarea id="slide-body" rows={6} value={form.body} onChange={e => set('body', e.target.value)}
@@ -2120,6 +2187,18 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
                   className={`${inputCls} resize-none font-mono leading-relaxed`} />
                 <p className="text-[11px] text-surface-400 mt-1">Line breaks are kept. Keep it large-screen friendly — a few short lines beats a paragraph.</p>
               </div>
+
+              <div>
+                <label htmlFor="slide-text-size" className="block text-xs font-semibold text-surface-700 mb-1.5">Text Size</label>
+                <select id="slide-text-size" value={form.text_size} onChange={e => set('text_size', e.target.value)} className={`${inputCls} bg-white`}>
+                  <option value="auto">Auto — fills the panel (recommended)</option>
+                  <option value="small">Small</option>
+                  <option value="medium">Medium</option>
+                  <option value="large">Large</option>
+                </select>
+                <p className="text-[11px] text-surface-400 mt-1">Auto scales the text to use the whole slide. Fixed sizes may clip very long content.</p>
+              </div>
+              </>
             )}
 
             <div>
@@ -2189,9 +2268,7 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
                     <span className="text-white text-xs font-semibold truncate">{form.title || 'Announcement'}</span>
                   </div>
                   <div className="flex-1 p-3 flex gap-2 overflow-hidden">
-                    <div className="flex-1 min-w-0 text-slate-200 text-[10px] leading-relaxed whitespace-pre-wrap overflow-hidden">
-                      {form.body || 'Body text appears here\u2026'}
-                    </div>
+                    <SlidePreviewBody body={form.body} textSize={form.text_size} />
                     {form.image_url && (
                       <img src={form.image_url} alt="" className="max-w-[45%] object-contain rounded self-center" />
                     )}
@@ -2200,7 +2277,7 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
               )}
             </div>
             <p className="text-[11px] text-surface-400 mt-2">
-              The TV shows this in the left panel, rotating with Open Work Orders. Text renders much larger on the actual display.
+              The TV shows this in the left panel, rotating with Open Work Orders. Text size here mirrors the TV proportionally.
             </p>
           </div>
         </div>

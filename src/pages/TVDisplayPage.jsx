@@ -12,6 +12,8 @@
  *  - Fallback polling every 5 minutes for resilience
  *  - Weather display for St. Cloud, MN (Open-Meteo API)
  *  - Large text optimised for TV display
+ *  - TV slide text auto-scales to fill the panel (per-slide override:
+ *    small / medium / large via tv_slides.text_size, default 'auto')
  *  - Dark theme
  */
 
@@ -83,6 +85,77 @@ function SlideDots({ count, active }) {
           transition: 'background 0.3s',
         }} />
       ))}
+    </div>
+  )
+}
+
+// ── Slide body auto-fit ─────────────────────────────────────────────
+// Sizes slide text to make full use of the panel. 'auto' (default) measures
+// the real container (so banners that shrink the panel are accounted for)
+// and searches for the largest font whose estimated wrapped height fits.
+// 'small' / 'medium' / 'large' are fixed per-slide overrides chosen in the
+// slide editor. A ResizeObserver re-fits when the container changes (e.g.
+// the side image finishes loading and squeezes the text column).
+const SLIDE_TEXT_PRESETS = { small: 24, medium: 34, large: 46 }
+const SLIDE_AUTO_MIN_PX = 22
+const SLIDE_AUTO_MAX_PX = 64
+const SLIDE_CHAR_W = 0.54   // avg char width as a fraction of font size (Inter)
+const SLIDE_LINE_H = 1.4    // line-height used for both estimate and render
+
+function computeAutoFontPx(rawLines, w, h) {
+  const trimmed = rawLines.map(l => l.trim())
+  if (trimmed.filter(Boolean).length === 0 || w <= 0 || h <= 0) return SLIDE_AUTO_MIN_PX
+  for (let f = SLIDE_AUTO_MAX_PX; f > SLIDE_AUTO_MIN_PX; f -= 1) {
+    let total = 0
+    for (const line of trimmed) {
+      if (!line) { total += f * 0.5; continue }             // blank spacer line
+      const wrapped = Math.max(1, Math.ceil((line.length * SLIDE_CHAR_W * f) / w))
+      total += wrapped * f * SLIDE_LINE_H + f * 0.35        // + paragraph gap
+    }
+    if (total <= h) return f
+  }
+  return SLIDE_AUTO_MIN_PX
+}
+
+function SlideBodyAutoFit({ body, textSize }) {
+  const ref = useRef(null)
+  const [fontPx, setFontPx] = useState(SLIDE_TEXT_PRESETS[textSize] || SLIDE_AUTO_MIN_PX)
+  const lines = (body || '').split('\n')
+
+  useEffect(() => {
+    function fit() {
+      const preset = SLIDE_TEXT_PRESETS[textSize]
+      if (preset) { setFontPx(preset); return }
+      const el = ref.current
+      if (!el) return
+      setFontPx(computeAutoFontPx((body || '').split('\n'), el.clientWidth, el.clientHeight))
+    }
+    fit()
+    let ro = null
+    if (typeof ResizeObserver !== 'undefined' && ref.current) {
+      ro = new ResizeObserver(fit)
+      ro.observe(ref.current)
+    } else {
+      window.addEventListener('resize', fit)
+    }
+    return () => {
+      if (ro) ro.disconnect()
+      else window.removeEventListener('resize', fit)
+    }
+  }, [body, textSize])
+
+  return (
+    <div ref={ref} style={S.slideBody}>
+      {lines.map((line, li) =>
+        line.trim()
+          ? <p key={li} style={{
+              ...S.slideBodyLine,
+              fontSize: fontPx,
+              lineHeight: SLIDE_LINE_H,
+              margin: `0 0 ${Math.round(fontPx * 0.35)}px 0`,
+            }}>{line}</p>
+          : <div key={li} style={{ height: Math.round(fontPx * 0.5) }} />
+      )}
     </div>
   )
 }
@@ -791,18 +864,12 @@ export default function TVDisplayPage() {
                 <>
                   <div style={{ ...S.panelHeader, borderBottom: '3px solid #a855f7' }}>
                     <span style={S.panelIcon}>📣</span>
-                    <h2 style={S.panelTitle}>{sl.title || 'Announcement'}</h2>
+                    <h2 style={{ ...S.panelTitle, ...S.slideTitle }}>{sl.title || 'Announcement'}</h2>
                     <SlideDots count={1 + slides.length} active={slideIndex} />
                   </div>
                   <div style={S.slideBodyWrap}>
                     {sl.body && (
-                      <div style={S.slideBody}>
-                        {sl.body.split('\n').map((line, li) =>
-                          line.trim()
-                            ? <p key={li} style={S.slideBodyLine}>{line}</p>
-                            : <div key={li} style={{ height: 14 }} />
-                        )}
-                      </div>
+                      <SlideBodyAutoFit body={sl.body} textSize={sl.text_size || 'auto'} />
                     )}
                     {sl.image_url && (
                       <div style={S.slideSideImageWrap}>
@@ -1110,8 +1177,17 @@ const S = {
   slideBodyWrap: {
     flex: 1, minHeight: 0, display: 'flex', gap: 24, padding: 32, overflow: 'hidden',
   },
-  slideBody: { flex: 1, minWidth: 0, overflow: 'hidden' },
+  slideBody: {
+    flex: 1, minWidth: 0, overflow: 'hidden',
+    display: 'flex', flexDirection: 'column', justifyContent: 'center',
+  },
+  // Base slide line style — fontSize / lineHeight / margin are overridden
+  // per-render by SlideBodyAutoFit (auto-fit or per-slide preset).
   slideBodyLine: { fontSize: '1.6rem', lineHeight: 1.5, margin: '0 0 10px 0', color: '#e2e8f0' },
+  slideTitle: {
+    fontSize: '2rem', fontWeight: 700, flex: 1, minWidth: 0,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   slideSideImageWrap: {
     flexShrink: 0, maxWidth: '45%', display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
