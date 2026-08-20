@@ -16,7 +16,7 @@
  *    small / medium / large via tv_slides.text_size, default 'auto')
  *  - Rotation is interleaved: Open Work Orders shows between every
  *    slide (WO, slide 1, WO, slide 2, WO, ... then repeat)
- *  - Green countdown bar along the panel bottom shows time until the
+ *  - Slate countdown bar along the panel bottom shows time until the
  *    next slide (hidden when rotation is paused/pinned)
  *  - Dark theme
  */
@@ -207,7 +207,7 @@ function SlideTitleAutoFit({ title }) {
 }
 
 // ── Rotation progress bar ───────────────────────────────────────────
-// Thin green bar along the bottom of the rotating panel that shrinks
+// Thin slate-500 bar along the bottom of the rotating panel that shrinks
 // over the panel's dwell time — when it runs out, the next panel shows.
 // Each panel remounts on rotation (keyed conditional render), so the
 // CSS animation restarts in sync with the rotation timer. scaleX is
@@ -1285,7 +1285,9 @@ const S = {
     background: 'rgba(148, 163, 184, 0.15)', overflow: 'hidden',
   },
   progressFill: {
-    width: '100%', height: '100%', background: '#22c55e',
+    // Slate-500 on the #1e293b panel = 3.07:1, meets WCAG 1.4.11 (3:1) while
+    // staying subdued. Was green #22c55e (6.42:1) — too attention-grabbing.
+    width: '100%', height: '100%', background: '#64748b',
     transformOrigin: 'left center',
   },
   slideBodyWrap: {
