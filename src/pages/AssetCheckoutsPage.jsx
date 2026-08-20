@@ -53,6 +53,7 @@ import {
   Loader2,
   ShieldCheck,
   XCircle,
+  ScanLine,
 } from 'lucide-react'
 
 const STATUS_PILL = {
@@ -121,7 +122,7 @@ function fmtDate(iso) {
 export default function AssetCheckoutsPage() {
   const { profile } = useAuth()
   const navigate = useNavigate()
-  const { hasPerm } = usePermissions('Asset Checkouts')
+  const { hasPerm, permsLoading } = usePermissions('Asset Checkouts')
   const { checkouts, loading } = useAssetCheckouts()
   const { saving, checkIn, extendDueDate, cancelPendingCheckout } = useCheckoutActions()
 
@@ -132,6 +133,26 @@ export default function AssetCheckoutsPage() {
   const [tab, setTab] = useState('out') // 'out' | 'pending' | 'overdue' | 'recent' | 'all'
   const [search, setSearch] = useState('')
   const [userFilter, setUserFilter] = useState('')
+
+  // Pooled items (barcode scanners) are managed on the Users page. Hidden
+  // here by default for instructors so 40+ scanner rows don't bury the real
+  // equipment; students see their own by default so they know they owe one.
+  const [showPooled, setShowPooled] = useState(false)
+  const pooledDefaultSetRef = useRef(false)
+  useEffect(() => {
+    // Set the default once permissions are known; never override a manual toggle.
+    if (permsLoading || pooledDefaultSetRef.current) return
+    pooledDefaultSetRef.current = true
+    setShowPooled(!hasPerm('view_all'))
+  }, [permsLoading, hasPerm])
+  const pooledOpenCount = useMemo(
+    () => checkouts.filter(c => c.is_pooled && !c.returned_at && c.status !== 'pending_acknowledgment').length,
+    [checkouts]
+  )
+  const pooledPendingCount = useMemo(
+    () => checkouts.filter(c => c.is_pooled && c.status === 'pending_acknowledgment').length,
+    [checkouts]
+  )
 
   // Modals
   const [checkInTarget, setCheckInTarget] = useState(null)
@@ -155,6 +176,9 @@ export default function AssetCheckoutsPage() {
     if (!hasPerm('view_all')) {
       list = list.filter(c => (c.user_email || '').toLowerCase() === myEmail)
     }
+
+    // Pooled items toggle
+    if (!showPooled) list = list.filter(c => !c.is_pooled)
 
     // Tab filter
     const now = new Date()
@@ -203,13 +227,14 @@ export default function AssetCheckoutsPage() {
     }
 
     return list
-  }, [checkouts, tab, search, userFilter, hasPerm, myEmail])
+  }, [checkouts, tab, search, userFilter, hasPerm, myEmail, showPooled])
 
   // Counts shown on tab pills (computed from the user's own slice if not view_all)
   const counts = useMemo(() => {
-    const visible = hasPerm('view_all')
+    let visible = hasPerm('view_all')
       ? checkouts
       : checkouts.filter(c => (c.user_email || '').toLowerCase() === myEmail)
+    if (!showPooled) visible = visible.filter(c => !c.is_pooled)
     const now = new Date()
     const out = visible.filter(c =>
       !c.returned_at &&
@@ -228,7 +253,7 @@ export default function AssetCheckoutsPage() {
       c.status !== 'declined' && c.status !== 'expired'
     ).length
     return { out, pending, overdue, recent, all: visible.length }
-  }, [checkouts, hasPerm, myEmail])
+  }, [checkouts, hasPerm, myEmail, showPooled])
 
   // Distinct users for the user dropdown (instructor only)
   const userOptions = useMemo(() => {
@@ -333,7 +358,27 @@ export default function AssetCheckoutsPage() {
             Track who has what, when it's due back, and full history.
           </p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
+          {/* Pooled scanners toggle — icon + text + aria-pressed, not color alone */}
+          <button
+            type="button"
+            onClick={() => setShowPooled(v => !v)}
+            aria-pressed={showPooled}
+            title={showPooled ? 'Hide pooled barcode scanners from this list' : 'Show pooled barcode scanners in this list'}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors min-h-[36px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+              showPooled
+                ? 'bg-brand-50 border-brand-300 text-brand-700'
+                : 'bg-white border-surface-200 text-surface-500 hover:border-brand-300 hover:text-brand-600'
+            }`}
+          >
+            <ScanLine size={14} aria-hidden="true" />
+            {showPooled ? 'Scanners shown' : 'Show scanners'}
+            {(pooledOpenCount > 0 || pooledPendingCount > 0) && (
+              <span className="ml-0.5 bg-surface-100 text-surface-700 rounded-full px-1.5 py-0 text-[10px] font-semibold">
+                {pooledOpenCount}{pooledPendingCount > 0 ? ` +${pooledPendingCount} unsigned` : ''}
+              </span>
+            )}
+          </button>
           {hasPerm('export_data') && (
             <>
               <button
@@ -674,7 +719,7 @@ export default function AssetCheckoutsPage() {
       {showReportModal && (
         <EquipmentReportModal
           dialogRef={reportDialogRef}
-          checkouts={checkouts.filter(c => c.status === 'checked_out' && !c.returned_at)}
+          checkouts={checkouts.filter(c => c.status === 'checked_out' && !c.returned_at && !c.is_pooled)}
           onClose={closeReport}
         />
       )}

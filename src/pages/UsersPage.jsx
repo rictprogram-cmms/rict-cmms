@@ -9,11 +9,18 @@ import {
   XCircle, Shield, ChevronDown, UserPlus, Send, X, Loader2,
   AlertCircle, Clock, UserCheck, UserX, Eye, EyeOff, Save, Archive,
   Trash2, AlertTriangle, UserMinus, Wifi, KeyRound, Copy, Check,
-  RefreshCcw, FileSearch
+  RefreshCcw, FileSearch, ScanLine, PackageCheck, PackageX, Hourglass
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
+import ConfirmDialog from '@/components/ConfirmDialog'
+import {
+  usePooledCheckouts,
+  useCheckoutActions,
+  POOLED_SCANNER_ASSET_ID,
+  POOLED_SCANNER_LABEL,
+} from '@/hooks/useAssetCheckouts'
 
 const ROLES = ['Instructor', 'Work Study', 'Student']
 const STATUSES = ['Active', 'Inactive', 'Archived']
@@ -64,6 +71,45 @@ function formatActiveDuration(joinedAt) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// HELPER: Scanner (pooled item) status pill — icon + text, never color alone
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function selectedCountFor(map) { return Object.keys(map).length }
+
+function scannerState(row) {
+  if (!row) return 'none'
+  if (row.status === 'pending_acknowledgment') return 'pending'
+  return 'issued'
+}
+
+function ScannerPill({ row }) {
+  const state = scannerState(row)
+  if (state === 'issued') {
+    const owed = row.handoff_method === 'carried_forward_lost'
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${owed ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}
+        title={owed ? 'Original reported lost — replacement still owed' : 'Signed for and issued'}>
+        {owed ? <PackageX size={12} aria-hidden="true" /> : <PackageCheck size={12} aria-hidden="true" />}
+        {owed ? 'Owes one' : 'Issued'}
+      </span>
+    )
+  }
+  if (state === 'pending') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700"
+        title="Issued — waiting for the student to e-sign">
+        <Hourglass size={12} aria-hidden="true" /> Awaiting sign
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-surface-100 text-surface-500">
+      <XCircle size={12} aria-hidden="true" /> None
+    </span>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -90,6 +136,65 @@ export default function UsersPage() {
   const [resetConfirm, setResetConfirm] = useState(null)
   const [showAddUser, setShowAddUser] = useState(false)
 
+  // ── Pooled scanners ──────────────────────────────────────────────────
+  const { byEmail: scannerByEmail, issuedCount: scannerIssued, pendingCount: scannerPending } = usePooledCheckouts(POOLED_SCANNER_ASSET_ID)
+  const { issuePooled, checkInPooled, markPooledLost, saving: scannerSaving } = useCheckoutActions()
+  const [scannerFilter, setScannerFilter] = useState('')
+  const [lostConfirm, setLostConfirm] = useState(null)          // user row
+  const [bulkIssueConfirm, setBulkIssueConfirm] = useState(false)
+  const [bulkIssueBusy, setBulkIssueBusy] = useState(false)
+  const [bulkAnnounce, setBulkAnnounce] = useState('')          // aria-live text
+  const canManageScanners = hasPerm('edit_users')
+
+  const scannerFor = (u) => scannerByEmail[(u.email || '').toLowerCase()] || null
+
+  const handleIssueScanner = async (u) => {
+    try {
+      await issuePooled({ user: { email: u.email, user_id: u.user_id || null, name: `${u.first_name || ''} ${u.last_name || ''}`.trim() } })
+    } catch { /* toast handled in hook */ }
+  }
+  const handleCheckInScanner = async (u) => {
+    const row = scannerFor(u)
+    if (!row) return
+    try { await checkInPooled({ checkoutId: row.checkout_id }) } catch { /* toast handled */ }
+  }
+  const handleMarkLost = async () => {
+    const row = lostConfirm && scannerFor(lostConfirm)
+    if (!row) { setLostConfirm(null); return }
+    try { await markPooledLost({ checkoutId: row.checkout_id }) } catch { /* toast handled */ }
+    setLostConfirm(null)
+  }
+
+  // Bulk: issue to every selected user who doesn't already have one.
+  const bulkIssueTargets = useMemo(() => {
+    const ids = new Set(Object.keys(selectedUsers))
+    return users.filter(u => ids.has(u.id) && u.status !== 'Archived' && !scannerByEmail[(u.email || '').toLowerCase()])
+  }, [users, selectedUsers, scannerByEmail])
+  const bulkSkipped = selectedCountFor(selectedUsers) - bulkIssueTargets.length
+
+  const handleBulkIssue = async () => {
+    setBulkIssueBusy(true)
+    setBulkAnnounce('Issuing scanners, please wait.')
+    let ok = 0
+    const failed = []
+    for (const u of bulkIssueTargets) {
+      try {
+        await issuePooled({ user: { email: u.email, user_id: u.user_id || null, name: `${u.first_name || ''} ${u.last_name || ''}`.trim() }, quiet: true })
+        ok++
+      } catch (e) {
+        failed.push(`${u.first_name} ${u.last_name}`)
+      }
+    }
+    const msg = `Issued ${ok} scanner${ok === 1 ? '' : 's'}.` +
+      (bulkSkipped > 0 ? ` ${bulkSkipped} skipped (already have one or archived).` : '') +
+      (failed.length ? ` ${failed.length} failed: ${failed.join(', ')}.` : '')
+    setBulkAnnounce(msg)
+    if (failed.length) toast.error(msg, { duration: 8000 }); else toast.success(msg)
+    setBulkIssueBusy(false)
+    setBulkIssueConfirm(false)
+    setSelectedUsers({})
+  }
+
   // Auto-refresh when users are updated (e.g. approved via NotificationBell)
   useEffect(() => {
     const handler = () => { refresh(); refreshReqs(); }
@@ -106,9 +211,15 @@ export default function UsersPage() {
       const hasBadge = !!(u.card_id && String(u.card_id).trim())
       const matchBadge = !badgeFilter || (badgeFilter === 'missing' && !hasBadge) || (badgeFilter === 'assigned' && hasBadge)
       const matchOnline = !onlineFilter || onlineUsers.has(u.email?.toLowerCase())
-      return matchSearch && matchRole && matchStatus && matchBadge && matchOnline
+      const scState = scannerState(scannerByEmail[(u.email || '').toLowerCase()])
+      const matchScanner = !scannerFilter
+        || (scannerFilter === 'has' && scState !== 'none')
+        || (scannerFilter === 'issued' && scState === 'issued')
+        || (scannerFilter === 'pending' && scState === 'pending')
+        || (scannerFilter === 'none' && scState === 'none')
+      return matchSearch && matchRole && matchStatus && matchBadge && matchOnline && matchScanner
     })
-  }, [users, search, roleFilter, statusFilter, badgeFilter, onlineFilter, onlineUsers])
+  }, [users, search, roleFilter, statusFilter, badgeFilter, onlineFilter, onlineUsers, scannerFilter, scannerByEmail])
 
   const selectedCount = Object.keys(selectedUsers).length
 
@@ -223,6 +334,13 @@ export default function UsersPage() {
               <option value="assigned">Has Badge</option>
               <option value="missing">No Badge</option>
             </select>
+            <select value={scannerFilter} onChange={e => setScannerFilter(e.target.value)} className="input text-sm w-auto" aria-label="Filter by scanner status">
+              <option value="">All Scanners</option>
+              <option value="has">Has Scanner (any)</option>
+              <option value="issued">Signed &amp; Issued</option>
+              <option value="pending">Awaiting Signature</option>
+              <option value="none">No Scanner</option>
+            </select>
             {/* Online Only toggle chip */}
             <button
               onClick={() => setOnlineFilter(f => !f)}
@@ -243,13 +361,34 @@ export default function UsersPage() {
             </button>
           </div>
 
+          {/* Scanner summary — quick read on how many are out */}
+          <div className="flex flex-wrap items-center gap-2 mb-3 text-xs text-surface-600">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-100 border border-surface-200">
+              <ScanLine size={13} aria-hidden="true" />
+              <span><strong>{scannerIssued}</strong> {POOLED_SCANNER_LABEL.toLowerCase()}{scannerIssued === 1 ? '' : 's'} out</span>
+              {scannerPending > 0 && <span>· <strong>{scannerPending}</strong> awaiting signature</span>}
+            </span>
+          </div>
+
+          {/* Screen-reader announcement for bulk scanner results */}
+          <div aria-live="polite" aria-atomic="true" className="sr-only">{bulkAnnounce}</div>
+
           {/* Selection Toolbar */}
           {selectedCount > 0 && (
-            <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2 flex items-center gap-3 text-sm mb-4">
+            <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2 flex flex-wrap items-center gap-3 text-sm mb-4">
               <span className="text-brand-700 font-medium">{selectedCount} selected</span>
               <button onClick={() => setShowCompose(true)} className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1">
                 <Mail size={12} /> Send Message
               </button>
+              {canManageScanners && (
+                <button
+                  onClick={() => setBulkIssueConfirm(true)}
+                  disabled={bulkIssueTargets.length === 0 || bulkIssueBusy}
+                  title={bulkIssueTargets.length === 0 ? 'Everyone selected already has a scanner' : `Issue a scanner to ${bulkIssueTargets.length} selected user${bulkIssueTargets.length === 1 ? '' : 's'}`}
+                  className="px-3 py-1 rounded-lg bg-white border border-brand-300 text-brand-700 text-xs font-medium flex items-center gap-1 hover:bg-brand-100 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                  <ScanLine size={12} aria-hidden="true" /> Issue Scanner ({bulkIssueTargets.length})
+                </button>
+              )}
               <button onClick={() => setSelectedUsers({})} className="text-xs text-surface-500 hover:text-surface-700">Deselect All</button>
               <div className="ml-auto flex gap-1">
                 {ROLES.map(r => (
@@ -286,6 +425,7 @@ export default function UsersPage() {
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Role</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Status</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Badge</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Scanner</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Classes</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Last Active</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600 text-center">Actions</th>
@@ -294,6 +434,9 @@ export default function UsersPage() {
                   <tbody className="divide-y divide-surface-100">
                     {filtered.map(u => {
                       const hasBadge = !!(u.card_id && String(u.card_id).trim())
+                      const scRow = scannerFor(u)
+                      const scState = scannerState(scRow)
+                      const fullName = `${u.first_name} ${u.last_name}`
                       // last_seen is more current (5-min heartbeat); fall back to last_login
                       const lastActiveTs = u.last_seen || u.last_login
                       const lastActiveFormatted = formatLastActive(lastActiveTs)
@@ -361,6 +504,10 @@ export default function UsersPage() {
                               </span>
                             )}
                           </td>
+                          {/* Scanner column — pooled barcode reader status */}
+                          <td className="px-3 py-2">
+                            <ScannerPill row={scRow} />
+                          </td>
                           <td className="px-3 py-2 text-xs text-surface-500 max-w-[120px] truncate">{u.classes || '—'}</td>
                           {/* Last Active column — shows last_seen (5-min heartbeat) with last_login in tooltip */}
                           <td className="px-3 py-2 text-xs whitespace-nowrap"
@@ -396,6 +543,37 @@ export default function UsersPage() {
                                   className="p-1.5 rounded-lg hover:bg-purple-50 text-surface-400 hover:text-purple-600">
                                   <FileSearch size={14} />
                                 </button>
+                                {/* Scanner: issue / check in / mark lost */}
+                                {u.status !== 'Archived' && (
+                                  scState === 'none' ? (
+                                    <button onClick={() => handleIssueScanner(u)}
+                                      disabled={scannerSaving}
+                                      title="Issue Scanner"
+                                      aria-label={`Issue scanner to ${fullName}`}
+                                      className="p-1.5 rounded-lg hover:bg-emerald-50 text-surface-400 hover:text-emerald-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                      <ScanLine size={14} aria-hidden="true" />
+                                    </button>
+                                  ) : (
+                                    <>
+                                      <button onClick={() => handleCheckInScanner(u)}
+                                        disabled={scannerSaving}
+                                        title={scState === 'pending' ? 'Cancel Scanner Issue (not yet signed)' : 'Check In Scanner'}
+                                        aria-label={scState === 'pending' ? `Cancel unsigned scanner issue for ${fullName}` : `Check in scanner from ${fullName}`}
+                                        className="p-1.5 rounded-lg hover:bg-sky-50 text-surface-400 hover:text-sky-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                        <PackageCheck size={14} aria-hidden="true" />
+                                      </button>
+                                      {scState === 'issued' && (
+                                        <button onClick={() => setLostConfirm(u)}
+                                          disabled={scannerSaving}
+                                          title="Mark Scanner Lost / Replacement Ordered"
+                                          aria-label={`Mark scanner lost for ${fullName}`}
+                                          className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                          <PackageX size={14} aria-hidden="true" />
+                                        </button>
+                                      )}
+                                    </>
+                                  )
+                                )}
                                 {/* Reset Password — only for non-Instructor accounts */}
                                 {u.role !== 'Instructor' && (
                                   <button onClick={() => setResetConfirm(u)}
@@ -470,8 +648,46 @@ export default function UsersPage() {
           {/* Archive Confirmation Modal */}
           {archiveConfirm && (
             <ArchiveConfirmModal user={archiveConfirm} actions={actions}
+              scannerRow={scannerFor(archiveConfirm)}
               onClose={() => setArchiveConfirm(null)}
               onDone={() => { setArchiveConfirm(null); refresh() }} />
+          )}
+
+          {/* Mark Scanner Lost — confirm */}
+          {lostConfirm && (
+            <ConfirmDialog
+              open
+              variant="danger"
+              title="Mark scanner lost?"
+              message={<>
+                <strong>{lostConfirm.first_name} {lostConfirm.last_name}</strong> reported their {POOLED_SCANNER_LABEL.toLowerCase()} lost.
+                The current record will be closed as <strong>Lost</strong> and a new one opened immediately, so they still show as owing one.
+                Their original e-signature carries forward — no second sign-off needed. Check it in once they turn in a replacement.
+              </>}
+              confirmLabel="Mark lost"
+              cancelLabel="Cancel"
+              busy={scannerSaving}
+              onConfirm={handleMarkLost}
+              onClose={() => setLostConfirm(null)}
+            />
+          )}
+
+          {/* Bulk Issue Scanner — confirm */}
+          {bulkIssueConfirm && (
+            <ConfirmDialog
+              open
+              title={`Issue scanners to ${bulkIssueTargets.length} user${bulkIssueTargets.length === 1 ? '' : 's'}?`}
+              message={<>
+                Each selected user will get a request to e-sign for one {POOLED_SCANNER_LABEL.toLowerCase()} on their dashboard and notification bell.
+                {bulkSkipped > 0 && <> <strong>{bulkSkipped}</strong> selected user{bulkSkipped === 1 ? ' is' : 's are'} skipped (already have one or archived).</>}
+                {' '}Requests expire after 24 hours if not signed.
+              </>}
+              confirmLabel={bulkIssueBusy ? 'Issuing…' : 'Issue scanners'}
+              cancelLabel="Cancel"
+              busy={bulkIssueBusy}
+              onConfirm={handleBulkIssue}
+              onClose={() => { if (!bulkIssueBusy) setBulkIssueConfirm(false) }}
+            />
           )}
 
           {/* Permanent Delete Confirmation Modal */}
@@ -829,9 +1045,11 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
 // ARCHIVE CONFIRMATION MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ArchiveConfirmModal({ user, actions, onClose, onDone }) {
+function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone }) {
   const [processing, setProcessing] = useState(false)
   const fullName = `${user.first_name} ${user.last_name}`
+  const hasScanner = !!scannerRow
+  const scannerPending = scannerRow?.status === 'pending_acknowledgment'
 
   const handleArchive = async () => {
     setProcessing(true)
@@ -867,11 +1085,29 @@ function ArchiveConfirmModal({ user, actions, onClose, onDone }) {
           Their historical data (time clock, work orders) will be preserved. You can reactivate them later.
         </p>
 
+        {hasScanner && (
+          <div role="alert" className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
+            <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <div>
+              <p className="font-semibold">
+                {scannerPending
+                  ? 'This user has an unsigned scanner issue open.'
+                  : `This user still has a ${POOLED_SCANNER_LABEL.toLowerCase()} issued.`}
+              </p>
+              <p className="mt-0.5">
+                {scannerPending
+                  ? 'Cancel it from the Scanner actions first, or it will stay open after archiving.'
+                  : 'Check it in (or mark it lost) from the Scanner actions before archiving so it isn\'t forgotten.'}
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-2 pt-1">
           <button onClick={handleArchive} disabled={processing}
             className="flex-1 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 flex items-center justify-center gap-1.5">
             {processing ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
-            {processing ? 'Archiving...' : 'Archive User'}
+            {processing ? 'Archiving...' : hasScanner ? 'Archive Anyway' : 'Archive User'}
           </button>
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
         </div>

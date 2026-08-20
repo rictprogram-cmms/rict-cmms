@@ -27,6 +27,17 @@
  * NEW UTILITIES:
  *   - formatCountdown(iso, [now])   — countdown label + urgency flags
  *   - DEFAULT_PENDING_EXPIRY_HOURS  — 24, the default request lifetime
+ *
+ * POOLED ITEMS (added for magnetic barcode readers):
+ *   Pooled assets (assets.is_pooled = true) are interchangeable units tracked
+ *   as ONE asset record that can have many open checkouts at once — one per
+ *   student. Issue / check-in / lost happen on the Users page; the student
+ *   signs through the same PendingAcknowledgmentModal as a normal checkout.
+ *   - POOLED_SCANNER_ASSET_ID          — 'POOL-SCANNER'
+ *   - buildPooledAcknowledgmentText()  — client preview of the server text
+ *   - usePooledCheckouts(assetId)      — open pooled rows keyed by email
+ *   - useCheckoutActions().issuePooled / checkInPooled / markPooledLost
+ *   - acknowledgeCheckout() auto-routes pooled rows to acknowledge_pooled_checkout
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -38,6 +49,23 @@ import toast from 'react-hot-toast'
 /* ── Constants ────────────────────────────────────────────────────── */
 
 export const DEFAULT_PENDING_EXPIRY_HOURS = 24
+
+// The single pooled asset record for the magnetic barcode readers.
+// Seeded by the 2026-08-20_pooled_scanner_checkouts.sql migration.
+export const POOLED_SCANNER_ASSET_ID = 'POOL-SCANNER'
+export const POOLED_SCANNER_LABEL    = 'Magnetic Barcode Reader'
+
+/**
+ * Client-side preview of the acknowledgment sentence the server stores for a
+ * pooled item (see _pooled_ack_text in the migration). Keep the two in sync.
+ */
+export function buildPooledAcknowledgmentText(checkout, typedName) {
+  const name = typedName?.trim() || '[your name]'
+  const item = checkout?.asset_name || 'pooled item'
+  return `I, ${name}, acknowledge that I have been issued one ${item} by the RICT program. ` +
+         `I accept responsibility for it and agree to return one in working condition, ` +
+         `or to purchase a replacement if it is lost or damaged.`
+}
 
 /* ── Time helpers ─────────────────────────────────────────────────── */
 
@@ -376,6 +404,70 @@ export function useUserPendingAcknowledgments(userEmail) {
   return { pending, allRows: rows, loading, now, refresh }
 }
 
+/* ── Pooled items: open rows for one pooled asset, keyed by email ──
+   Used by the Users page to render the Scanner column. "Open" means
+   returned_at IS NULL — that includes pending_acknowledgment (issued, not
+   yet signed) and checked_out (signed). Realtime keeps it fresh so the
+   column flips the moment a student signs on their phone.
+*/
+
+export function usePooledCheckouts(assetId = POOLED_SCANNER_ASSET_ID) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const hasLoadedRef = useRef(false)
+
+  const refresh = useCallback(async () => {
+    if (!assetId) return
+    if (!hasLoadedRef.current) setLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('asset_checkouts')
+        .select('checkout_id, asset_id, asset_name, user_email, user_name, status, checked_out_at, requested_at, expires_at, acknowledgment_at, handoff_method, checkout_notes')
+        .eq('asset_id', assetId)
+        .eq('is_pooled', true)
+        .is('returned_at', null)
+      if (error) throw error
+      setRows(data || [])
+      hasLoadedRef.current = true
+    } catch (err) {
+      console.error('Error fetching pooled checkouts:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [assetId])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  useEffect(() => {
+    if (!assetId) return
+    const channelName = `pooled-${assetId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const channel = supabase
+      .channel(channelName)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'asset_checkouts', filter: `asset_id=eq.${assetId}` },
+        refresh)
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [assetId, refresh])
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'visible' && hasLoadedRef.current) refresh()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [refresh])
+
+  // Map: lowercased email → open row
+  const byEmail = {}
+  rows.forEach(r => { if (r.user_email) byEmail[r.user_email.toLowerCase()] = r })
+
+  const issuedCount  = rows.filter(r => r.status === 'checked_out').length
+  const pendingCount = rows.filter(r => r.status === 'pending_acknowledgment').length
+
+  return { rows, byEmail, issuedCount, pendingCount, loading, refresh }
+}
+
 /* ── Mutation actions ──────────────────────────────────────────── */
 
 export function useCheckoutActions() {
@@ -460,18 +552,21 @@ export function useCheckoutActions() {
    * the RPC compares auth.jwt().email to the row's user_email and rejects
    * any mismatch.
    */
-  const acknowledgeCheckout = async ({ checkoutId, acknowledgmentName }) => {
+  const acknowledgeCheckout = async ({ checkoutId, acknowledgmentName, isPooled = false }) => {
     if (!checkoutId) throw new Error('Checkout ID is required')
     if (!acknowledgmentName?.trim()) throw new Error('Typed acknowledgment is required')
 
     setSaving(true)
     try {
       const ackAt = localToUtcIso(new Date())
+      // Pooled rows (scanners) have their own RPC so the stored legal text
+      // matches the pooled wording; everything else is unchanged.
+      const rpcName = isPooled ? 'acknowledge_pooled_checkout' : 'acknowledge_asset_checkout'
       // Retry-safe: status-flip RPC. If a "failed" attempt actually landed,
       // the retry gets the server's "no longer pending" answer rather than
       // signing twice.
       const data = await withNetworkRetry(async () => {
-        const { data: row, error } = await supabase.rpc('acknowledge_asset_checkout', {
+        const { data: row, error } = await supabase.rpc(rpcName, {
           p_checkout_id:         checkoutId,
           p_acknowledgment_name: acknowledgmentName.trim(),
           p_acknowledgment_at:   ackAt,
@@ -558,6 +653,111 @@ export function useCheckoutActions() {
   }
 
   /* ───────────────────────────────────────────────────────────────
+     POOLED ITEMS — barcode scanners (Users page)
+     All three go through SECURITY DEFINER RPCs that verify the caller
+     is an active Instructor, so RLS silent-failures can't happen here:
+     the RPC either returns the row or raises.
+     ─────────────────────────────────────────────────────────────── */
+
+  /**
+   * Issue one pooled item to a student → creates a pending_acknowledgment
+   * row. The student signs via PendingAcknowledgmentModal (dashboard/bell).
+   * Pass `quiet: true` when looping (bulk issue) to suppress the toast.
+   */
+  const issuePooled = async ({ assetId = POOLED_SCANNER_ASSET_ID, user, notes = '', expiryHours = DEFAULT_PENDING_EXPIRY_HOURS, quiet = false }) => {
+    if (!user?.email) throw new Error('Student is required')
+    setSaving(true)
+    try {
+      const requestedDate = new Date()
+      const expiresDate   = new Date(requestedDate.getTime() + expiryHours * 60 * 60 * 1000)
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('request_pooled_checkout', {
+          p_asset_id:     assetId,
+          p_user_email:   user.email,
+          p_user_name:    user.name || user.email,
+          p_user_id:      user.user_id || null,
+          p_notes:        notes || '',
+          p_requested_at: localToUtcIso(requestedDate),
+          p_expires_at:   localToUtcIso(expiresDate),
+        })
+        if (error) throw error
+        if (!row) throw new Error('No row returned — the issue may have been blocked.')
+        return row
+      }, {
+        failureMessage: 'Connection problem — the scanner was not issued. Please check your signal and try again.',
+      })
+      if (!quiet) toast.success(`Scanner issued to ${user.name || user.email} — awaiting their signature`)
+      return data
+    } catch (err) {
+      console.error('Issue pooled error:', err)
+      if (!quiet) toast.error(err.message || 'Failed to issue scanner')
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Check one pooled item back in (or cancel an unsigned issue). */
+  const checkInPooled = async ({ checkoutId, notes = '', quiet = false }) => {
+    if (!checkoutId) throw new Error('Checkout ID is required')
+    setSaving(true)
+    try {
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('checkin_pooled_checkout', {
+          p_checkout_id: checkoutId,
+          p_at:          localToUtcIso(new Date()),
+          p_notes:       notes || '',
+        })
+        if (error) throw error
+        if (!row) throw new Error('No row returned — the check-in may have been blocked.')
+        return row
+      }, {
+        failureMessage: 'Connection problem — the check-in was not saved. Please check your signal and try again.',
+      })
+      if (!quiet) toast.success(data?.status === 'cancelled' ? 'Unsigned issue cancelled' : 'Scanner checked in')
+      return data
+    } catch (err) {
+      console.error('Check-in pooled error:', err)
+      if (!quiet) toast.error(err.message || 'Failed to check in scanner')
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /**
+   * Mark a signed pooled item lost. Server closes the row as Lost and
+   * immediately opens a new checked_out row with the original signature
+   * carried forward, so the student still shows as owing one.
+   */
+  const markPooledLost = async ({ checkoutId, notes = '' }) => {
+    if (!checkoutId) throw new Error('Checkout ID is required')
+    setSaving(true)
+    try {
+      const data = await withNetworkRetry(async () => {
+        const { data: row, error } = await supabase.rpc('mark_pooled_checkout_lost', {
+          p_checkout_id: checkoutId,
+          p_at:          localToUtcIso(new Date()),
+          p_notes:       notes || '',
+        })
+        if (error) throw error
+        if (!row) throw new Error('No row returned — the update may have been blocked.')
+        return row
+      }, {
+        failureMessage: 'Connection problem — the lost report was not saved. Please check your signal and try again.',
+      })
+      toast.success('Marked lost — replacement still owed')
+      return data
+    } catch (err) {
+      console.error('Mark pooled lost error:', err)
+      toast.error(err.message || 'Failed to mark scanner lost')
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /* ───────────────────────────────────────────────────────────────
      LEGACY — Instructor-attested in-person hand-off (fast path)
      ─────────────────────────────────────────────────────────────── */
 
@@ -592,6 +792,7 @@ export function useCheckoutActions() {
         .from('asset_checkouts')
         .select('checkout_id, user_name, status')
         .eq('asset_id', asset.asset_id)
+        .eq('is_pooled', false)
         .is('returned_at', null)
         .maybeSingle()
 
@@ -809,6 +1010,11 @@ export function useCheckoutActions() {
     acknowledgeCheckout,
     declineCheckout,
     cancelPendingCheckout,
+
+    // Pooled items (scanners)
+    issuePooled,
+    checkInPooled,
+    markPooledLost,
 
     // Legacy fast path (and deprecated alias)
     instructorAttestedCheckout,

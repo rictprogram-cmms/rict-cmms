@@ -14,6 +14,11 @@
  * sets handoff_method='instructor_attested' on the row, so the audit trail
  * can distinguish the two methods.
  *
+ * POOLED ITEMS (checkout.is_pooled === true — e.g. barcode scanners):
+ *   Same flow, different wording. The header, summary and legal text adapt
+ *   (no asset ID / serial / due date; "return one" instead of "return it"),
+ *   and acknowledgeCheckout() routes to acknowledge_pooled_checkout.
+ *
  * Accessibility (WCAG 2.1 AA):
  *   - useDialogA11y (Esc closes, focus trap, focus restoration)
  *   - aria-modal="true", aria-labelledby, aria-describedby
@@ -34,13 +39,14 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   X, AlertTriangle, CheckCircle2, Loader2, Clock, ShieldCheck,
-  ArrowLeft, Package,
+  ArrowLeft, Package, ScanLine,
 } from 'lucide-react'
 import useDialogA11y from '@/hooks/useDialogA11y'
 import {
   useCheckoutActions,
   formatCountdown,
   fakeUtcToDisplay,
+  buildPooledAcknowledgmentText,
 } from '@/hooks/useAssetCheckouts'
 
 /* ───────────────────────────── Helpers ───────────────────────────── */
@@ -61,6 +67,7 @@ function useNowTick() {
 // Shown to the student up-front so they know what they're agreeing to.
 function buildAcknowledgmentText(checkout, typedName) {
   if (!checkout) return ''
+  if (checkout.is_pooled) return buildPooledAcknowledgmentText(checkout, typedName)
   const namePart = typedName?.trim() || '[your name]'
   const sn = checkout.asset_serial_number ? `, SN ${checkout.asset_serial_number}` : ''
   const dueDate = checkout.expected_return
@@ -288,6 +295,7 @@ export default function PendingAcknowledgmentModal({
     : typedName.trim().length > 0
 
   const isExpired = !!cd?.expired
+  const isPooled = !!checkout.is_pooled
   const requestedAt = fakeUtcToDisplay(checkout.requested_at)
   const expectedReturn = fakeUtcToDisplay(checkout.expected_return)
   const previewText = buildAcknowledgmentText(checkout, typedName)
@@ -310,6 +318,7 @@ export default function PendingAcknowledgmentModal({
       const updated = await acknowledgeCheckout({
         checkoutId: checkout.checkout_id,
         acknowledgmentName: typedName.trim(),
+        isPooled,
       })
       onAcknowledged?.(updated)
       onClose?.()
@@ -355,10 +364,12 @@ export default function PendingAcknowledgmentModal({
             </div>
             <div>
               <h2 id={titleId} className="text-base font-bold text-surface-900">
-                Acknowledge asset checkout
+                {isPooled ? `Accept your ${checkout.asset_name || 'issued item'}` : 'Acknowledge asset checkout'}
               </h2>
               <p id={descId} className="text-sm text-surface-500 mt-0.5">
-                Please review and e-sign to accept this asset.
+                {isPooled
+                  ? 'Please review and e-sign to confirm you received one and will return one.'
+                  : 'Please review and e-sign to accept this asset.'}
               </p>
             </div>
           </div>
@@ -379,16 +390,24 @@ export default function PendingAcknowledgmentModal({
           <div className="px-5 py-4 border-b border-surface-200">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-lg bg-surface-100 flex items-center justify-center flex-shrink-0">
-                <Package size={20} className="text-surface-500" aria-hidden="true" />
+                {isPooled
+                  ? <ScanLine size={20} className="text-surface-500" aria-hidden="true" />
+                  : <Package size={20} className="text-surface-500" aria-hidden="true" />}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-surface-900 break-words">
                   {checkout.asset_name || '(unnamed asset)'}
                 </p>
                 <p className="text-xs text-surface-500 mt-0.5">
-                  {checkout.asset_id}
-                  {checkout.asset_serial_number && (
-                    <> · <span>SN {checkout.asset_serial_number}</span></>
+                  {isPooled ? (
+                    'Program-issued item — not individually numbered'
+                  ) : (
+                    <>
+                      {checkout.asset_id}
+                      {checkout.asset_serial_number && (
+                        <> · <span>SN {checkout.asset_serial_number}</span></>
+                      )}
+                    </>
                   )}
                 </p>
                 <div className="flex flex-wrap gap-2 mt-2">
@@ -398,7 +417,7 @@ export default function PendingAcknowledgmentModal({
                       Due {expectedReturn.date}
                     </span>
                   )}
-                  {checkout.checkout_condition && (
+                  {checkout.checkout_condition && !isPooled && (
                     <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full bg-surface-100 text-surface-700 border border-surface-200">
                       Condition: {checkout.checkout_condition}
                     </span>
