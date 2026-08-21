@@ -223,6 +223,24 @@ Additionally, students are urged to report to the instructor immediately any har
 
 Refer to the Energy & Electronics Rules posted in the Electronics D2L Shell, under "Materials" and "Program Policies and Rules". These rules apply to this class and will be addressed as posted.`,
   },
+  attendance_online: {
+    title: 'Attendance Policy (Online)',
+    order: 9,
+    content: `WEEK 1 REQUIREMENT
+Students who do not participate in the course during the first week of the semester will be dropped from the course for non-attendance. For an online course, participation means completing a graded activity or the first-week check-in in D2L Brightspace.
+
+ATTENDANCE IN AN ONLINE COURSE
+Attendance is measured by participation in D2L Brightspace, not by campus presence. The specific expectations for this course (for example, whether a weekly check-in is required) are listed under Online Attendance Expectations above and under Course Information.
+
+ADMINISTRATIVE WITHDRAWAL
+Students who do not participate in the course for two consecutive weeks during the semester will be administratively withdrawn, in accordance with federal financial aid regulations.
+
+COMMUNICATION
+Attendance-related issues must be communicated via school email. Your SCTCC email address is automatically entered in D2L and will be used for all official communication.
+
+LATE POLICY
+Late work is not accepted. All assignments are due the date they are posted.`,
+  },
   pass_fail: {
     title: 'Pass/Fail Statement',
     order: 8,
@@ -454,7 +472,9 @@ export function generateSyllabusHTML(data, commonSections) {
   <h3 class="sub-head">Accommodations</h3><div class="block">${renderSection(get('accommodations'))}</div>
   <h3 class="sub-head">Nondiscrimination and Title IX</h3><div class="block">${renderSection(get('diversity'))}</div>
   <h2 class="sec-head" id="sec-course-policies">Course Policies &amp; Procedures</h2>
-  <h3 class="sub-head">Attendance</h3><div class="block">${isOnline && onlineNotes ? `<p><strong>Online Attendance Expectations for This Course</strong></p>${renderSection(onlineNotes)}<p><strong>College &amp; Program Attendance Policy</strong></p>` : ''}${renderSection(get('attendance'))}</div>
+  <h3 class="sub-head">Attendance</h3><div class="block">${isOnline
+    ? `${onlineNotes ? `<p><strong>Online Attendance Expectations for This Course</strong></p>${renderSection(onlineNotes)}` : ''}${renderSection(get('attendance_online'))}`
+    : renderSection(get('attendance'))}</div>
   <h3 class="sub-head">Navigating D2L &amp; Technical Support</h3><div class="block">${renderSection(get('d2l'))}</div>
   <h3 class="sub-head">Class Environment</h3><div class="block">${renderSection(get('class_environment'))}</div>
   <h2 class="sec-head" id="sec-grading">Grading</h2>
@@ -1609,7 +1629,7 @@ function Step3CourseInfo({ data, update }) {
               className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 resize-y bg-white"
             />
             <p id="syllabus-online-attendance-hint" className="text-xs text-surface-400 mt-1">
-              Appears under Course Information and leads the Attendance section of the syllabus. Blank lines start a new paragraph.
+              Appears under Course Information and leads the Attendance section. Online courses use the shared <span className="font-medium">Attendance Policy (Online)</span> (editable in Syllabus settings) instead of the lab-scheduling policy. Blank lines start a new paragraph.
             </p>
           </div>
         </div>

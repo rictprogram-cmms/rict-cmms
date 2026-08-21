@@ -614,12 +614,17 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   // ── Course Policies & Procedures ───────────────────────────────────────────
   c.push(h2('Course Policies & Procedures', 'sec_course_policies'))
   c.push(h3('Attendance'))
-  if (isOnline && onlineNotes) {
-    c.push(p([rb('Online Attendance Expectations for This Course')], { spacing: { after: 60 } }))
-    c.push(...sectionToDocx(onlineNotes, numCtx))
-    c.push(p([rb('College & Program Attendance Policy')], { spacing: { before: 120, after: 60 } }))
+  if (isOnline) {
+    // Online courses: instructor's expectations + the online policy section.
+    // The lab-scheduling policy is NOT printed — it does not apply.
+    if (onlineNotes) {
+      c.push(p([rb('Online Attendance Expectations for This Course')], { spacing: { after: 60 } }))
+      c.push(...sectionToDocx(onlineNotes, numCtx))
+    }
+    c.push(...sectionToDocx(get('attendance_online'), numCtx))
+  } else {
+    c.push(...sectionToDocx(get('attendance'), numCtx))
   }
-  c.push(...sectionToDocx(get('attendance'), numCtx))
   c.push(h3('Navigating D2L & Technical Support'))
   c.push(...sectionToDocx(get('d2l'), numCtx))
   c.push(h3('Class Environment'))
