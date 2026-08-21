@@ -380,8 +380,28 @@ function scaleTo(img, targetW, maxH) {
   return { width: w, height: h }
 }
 
+// ─── Pass/Fail wording (mirrors PASS_FAIL_STATEMENT in SyllabusWizard.jsx) ──
+export const PASS_FAIL_STATEMENT = 'This course is graded on a Pass/Fail basis. To receive a grade of \u201CP\u201D (Pass), students must satisfactorily complete all required coursework and meet the attendance requirements outlined in this syllabus. Students who do not meet these requirements will receive a grade of \u201CF\u201D (Fail). No letter grades (A, B, C) are assigned for this course.'
+
 // ─── Assessment table (real header row → tagged <TH> cells in the PDF) ───────
-function buildGradeTable(assessments, totalPoints) {
+// passFail = true renders a single-column "Required Activity" list: no Points
+// column and no Total row, because a pass/fail course has no point values.
+function buildGradeTable(assessments, totalPoints, passFail = false) {
+  if (passFail) {
+    const W = 5430
+    const cellB1 = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D8E2F0' }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
+    const mk = (children, opts = {}) => new TableCell({ borders: cellB1, margins: { top: 60, bottom: 60, left: 140, right: 140 }, width: { size: W, type: WidthType.DXA }, ...opts, children })
+    const head = new TableRow({ tableHeader: true, children: [
+      mk([p([new TextRun({ text: 'Required Activity', font: 'Calibri', size: 20, bold: true, allCaps: true, color: 'FFFFFF' })], { spacing: { after: 0 } })], { shading: { fill: NAVY, type: ShadingType.CLEAR } }),
+    ]})
+    const body = (assessments || []).map((a, i) => {
+      const shade = i % 2 === 1 ? { fill: 'F2F5FB', type: ShadingType.CLEAR } : undefined
+      const runs = [r(a.name, { size: 20 })]
+      if (a.description) runs.push(r(' \u2013 ', { size: 20 }), ri(a.description, { size: 20 }))
+      return new TableRow({ children: [mk([p(runs, { spacing: { after: 0 } })], { shading: shade })] })
+    })
+    return new Table({ width: { size: W, type: WidthType.DXA }, columnWidths: [W], rows: [head, ...body] })
+  }
   const CW = [4200, 1230]
   const cellB = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D8E2F0' }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
   const cell = (children, opts = {}) => new TableCell({
@@ -601,22 +621,33 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
 
   // ── Grading ────────────────────────────────────────────────────────────────
   c.push(h2('Grading', 'sec_grading'))
-  c.push(h3('Assignments & Points'))
+  const passFail = data.grading_mode === 'pass_fail'
+  if (passFail) {
+    c.push(h3('Pass/Fail Course'))
+    c.push(p(PASS_FAIL_STATEMENT))
+  }
+  c.push(h3(passFail ? 'Required Activities' : 'Assignments & Points'))
   if ((parseInt(data.volunteer_hours_required) || 0) > 0) {
     c.push(p([r('All students are expected to put in '), rb(`${data.volunteer_hours_required} hours of volunteer hours`), r('. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.')]))
   }
   c.push(p([r('Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need '), rb(`${data.required_hours_per_week} hours a week`), r(' of lab time.')], { spacing: { after: 160 } }))
-  c.push(buildGradeTable(data.assessments, totalPoints))
-  c.push(p([r('(Subject to change depending on course content)', { size: 18, color: '666666' })], { spacing: { before: 60 } }))
-  c.push(h3('Grading Scale'))
-  c.push(p(`A = ${data.grading_a_min}\u2013100% = ${aMin}\u2013${totalPoints} points`))
-  c.push(p(`B = ${data.grading_b_min}\u2013${data.grading_a_min - 1}% = ${bMin}\u2013${aMin - 1} points`))
-  c.push(p(`C = ${data.grading_c_min}\u2013${data.grading_b_min - 1}% = ${cMin}\u2013${bMin - 1} points`))
-  c.push(p(`F = ${data.grading_c_min - 1} and below = <${cMin} points`))
+  if (!passFail || (data.assessments || []).length > 0) {
+    c.push(buildGradeTable(data.assessments, totalPoints, passFail))
+    c.push(p([r('(Subject to change depending on course content)', { size: 18, color: '666666' })], { spacing: { before: 60 } }))
+  }
+  if (!passFail) {
+    c.push(h3('Grading Scale'))
+    c.push(p(`A = ${data.grading_a_min}\u2013100% = ${aMin}\u2013${totalPoints} points`))
+    c.push(p(`B = ${data.grading_b_min}\u2013${data.grading_a_min - 1}% = ${bMin}\u2013${aMin - 1} points`))
+    c.push(p(`C = ${data.grading_c_min}\u2013${data.grading_b_min - 1}% = ${cMin}\u2013${bMin - 1} points`))
+    c.push(p(`F = ${data.grading_c_min - 1} and below = <${cMin} points`))
+  }
   c.push(h3('Grades'))
   c.push(p('You can check your grade through D2L Brightspace ASSESSMENTS/GRADES at any point during the semester.'))
-  c.push(p('You can expect to have graded assignments returned within 3\u20135 days of the due date of the assignment.'))
-  c.push(p('Your grade will reflect how well you have mastered the material, not how hard you have worked.'))
+  if (!passFail) {
+    c.push(p('You can expect to have graded assignments returned within 3\u20135 days of the due date of the assignment.'))
+    c.push(p('Your grade will reflect how well you have mastered the material, not how hard you have worked.'))
+  }
   c.push(h3('Time Commitment'))
   c.push(p(timeNote))
   c.push(h3('Course Calendar'))

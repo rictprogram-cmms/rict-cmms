@@ -6,9 +6,9 @@ import {
   BookOpen, Printer, Save, Check, AlertCircle,
   Copy, Upload, RefreshCw, Eye, Clock,
   UserPlus, User, GraduationCap, PlusCircle, Search, Pencil,
-  FileText, Download
+  FileText, Download, ChevronUp, ChevronDown
 } from 'lucide-react'
-import { downloadSyllabusDocx } from './syllabusDocx'
+import { downloadSyllabusDocx, PASS_FAIL_STATEMENT } from './syllabusDocx'
 import toast from 'react-hot-toast'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 
@@ -85,6 +85,7 @@ const EMPTY_SYLLABUS = {
     { id: 7, name: 'Final Exam',            points: 200, description: '' },
   ],
   volunteer_hours_required: 5,
+  grading_mode: 'graded',   // 'graded' | 'pass_fail' — pass_fail drops the letter-grade scale
   grading_a_min: 90,
   grading_b_min: 80,
   grading_c_min: 70,
@@ -277,7 +278,23 @@ export function generateSyllabusHTML(data, commonSections) {
   const springBreakNote = (data.spring_break_start && data.spring_break_end) ? `<p><strong>Spring Break:</strong> ${fmtDate(data.spring_break_start)} \u2013 ${fmtDate(data.spring_break_end)}</p>` : ''
   const finalsNote = (data.finals_start && data.finals_end) ? `<p>The Final will be taken the week of ${fmtDateShort(data.finals_start)}\u2013${fmtDateShort(data.finals_end)} during class.</p>` : ''
   const timeNote = data.time_commitment_notes || `You should expect to spend two hours outside of class for each hour of lecture and one hour outside of class for each hour of lab. For this course, that means a total expectation of ${(parseInt(data.credits_lecture) || 0) * 2 + (parseInt(data.credits_lab) || 0)} hours per week outside of the classroom. If you do not feel you can fulfill this expectation, you should consider whether this class best fits this term for you.`
-  const assessmentRows = (data.assessments || []).map(a => `<tr><td>${escHtml(a.name)}${a.description ? ` &ndash; <em>${escHtml(a.description)}</em>` : ''}</td><td class="pts">${a.points > 0 ? a.points + ' pts' : '&ndash;'}</td></tr>`).join('\n')
+  const passFail = data.grading_mode === 'pass_fail'
+  const assessmentRows = (data.assessments || []).map(a => `<tr><td>${escHtml(a.name)}${a.description ? ` &ndash; <em>${escHtml(a.description)}</em>` : ''}</td>${passFail ? '' : `<td class="pts">${a.points > 0 ? a.points + ' pts' : '&ndash;'}</td>`}</tr>`).join('\n')
+  // Pass/fail: single-column "Required Activity" list, no points / total / letter scale
+  const gradeTableHtml = (!passFail || (data.assessments || []).length > 0) ? `
+    <table class="grade-table">
+      <thead><tr><th scope="col">${passFail ? 'Required Activity' : 'Assessment'}</th>${passFail ? '' : '<th scope="col" class="r">Points</th>'}</tr></thead>
+      <tbody>${assessmentRows}${passFail ? '' : `<tr class="total"><td>Total Points</td><td class="pts">${totalPoints} pts</td></tr>`}</tbody>
+    </table>
+    <p class="note">(Subject to change depending on course content)</p>` : ''
+  const gradingScaleHtml = passFail ? '' : `
+  <h3 class="sub-head">Grading Scale</h3>
+  <div class="block">
+    <p>A = ${data.grading_a_min}\u2013100% = ${aMin}\u2013${totalPoints} points</p>
+    <p>B = ${data.grading_b_min}\u2013${data.grading_a_min - 1}% = ${bMin}\u2013${aMin - 1} points</p>
+    <p>C = ${data.grading_c_min}\u2013${data.grading_b_min - 1}% = ${cMin}\u2013${bMin - 1} points</p>
+    <p>F = ${data.grading_c_min - 1} and below = &lt;${cMin} points</p>
+  </div>`
   // Accessibility: real ordered list so screen readers announce list semantics
   const outcomesHtml = (data.student_outcomes || []).length > 0 ? `<p><strong>Student Learning Outcomes:</strong></p>\n<ol class="outcomes">` + (data.student_outcomes || []).map(o => `<li>${escHtml(o)}</li>`).join('\n') + `</ol>` : ''
   // Strip " (Part #: ...)" suffix — part numbers are for the catalog, not the PDF
@@ -416,29 +433,19 @@ export function generateSyllabusHTML(data, commonSections) {
   <h3 class="sub-head">Navigating D2L &amp; Technical Support</h3><div class="block">${renderSection(get('d2l'))}</div>
   <h3 class="sub-head">Class Environment</h3><div class="block">${renderSection(get('class_environment'))}</div>
   <h2 class="sec-head" id="sec-grading">Grading</h2>
-  <h3 class="sub-head">Assignments &amp; Points</h3>
+  ${passFail ? `<h3 class="sub-head">Pass/Fail Course</h3>
+  <div class="block"><p>${escHtml(PASS_FAIL_STATEMENT)}</p></div>` : ''}
+  <h3 class="sub-head">${passFail ? 'Required Activities' : 'Assignments &amp; Points'}</h3>
   <div class="block">
     ${(parseInt(data.volunteer_hours_required) || 0) > 0 ? `<p>All students are expected to put in <strong>${escHtml(String(data.volunteer_hours_required))} hours of volunteer hours</strong>. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.</p>` : ''}
     <p>Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need <strong>${escHtml(String(data.required_hours_per_week))} hours a week</strong> of lab time.</p>
-    <br>
-    <table class="grade-table">
-      <thead><tr><th scope="col">Assessment</th><th scope="col" class="r">Points</th></tr></thead>
-      <tbody>${assessmentRows}<tr class="total"><td>Total Points</td><td class="pts">${totalPoints} pts</td></tr></tbody>
-    </table>
-    <p class="note">(Subject to change depending on course content)</p>
-  </div>
-  <h3 class="sub-head">Grading Scale</h3>
-  <div class="block">
-    <p>A = ${data.grading_a_min}\u2013100% = ${aMin}\u2013${totalPoints} points</p>
-    <p>B = ${data.grading_b_min}\u2013${data.grading_a_min - 1}% = ${bMin}\u2013${aMin - 1} points</p>
-    <p>C = ${data.grading_c_min}\u2013${data.grading_b_min - 1}% = ${cMin}\u2013${bMin - 1} points</p>
-    <p>F = ${data.grading_c_min - 1} and below = &lt;${cMin} points</p>
-  </div>
+    <br>${gradeTableHtml}
+  </div>${gradingScaleHtml}
   <h3 class="sub-head">Grades</h3>
   <div class="block">
     <p>You can check your grade through D2L Brightspace ASSESSMENTS/GRADES at any point during the semester.</p>
-    <p>You can expect to have graded assignments returned within 3\u20135 days of the due date of the assignment.</p>
-    <p>Your grade will reflect how well you have mastered the material, not how hard you have worked.</p>
+    ${passFail ? '' : `<p>You can expect to have graded assignments returned within 3\u20135 days of the due date of the assignment.</p>
+    <p>Your grade will reflect how well you have mastered the material, not how hard you have worked.</p>`}
   </div>
   <h3 class="sub-head">Time Commitment</h3>
   <div class="block"><p>${escHtml(timeNote)}</p></div>
@@ -2176,6 +2183,16 @@ function Step6Description({ data, update }) {
 
 function Step7Grading({ data, update }) {
   const totalPoints = (data.assessments || []).reduce((s, a) => s + (parseInt(a.points) || 0), 0)
+  const passFail = data.grading_mode === 'pass_fail'
+  // Announced to screen readers when the grading fields show/hide
+  const [modeAnnounce, setModeAnnounce] = useState('')
+  const setMode = (mode) => {
+    if (mode === data.grading_mode) return
+    update('grading_mode', mode)
+    setModeAnnounce(mode === 'pass_fail'
+      ? 'Pass/Fail selected. Letter-grade minimums and point values are hidden; the syllabus will state that this is a pass/fail course.'
+      : 'Graded selected. Letter-grade minimums and point values are shown.')
+  }
 
   // ── Volunteer hours toggle ───────────────────────────────────────────────────
   // No new DB column: "no volunteer hours" is expressed as volunteer_hours_required = 0.
@@ -2218,22 +2235,74 @@ function Step7Grading({ data, update }) {
     dragId.current = null
     dragOver.current = null
   }
+  // Keyboard-accessible alternative to dragging (WCAG 2.1.1)
+  function moveA(id, dir) {
+    const list = [...(data.assessments || [])]
+    const idx = list.findIndex(a => a.id === id)
+    const to = idx + dir
+    if (idx === -1 || to < 0 || to >= list.length) return
+    const [moved] = list.splice(idx, 1)
+    list.splice(to, 0, moved)
+    update('assessments', list)
+  }
+  const rowCols = passFail ? 'grid-cols-[20px_1fr_2fr_56px_36px]' : 'grid-cols-[20px_1fr_2fr_100px_56px_36px]'
 
   return (
     <div className="space-y-6">
+      {/* ── Grading mode ─────────────────────────────────────────────────────── */}
+      <fieldset className="border border-surface-200 rounded-xl p-4">
+        <legend className="px-1.5 text-sm font-semibold text-surface-700">How is this course graded?</legend>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+          {[
+            { value: 'graded',    title: 'Graded course',    desc: 'Letter grades (A/B/C/F) from a point-based scale. The syllabus shows the assessment points table and grading scale.' },
+            { value: 'pass_fail', title: 'Pass/Fail course', desc: 'No letter grades. The grading scale and point values are removed and replaced with a Pass/Fail statement.' },
+          ].map(opt => {
+            const checked = (data.grading_mode || 'graded') === opt.value
+            return (
+              <label
+                key={opt.value}
+                htmlFor={`syllabus-grading-mode-${opt.value}`}
+                className={`flex items-start gap-3 min-h-[44px] p-3 rounded-lg border cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-brand-500/40 ${checked ? 'border-brand-400 bg-brand-50/60' : 'border-surface-200 bg-white hover:border-brand-200'}`}
+              >
+                <input
+                  type="radio"
+                  id={`syllabus-grading-mode-${opt.value}`}
+                  name="syllabus-grading-mode"
+                  value={opt.value}
+                  checked={checked}
+                  onChange={() => setMode(opt.value)}
+                  className="mt-0.5 h-4 w-4 border-surface-300 text-brand-600 focus:outline-none"
+                />
+                <span className="select-none">
+                  <span className="block text-sm font-semibold text-surface-800">{opt.title}</span>
+                  <span className="block text-xs text-surface-500 mt-0.5">{opt.desc}</span>
+                </span>
+              </label>
+            )
+          })}
+        </div>
+        <div aria-live="polite" className="sr-only">{modeAnnounce}</div>
+      </fieldset>
+
       <div>
         <div className="flex items-center justify-between mb-3">
           <div>
-            <p className="text-sm font-semibold text-surface-700">Assessment Items</p>
-            <p className="text-xs text-surface-400 mt-0.5">Drag the ≡ handle to reorder rows.</p>
+            <p className="text-sm font-semibold text-surface-700">{passFail ? 'Required Activities' : 'Assessment Items'}</p>
+            <p className="text-xs text-surface-400 mt-0.5">
+              {passFail
+                ? 'Optional — list what students must complete to pass. No point values are shown on a pass/fail syllabus.'
+                : 'Drag the ≡ handle or use the arrow buttons to reorder rows.'}
+            </p>
           </div>
-          <span className="text-xs bg-brand-50 text-brand-600 font-semibold px-2.5 py-1 rounded-full">Total: {totalPoints} pts</span>
+          {!passFail && <span className="text-xs bg-brand-50 text-brand-600 font-semibold px-2.5 py-1 rounded-full">Total: {totalPoints} pts</span>}
         </div>
         <div className="space-y-1.5">
-          <div className="grid grid-cols-[20px_1fr_2fr_100px_36px] gap-2 px-3 py-1.5 bg-surface-50 rounded-lg text-xs font-semibold text-surface-500 uppercase tracking-wide">
-            <span /><span>Assessment Name</span><span>Note / Description</span><span className="text-right">Points</span><span />
+          <div className={`grid ${rowCols} gap-2 px-3 py-1.5 bg-surface-50 rounded-lg text-xs font-semibold text-surface-500 uppercase tracking-wide`}>
+            <span /><span>{passFail ? 'Activity Name' : 'Assessment Name'}</span><span>Note / Description</span>{!passFail && <span className="text-right">Points</span>}<span className="sr-only">Reorder</span><span className="sr-only">Remove</span>
           </div>
-          {(data.assessments||[]).map(a => (
+          {(data.assessments||[]).map((a, idx, arr) => {
+            const rowName = a.name || `item ${idx + 1}`
+            return (
             <div
               key={a.id}
               draggable
@@ -2241,30 +2310,39 @@ function Step7Grading({ data, update }) {
               onDragEnter={() => handleDragEnter(a.id)}
               onDragEnd={handleDragEnd}
               onDragOver={e => e.preventDefault()}
-              className="grid grid-cols-[20px_1fr_2fr_100px_36px] gap-2 items-center bg-white border border-surface-100 rounded-lg px-2 py-1 hover:border-brand-200 transition-colors"
+              className={`grid ${rowCols} gap-2 items-center bg-white border border-surface-100 rounded-lg px-2 py-1 hover:border-brand-200 transition-colors`}
             >
-              {/* Drag handle */}
-              <div className="flex items-center justify-center cursor-grab active:cursor-grabbing text-surface-300 hover:text-surface-500 select-none">
+              {/* Drag handle (mouse) — keyboard users have the arrow buttons */}
+              <div aria-hidden="true" className="flex items-center justify-center cursor-grab active:cursor-grabbing text-surface-300 hover:text-surface-500 select-none">
                 <svg width="12" height="16" viewBox="0 0 12 16" fill="currentColor">
                   <circle cx="3" cy="3" r="1.5"/><circle cx="9" cy="3" r="1.5"/>
                   <circle cx="3" cy="8" r="1.5"/><circle cx="9" cy="8" r="1.5"/>
                   <circle cx="3" cy="13" r="1.5"/><circle cx="9" cy="13" r="1.5"/>
                 </svg>
               </div>
-              <input value={a.name} onChange={e => updateA(a.id, 'name', e.target.value)} placeholder="Assessment name" className="px-2.5 py-1.5 border border-surface-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-400" />
-              <input value={a.description} onChange={e => updateA(a.id, 'description', e.target.value)} placeholder="Optional note" className="px-2.5 py-1.5 border border-surface-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-400" />
-              <input type="number" value={a.points} onChange={e => updateA(a.id, 'points', parseInt(e.target.value)||0)} min={0} className="px-2.5 py-1.5 border border-surface-200 rounded text-sm text-right focus:outline-none focus:ring-1 focus:ring-brand-400" />
-              <button onClick={() => removeA(a.id)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"><Trash2 size={13} /></button>
+              <input value={a.name} onChange={e => updateA(a.id, 'name', e.target.value)} placeholder={passFail ? 'Activity name' : 'Assessment name'} aria-label={`${passFail ? 'Activity' : 'Assessment'} name, row ${idx + 1}`} className="px-2.5 py-1.5 border border-surface-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-400" />
+              <input value={a.description} onChange={e => updateA(a.id, 'description', e.target.value)} placeholder="Optional note" aria-label={`Note for ${rowName}`} className="px-2.5 py-1.5 border border-surface-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-400" />
+              {!passFail && (
+                <input type="number" value={a.points} onChange={e => updateA(a.id, 'points', parseInt(e.target.value)||0)} min={0} aria-label={`Points for ${rowName}`} className="px-2.5 py-1.5 border border-surface-200 rounded text-sm text-right focus:outline-none focus:ring-1 focus:ring-brand-400" />
+              )}
+              <div className="flex items-center justify-center gap-0.5">
+                <button type="button" onClick={() => moveA(a.id, -1)} disabled={idx === 0} aria-label={`Move ${rowName} up`} className="p-1 text-surface-400 hover:text-brand-600 hover:bg-brand-50 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 transition-colors"><ChevronUp size={14} aria-hidden="true" /></button>
+                <button type="button" onClick={() => moveA(a.id, 1)} disabled={idx === arr.length - 1} aria-label={`Move ${rowName} down`} className="p-1 text-surface-400 hover:text-brand-600 hover:bg-brand-50 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 transition-colors"><ChevronDown size={14} aria-hidden="true" /></button>
+              </div>
+              <button type="button" onClick={() => removeA(a.id)} aria-label={`Remove ${rowName}`} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 transition-colors"><Trash2 size={13} aria-hidden="true" /></button>
             </div>
-          ))}
-          <button onClick={addA} className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-700 py-1 mt-1"><Plus size={13} /> Add Assessment Item</button>
+            )
+          })}
+          <button type="button" onClick={addA} className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-700 py-1 mt-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 rounded"><Plus size={13} aria-hidden="true" /> {passFail ? 'Add Required Activity' : 'Add Assessment Item'}</button>
         </div>
       </div>
-      <div className="border-t border-surface-100 pt-4 grid grid-cols-3 gap-4">
-        <Field label="Grade A Minimum %"><NI value={data.grading_a_min} onChange={v => update('grading_a_min', parseInt(v)||90)} min={50} max={100} /></Field>
-        <Field label="Grade B Minimum %"><NI value={data.grading_b_min} onChange={v => update('grading_b_min', parseInt(v)||80)} min={40} max={99} /></Field>
-        <Field label="Grade C Minimum %"><NI value={data.grading_c_min} onChange={v => update('grading_c_min', parseInt(v)||70)} min={30} max={99} /></Field>
-      </div>
+      {!passFail && (
+        <div className="border-t border-surface-100 pt-4 grid grid-cols-3 gap-4">
+          <Field label="Grade A Minimum %"><NI value={data.grading_a_min} onChange={v => update('grading_a_min', parseInt(v)||90)} min={50} max={100} /></Field>
+          <Field label="Grade B Minimum %"><NI value={data.grading_b_min} onChange={v => update('grading_b_min', parseInt(v)||80)} min={40} max={99} /></Field>
+          <Field label="Grade C Minimum %"><NI value={data.grading_c_min} onChange={v => update('grading_c_min', parseInt(v)||70)} min={30} max={99} /></Field>
+        </div>
+      )}
       <div className="border-t border-surface-100 pt-4 space-y-3">
         <div className="flex items-center gap-2.5 min-h-[44px]">
           <input
@@ -2317,7 +2395,10 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
     { label: 'Drop/withdraw dates', ok: !!data.last_drop_date && !!data.last_withdraw_date,   step: 4 },
     { label: 'Course description',  ok: !!data.course_description,                            step: 6 },
     { label: 'Student outcomes',    ok: (data.student_outcomes||[]).length > 0,               step: 6 },
-    { label: 'Assessments',         ok: (data.assessments||[]).length > 0 && totalPoints > 0, step: 7 },
+    // Pass/fail courses have no point values — only require a named activity list
+    data.grading_mode === 'pass_fail'
+      ? { label: 'Required activities', ok: (data.assessments||[]).some(a => (a.name||'').trim()), step: 7 }
+      : { label: 'Assessments',         ok: (data.assessments||[]).length > 0 && totalPoints > 0, step: 7 },
     // Federal accessibility requirement: a course photo must have a description
     ...(data.course_photo_url ? [{ label: 'Photo description (alt text)', ok: !!(data.course_photo_alt || '').trim(), step: 2 }] : []),
   ]
@@ -2579,6 +2660,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
             ? row.student_outcomes
             : (Array.isArray(catalogRow?.student_outcomes) ? catalogRow.student_outcomes : []),
           assessments:         Array.isArray(row.assessments) ? row.assessments : EMPTY_SYLLABUS.assessments,
+          grading_mode:        row.grading_mode === 'pass_fail' ? 'pass_fail' : 'graded',
         }))
       } else if (catalogRow) {
         // No saved template — pre-populate description/outcomes from catalog
