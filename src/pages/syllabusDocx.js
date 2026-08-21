@@ -380,9 +380,6 @@ function scaleTo(img, targetW, maxH) {
   return { width: w, height: h }
 }
 
-// ─── Pass/Fail wording (mirrors PASS_FAIL_STATEMENT in SyllabusWizard.jsx) ──
-export const PASS_FAIL_STATEMENT = 'This course is graded on a Pass/Fail basis. To receive a grade of \u201CP\u201D (Pass), students must satisfactorily complete all required coursework and meet the attendance requirements outlined in this syllabus. Students who do not meet these requirements will receive a grade of \u201CF\u201D (Fail). No letter grades (A, B, C) are assigned for this course.'
-
 // ─── Assessment table (real header row → tagged <TH> cells in the PDF) ───────
 // passFail = true renders a single-column "Required Activity" list: no Points
 // column and no Total row, because a pass/fail course has no point values.
@@ -560,8 +557,12 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   c.push(h3('General Information'))
   c.push(p([rb(`${data.course_id}: ${data.course_name}`)]))
   c.push(p(creditsStr))
-  if (data.course_type === 'online') {
-    c.push(p('This is a fully online course. All lectures, assignments, and coursework are completed remotely. There are no required on-campus hours unless otherwise stated by the instructor.'))
+  const isOnline = data.course_type === 'online'
+  const onlineNotes = (data.online_attendance_notes || '').trim()
+  if (isOnline) {
+    // Instructor-written expectations (Step 3) replace the generic sentence
+    if (onlineNotes) c.push(...sectionToDocx(onlineNotes, numCtx))
+    else c.push(p('This is a fully online course. All lectures, assignments, and coursework are completed remotely. There are no required on-campus hours unless otherwise stated by the instructor.'))
   } else if (data.course_type === 'hybrid') {
     c.push(p([r('This is a hybrid course that does not have a designated meeting time. Students are responsible for signing up for their lab hours on a weekly basis. Please review the attendance policy for details. This course requires each student to be on campus for '), rb(`${data.required_hours_per_week} hours a week`), r(', unless otherwise stated by instructor.')]))
     c.push(p('The lecture component of this course is online and is expected to be done outside of class time.'))
@@ -613,6 +614,11 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   // ── Course Policies & Procedures ───────────────────────────────────────────
   c.push(h2('Course Policies & Procedures', 'sec_course_policies'))
   c.push(h3('Attendance'))
+  if (isOnline && onlineNotes) {
+    c.push(p([rb('Online Attendance Expectations for This Course')], { spacing: { after: 60 } }))
+    c.push(...sectionToDocx(onlineNotes, numCtx))
+    c.push(p([rb('College & Program Attendance Policy')], { spacing: { before: 120, after: 60 } }))
+  }
   c.push(...sectionToDocx(get('attendance'), numCtx))
   c.push(h3('Navigating D2L & Technical Support'))
   c.push(...sectionToDocx(get('d2l'), numCtx))
@@ -624,13 +630,16 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   const passFail = data.grading_mode === 'pass_fail'
   if (passFail) {
     c.push(h3('Pass/Fail Course'))
-    c.push(p(PASS_FAIL_STATEMENT))
+    // Editable in Instructor Tools → Syllabus Common Sections ("Pass/Fail Statement")
+    c.push(...sectionToDocx(get('pass_fail'), numCtx))
   }
   c.push(h3(passFail ? 'Required Activities' : 'Assignments & Points'))
   if ((parseInt(data.volunteer_hours_required) || 0) > 0) {
     c.push(p([r('All students are expected to put in '), rb(`${data.volunteer_hours_required} hours of volunteer hours`), r('. These hours need to be approved by the instructor. They must support the program. Examples are VEX Robotics tournaments, Ambassador program, Epic, etc.')]))
   }
-  c.push(p([r('Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need '), rb(`${data.required_hours_per_week} hours a week`), r(' of lab time.')], { spacing: { after: 160 } }))
+  if (!isOnline) {
+    c.push(p([r('Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need '), rb(`${data.required_hours_per_week} hours a week`), r(' of lab time.')], { spacing: { after: 160 } }))
+  }
   if (!passFail || (data.assessments || []).length > 0) {
     c.push(buildGradeTable(data.assessments, totalPoints, passFail))
     c.push(p([r('(Subject to change depending on course content)', { size: 18, color: '666666' })], { spacing: { before: 60 } }))
