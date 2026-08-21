@@ -381,24 +381,7 @@ function scaleTo(img, targetW, maxH) {
 }
 
 // ─── Assessment table (real header row → tagged <TH> cells in the PDF) ───────
-// passFail = true renders a single-column "Required Activity" list: no Points
-// column and no Total row, because a pass/fail course has no point values.
-function buildGradeTable(assessments, totalPoints, passFail = false) {
-  if (passFail) {
-    const W = 5430
-    const cellB1 = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D8E2F0' }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
-    const mk = (children, opts = {}) => new TableCell({ borders: cellB1, margins: { top: 60, bottom: 60, left: 140, right: 140 }, width: { size: W, type: WidthType.DXA }, ...opts, children })
-    const head = new TableRow({ tableHeader: true, children: [
-      mk([p([new TextRun({ text: 'Required Activity', font: 'Calibri', size: 20, bold: true, allCaps: true, color: 'FFFFFF' })], { spacing: { after: 0 } })], { shading: { fill: NAVY, type: ShadingType.CLEAR } }),
-    ]})
-    const body = (assessments || []).map((a, i) => {
-      const shade = i % 2 === 1 ? { fill: 'F2F5FB', type: ShadingType.CLEAR } : undefined
-      const runs = [r(a.name, { size: 20 })]
-      if (a.description) runs.push(r(' \u2013 ', { size: 20 }), ri(a.description, { size: 20 }))
-      return new TableRow({ children: [mk([p(runs, { spacing: { after: 0 } })], { shading: shade })] })
-    })
-    return new Table({ width: { size: W, type: WidthType.DXA }, columnWidths: [W], rows: [head, ...body] })
-  }
+function buildGradeTable(assessments, totalPoints) {
   const CW = [4200, 1230]
   const cellB = { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.SINGLE, size: 4, color: 'D8E2F0' }, left: { style: BorderStyle.NONE }, right: { style: BorderStyle.NONE } }
   const cell = (children, opts = {}) => new TableCell({
@@ -645,8 +628,18 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
   if (!isOnline) {
     c.push(p([r('Weekly attendance \u2013 Your time sheet will need to match up to your signup days for lab. You will need '), rb(`${data.required_hours_per_week} hours a week`), r(' of lab time.')], { spacing: { after: 160 } }))
   }
-  if (!passFail || (data.assessments || []).length > 0) {
-    c.push(buildGradeTable(data.assessments, totalPoints, passFail))
+  if (passFail) {
+    // Pass/fail: a real Word bulleted list, not a table. A one-column table
+    // is not tabular data and Word's PDF export does not tag its header row,
+    // which Ally flags ("Table does not have a header").
+    const items = (data.assessments || []).filter(a => (a.name || '').trim())
+    if (items.length > 0) {
+      const listText = items.map(a => `\u2022 ${a.name.trim()}${a.description ? ` \u2013 ${a.description}` : ''}`).join('\n')
+      c.push(...sectionToDocx(listText, numCtx))
+      c.push(p([r('(Subject to change depending on course content)', { size: 18, color: '666666' })], { spacing: { before: 60 } }))
+    }
+  } else {
+    c.push(buildGradeTable(data.assessments, totalPoints))
     c.push(p([r('(Subject to change depending on course content)', { size: 18, color: '666666' })], { spacing: { before: 60 } }))
   }
   if (!passFail) {

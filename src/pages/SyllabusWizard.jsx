@@ -338,14 +338,21 @@ export function generateSyllabusHTML(data, commonSections) {
   const finalsNote = (data.finals_start && data.finals_end) ? `<p>The Final will be taken the week of ${fmtDateShort(data.finals_start)}\u2013${fmtDateShort(data.finals_end)} during class.</p>` : ''
   const timeNote = data.time_commitment_notes || `You should expect to spend two hours outside of class for each hour of lecture and one hour outside of class for each hour of lab. For this course, that means a total expectation of ${(parseInt(data.credits_lecture) || 0) * 2 + (parseInt(data.credits_lab) || 0)} hours per week outside of the classroom. If you do not feel you can fulfill this expectation, you should consider whether this class best fits this term for you.`
   const passFail = data.grading_mode === 'pass_fail'
-  const assessmentRows = (data.assessments || []).map(a => `<tr><td>${escHtml(a.name)}${a.description ? ` &ndash; <em>${escHtml(a.description)}</em>` : ''}</td>${passFail ? '' : `<td class="pts">${a.points > 0 ? a.points + ' pts' : '&ndash;'}</td>`}</tr>`).join('\n')
+  const assessmentRows = (data.assessments || []).map(a => `<tr><td>${escHtml(a.name)}${a.description ? ` &ndash; <em>${escHtml(a.description)}</em>` : ''}</td><td class="pts">${a.points > 0 ? a.points + ' pts' : '&ndash;'}</td></tr>`).join('\n')
   // Pass/fail: single-column "Required Activity" list, no points / total / letter scale
-  const gradeTableHtml = (!passFail || (data.assessments || []).length > 0) ? `
+  // Pass/fail: bulleted list (matches the Word output — a one-column table is
+  // not tabular data and fails the Ally header check). Graded: points table.
+  const pfItems = (data.assessments || []).filter(a => (a.name || '').trim())
+  const gradeTableHtml = passFail
+    ? (pfItems.length > 0 ? `
+    <ul>${pfItems.map(a => `<li>${escHtml(a.name.trim())}${a.description ? ` &ndash; <em>${escHtml(a.description)}</em>` : ''}</li>`).join('\n')}</ul>
+    <p class="note">(Subject to change depending on course content)</p>` : '')
+    : `
     <table class="grade-table">
-      <thead><tr><th scope="col">${passFail ? 'Required Activity' : 'Assessment'}</th>${passFail ? '' : '<th scope="col" class="r">Points</th>'}</tr></thead>
-      <tbody>${assessmentRows}${passFail ? '' : `<tr class="total"><td>Total Points</td><td class="pts">${totalPoints} pts</td></tr>`}</tbody>
+      <thead><tr><th scope="col">Assessment</th><th scope="col" class="r">Points</th></tr></thead>
+      <tbody>${assessmentRows}<tr class="total"><td>Total Points</td><td class="pts">${totalPoints} pts</td></tr></tbody>
     </table>
-    <p class="note">(Subject to change depending on course content)</p>` : ''
+    <p class="note">(Subject to change depending on course content)</p>`
   const gradingScaleHtml = passFail ? '' : `
   <h3 class="sub-head">Grading Scale</h3>
   <div class="block">
