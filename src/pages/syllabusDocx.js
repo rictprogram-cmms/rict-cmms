@@ -785,6 +785,24 @@ async function finalizeDocxAccessibility(blob) {
       return `<w:pBdr>${kids.join('')}</w:pBdr>`
     })
 
+    // Data tables: Word's PDF export only emits <TH> cells for the header row
+    // when the table's look flags say it HAS a header row (tblLook firstRow=1),
+    // not merely because the row repeats (tblHeader). Without this every cell
+    // exports as <TD> and Ally reports "Table does not have a header". Add the
+    // look flags plus a caption/description to every table that has a
+    // repeating header row. Schema order inside tblPr: ... tblCaption,
+    // tblDescription, tblLook are the last three children.
+    let tblIdx = 0
+    xml = xml.replace(/<w:tbl>([\s\S]*?)<\/w:tbl>/g, (whole, inner) => {
+      if (!inner.includes('<w:tblHeader/>') || inner.includes('<w:tblLook')) return whole
+      tblIdx += 1
+      const firstCellText = (inner.match(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/) || [])[1] || `Table ${tblIdx}`
+      const cap = firstCellText.replace(/[<>&"]/g, '')
+      const extra = `<w:tblCaption w:val="${cap}"/><w:tblDescription w:val="${cap} table with a header row"/>` +
+        `<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>`
+      return whole.replace('</w:tblPr>', `${extra}</w:tblPr>`)
+    })
+
     files[DOC] = strToU8(xml)
   }
 
