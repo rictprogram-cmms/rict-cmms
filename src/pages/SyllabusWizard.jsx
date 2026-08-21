@@ -24,17 +24,33 @@ const STEPS = [
   { id: 8, label: 'Preview',     desc: 'Review & export PDF' },
 ]
 
-const SEMESTERS = [
-  'Spring 2026', 'Summer 2026', 'Fall 2026',
-  'Spring 2027', 'Summer 2027', 'Fall 2027',
-  'Spring 2028', 'Summer 2028', 'Fall 2028',
-]
+// RICT does not teach in summer — Spring and Fall only. The list builds itself
+// from the current date (last year through two years ahead) so it never needs
+// a code change as years roll over.
+function buildSemesters(today = new Date()) {
+  const y0 = today.getFullYear() - 1
+  const out = []
+  for (let y = y0; y <= y0 + 3; y++) out.push(`Spring ${y}`, `Fall ${y}`)
+  return out
+}
+const SEMESTERS = buildSemesters()
+
+// Which semester should a NEW syllabus default to? About two weeks into a term
+// instructors are already building the next one, so the window rolls early:
+//   Jan 1–31 → Spring (this year)   Feb 1–Sep 7 → Fall (this year)
+//   Sep 8–Dec 31 → Spring (next year)
+export function getDefaultSemester(today = new Date()) {
+  const y = today.getFullYear(), m = today.getMonth() + 1, d = today.getDate()
+  if (m === 1) return `Spring ${y}`
+  if (m < 9 || (m === 9 && d <= 7)) return `Fall ${y}`
+  return `Spring ${y + 1}`
+}
 
 // ─── Default State ─────────────────────────────────────────────────────────────
 const EMPTY_SYLLABUS = {
   id: null,
   course_id: '',
-  semester: 'Spring 2026',
+  semester: getDefaultSemester(),
   instructor_name: '',
   instructor_email: '',
   instructor_phone: '',
@@ -604,7 +620,7 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
     course_name: syllabusData.course_name || '',
     required_hours: syllabusData.required_hours_per_week || calcHours(syllabusData.credits_lab || 1, semLen),
     instructor: syllabusData.instructor_name || '',
-    semester: syllabusData.semester || 'Spring 2026',
+    semester: syllabusData.semester || getDefaultSemester(),
     status: 'Active',
     start_date: syllabusData.begin_date || '',
     end_date: syllabusData.end_date || '',
