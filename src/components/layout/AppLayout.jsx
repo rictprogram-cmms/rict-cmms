@@ -9,6 +9,7 @@ import HoldLockoutModal from '@/components/holds/HoldLockoutModal'
 import HoldReminderModal from '@/components/holds/HoldReminderModal'
 import HoldNudgeBanner from '@/components/holds/HoldNudgeBanner'
 import GlossaryModal from '@/components/GlossaryModal'
+import PageErrorBoundary from '@/components/PageErrorBoundary'
 import useChangelog from '@/hooks/useChangelog'
 import {
   Wrench,
@@ -2075,7 +2076,19 @@ export default function AppLayout() {
           )}
           {/* Student Hold — Nudge-tier banners (non-blocking, dismissible) */}
           <HoldNudgeBanner />
-          <Outlet />
+          {/* Page-level error boundary: a crash on one page shows a readable,
+              reportable panel instead of a blank screen. Resets on route change. */}
+          <PageErrorBoundary
+            resetKey={location.pathname}
+            pathname={location.pathname}
+            appVersion={appVersion}
+            userEmail={profile?.email}
+            userName={profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''}
+            onGoHome={() => navigate('/dashboard')}
+            onReport={(prefill) => navigate('/bug-tracker', { state: { prefill } })}
+          >
+            <Outlet />
+          </PageErrorBoundary>
         </main>
       </div>
 
