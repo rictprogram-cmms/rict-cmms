@@ -1214,6 +1214,9 @@ export default function NotificationBell() {
       const courseId = req.course_id || req.class_id || '';
       const userEmail = req.user_email;
       const userName  = req.user_name || 'Unknown';
+      // Make-up tags saved with the request (slot key → absence request id) so
+      // approved slots keep their is_makeup flag — see useMakeupHours.js.
+      const makeupTags = (req.makeup_tags && typeof req.makeup_tags === 'object') ? req.makeup_tags : {};
 
       const slotsToCancel = Object.entries(labApproveCancels).filter(([, v]) => v).map(([k]) => k);
       const slotsToAdd    = Object.entries(labApproveAdds).filter(([, v]) => v).map(([k]) => k);
@@ -1262,6 +1265,8 @@ export default function NotificationBell() {
             start_time: `${String(hour).padStart(2, '0')}:00:00`,
             end_time:   `${String(hour + 1).padStart(2, '0')}:00:00`,
             status: 'Confirmed', created_at: new Date().toISOString(),
+            is_makeup: !!makeupTags[slotKey],
+            makeup_request_id: makeupTags[slotKey] || null,
           });
         }
         if (rows.length > 0) {

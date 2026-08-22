@@ -467,6 +467,8 @@ function WeeklySignupTab() {
     const weekNewSelections = getWeekAllNewSelections(weekIdx)
     const weekCancelIds = getWeekCancellations(weekIdx)
     const week = weeks[weekIdx]
+    // Make-up tags per class (slot → ABS request id) ride along on the request
+    const weekMuStatusForSubmit = getWeekMakeupStatus(weekIdx)
 
     // Build current and requested slots per class
     // Gather existing signups by class for this week
@@ -514,7 +516,8 @@ function WeeklySignupTab() {
         weekStartDate,
         existingByClass[classId] || [],
         requestedSlots,
-        reason.trim()
+        reason.trim(),
+        weekMuStatusForSubmit[classId]?.tags || {}
       )
     }
 

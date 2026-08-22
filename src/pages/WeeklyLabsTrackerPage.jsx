@@ -6,10 +6,11 @@ import {
   useLabClasses, useLabReport, useStudentLabReport,
   useLabTrackerActions, buildClassWeeks,
 } from '@/hooks/useWeeklyLabs'
+import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
 import {
   Printer, Loader2, CheckCircle2, Lock, BadgeCheck,
   ChevronDown, ChevronUp, BarChart3, ShieldCheck, X,
-  AlertTriangle, ClipboardList, Clock, Star, BookOpen, UserCircle,
+  AlertTriangle, ClipboardList, Clock, Star, BookOpen, UserCircle, RotateCcw,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -241,6 +242,9 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   const [loadingWOs, setLoadingWOs] = useState(true)
   const [weeklyReminders, setWeeklyReminders] = useState([])  // [{id, class_id, class_label, message}]
   const [acknowledgedIds, setAcknowledgedIds] = useState(() => new Set())
+  // Make-up hours owed THIS week from approved absences the week before:
+  //   [{ requestId, courseId, owed, logged, windowDays: ['YYYY-MM-DD', …], complete }]
+  const [makeups, setMakeups] = useState([])
   // Ref-based guard to prevent double-fire from rapid badge swipe events
   const processingRef = useRef(false)
 
@@ -297,6 +301,71 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
       })
       .catch(() => setWeeklyReminders([]))
   }, [isOpen, classes, studentEmail])
+
+  // Fetch make-up hours owed this week (approved absences → first two open lab
+  // days). Uses the same SQL window helper the auto-complete trigger uses so
+  // the modal and the trigger always agree on which days count.
+  useEffect(() => {
+    if (!isOpen || !studentEmail || !weekStartDate || !weekEndDate) { setMakeups([]); return }
+    let cancelled = false
+    const ws = weekStartDate.substring(0, 10)
+    const we = weekEndDate.substring(0, 10)
+
+    async function loadMakeups() {
+      try {
+        const overlay = await fetchMakeupOverlay({ emails: [studentEmail], rangeStart: ws, rangeEnd: we })
+        const inWeek = (overlay.requests || []).filter(r => r.makeupWeekMonday >= ws && r.makeupWeekMonday <= we)
+        if (inWeek.length === 0) { if (!cancelled) setMakeups([]); return }
+
+        const rows = []
+        for (const r of inWeek) {
+          let windowDays = []
+          try {
+            const { data } = await supabase.rpc('makeup_window_days', { p_monday: r.makeupWeekMonday })
+            windowDays = Array.isArray(data) ? data.map(d => String(d).substring(0, 10)) : []
+          } catch { /* fall through with empty window */ }
+
+          let logged = 0
+          if (windowDays.length > 0) {
+            // Fake-UTC convention: punch_in wall-clock date == local date, so a
+            // T00:00:00+00 … T23:59:59+00 range on the window days is exact.
+            const from = `${windowDays[0]}T00:00:00+00`
+            const to = `${windowDays[windowDays.length - 1]}T23:59:59+00`
+            let q = supabase
+              .from('time_clock')
+              .select('punch_in, total_hours, entry_type, course_id, class_id')
+              .eq('user_email', studentEmail)
+              .gte('punch_in', from)
+              .lte('punch_in', to)
+            if (r.course_id) q = q.eq('course_id', r.course_id)
+            else if (r.class_id) q = q.eq('class_id', r.class_id)
+            const { data: tc } = await q
+            ;(tc || []).forEach(e => {
+              if (e.entry_type === 'Volunteer') return
+              const d = String(e.punch_in || '').substring(0, 10)
+              if (!windowDays.includes(d)) return
+              logged += parseFloat(e.total_hours) || 0
+            })
+          }
+          const owed = Number(r.hours_missed) || 0
+          rows.push({
+            requestId: r.request_id,
+            courseId: r.course_id || r.class_id || '',
+            owed,
+            logged: Math.round(logged * 100) / 100,
+            windowDays,
+            complete: !!r.makeup_complete || logged >= owed,
+          })
+        }
+        if (!cancelled) setMakeups(rows)
+      } catch (err) {
+        console.error('All Done make-up fetch error:', err)
+        if (!cancelled) setMakeups([])
+      }
+    }
+    loadMakeups()
+    return () => { cancelled = true }
+  }, [isOpen, studentEmail, weekStartDate, weekEndDate])
 
   // Fetch work orders when modal opens
   useEffect(() => {
@@ -386,6 +455,13 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   const hasOpenWOs = studentWorkOrders.length > 0
   const hasLateWOs = lateWorkOrders.length > 0
   const allLabsDone = (labStatuses || []).every(ls => ls.labComplete)
+  const hasMakeups = makeups.length > 0
+  const makeupsOutstanding = makeups.filter(m => !m.complete)
+  const fmtDay = (d) => {
+    const dt = new Date(d + 'T00:00:00')
+    return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' })
+  }
+  const fmtH = (n) => (Number(n) % 1 === 0 ? String(Number(n)) : Number(n).toFixed(2))
 
   // Determine which WOs have a log entry this week and overall
   // weekStartDate may arrive as a full ISO string (e.g. "2026-03-23T05:00:00.000Z")
@@ -608,6 +684,65 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
               </div>
             )}
           </div>
+
+          {/* ── MAKE-UP HOURS (approved absences → this week) ── */}
+          {hasMakeups && (
+            <div
+              className={`px-6 py-4 border-b ${makeupsOutstanding.length > 0 ? 'border-amber-200 bg-amber-50/30' : 'border-emerald-200 bg-emerald-50/30'}`}
+              role="region"
+              aria-label="Make-up hours owed this week"
+            >
+              <div className={`flex items-center gap-2 mb-3 px-3 py-2 rounded-lg ${
+                makeupsOutstanding.length > 0 ? 'bg-amber-100 border border-amber-200' : 'bg-emerald-100 border border-emerald-200'
+              }`}>
+                <RotateCcw size={16} className={makeupsOutstanding.length > 0 ? 'text-amber-600' : 'text-emerald-600'} aria-hidden="true" />
+                <h3 className={`text-sm font-semibold ${makeupsOutstanding.length > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
+                  Make-Up Hours
+                  <span className="font-normal opacity-70 ml-1">(approved absence last week)</span>
+                </h3>
+              </div>
+              <div className="space-y-2">
+                {makeups.map(m => (
+                  <div
+                    key={m.requestId}
+                    className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border text-sm ${
+                      m.complete ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-surface-900">{m.courseId || 'Class'} <span className="text-xs font-normal text-surface-400">· {m.requestId}</span></div>
+                      <div className="text-xs text-surface-500">
+                        {fmtH(m.owed)} hr owed · must be logged on {m.windowDays.length > 0 ? m.windowDays.map(fmtDay).join(' / ') : 'the first two lab days'}
+                      </div>
+                    </div>
+                    {m.complete ? (
+                      <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700 whitespace-nowrap">
+                        <CheckCircle2 size={14} aria-hidden="true" /> {fmtH(m.logged)}/{fmtH(m.owed)} hr — Complete
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs font-semibold text-amber-700 whitespace-nowrap">
+                        <Clock size={14} aria-hidden="true" /> {fmtH(m.logged)}/{fmtH(m.owed)} hr — {fmtH(m.owed - m.logged)} short
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {makeupsOutstanding.length > 0 ? (
+                  <div role="alert" className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 font-medium">
+                    <AlertTriangle size={14} className="flex-shrink-0 mt-px" aria-hidden="true" />
+                    <span>
+                      Make-up hours are still outstanding. Marking All Done records this week's hours as fulfilled
+                      (base + make-up) even though the make-up time hasn't been logged — instructor's call.
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 font-medium">
+                    <CheckCircle2 size={14} aria-hidden="true" />
+                    All make-up hours logged
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* ── OPEN WORK ORDERS (assigned to student) ── */}
           <div className={`px-6 py-4 border-b ${hasOpenWOs && anyWOMissingLog ? 'border-red-200 bg-red-50/30' : hasOpenWOs && !anyWOMissingLog ? 'border-emerald-200 bg-emerald-50/30' : 'border-surface-200'}`}>
