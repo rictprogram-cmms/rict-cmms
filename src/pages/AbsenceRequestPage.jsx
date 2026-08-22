@@ -213,13 +213,6 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
   const makeupNoteId = useId()
   const dialogRef = useDialogA11y(open, onClose)
 
-  // Selected class (for its end_date / label in the make-up note)
-  const selectedClass = useMemo(() => {
-    if (!classChoice) return null
-    const [cid] = classChoice.split('|')
-    return classes.find(c => c.class_id === cid) || null
-  }, [classChoice, classes])
-
   const { students, loading: studentsLoading } = useAbsenceStudentOptions({ enabled: open && canSubmitOnBehalf })
 
   // On-behalf: classes follow the SELECTED student's enrollment; self: own.
@@ -229,6 +222,13 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
   )
   const classFilterProfile = canSubmitOnBehalf ? selectedStudent : profile
   const { classes, loading: classesLoading } = useAbsenceClasses(classFilterProfile)
+
+  // Selected class (for its end_date / label in the make-up note)
+  const selectedClass = useMemo(() => {
+    if (!classChoice) return null
+    const [cid] = classChoice.split('|')
+    return classes.find(c => c.class_id === cid) || null
+  }, [classChoice, classes])
 
   function resetForm() {
     setStudentEmail('')
