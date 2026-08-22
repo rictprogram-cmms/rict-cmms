@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
+import { fetchMakeupOverlay, getMakeupInfo, mondayKeyOf, firstTwoLabDays } from '@/hooks/useMakeupHours'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -419,7 +420,10 @@ export function useLabCalendarActions() {
 
 export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1, 2, 3, 4]) {
   const { profile } = useAuth()
-  const [data, setData] = useState({ weeks: [], hours: [], slots: {}, classes: [] })
+  // makeup: { [weekStartKey]: { [courseId]: { hours, requests, windowDays } } }
+  //   — approved-absence make-up hours that add to a class's required hours
+  //     for that week (see useMakeupHours.js). Students / Work Study only.
+  const [data, setData] = useState({ weeks: [], hours: [], slots: {}, classes: [], makeup: {} })
   const [loading, setLoading] = useState(true)
 
   const fetch = useCallback(async () => {
@@ -496,10 +500,20 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
       // 3. Get signups
       const { data: signupData } = await supabase
         .from('lab_signup')
-        .select('signup_id, user_email, class_id, date, start_time')
+        .select('signup_id, user_email, class_id, date, start_time, is_makeup, makeup_request_id')
         .neq('status', 'Cancelled')
         .gte('date', firstWeek.toISOString())
         .lte('date', overallEnd.toISOString())
+
+      // 3b. Make-up hours overlay (approved absences → next week's requirement)
+      let makeupOverlay = { byKey: {}, requests: [] }
+      if (classes.length > 0) {
+        makeupOverlay = await fetchMakeupOverlay({
+          emails: [profile.email],
+          rangeStart: formatDateKey(firstWeek),
+          rangeEnd: formatDateKey(overallEnd),
+        })
+      }
 
       const signupsByKey = {}
       ;(signupData || []).forEach(row => {
@@ -512,6 +526,8 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
           signupId: row.signup_id,
           userEmail: row.user_email,
           classId: row.class_id || '',
+          isMakeup: !!row.is_makeup,
+          makeupRequestId: row.makeup_request_id || '',
         })
       })
 
@@ -520,6 +536,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
       const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
       const weeks = []
       const slots = {}
+      const makeup = {}
 
       for (let w = 0; w < weeksToDisplay; w++) {
         const ws = new Date(firstWeek)
@@ -565,10 +582,14 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
 
             let mySignupId = ''
             let myClassId = ''
+            let myIsMakeup = false
+            let myMakeupRequestId = ''
             signups.forEach(s => {
               if (s.userEmail === profile.email) {
                 mySignupId = s.signupId
                 myClassId = s.classId || ''
+                myIsMakeup = !!s.isMakeup
+                myMakeupRequestId = s.makeupRequestId || ''
               }
             })
 
@@ -593,21 +614,43 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
               closureReason: closureReason || '',
               mySignupId,
               myClassId,
+              myIsMakeup,
+              myMakeupRequestId,
               deadlinePassed: weekDeadlinePassed,
             }
           })
         }
 
+        const weekStartKey = formatDateKey(ws)
+
+        // Make-up hours for this week, per class. Lab-signup weeks start on
+        // Sunday; the overlay is keyed by Monday, so look up the Monday of
+        // this week. Make-up slots must land on the first two OPEN lab days.
+        const mondayKey = mondayKeyOf(formatDateKey(new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() + 1)))
+        const weekMakeup = {}
+        for (const cls of classes) {
+          const info = getMakeupInfo(makeupOverlay, profile.email, mondayKey, cls.courseId)
+            || getMakeupInfo(makeupOverlay, profile.email, mondayKey, cls.classId)
+          if (info) {
+            weekMakeup[cls.courseId] = {
+              hours: info.hours,
+              requests: info.requests,
+              windowDays: firstTwoLabDays(days, visibleDays),
+            }
+          }
+        }
+        if (Object.keys(weekMakeup).length > 0) makeup[weekStartKey] = weekMakeup
+
         weeks.push({
           weekIndex: w,
-          weekStart: formatDateKey(ws),
+          weekStart: weekStartKey,
           weekTitle,
           days,
           deadlinePassed: weekDeadlinePassed,
         })
       }
 
-      setData({ weeks, hours: allHours, slots, classes })
+      setData({ weeks, hours: allHours, slots, classes, makeup })
     } catch (err) {
       console.error('Error loading lab signup data:', err)
       toast.error('Failed to load lab data')
@@ -640,9 +683,13 @@ export function useLabSignupActions() {
 
   /**
    * signUpBatchMultiClass - takes a map of { classId: [slotKey, ...] }
-   * and inserts all signups in one batch
+   * and inserts all signups in one batch.
+   *
+   * @param {Object} [makeupTags]  { [slotKey]: absenceRequestId } — slots that
+   *   satisfy an approved absence make-up are saved with is_makeup = true and
+   *   makeup_request_id so Time Cards / the absence record can trace them.
    */
-  const signUpBatchMultiClass = async (selectionsByClass) => {
+  const signUpBatchMultiClass = async (selectionsByClass, makeupTags = {}) => {
     setSaving(true)
     try {
       // Get next signup ID
@@ -696,6 +743,8 @@ export function useLabSignupActions() {
             end_time: endTime,
             status: 'Confirmed',
             created_at: new Date().toISOString(),
+            is_makeup: !!makeupTags[sel],
+            makeup_request_id: makeupTags[sel] || null,
           })
         }
       }
@@ -703,7 +752,8 @@ export function useLabSignupActions() {
       if (rows.length > 0) {
         const { error } = await supabase.from('lab_signup').insert(rows)
         if (error) throw error
-        toast.success(`Signed up for ${rows.length} slot(s)`)
+        const muCount = rows.filter(r => r.is_makeup).length
+        toast.success(`Signed up for ${rows.length} slot(s)${muCount > 0 ? ` (${muCount} make-up)` : ''}`)
       }
       return { success: true, count: rows.length }
     } catch (err) {
@@ -821,6 +871,8 @@ export function useMySignups() {
           classId: s.class_id || '',
           status: s.status,
           canCancel: s.status !== 'Cancelled',
+          isMakeup: !!s.is_makeup,
+          makeupRequestId: s.makeup_request_id || '',
         }
       }))
     }

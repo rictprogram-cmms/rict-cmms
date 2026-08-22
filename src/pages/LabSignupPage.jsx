@@ -9,13 +9,23 @@ import {
   timeToMinutes, minutesToTimeStr, findOverlappingClosure,
 } from '@/hooks/useLabSignup'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 import {
   Calendar, Clock, ChevronLeft, ChevronRight, Plus, X, Trash2,
   CheckCircle2, XCircle, Users, UserPlus, Printer, AlertTriangle,
-  Info, CalendarDays, ClipboardList, Shield, Loader2, Ban, Mail,
+  Info, CalendarDays, ClipboardList, Shield, Loader2, Ban, Mail, RotateCcw,
 } from 'lucide-react'
+
+/** 'YYYY-MM-DD' → 'Mon 8/24' (local parse — never toISOString on date-only strings) */
+function formatShortDay(dateStr) {
+  if (!dateStr) return ''
+  const d = new Date(dateStr + 'T00:00:00')
+  if (isNaN(d.getTime())) return dateStr
+  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  return `${names[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAB NAVIGATION
@@ -127,6 +137,8 @@ function WeeklySignupTab() {
   const [reason, setReason] = useState('')
   // Instructor slot detail modal
   const [slotDetail, setSlotDetail] = useState(null) // { date, hour, students: [], loading }
+  // Make-up shortfall warning before submit: { weekIdx, lines: [string] }
+  const [makeupWarn, setMakeupWarn] = useState(null)
 
   const openSlotDetail = useCallback(async (dateKey, hour, slot) => {
     const dt = new Date(dateKey + 'T12:00:00')
@@ -172,7 +184,7 @@ function WeeklySignupTab() {
     }
   }, [])
 
-  const { weeks, hours, slots, classes, loading, refresh } = useLabSignupData(
+  const { weeks, hours, slots, classes, makeup, loading, refresh } = useLabSignupData(
     settingsLoaded ? weekStart.toISOString() : null, labSettings.weeksToDisplay, labSettings.visibleDays
   )
   const { signUpBatchMultiClass, cancelSignup, submitPostDeadlineRequest, saving } = useLabSignupActions()
@@ -293,6 +305,49 @@ function WeeklySignupTab() {
     return getExistingWeekSignups(weekIdx, courseId) + getNewWeekSelections(weekIdx, courseId)
   }, [getExistingWeekSignups, getNewWeekSelections])
 
+  // ── Make-up hours (approved absences → this week's requirement) ──
+  // For a week, per class with make-up hours owed: which selections/signups on
+  // the first two open lab days count as make-up, and whether the owed hours
+  // are covered. Returns:
+  //   { [courseId]: { hours, windowDays, covered, shortfall, tags: { slotKey: requestId } } }
+  const getWeekMakeupStatus = useCallback((weekIdx) => {
+    const week = weeks[weekIdx]
+    const weekMu = week ? makeup?.[week.weekStart] : null
+    if (!week || !weekMu) return {}
+    const result = {}
+    for (const [cid, mu] of Object.entries(weekMu)) {
+      const windowSet = new Set(mu.windowDays || [])
+      const needed = Math.ceil(mu.hours) // one slot = one hour
+      let covered = 0
+      // 1. Existing make-up signups (not being cancelled) count first
+      week.days.forEach(day => {
+        hours.forEach(hour => {
+          const slot = slots[`${day.date}_${hour}`]
+          if (slot?.mySignupId && slot.myClassId === cid && slot.myIsMakeup && !cancellations.includes(slot.mySignupId)) covered++
+        })
+      })
+      // 2. Then new selections on the window days, in time order, until covered
+      const reqId = mu.requests?.[0]?.requestId || ''
+      const tags = {}
+      const newSel = (selections[cid] || [])
+        .filter(k => windowSet.has(k.split('_')[0]))
+        .sort()
+      for (const k of newSel) {
+        if (covered >= needed) break
+        tags[k] = reqId
+        covered++
+      }
+      result[cid] = { hours: mu.hours, needed, windowDays: mu.windowDays || [], covered, shortfall: Math.max(0, needed - covered), tags, requests: mu.requests || [] }
+    }
+    return result
+  }, [weeks, makeup, hours, slots, selections, cancellations])
+
+  // Effective required hours for a class tile = base + make-up for that week
+  const getWeekMakeupHours = useCallback((weekIdx, courseId) => {
+    const week = weeks[weekIdx]
+    return week ? (makeup?.[week.weekStart]?.[courseId]?.hours || 0) : 0
+  }, [weeks, makeup])
+
   // ── Get all week selections (new) across all classes for a specific week ──
   const getWeekAllNewSelections = useCallback((weekIdx) => {
     const week = weeks[weekIdx]
@@ -351,6 +406,18 @@ function WeeklySignupTab() {
       return
     }
 
+    // Make-up hours not fully scheduled on the first two lab days? Warn first.
+    if (!isInstructor) {
+      const mu = getWeekMakeupStatus(weekIdx)
+      const lines = Object.entries(mu)
+        .filter(([, v]) => v.shortfall > 0)
+        .map(([cid, v]) => `${cid}: ${v.shortfall} of ${v.needed} make-up hour${v.needed === 1 ? '' : 's'} still need${v.shortfall === 1 ? 's' : ''} a slot on ${v.windowDays.map(d => formatShortDay(d)).join(' or ')}`)
+      if (lines.length > 0) {
+        setMakeupWarn({ weekIdx, lines })
+        return
+      }
+    }
+
     // Normal flow — direct submit
     await executeSubmit(weekIdx)
   }
@@ -358,6 +425,9 @@ function WeeklySignupTab() {
   const executeSubmit = async (weekIdx) => {
     const weekNewSelections = getWeekAllNewSelections(weekIdx)
     const weekCancelIds = getWeekCancellations(weekIdx)
+    // Slots that satisfy an approved absence make-up → saved with is_makeup
+    const makeupTags = isInstructor ? {} : Object.values(getWeekMakeupStatus(weekIdx))
+      .reduce((acc, v) => Object.assign(acc, v.tags), {})
 
     // Process cancellations
     for (const id of weekCancelIds) {
@@ -366,7 +436,7 @@ function WeeklySignupTab() {
 
     // Process new signups
     if (Object.values(weekNewSelections).some(arr => arr.length > 0)) {
-      const result = await signUpBatchMultiClass(weekNewSelections)
+      const result = await signUpBatchMultiClass(weekNewSelections, makeupTags)
       if (!result.success) return
     }
 
@@ -496,6 +566,8 @@ function WeeklySignupTab() {
       {/* Weeks */}
       {weeks.map((week, wIdx) => {
         const changeCount = getWeekChangeCount(wIdx)
+        // Make-up status for this week (computed once per week, not per cell)
+        const weekMuStatus = (!isInstructor && makeup?.[week.weekStart]) ? getWeekMakeupStatus(wIdx) : null
         return (
           <div key={week.weekStart} className="bg-white rounded-xl border border-surface-200 overflow-hidden">
             {/* Week Header */}
@@ -516,14 +588,22 @@ function WeeklySignupTab() {
                 <div className="flex gap-2 overflow-x-auto">
                   {classes.map(cls => {
                     const progress = getWeekProgress(wIdx, cls.courseId)
-                    const required = cls.requiredHours
+                    const muHours = getWeekMakeupHours(wIdx, cls.courseId)
+                    const required = cls.requiredHours + muHours
                     const isActive = activeClassId === cls.courseId
                     const isComplete = required > 0 && progress >= required
+                    const muStatus = muHours > 0 ? weekMuStatus?.[cls.courseId] : null
+                    const muLabel = muHours > 0
+                      ? ` Includes ${muHours} make-up hour${muHours === 1 ? '' : 's'} from an approved absence — schedule on ${(muStatus?.windowDays || []).map(d => formatShortDay(d)).join(' or ')}.`
+                      : ''
 
                     return (
                       <button
                         key={cls.courseId}
                         onClick={() => setActiveClassId(cls.courseId)}
+                        aria-pressed={isActive}
+                        aria-label={`${cls.courseId} ${cls.courseName}: ${progress} of ${required} hours.${muLabel}`}
+                        title={muHours > 0 ? muLabel.trim() : undefined}
                         className={`flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg text-left border-2 transition-all min-w-[140px] ${
                           isActive
                             ? 'border-brand-500 bg-brand-50 shadow-sm'
@@ -555,6 +635,17 @@ function WeeklySignupTab() {
                               {progress}/{required}
                             </span>
                           </div>
+                        )}
+                        {/* Make-up badge (approved absence hours added to this week) */}
+                        {muHours > 0 && (
+                          <span
+                            className={`mt-1 inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                              muStatus && muStatus.shortfall === 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-violet-100 text-violet-700'
+                            }`}
+                            aria-hidden="true"
+                          >
+                            <RotateCcw size={9} /> +{muHours} make-up{muStatus ? ` · ${muStatus.covered}/${muStatus.needed}` : ''}
+                          </span>
                         )}
                       </button>
                     )
@@ -593,6 +684,9 @@ function WeeklySignupTab() {
                         const isMarkedCancel = isMine && cancellations.includes(slot.mySignupId)
                         const owningClass = classForSlot(key)
                         const isSelected = !!owningClass
+                        // Make-up tagging: existing make-up signup, or a new selection that covers owed hours
+                        const isMakeupSlot = (isMine && slot.myIsMakeup) ||
+                          (isSelected && !!weekMuStatus?.[owningClass]?.tags?.[key])
 
                         // Lunch slots are now selectable — removed isLunch blocks
                         const canSelect = slot.isOpen && !slot.isFull && !isMine && !isSelected
@@ -615,6 +709,10 @@ function WeeklySignupTab() {
                         // Helper: lunch badge overlay
                         const lunchBadge = isLunch ? (
                           <span className="absolute top-0.5 right-0.5 text-[6px] font-bold bg-orange-400 text-white px-1 rounded leading-tight">LUNCH</span>
+                        ) : null
+                        // Helper: make-up badge overlay (top-left so it doesn't collide with LUNCH)
+                        const makeupBadge = isMakeupSlot ? (
+                          <span className="absolute top-0.5 left-0.5 text-[6px] font-bold bg-violet-500 text-white px-1 rounded leading-tight">MU</span>
                         ) : null
 
                         if (!slot.isOpen) {
@@ -689,8 +787,8 @@ function WeeklySignupTab() {
                           : isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up — click for details`
                           : isMarkedCancel ? 'Click to undo cancel'
                           : isMine && isLunch ? 'Lunch hour — click to cancel'
-                          : isMine ? 'Click to cancel this signup'
-                          : isSelected ? `${owningClass} — click to deselect`
+                          : isMine ? `Click to cancel this signup${isMakeupSlot ? ' (make-up hour)' : ''}`
+                          : isSelected ? `${owningClass}${isMakeupSlot ? ' make-up hour' : ''} — click to deselect`
                           : slot.isFull ? 'No spots available'
                           : isLunch ? `Lunch hour — ${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} (instructor on break)`
                           : `${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} open${slot.deadlinePassed && !isInstructor ? ' (requires approval)' : ''}`
@@ -705,6 +803,7 @@ function WeeklySignupTab() {
                               disabled={!slot.isOpen}
                             >
                               {lunchBadge}
+                              {makeupBadge}
                               {cellContent}
                             </button>
                           </td>
@@ -781,6 +880,29 @@ function WeeklySignupTab() {
         )
       })}
 
+      {/* Make-up shortfall warning (not blocking — instructor still has the final say) */}
+      {makeupWarn && (
+        <ConfirmDialog
+          open
+          variant="primary"
+          title="Make-up hours not fully scheduled"
+          message={
+            <div className="space-y-2">
+              <p>Per program policy, make-up hours are completed on the first two lab days of the week.</p>
+              <ul className="list-disc pl-5 space-y-1">
+                {makeupWarn.lines.map(l => <li key={l}>{l}</li>)}
+              </ul>
+              <p>Submit anyway, or go back and add slots on those days?</p>
+            </div>
+          }
+          confirmLabel="Submit anyway"
+          cancelLabel="Go back"
+          busy={saving}
+          onConfirm={async () => { const idx = makeupWarn.weekIdx; setMakeupWarn(null); await executeSubmit(idx) }}
+          onClose={() => setMakeupWarn(null)}
+        />
+      )}
+
       {/* Legend */}
       <div className="flex flex-wrap gap-4 justify-center text-xs text-surface-500 bg-white rounded-xl border border-surface-200 p-3">
         <span className="flex items-center gap-1.5">
@@ -794,6 +916,10 @@ function WeeklySignupTab() {
         <span className="flex items-center gap-1.5">
           <span className="w-4 h-4 rounded-sm bg-amber-100 border-2 border-amber-400 flex items-center justify-center text-[7px] text-amber-800 font-bold">ID</span>
           Your Signup
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-4 h-4 rounded-sm bg-violet-500 flex items-center justify-center text-[6px] text-white font-bold">MU</span>
+          Make-up hour (approved absence)
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-4 h-4 rounded-sm bg-red-100 border-2 border-red-400" />
@@ -982,6 +1108,14 @@ function MySignupsTab() {
                     <span className="ml-2 px-1.5 py-0.5 rounded bg-surface-100 text-surface-600 font-medium">
                       {s.classId}
                       {classMap[s.classId] && <span className="text-surface-400 font-normal"> — {classMap[s.classId]}</span>}
+                    </span>
+                  )}
+                  {s.isMakeup && (
+                    <span
+                      className="ml-2 px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold"
+                      title={s.makeupRequestId ? `Make-up hour for absence ${s.makeupRequestId}` : 'Make-up hour'}
+                    >
+                      Make-up{s.makeupRequestId ? ` · ${s.makeupRequestId}` : ''}
                     </span>
                   )}
                 </div>

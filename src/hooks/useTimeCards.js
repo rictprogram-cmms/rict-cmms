@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry } from '@/lib/supabaseRetry'
 import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
+import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -94,6 +95,28 @@ function toSafeDateStr(d) {
   return `${yr}-${mo}-${dy}`
 }
 
+/**
+ * Make-up hours (approved absences → following week) for one student + course
+ * whose make-up week Monday falls inside [rangeStart, rangeEnd] (date strings).
+ * Class weeks can start on Sunday, so we match by "Monday within the week
+ * range" rather than by an exact key. Returns { hours, requestIds }.
+ */
+function makeupHoursInRange(overlay, email, courseId, classId, rangeStart, rangeEnd) {
+  const out = { hours: 0, requestIds: [] }
+  if (!overlay?.requests?.length || !rangeStart || !rangeEnd) return out
+  const e = (email || '').toLowerCase().trim()
+  for (const r of overlay.requests) {
+    if ((r.user_email || '').toLowerCase().trim() !== e) continue
+    const mk = r.makeupWeekMonday
+    if (!mk || mk < rangeStart || mk > rangeEnd) continue
+    const matches = (courseId && r.course_id === courseId) || (classId && r.class_id === classId)
+    if (!matches) continue
+    out.hours += Number(r.hours_missed) || 0
+    out.requestIds.push(r.request_id)
+  }
+  return out
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // REPORT GENERATION — single source of truth for per-user attendance reports.
 //
@@ -148,6 +171,14 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
     (enrolledClassIds.includes(c.class_id) || enrolledClassIds.includes(c.course_id)) &&
     classActiveInRange(c, reportStart, reportEnd)
   )
+
+  // 2b. Make-up hours overlay (approved absences add to next week's requirement)
+  let makeupOverlay = { byKey: {}, requests: [] }
+  if (userEmail) {
+    try {
+      makeupOverlay = await fetchMakeupOverlay({ emails: [userEmail], rangeStart: reportStart, rangeEnd: reportEnd })
+    } catch {}
+  }
 
   // 3. Fetch weekly_lab_tracker
   let labTrackerData = []
@@ -394,7 +425,10 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       const wkClosed = labStatus.allDone || labStatus.requiredHoursMet ||
         weekEntries.some(e => e.entry_type === 'All Done') ||
         hasUserAllDoneThisWeek
-      const wkRequired = data.requiredHoursPerWeek || 0
+      // Make-up hours owed this week (approved absence the week before) are
+      // added to the base requirement — matches the Lab Signup tile.
+      const mu = makeupHoursInRange(makeupOverlay, userEmail, cfg?.course_id || courseId, cfg?.class_id, wkStartStr, wkEndStr)
+      const wkRequired = (data.requiredHoursPerWeek || 0) + mu.hours
       let wkBase = 100
       if (!wkClosed && wkRequired > 0 && weekHours < wkRequired) {
         wkBase = Math.min(100, Math.round((weekHours / wkRequired) * 100))
@@ -406,8 +440,11 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         startDate: wkStartStr, endDate: wkEndStr,
         isFinals: wk.isFinals, entries: weekEntries,
         hours: Math.round(weekHours * 100) / 100,
-        requiredHours: data.requiredHoursPerWeek,
-        metHours: weekHours >= data.requiredHoursPerWeek,
+        requiredHours: wkRequired,                       // base + make-up
+        baseRequiredHours: data.requiredHoursPerWeek,
+        makeupHours: mu.hours,
+        makeupRequestIds: mu.requestIds,
+        metHours: weekHours >= wkRequired,
         labComplete: labStatus.labComplete,
         // Propagate allDone / requiredHoursMet across classes so the Done column
         // and "weeksDone" / "weeksWithHours" summary tallies reflect the closure.
@@ -451,7 +488,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
     const weeksWithLab = filteredWeeks.filter(w => w.labComplete).length
     const weeksWithHours = filteredWeeks.filter(w => w.metHours || w.requiredHoursMet).length
     const weeksDone = filteredWeeks.filter(w => w.allDone).length
-    const totalRequiredHours = data.requiredHoursPerWeek * filteredWeeks.length
+    const totalRequiredHours = filteredWeeks.reduce((sum, w) => sum + (w.requiredHours || 0), 0)
 
     return {
       courseId, courseName: data.courseName || '',
@@ -886,6 +923,14 @@ export function useTimeCardData() {
         classesData = data || []
       }
 
+      // Make-up hours for this period (approved absence the week before)
+      let makeupOverlay = { byKey: {}, requests: [] }
+      if (userEmail) {
+        try {
+          makeupOverlay = await fetchMakeupOverlay({ emails: [userEmail], rangeStart: startDate, rangeEnd: endDate })
+        } catch {}
+      }
+
       // Build the final classHrs map using date-range awareness:
       //   - Enrolled class whose date window overlaps the selected range: always show
       //     (even 0 hrs — student is expected to be attending)
@@ -1010,11 +1055,17 @@ export function useTimeCardData() {
         const isInRange = classActiveInRange(c, startDate, endDate)
         const closure = weekClosedByCourse[key] || { allDone: false, requiredHoursMet: false }
 
+        const mu = makeupHoursInRange(makeupOverlay, userEmail, c.course_id, c.class_id, startDate, endDate)
+        const baseReq = parseFloat(c.required_hours) || 0
+
         if (isEnrolled && isInRange) {
           // Class was running during this period — always show tile
           classHrs[key] = {
             hours: classHrsFromEntries[key]?.hours || 0,
-            requiredHours: parseFloat(c.required_hours) || 0,
+            requiredHours: baseReq + mu.hours,
+            baseRequiredHours: baseReq,
+            makeupHours: mu.hours,
+            makeupRequestIds: mu.requestIds,
             courseName: c.course_name || '',
             allDone: closure.allDone,
             requiredHoursMet: closure.requiredHoursMet,
@@ -1024,7 +1075,10 @@ export function useTimeCardData() {
           // still show so history isn't lost
           classHrs[key] = {
             hours: classHrsFromEntries[key].hours,
-            requiredHours: parseFloat(c.required_hours) || 0,
+            requiredHours: baseReq + mu.hours,
+            baseRequiredHours: baseReq,
+            makeupHours: mu.hours,
+            makeupRequestIds: mu.requestIds,
             courseName: c.course_name || '',
             allDone: closure.allDone,
             requiredHoursMet: closure.requiredHoursMet,
@@ -1242,6 +1296,13 @@ export function useTimeCardData() {
           fetchTimeCard(userId, startDate, endDate)
         }
       })
+      // Approved/changed absence requests move make-up hours between weeks
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, () => {
+        if (lastFetchParamsRef.current) {
+          const { userId, startDate, endDate } = lastFetchParamsRef.current
+          fetchTimeCard(userId, startDate, endDate)
+        }
+      })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [fetchTimeCard])
@@ -1304,8 +1365,16 @@ export function useClassWeeklyReport() {
         tcRecords = data || []
       }
 
-      // Fetch lab signups for all enrolled students for attendance flags
+      // Make-up hours owed this period, per student (approved absences)
       const emails = enrolled.map(u => u.email).filter(Boolean)
+      let makeupOverlay = { byKey: {}, requests: [] }
+      if (emails.length > 0) {
+        try {
+          makeupOverlay = await fetchMakeupOverlay({ emails, rangeStart: startDate, rangeEnd: endDate })
+        } catch {}
+      }
+
+      // Fetch lab signups for all enrolled students for attendance flags
       let allSignups = []
       if (emails.length > 0) {
         try {
@@ -1433,14 +1502,17 @@ export function useClassWeeklyReport() {
           if (earlyFlagRecords.has(r.record_id) && r.entry_type === 'Left Early') earlyCount++
         })
 
+        const userMakeup = makeupHoursInRange(makeupOverlay, u.email, courseId, classId, startDate, endDate)
         return {
           userId: u.user_id,
           name: `${u.first_name} ${(u.last_name || '').charAt(0)}.`,
           fullName: `${u.first_name} ${u.last_name}`,
           role: u.role,
           totalHours: roundToMinute(totalHours),
-          requiredHours,
-          metRequirement: totalHours >= requiredHours,
+          requiredHours: requiredHours + userMakeup.hours,     // base + make-up
+          baseRequiredHours: requiredHours,
+          makeupHours: userMakeup.hours,
+          metRequirement: totalHours >= requiredHours + userMakeup.hours,
           entryCount: userRecords.length,
           lateCount,
           earlyCount,

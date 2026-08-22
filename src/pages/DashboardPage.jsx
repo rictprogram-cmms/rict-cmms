@@ -859,7 +859,9 @@ function buildWeekReason(wk) {
   if (reasons.length === 0) {
     if (wk.metHours || wk.requiredHoursMet) return 'Hours met';
     if (wk.requiredHours > 0 && (wk.hours || 0) < wk.requiredHours) {
-      return `${formatHoursMin(wk.hours || 0)} of ${formatHoursMin(wk.requiredHours)}`;
+      // requiredHours already includes any make-up hours from an approved absence
+      const mu = wk.makeupHours > 0 ? ` (incl. ${formatHoursMin(wk.makeupHours)} make-up)` : '';
+      return `${formatHoursMin(wk.hours || 0)} of ${formatHoursMin(wk.requiredHours)}${mu}`;
     }
     return wk.isFinals ? 'Finals week' : '—';
   }

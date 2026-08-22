@@ -77,6 +77,23 @@ function formatTime(val) {
   } catch { return '—' }
 }
 
+/**
+ * Small "+N make-up" badge shown next to a required-hours figure when an
+ * approved absence added hours to that week (see useMakeupHours.js).
+ */
+function MakeupBadge({ hours, className = '' }) {
+  const n = Number(hours) || 0
+  if (n <= 0) return null
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 text-[10px] font-semibold ${className}`}
+      title={`Includes ${formatHours(n)} make-up hour${n === 1 ? '' : 's'} from an approved absence the previous week`}
+    >
+      +{formatHours(n)} make-up
+    </span>
+  )
+}
+
 function formatHours(h) {
   const totalMins = Math.round((Number(h) || 0) * 60)
   if (totalMins <= 0) return '0h'
@@ -1555,6 +1572,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                 {wk.requiredHours > 0 && (
                                   <span className="text-surface-400 font-normal ml-0.5">/{formatHours(wk.requiredHours)}</span>
                                 )}
+                                <MakeupBadge hours={wk.makeupHours} className="ml-1" />
                               </td>
                               {cr.requiredHoursPerWeek > 0 && (
                                 <td className="px-2 py-2 text-center">
@@ -1885,11 +1903,12 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   <div className="text-lg font-bold text-surface-900 mt-1">
                     {formatHours(data.hours)}
                     {data.requiredHours > 0 && <span className="text-xs font-normal text-surface-500 ml-1">/ {formatHours(data.requiredHours)} hrs</span>}
+                    <MakeupBadge hours={data.makeupHours} className="ml-1 align-middle" />
                   </div>
                   {data.requiredHours > 0 && (
                     <div className="mt-2 h-1.5 bg-surface-200 rounded-full overflow-hidden" role="progressbar"
                       aria-valuenow={Math.min(Math.round(pct), 100)} aria-valuemin={0} aria-valuemax={100}
-                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours`}>
+                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
                       <div className={`h-full rounded-full transition-all ${
                         tileGreen ? 'bg-green-500' : isBehind ? 'bg-amber-400' : 'bg-brand-500'
                       }`} style={{ width: `${weekClosed ? 100 : Math.min(pct, 100)}%` }} />
@@ -2097,7 +2116,10 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                   <td className="px-3 py-2.5 font-medium text-surface-800">{s.fullName}</td>
                   <td className="px-3 py-2.5 text-surface-500 text-xs">{s.role}</td>
                   <td className="px-3 py-2.5 text-right font-semibold text-surface-900">{formatHours(s.totalHours)}</td>
-                  <td className="px-3 py-2.5 text-right text-surface-500">{formatHours(s.requiredHours)}</td>
+                  <td className="px-3 py-2.5 text-right text-surface-500">
+                    {formatHours(s.requiredHours)}
+                    <MakeupBadge hours={s.makeupHours} className="ml-1" />
+                  </td>
                   <td className="px-3 py-2.5">
                     {s.metRequirement ? (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} /> Complete</span>

@@ -56,6 +56,30 @@ function pad(n, width) {
  * Parses with T00:00:00 (local midnight) per project convention to avoid
  * the UTC date-shift bug. Returns 'YYYY-MM-DD'.
  */
+/**
+ * Make-up week Monday = absence week_start + 7 days (Policy 4.3: hours are
+ * made up during the first two lab days of the FOLLOWING week). Returns
+ * 'YYYY-MM-DD' or null.
+ */
+export function makeupWeekOf(weekStartStr) {
+  if (!weekStartStr) return null
+  const d = new Date(weekStartStr + 'T00:00:00')
+  if (isNaN(d.getTime())) return null
+  d.setDate(d.getDate() + 7)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * True when the make-up week falls AFTER the class end date — nothing can be
+ * made up, so the missed hours are NOT added to any week (Policy #5).
+ * `classEndDate` may be null/undefined (treated as "still eligible").
+ */
+export function makeupPastClassEnd(weekStartStr, classEndDate) {
+  const mk = makeupWeekOf(weekStartStr)
+  if (!mk || !classEndDate) return false
+  return mk > String(classEndDate).substring(0, 10)
+}
+
 export function mondayOf(dateStr) {
   if (!dateStr) return null
   const d = new Date(dateStr + 'T00:00:00')
@@ -287,6 +311,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     if (!absenceDate) return { success: false, message: 'Missing absence date.' }
     if (!reason?.trim()) return { success: false, message: 'A reason is required.' }
     if (!makeupPlan?.trim()) return { success: false, message: 'A make-up plan is required.' }
+    if (!(Number(hoursMissed) > 0)) return { success: false, message: 'Hours missed is required (greater than 0).' }
 
     const weekStart = mondayOf(absenceDate)
     if (!weekStart) return { success: false, message: 'Invalid absence date.' }
@@ -412,11 +437,21 @@ export function useAbsenceRequests({ enabled = true } = {}) {
       const deductionLine = deductionStatus === 'Waived'
         ? 'The 20% assignment deduction is WAIVED (institutional excused absence).'
         : 'The automatic 20% assignment deduction applies (maximum score 80%) per program policy Section 5.2.'
+      // Make-up hours line: added to the following week's required lab hours
+      // unless the class has already ended (then they simply can't be made up).
+      const mkWeek = makeupWeekOf(request.week_start)
+      const hrs = Number(request.hours_missed) || 0
+      const pastEnd = makeupPastClassEnd(request.week_start, request.class_end_date)
+      const makeupLine = hrs > 0 && mkWeek && !pastEnd
+        ? ` ${hrs} make-up hour${hrs === 1 ? '' : 's'} for ${request.course_id || request.class_id || 'this class'} have been added to your required lab time for the week of ${formatDateHuman(mkWeek)} — sign up for them on the first two lab days of that week. They'll be marked complete automatically once you've logged the time.`
+        : hrs > 0 && pastEnd
+          ? ' This absence falls in the final week of the class, so the hours cannot be made up and were not added to a later week.'
+          : ''
       await sendAbsenceBellNotification(
         profile,
         request.user_email,
         `Absence Request Approved: ${request.request_id}`,
-        `Your absence request for ${formatDateHuman(request.absence_date)} was approved. ${deductionLine} Complete your make-up hours per your plan: "${request.makeup_plan}"`
+        `Your absence request for ${formatDateHuman(request.absence_date)} was approved. ${deductionLine}${makeupLine} Your plan: "${request.makeup_plan}"`
       )
 
       fetchRequests() // direct refresh — don't depend on realtime for our own writes
@@ -598,7 +633,7 @@ export function useAbsenceClasses(profileForFilter = null) {
       try {
         const { data } = await supabase
           .from('classes')
-          .select('class_id, course_id, course_name, status')
+          .select('class_id, course_id, course_name, status, end_date')
           .eq('status', 'Active')
           .order('course_id', { ascending: true })
         let list = data || []

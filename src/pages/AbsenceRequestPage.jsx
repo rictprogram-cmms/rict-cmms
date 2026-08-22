@@ -44,6 +44,8 @@ import {
   useAbsenceClasses,
   useAbsenceStudentOptions,
   mondayOf,
+  makeupWeekOf,
+  makeupPastClassEnd,
 } from '@/hooks/useAbsenceRequests'
 
 const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
@@ -91,6 +93,36 @@ function formatHours(h) {
   const n = Number(h) || 0
   if (n <= 0) return '—'
   return n % 1 === 0 ? `${n}h` : `${n.toFixed(2)}h`
+}
+
+/**
+ * Make-up week note shared by the submit form, approve modal and request card.
+ * Explains where the missed hours land (following week, first two lab days)
+ * or that they can't be made up because the class has ended (Policy #5).
+ */
+function MakeupWeekNote({ weekStart, hours, classEndDate, courseLabel, id }) {
+  const mk = makeupWeekOf(weekStart)
+  const hrs = Number(hours) || 0
+  if (!mk) return null
+  const pastEnd = makeupPastClassEnd(weekStart, classEndDate)
+  const hrsText = hrs > 0 ? `${hrs % 1 === 0 ? hrs : hrs.toFixed(2)} hour${hrs === 1 ? '' : 's'}` : 'The missed hours'
+
+  if (pastEnd) {
+    return (
+      <p id={id} role="note" className="flex items-start gap-1.5 text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5 mt-1">
+        <AlertTriangle size={12} className="flex-shrink-0 mt-px" aria-hidden="true" />
+        <span>
+          Final week of {courseLabel || 'this class'} — the hours can't be made up the following week and won't be added. The week's points are lost.
+        </span>
+      </p>
+    )
+  }
+  return (
+    <p id={id} role="note" className="text-[11px] text-surface-500 mt-1">
+      Make-up week: <span className="font-medium text-surface-700">{formatWeekLabel(mk).replace('Week of ', '')}</span>
+      {' '}— {hrsText} will be added to that week's required lab time (first two lab days).
+    </p>
+  )
 }
 
 /**
@@ -178,7 +210,15 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
   const titleId = useId()
   const errId = useId()
   const classHelpId = useId()
+  const makeupNoteId = useId()
   const dialogRef = useDialogA11y(open, onClose)
+
+  // Selected class (for its end_date / label in the make-up note)
+  const selectedClass = useMemo(() => {
+    if (!classChoice) return null
+    const [cid] = classChoice.split('|')
+    return classes.find(c => c.class_id === cid) || null
+  }, [classChoice, classes])
 
   const { students, loading: studentsLoading } = useAbsenceStudentOptions({ enabled: open && canSubmitOnBehalf })
 
@@ -217,6 +257,10 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
     }
     if (!absenceDate) {
       setFormError('Select the date of the absence.')
+      return
+    }
+    if (!(Number(hoursMissed) > 0)) {
+      setFormError('Enter the hours missed (greater than 0) — they\'re added to next week\'s required lab time.')
       return
     }
     if (!reason.trim()) {
@@ -384,24 +428,36 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
             </div>
             <div>
               <label htmlFor="abs-hours" className="block text-xs font-semibold text-surface-700 mb-1">
-                Hours Missed
+                Hours Missed <span className="text-red-600" aria-hidden="true">*</span>
               </label>
               <input
                 id="abs-hours"
                 type="number"
                 inputMode="decimal"
-                min="0"
+                min="0.25"
                 max="24"
                 step="0.25"
                 value={hoursMissed}
                 onChange={e => setHoursMissed(e.target.value)}
                 disabled={saving}
+                required
+                aria-required="true"
+                aria-describedby={makeupNoteId}
                 placeholder="e.g. 4"
                 className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm
                   focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
               />
             </div>
           </div>
+          {absenceDate && (
+            <MakeupWeekNote
+              id={makeupNoteId}
+              weekStart={mondayOf(absenceDate)}
+              hours={hoursMissed}
+              classEndDate={selectedClass?.end_date}
+              courseLabel={selectedClass?.course_id}
+            />
+          )}
 
           {/* Reason */}
           <div>
@@ -489,7 +545,15 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
 
   const titleId = useId()
   const groupId = useId()
+  const makeupNoteId = useId()
   const dialogRef = useDialogA11y(open, onClose)
+
+  // Class end_date drives the "final week — can't be made up" note
+  const { classes: allClasses } = useAbsenceClasses(null)
+  const reqClass = useMemo(() => {
+    if (!request) return null
+    return allClasses.find(c => c.class_id === request.class_id || c.course_id === request.course_id) || null
+  }, [allClasses, request])
 
   async function handleConfirm() {
     setFormError('')
@@ -497,7 +561,8 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
       setFormError('Choose the deduction outcome before approving.')
       return
     }
-    const result = await onConfirm(deduction, notes)
+    // Pass the class end date along so the hook can word the notification correctly
+    const result = await onConfirm(deduction, notes, reqClass?.end_date || null)
     if (result?.success) {
       setDeduction('')
       setNotes('')
@@ -535,6 +600,19 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
         </div>
 
         <div className="p-5 space-y-4">
+          {/* Where the make-up hours land */}
+          <div className="bg-surface-50 border border-surface-100 rounded-lg px-3 py-2 text-xs text-surface-600">
+            <span className="font-medium text-surface-700">{formatHours(request.hours_missed)} missed</span>
+            {' '}· {request.course_id || request.class_id || 'No class'} · {formatWeekLabel(request.week_start)}
+            <MakeupWeekNote
+              id={makeupNoteId}
+              weekStart={request.week_start}
+              hours={request.hours_missed}
+              classEndDate={reqClass?.end_date}
+              courseLabel={request.course_id || request.class_id}
+            />
+          </div>
+
           {/* Deduction decision */}
           <fieldset>
             <legend id={groupId} className="block text-xs font-semibold text-surface-700 mb-2">
@@ -696,7 +774,7 @@ function DeleteConfirmModal({ open, request, onClose, onConfirm, saving }) {
 // REQUEST CARD (shared by student + instructor views)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onApprove, onReject, onToggleMakeup, onDelete }) {
+function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onApprove, onReject, onToggleMakeup, onDelete, classEndDate = null }) {
   const isOnBehalf =
     req.submitted_by_email &&
     req.submitted_by_email.toLowerCase() !== (req.user_email || '').toLowerCase()
@@ -762,6 +840,14 @@ function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onAppr
           </span>
           <span className="text-surface-400">{formatWeekLabel(req.week_start)}</span>
         </div>
+        {req.status === 'Approved' && Number(req.hours_missed) > 0 && (
+          <MakeupWeekNote
+            weekStart={req.week_start}
+            hours={req.hours_missed}
+            classEndDate={classEndDate}
+            courseLabel={req.course_id || req.class_id}
+          />
+        )}
 
         <div className="bg-surface-50 rounded-lg px-3 py-2 text-xs text-surface-600 border border-surface-100">
           <span className="font-medium text-surface-500">Reason: </span>{req.reason}
@@ -863,6 +949,18 @@ export default function AbsenceRequestPage() {
   const canSubmitOnBehalf = hasPerm('submit_on_behalf')
   const canMarkMakeup = hasPerm('mark_makeup_complete')
 
+  // Class end dates (for the make-up week note on each card — Policy #5)
+  const { classes: allClassesForCards } = useAbsenceClasses(null)
+  const classEndById = useMemo(() => {
+    const m = {}
+    allClassesForCards.forEach(c => {
+      if (c.course_id) m[c.course_id] = c.end_date || null
+      if (c.class_id) m[c.class_id] = c.end_date || null
+    })
+    return m
+  }, [allClassesForCards])
+  const endDateFor = (req) => classEndById[req.course_id] ?? classEndById[req.class_id] ?? null
+
   // Delete is super-admin only (test cleanup). Checks the REAL account
   // (realProfile during emulation, profile otherwise) so an emulated user's
   // identity never grants it, and hides it while emulating so the emulated
@@ -934,8 +1032,8 @@ export default function AbsenceRequestPage() {
     return result
   }, [submitRequest])
 
-  const handleApproveConfirm = useCallback(async (deduction, notes) => {
-    const result = await approveRequest(approveTarget, deduction, notes)
+  const handleApproveConfirm = useCallback(async (deduction, notes, classEndDate = null) => {
+    const result = await approveRequest({ ...approveTarget, class_end_date: classEndDate }, deduction, notes)
     if (result?.success) toast.success(`Request ${approveTarget.request_id} approved`)
     return result
   }, [approveRequest, approveTarget])
@@ -1143,6 +1241,7 @@ export default function AbsenceRequestPage() {
                   onReject={setRejectTarget}
                   onToggleMakeup={handleToggleMakeup}
                   onDelete={setDeleteTarget}
+                  classEndDate={endDateFor(req)}
                 />
               ))}
             </div>
@@ -1193,6 +1292,7 @@ export default function AbsenceRequestPage() {
                   onReject={() => {}}
                   onToggleMakeup={() => {}}
                   onDelete={setDeleteTarget}
+                  classEndDate={endDateFor(req)}
                 />
               ))}
             </div>
