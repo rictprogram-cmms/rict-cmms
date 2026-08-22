@@ -18,15 +18,26 @@
  * - Auto-close: Completed items are automatically closed after 15 days,
  *   creating a changelog entry and bumping the version number
  * - Version bumping: Bug → patch (2.1.8 → 2.1.9), Feature → minor (2.1.8 → 2.2.0)
+ * - Screenshot attachments: paste (Ctrl+V), drag-and-drop, or browse in the
+ *   New/Edit Request modal; thumbnails + accessible lightbox in View
+ * - Pre-filled New Request via router state { prefill } (PageErrorBoundary
+ *   "Report this bug")
  */
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react'
+import React, { useState, useMemo, useCallback, useEffect, useRef, useId } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import toast from 'react-hot-toast'
 import { useAuth } from '@/contexts/AuthContext'
-import { useBugRequests, useBugActions, useChangelog, useBugRequestLookup, useAutoClose } from '@/hooks/useBugTracker'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import {
+  useBugRequests, useBugActions, useChangelog, useBugRequestLookup, useAutoClose,
+  MAX_SCREENSHOTS, SCREENSHOT_TYPES, validateScreenshot,
+} from '@/hooks/useBugTracker'
 import {
   Search, Plus, Bug, Lightbulb, Clock, CheckCircle2, Loader2,
   Eye, Edit3, Trash2, CheckCircle, XCircle, History, AlertCircle,
-  HelpCircle, X, Hourglass, ExternalLink, FileText, ChevronDown, ChevronRight
+  HelpCircle, X, Hourglass, ExternalLink, FileText, ChevronDown, ChevronRight,
+  Paperclip, ImagePlus, ZoomIn, ChevronLeft,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,6 +87,8 @@ function formatDate(val) {
 
 export default function BugTrackerPage() {
   const { profile } = useAuth()
+  const location = useLocation()
+  const navigate = useNavigate()
   const { requests, loading, refresh } = useBugRequests()
   const actions = useBugActions()
   const { entries: changelogEntries, loading: changelogLoading, refresh: refreshChangelog } = useChangelog()
@@ -120,6 +133,19 @@ export default function BugTrackerPage() {
 
   // Add-changelog-entry modal (super admin only)
   const [showAddChangelogModal, setShowAddChangelogModal] = useState(false)
+
+  // Pre-filled New Request (from PageErrorBoundary "Report this bug" or any
+  // navigate('/bug-tracker', { state: { prefill: { type, title, description } } }))
+  const [prefill, setPrefill] = useState(null)
+  useEffect(() => {
+    const pf = location.state?.prefill
+    if (pf && (pf.title || pf.description)) {
+      setPrefill(pf)
+      setShowAddModal(true)
+      // Clear the state so a refresh / back doesn't re-open the modal
+      navigate(location.pathname, { replace: true, state: null })
+    }
+  }, [location.state]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Active requests = exclude Closed (those appear in changelog)
   const activeRequests = useMemo(() =>
@@ -310,7 +336,18 @@ export default function BugTrackerPage() {
                   <tr key={item.request_id} className="hover:bg-surface-50 transition-colors">
                     <td className="px-4 py-2.5 font-semibold text-surface-900 text-xs">{item.request_id}</td>
                     <td className="px-4 py-2.5"><Badge text={item.type} styleMap={TYPE_STYLES} /></td>
-                    <td className="px-4 py-2.5 text-surface-700 max-w-xs truncate">{item.title}</td>
+                    <td className="px-4 py-2.5 text-surface-700 max-w-xs truncate">
+                      {item.title}
+                      {Array.isArray(item.screenshots) && item.screenshots.length > 0 && (
+                        <span
+                          className="inline-flex items-center gap-0.5 ml-2 text-[10px] text-surface-400 align-middle"
+                          title={`${item.screenshots.length} screenshot(s) attached`}
+                          aria-label={`${item.screenshots.length} screenshot${item.screenshots.length === 1 ? '' : 's'} attached`}
+                        >
+                          <Paperclip size={11} aria-hidden="true" />{item.screenshots.length}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5"><Badge text={item.priority} styleMap={PRIORITY_STYLES} /></td>
                     <td className="px-4 py-2.5"><Badge text={item.status} styleMap={STATUS_STYLES} /></td>
                     <td className="px-4 py-2.5 text-surface-600 text-xs">{item.submitted_by || '—'}</td>
@@ -384,7 +421,8 @@ export default function BugTrackerPage() {
       {/* ─── Modals ────────────────────────────────────────────────────── */}
       {showAddModal && (
         <AddEditModal
-          onClose={() => setShowAddModal(false)}
+          initial={prefill}
+          onClose={() => { setShowAddModal(false); setPrefill(null) }}
           onSaved={handleSaved}
           actions={actions}
           canUpdateStatus={canUpdateStatus}
@@ -754,19 +792,64 @@ function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
 // ADD / EDIT MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMarkComplete }) {
+function AddEditModal({ item, initial, onClose, onSaved, actions, canUpdateStatus, canMarkComplete }) {
   const isEdit = !!item
   const [form, setForm] = useState({
-    type: item?.type || 'Bug',
-    priority: item?.priority || 'Medium',
-    title: item?.title || '',
-    description: item?.description || '',
+    type: item?.type || initial?.type || 'Bug',
+    priority: item?.priority || initial?.priority || 'Medium',
+    title: item?.title || initial?.title || '',
+    description: item?.description || initial?.description || '',
     status: item?.status || 'Open',
     resolution_notes: item?.resolution_notes || '',
     bumpVersionOnClose: true, // only used when status → Closed (super admin only)
   })
+  // Screenshots: pending = picked but not uploaded yet; existing = saved on the request
+  const [pending, setPending] = useState([])          // File[]
+  const [existing, setExisting] = useState(Array.isArray(item?.screenshots) ? item.screenshots : [])
+  const [uploadNote, setUploadNote] = useState('')    // aria-live status line
+
+  const titleId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
+
+  const addFiles = (fileList) => {
+    const files = Array.from(fileList || [])
+    if (files.length === 0) return
+    const next = [...pending]
+    const errors = []
+    for (const f of files) {
+      const err = validateScreenshot(f, existing.length + next.length)
+      if (err) { errors.push(err); continue }
+      next.push(f)
+    }
+    setPending(next)
+    const added = files.length - errors.length
+    setUploadNote(errors.length ? errors.join(' ') : `${added} screenshot${added === 1 ? '' : 's'} added.`)
+  }
+
+  // Paste anywhere in the modal (Snipping Tool / Print Screen → Ctrl+V)
+  const handlePaste = (e) => {
+    const items = Array.from(e.clipboardData?.items || [])
+    const imgs = items
+      .filter(i => i.kind === 'file' && SCREENSHOT_TYPES.includes(i.type))
+      .map(i => i.getAsFile())
+      .filter(Boolean)
+    if (imgs.length === 0) return
+    e.preventDefault()
+    // Clipboard images arrive as "image.png" — give them a useful name
+    const stamped = imgs.map((f, i) => new File(
+      [f],
+      `pasted-${Date.now()}-${i + 1}.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`,
+      { type: f.type }
+    ))
+    addFiles(stamped)
+  }
+
+  const handleRemoveExisting = async (shot) => {
+    const ok = await actions.removeScreenshot(item.request_id, shot.path)
+    if (ok) setExisting(list => list.filter(x => x.path !== shot.path))
+  }
 
   const handleSave = async () => {
     if (!form.title.trim()) return
@@ -785,13 +868,24 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
           status: form.status,
           resolution_notes: form.resolution_notes.trim(),
         }, options)
+        if (pending.length > 0) {
+          const { failed } = await actions.uploadScreenshots(item.request_id, pending)
+          failed.forEach(msg => toast.error(msg))
+        }
       } else {
-        await actions.createRequest({
+        const res = await actions.createRequest({
           type: form.type,
           priority: form.priority,
           title: form.title.trim(),
           description: form.description.trim(),
         })
+        // Upload after the row exists so the storage path can use the request ID.
+        // The request is already saved — an upload failure only loses the image.
+        if (res?.requestId && pending.length > 0) {
+          const { uploaded, failed } = await actions.uploadScreenshots(res.requestId, pending)
+          failed.forEach(msg => toast.error(msg))
+          if (uploaded.length) toast.success(`${uploaded.length} screenshot${uploaded.length === 1 ? '' : 's'} attached`)
+        }
       }
       onSaved()
       onClose()
@@ -821,13 +915,27 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onPaste={handlePaste}
+        className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-          <h3 className="font-semibold text-surface-900">{isEdit ? 'Edit Request' : 'New Request'}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <h3 id={titleId} className="font-semibold text-surface-900">{isEdit ? 'Edit Request' : 'New Request'}</h3>
+          <button onClick={onClose} aria-label="Close" className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><X size={18} aria-hidden="true" /></button>
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
+          {initial && (
+            <div role="status" className="flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+              <AlertCircle size={14} className="shrink-0 mt-px" aria-hidden="true" />
+              Pre-filled from the page error. Add a screenshot of what you saw if you have one, then Submit.
+            </div>
+          )}
           {/* Type + Priority row */}
           <div className="grid grid-cols-2 gap-4">
             <Field label="Type *">
@@ -853,6 +961,17 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
               rows={4} placeholder="Detailed description, steps to reproduce, expected behavior, etc."
               className="input text-sm resize-none" />
           </Field>
+
+          {/* Screenshots */}
+          <ScreenshotDropZone
+            pending={pending}
+            existing={existing}
+            onAdd={addFiles}
+            onRemovePending={(idx) => setPending(list => list.filter((_, i) => i !== idx))}
+            onRemoveExisting={isEdit ? handleRemoveExisting : null}
+            note={uploadNote}
+            busy={actions.saving}
+          />
 
           {/* Status (only for edit, requires update_status or mark_complete permission) */}
           {isEdit && (canUpdateStatus || canMarkComplete) && (
@@ -921,14 +1040,26 @@ function AddEditModal({ item, onClose, onSaved, actions, canUpdateStatus, canMar
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ViewModal({ item, onClose, onEdit }) {
+  const titleId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
+  const [lightbox, setLightbox] = useState(null)   // index into screenshots
+  const shots = Array.isArray(item.screenshots) ? item.screenshots : []
+
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-          <h3 className="font-semibold text-surface-900 truncate pr-4">
+          <h3 id={titleId} className="font-semibold text-surface-900 truncate pr-4">
             {item.request_id}: {item.title}
           </h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 shrink-0"><X size={18} /></button>
+          <button onClick={onClose} aria-label="Close" className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-surface-100 text-surface-400 shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><X size={18} aria-hidden="true" /></button>
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
@@ -949,6 +1080,32 @@ function ViewModal({ item, onClose, onEdit }) {
               {item.description || 'No description provided'}
             </p>
           </div>
+
+          {/* Screenshots */}
+          {shots.length > 0 && (
+            <div>
+              <h4 className="text-[11px] font-semibold text-surface-400 uppercase tracking-wider mb-1">
+                Screenshots ({shots.length})
+              </h4>
+              <ul className="grid grid-cols-3 gap-2 list-none p-0 m-0">
+                {shots.map((shot, i) => (
+                  <li key={shot.path || i}>
+                    <button
+                      type="button"
+                      onClick={() => setLightbox(i)}
+                      aria-label={`Open screenshot ${i + 1} of ${shots.length}: ${shot.name || 'image'}`}
+                      className="group relative block w-full aspect-video rounded-lg overflow-hidden border border-surface-200 bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                    >
+                      <img src={shot.url} alt="" className="w-full h-full object-cover" loading="lazy" />
+                      <span className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                        <ZoomIn size={18} className="text-white opacity-0 group-hover:opacity-100" aria-hidden="true" />
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Resolution Notes */}
           {item.resolution_notes && (
@@ -972,7 +1129,181 @@ function ViewModal({ item, onClose, onEdit }) {
           )}
         </div>
       </div>
+
+      {lightbox != null && (
+        <ScreenshotLightbox
+          shots={shots}
+          index={lightbox}
+          onIndex={setLightbox}
+          onClose={() => setLightbox(null)}
+        />
+      )}
     </ModalOverlay>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCREENSHOT DROP ZONE + LIGHTBOX
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Paste / drag-and-drop / browse picker for images. `pending` are Files not
+ * yet uploaded (shown via object URLs); `existing` are saved screenshots.
+ * Keyboard-operable throughout: the zone is a real <button>, each thumbnail's
+ * remove control is a labelled <button>, status goes through aria-live.
+ */
+function ScreenshotDropZone({ pending, existing, onAdd, onRemovePending, onRemoveExisting, note, busy }) {
+  const inputRef = useRef(null)
+  const [dragOver, setDragOver] = useState(false)
+  const noteId = useId()
+  const total = pending.length + existing.length
+  const full = total >= MAX_SCREENSHOTS
+
+  // Object URLs for pending previews — revoked when the list changes / unmounts
+  const previews = useMemo(() => pending.map(f => URL.createObjectURL(f)), [pending])
+  useEffect(() => () => previews.forEach(u => URL.revokeObjectURL(u)), [previews])
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="block text-xs font-medium text-surface-600">
+          Screenshots <span className="text-surface-400 font-normal">(optional · up to {MAX_SCREENSHOTS})</span>
+        </span>
+        <span className="text-[11px] text-surface-400" aria-hidden="true">{total}/{MAX_SCREENSHOTS}</span>
+      </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept={SCREENSHOT_TYPES.join(',')}
+        multiple
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={e => { onAdd(e.target.files); e.target.value = '' }}
+      />
+
+      <button
+        type="button"
+        disabled={full || busy}
+        onClick={() => inputRef.current?.click()}
+        onDragOver={e => { e.preventDefault(); if (!full) setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); if (!full) onAdd(e.dataTransfer.files) }}
+        aria-describedby={noteId}
+        className={`w-full min-h-[72px] rounded-lg border-2 border-dashed px-4 py-3 text-sm flex flex-col items-center justify-center gap-1 transition-colors
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
+          disabled:opacity-50 disabled:cursor-not-allowed
+          ${dragOver ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-surface-300 bg-surface-50 text-surface-600 hover:border-brand-400 hover:bg-brand-50/40'}`}
+      >
+        <ImagePlus size={20} aria-hidden="true" />
+        <span className="font-medium">{full ? 'Maximum reached' : 'Paste (Ctrl+V), drag & drop, or click to browse'}</span>
+        <span className="text-[11px] text-surface-400">PNG, JPG, WebP or GIF · large images are resized automatically</span>
+      </button>
+
+      <p id={noteId} role="status" aria-live="polite" className="text-[11px] text-surface-500 mt-1 min-h-[1em]">
+        {note || ''}
+      </p>
+
+      {(existing.length > 0 || pending.length > 0) && (
+        <ul className="grid grid-cols-3 gap-2 mt-2 list-none p-0 m-0">
+          {existing.map(shot => (
+            <li key={shot.path} className="relative aspect-video rounded-lg overflow-hidden border border-surface-200 bg-surface-50">
+              <img src={shot.url} alt={shot.name || 'Screenshot'} className="w-full h-full object-cover" loading="lazy" />
+              {onRemoveExisting && (
+                <button
+                  type="button"
+                  onClick={() => onRemoveExisting(shot)}
+                  disabled={busy}
+                  aria-label={`Remove screenshot ${shot.name || ''}`}
+                  className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
+            </li>
+          ))}
+          {pending.map((f, i) => (
+            <li key={`${f.name}-${i}`} className="relative aspect-video rounded-lg overflow-hidden border-2 border-brand-300 bg-surface-50">
+              <img src={previews[i]} alt={f.name} className="w-full h-full object-cover" />
+              <span className="absolute bottom-0 inset-x-0 bg-brand-600/90 text-white text-[9px] px-1 py-0.5 truncate" aria-hidden="true">New · {f.name}</span>
+              <button
+                type="button"
+                onClick={() => onRemovePending(i)}
+                aria-label={`Remove ${f.name} (not yet uploaded)`}
+                className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** Full-size viewer. Escape closes, ←/→ navigate, focus trapped + restored (useDialogA11y). */
+function ScreenshotLightbox({ shots, index, onIndex, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
+  const titleId = useId()
+  const shot = shots[index]
+  const prev = () => onIndex((index - 1 + shots.length) % shots.length)
+  const next = () => onIndex((index + 1) % shots.length)
+
+  return (
+    <div className="fixed inset-0 z-[9100] bg-black/85 flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={e => {
+          if (e.key === 'ArrowLeft') { e.preventDefault(); prev() }
+          if (e.key === 'ArrowRight') { e.preventDefault(); next() }
+        }}
+        onClick={e => e.stopPropagation()}
+        className="relative max-w-[95vw] max-h-[95vh] flex flex-col"
+      >
+        <div className="flex items-center justify-between gap-3 text-white mb-2">
+          <h3 id={titleId} className="text-sm font-medium truncate">
+            {shot?.name || 'Screenshot'} <span className="text-white/60">({index + 1} of {shots.length})</span>
+          </h3>
+          <div className="flex items-center gap-1 shrink-0">
+            <a
+              href={shot?.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Open full size in a new tab"
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            >
+              <ExternalLink size={18} aria-hidden="true" />
+            </a>
+            <button type="button" onClick={onClose} aria-label="Close viewer"
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">
+              <X size={20} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+        <img
+          src={shot?.url}
+          alt={shot?.name || 'Screenshot'}
+          className="max-w-[95vw] max-h-[80vh] object-contain rounded-lg bg-surface-900"
+        />
+        {shots.length > 1 && (
+          <div className="flex justify-center gap-2 mt-2">
+            <button type="button" onClick={prev} aria-label="Previous screenshot"
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg bg-white/10 text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">
+              <ChevronLeft size={20} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={next} aria-label="Next screenshot"
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg bg-white/10 text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white">
+              <ChevronRight size={20} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 

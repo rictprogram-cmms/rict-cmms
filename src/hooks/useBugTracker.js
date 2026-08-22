@@ -4,6 +4,67 @@ import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { usePermissions } from '@/hooks/usePermissions'
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCREENSHOT ATTACHMENTS (Supabase Storage bucket: bug-screenshots)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const BUG_SCREENSHOT_BUCKET = 'bug-screenshots'
+export const MAX_SCREENSHOTS = 5
+export const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024       // bucket limit
+export const SCREENSHOT_MAX_WIDTH = 1920                  // resize cap (px)
+export const SCREENSHOT_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+
+function safeFileName(name) {
+  return (name || 'screenshot.png').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80)
+}
+
+/**
+ * Downscale an image to SCREENSHOT_MAX_WIDTH and re-encode so a 4K PNG
+ * doesn't land as 4 MB. Small images and GIFs (animation) pass through.
+ * Returns a File (possibly the original).
+ */
+export async function prepareScreenshot(file) {
+  if (!file || !SCREENSHOT_TYPES.includes(file.type)) return file
+  if (file.type === 'image/gif') return file
+  if (file.size <= 800 * 1024) return file                  // ≤ 800 KB: keep as-is
+
+  const bitmap = await new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => resolve(img)
+    img.onerror = () => reject(new Error('Could not read image'))
+    img.src = URL.createObjectURL(file)
+  })
+  try {
+    const scale = Math.min(1, SCREENSHOT_MAX_WIDTH / bitmap.naturalWidth)
+    const w = Math.round(bitmap.naturalWidth * scale)
+    const h = Math.round(bitmap.naturalHeight * scale)
+    const canvas = document.createElement('canvas')
+    canvas.width = w; canvas.height = h
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h)
+    // PNG keeps UI text crisp; JPEG only if PNG is still big
+    let blob = await new Promise(res => canvas.toBlob(res, 'image/png'))
+    let type = 'image/png', ext = 'png'
+    if (!blob || blob.size > 1.5 * 1024 * 1024) {
+      blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.85))
+      type = 'image/jpeg'; ext = 'jpg'
+    }
+    if (!blob) return file
+    const base = safeFileName(file.name).replace(/\.[^.]+$/, '')
+    return new File([blob], `${base}.${ext}`, { type })
+  } finally {
+    URL.revokeObjectURL(bitmap.src)
+  }
+}
+
+/** Validate a candidate file; returns an error string or null. */
+export function validateScreenshot(file, currentCount) {
+  if (!file) return 'No file.'
+  if (!SCREENSHOT_TYPES.includes(file.type)) return `${file.name || 'File'} is not a PNG, JPG, WebP or GIF image.`
+  if (file.size > MAX_SCREENSHOT_BYTES * 4) return `${file.name} is too large (over 20 MB).`
+  if (currentCount >= MAX_SCREENSHOTS) return `Maximum ${MAX_SCREENSHOTS} screenshots per request.`
+  return null
+}
+
 // ─── Super Admin Check ────────────────────────────────────────────────────────
 const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
 
@@ -120,6 +181,124 @@ export function useBugActions() {
     } catch (err) {
       toast.error(err.message)
       throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /**
+   * Upload screenshots for a request and append them to bug_tracker.screenshots.
+   * Images are resized client-side (prepareScreenshot). Failures are per-file:
+   * the request keeps whatever uploaded and the caller gets { uploaded, failed }.
+   */
+  const uploadScreenshots = async (requestId, files) => {
+    if (!requestId || !files?.length) return { uploaded: [], failed: [] }
+    setSaving(true)
+    const uploaded = []
+    const failed = []
+    try {
+      // Current list (so concurrent edits don't clobber each other)
+      const { data: row, error: readErr } = await supabase
+        .from('bug_tracker').select('screenshots').eq('request_id', requestId).single()
+      if (readErr) throw readErr
+      const existing = Array.isArray(row?.screenshots) ? row.screenshots : []
+      const room = Math.max(0, MAX_SCREENSHOTS - existing.length)
+      const batch = Array.from(files).slice(0, room)
+      if (batch.length < files.length) failed.push(`Only ${room} more screenshot(s) allowed (max ${MAX_SCREENSHOTS}).`)
+
+      for (let i = 0; i < batch.length; i++) {
+        const original = batch[i]
+        try {
+          const file = await prepareScreenshot(original)
+          if (file.size > MAX_SCREENSHOT_BYTES) { failed.push(`${original.name}: still over 5 MB after resizing.`); continue }
+          const path = `${requestId}/${Date.now()}-${i}-${safeFileName(file.name)}`
+          const { error: upErr } = await supabase.storage
+            .from(BUG_SCREENSHOT_BUCKET)
+            .upload(path, file, { contentType: file.type, upsert: false })
+          if (upErr) { failed.push(`${original.name}: ${upErr.message}`); continue }
+          const { data: pub } = supabase.storage.from(BUG_SCREENSHOT_BUCKET).getPublicUrl(path)
+          uploaded.push({
+            url: pub?.publicUrl || '',
+            path,
+            name: file.name,
+            size: file.size,
+            uploaded_by: userName,
+            uploaded_at: new Date().toISOString(),
+          })
+        } catch (e) {
+          failed.push(`${original.name}: ${e.message}`)
+        }
+      }
+
+      if (uploaded.length > 0) {
+        const now = new Date().toISOString()
+        const { data: upd, error: updErr } = await supabase
+          .from('bug_tracker')
+          .update({ screenshots: [...existing, ...uploaded], updated_at: now, updated_by: userName })
+          .eq('request_id', requestId)
+          .select('request_id')
+        if (updErr) throw updErr
+        if (!upd || upd.length === 0) throw new Error('Screenshot save blocked by permissions (no rows updated).')
+
+        await supabase.from('audit_log').insert({
+          log_id: `AUD${Date.now()}`,
+          timestamp: now,
+          user_email: userEmail,
+          user_name: userName,
+          action: 'Attach Screenshot',
+          entity_type: 'Bug Request',
+          entity_id: requestId,
+          details: `Attached ${uploaded.length} screenshot(s): ${uploaded.map(u => u.name).join(', ')}`
+        })
+      }
+      return { uploaded, failed }
+    } catch (err) {
+      toast.error(err.message)
+      return { uploaded, failed: [...failed, err.message] }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Remove one screenshot (storage object + jsonb entry). */
+  const removeScreenshot = async (requestId, path) => {
+    if (!requestId || !path) return false
+    setSaving(true)
+    try {
+      const { data: row, error: readErr } = await supabase
+        .from('bug_tracker').select('screenshots').eq('request_id', requestId).single()
+      if (readErr) throw readErr
+      const existing = Array.isArray(row?.screenshots) ? row.screenshots : []
+      const target = existing.find(s => s.path === path)
+      const remaining = existing.filter(s => s.path !== path)
+
+      const { error: rmErr } = await supabase.storage.from(BUG_SCREENSHOT_BUCKET).remove([path])
+      if (rmErr) throw rmErr
+
+      const now = new Date().toISOString()
+      const { data: upd, error: updErr } = await supabase
+        .from('bug_tracker')
+        .update({ screenshots: remaining, updated_at: now, updated_by: userName })
+        .eq('request_id', requestId)
+        .select('request_id')
+      if (updErr) throw updErr
+      if (!upd || upd.length === 0) throw new Error('Screenshot removal blocked by permissions (no rows updated).')
+
+      await supabase.from('audit_log').insert({
+        log_id: `AUD${Date.now()}`,
+        timestamp: now,
+        user_email: userEmail,
+        user_name: userName,
+        action: 'Remove Screenshot',
+        entity_type: 'Bug Request',
+        entity_id: requestId,
+        details: `Removed screenshot: ${target?.name || path}`
+      })
+      toast.success('Screenshot removed')
+      return true
+    } catch (err) {
+      toast.error(err.message)
+      return false
     } finally {
       setSaving(false)
     }
@@ -357,7 +536,8 @@ export function useBugActions() {
     saving, isSuperAdmin, hasPerm,
     createRequest, updateRequest, deleteRequest,
     approveRequest, rejectRequest,
-    addManualChangelogEntry
+    addManualChangelogEntry,
+    uploadScreenshots, removeScreenshot,
   }
 }
 
