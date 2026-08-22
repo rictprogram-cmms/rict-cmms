@@ -177,6 +177,7 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
 
   const titleId = useId()
   const errId = useId()
+  const classHelpId = useId()
   const dialogRef = useDialogA11y(open, onClose)
 
   const { students, loading: studentsLoading } = useAbsenceStudentOptions({ enabled: open && canSubmitOnBehalf })
@@ -204,6 +205,14 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
 
     if (canSubmitOnBehalf && !studentEmail) {
       setFormError('Select the student this absence is for.')
+      return
+    }
+    if (!classesLoading && classes.length === 0) {
+      setFormError('No classes are linked to this profile, so an absence request can\'t be submitted. Contact your instructor.')
+      return
+    }
+    if (!classChoice) {
+      setFormError('Select the class this absence is for — submit one request per class.')
       return
     }
     if (!absenceDate) {
@@ -326,23 +335,31 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
           {/* Class */}
           <div>
             <label htmlFor="abs-class" className="block text-xs font-semibold text-surface-700 mb-1">
-              Class
+              Class <span className="text-red-600" aria-hidden="true">*</span>
             </label>
             <select
               id="abs-class"
               value={classChoice}
               onChange={e => setClassChoice(e.target.value)}
               disabled={saving || classesLoading}
+              required
+              aria-required="true"
+              aria-describedby={classHelpId}
               className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
-              <option value="">{classesLoading ? 'Loading classes…' : 'Select a class (optional)…'}</option>
+              <option value="">{classesLoading ? 'Loading classes…' : 'Select a class…'}</option>
               {classes.map(c => (
                 <option key={c.class_id} value={`${c.class_id}|${c.course_id}`}>
                   {c.course_id} — {c.course_name}
                 </option>
               ))}
             </select>
+            <p id={classHelpId} className="text-[11px] text-surface-500 mt-1">
+              {!classesLoading && classes.length === 0
+                ? 'No classes are linked to this profile. Contact your instructor before submitting.'
+                : 'Missed more than one class? Submit a separate request for each class.'}
+            </p>
           </div>
 
           {/* Date + Hours */}

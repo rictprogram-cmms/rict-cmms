@@ -234,7 +234,17 @@ const DEFAULT_CONFIG = {
  *   +closerAckPct flat to whoever clicked Close, IF they logged ≥ minCloserHours on the WO.
  *   Floor: 0%, Cap: 100% (also returns rawScore — uncapped, for reference).
  *
- * @param {Object} user - {emailLower, role, displayNameLower}
+ * JOIN-DATE CLAMP:
+ *   A user is never penalized for school days before their profile existed.
+ *   Every penalty window (open late, closed late, stale) starts no earlier
+ *   than `user.joinDate` (profiles.created_at, date-only). Days excluded by
+ *   this clamp are tracked in `preJoinExcluded` and on each detail row as
+ *   `preJoinDays` so the UI can explain the number. Rewards are unaffected
+ *   (they are hours-weighted, so a new user simply earns 0 until they log).
+ *   For users whose join date predates the evaluation window the clamp is a
+ *   no-op and results are identical to the previous behaviour.
+ *
+ * @param {Object} user - {emailLower, role, displayNameLower, joinDate?: Date|null}
  * @param {Object} ctx - aggregated context built once in fetchData
  * @returns {object} Score breakdown
  */
@@ -250,6 +260,7 @@ function calculateScore(user, ctx) {
   } = ctx
 
   const { emailLower, role, displayNameLower } = user
+  const joinDate = user.joinDate instanceof Date && !isNaN(user.joinDate) ? toDateOnly(user.joinDate) : null
   const today = toDateOnly(new Date())
   const effectiveEnd = rangeEnd ? (rangeEnd < today ? rangeEnd : today) : today
   const details = []
@@ -257,6 +268,22 @@ function calculateScore(user, ctx) {
   let assignedLateDays = 0
   let teamLateDays = 0
   let staleDays = 0
+  // School days excluded by the join-date clamp (for the "X in range − Y before join = Z counted" line)
+  const preJoinExcluded = { teamLate: 0, personalLate: 0, stale: 0 }
+  let joinClampApplied = false
+
+  /**
+   * Clamp a penalty-window start to the user's join date.
+   * Returns { start, excluded } where `excluded` is the number of school days
+   * between the original start and the clamped start (capped at `end`).
+   */
+  const clampToJoin = (start, end) => {
+    if (!joinDate || !start || joinDate <= start) return { start, excluded: 0 }
+    const clampedStart = joinDate
+    const excluded = countSchoolDays(start, clampedStart < end ? clampedStart : end, holidays, closedDays)
+    if (excluded > 0) joinClampApplied = true
+    return { start: clampedStart, excluded }
+  }
   let earlyShare = 0      // float — sum of (daysEarly × share) across WOs
   let closerAckBonus = 0  // integer — sum of flat ack bonuses
 
@@ -302,8 +329,14 @@ function calculateScore(user, ctx) {
     // Late WO penalty (past due date) — only after the due date has passed, not on the day itself
     if (dueDate && dueDate < effectiveEnd) {
       // Count late days only within the evaluation range
-      const lateCountStart = rangeStart && rangeStart > dueDate ? rangeStart : dueDate
+      const rawLateStart = rangeStart && rangeStart > dueDate ? rangeStart : dueDate
+      // Never count late days from before this user joined
+      const { start: lateCountStart, excluded: preJoinDays } = clampToJoin(rawLateStart, effectiveEnd)
       const lateDayCount = countSchoolDays(lateCountStart, effectiveEnd, holidays, closedDays)
+      if (preJoinDays > 0) {
+        preJoinExcluded.teamLate += preJoinDays
+        if (assignedToUser) preJoinExcluded.personalLate += preJoinDays
+      }
       if (lateDayCount > 0) {
         // Team penalty: everyone gets -1% per school day
         teamLateDays += lateDayCount
@@ -311,6 +344,7 @@ function calculateScore(user, ctx) {
           type: 'team_late',
           woId, description: desc, days: lateDayCount,
           deduction: lateDayCount,
+          preJoinDays,
           source: 'open'
         })
 
@@ -321,6 +355,7 @@ function calculateScore(user, ctx) {
             type: 'personal_late',
             woId, description: desc, days: lateDayCount,
             deduction: lateDayCount * 2,
+            preJoinDays,
             source: 'open'
           })
         }
@@ -335,9 +370,12 @@ function calculateScore(user, ctx) {
       const assigneeCount = countAssignees(woId, wo.assigned_email)
       const eligibleForStale = hoursOnWo > 0 || assigneeCount <= 1
       if (eligibleForStale) {
-        const referenceDate = updatedDate && updatedDate > createdDate ? updatedDate : createdDate
-        if (referenceDate) {
+        const rawReferenceDate = updatedDate && updatedDate > createdDate ? updatedDate : createdDate
+        if (rawReferenceDate) {
+          // Stale clock can't start before this user joined
+          const { start: referenceDate, excluded: preJoinDays } = clampToJoin(rawReferenceDate, effectiveEnd)
           const totalSchoolDaysSinceUpdate = countSchoolDays(referenceDate, effectiveEnd, holidays, closedDays)
+          if (preJoinDays > 0) preJoinExcluded.stale += preJoinDays
           if (totalSchoolDaysSinceUpdate > config.staleThreshold) {
             const daysOverThreshold = totalSchoolDaysSinceUpdate - config.staleThreshold
             staleDays += daysOverThreshold
@@ -346,6 +384,7 @@ function calculateScore(user, ctx) {
               woId, description: desc, days: daysOverThreshold,
               deduction: daysOverThreshold,
               daysSinceUpdate: totalSchoolDaysSinceUpdate,
+              preJoinDays,
               source: 'open'
             })
           }
@@ -374,9 +413,15 @@ function calculateScore(user, ctx) {
     // ── 2a. LATE CLOSE PENALTY — WO was closed AFTER its due date ─────────
     // Closing a late WO does not erase the penalty.
     if (dueDate && closedDate && closedDate > dueDate) {
-      const lateStart = rangeStart && rangeStart > dueDate ? rangeStart : dueDate
+      const rawLateStart = rangeStart && rangeStart > dueDate ? rangeStart : dueDate
       const lateEnd = rangeEnd && rangeEnd < closedDate ? rangeEnd : closedDate
+      // Never count late days from before this user joined
+      const { start: lateStart, excluded: preJoinDays } = clampToJoin(rawLateStart, lateEnd)
       const lateDayCount = countSchoolDays(lateStart, lateEnd, holidays, closedDays)
+      if (preJoinDays > 0) {
+        preJoinExcluded.teamLate += preJoinDays
+        if (assignedToUser) preJoinExcluded.personalLate += preJoinDays
+      }
 
       if (lateDayCount > 0) {
         // Team penalty: everyone gets -1% per school day for WOs that were late
@@ -385,6 +430,7 @@ function calculateScore(user, ctx) {
           type: 'team_late',
           woId, description: desc + ' (closed late)', days: lateDayCount,
           deduction: lateDayCount,
+          preJoinDays,
           source: 'closed'
         })
 
@@ -395,6 +441,7 @@ function calculateScore(user, ctx) {
             type: 'personal_late',
             woId, description: desc + ' (closed late)', days: lateDayCount,
             deduction: lateDayCount * 2,
+            preJoinDays,
             source: 'closed'
           })
         }
@@ -505,15 +552,37 @@ function calculateScore(user, ctx) {
     teamDeduction,
     totalDeduction,
     totalReward,
-    details
+    details,
+    // Join-date clamp info (for the breakdown UI)
+    joinDate: joinDate ? toISODate(joinDate) : null,
+    joinClampApplied,
+    preJoinExcluded,                       // { teamLate, personalLate, stale } school days not counted
+    preJoinExcludedTotal: preJoinExcluded.teamLate + preJoinExcluded.personalLate * 2 + preJoinExcluded.stale,
   }
+}
+
+/** Format a Date as local YYYY-MM-DD (no UTC shift). */
+function toISODate(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** Parse profiles.created_at into a date-only Date, or null. */
+function parseJoinDate(createdAt) {
+  if (!createdAt) return null
+  // Postgres may emit a bare "+00" offset, which JS Date rejects — normalise to "+00:00"
+  const normalised = String(createdAt).replace(/([+-]\d{2})$/, '$1:00')
+  const d = new Date(normalised)
+  return isNaN(d) ? null : toDateOnly(d)
 }
 
 /**
  * Calculate average completion time for a user's closed WOs.
  * Updated to use assignmentsMap for multi-assignment support.
  */
-function calcCompletionTime(email, closedWOs, holidays, closedDays, assignmentsMap, rangeStart = null, rangeEnd = null) {
+function calcCompletionTime(email, closedWOs, holidays, closedDays, assignmentsMap, rangeStart = null, rangeEnd = null, joinDate = null) {
   const emailLower = (email || '').toLowerCase().trim()
   let totalDays = 0
   let count = 0
@@ -540,7 +609,10 @@ function calcCompletionTime(email, closedWOs, holidays, closedDays, assignmentsM
     if (rangeStart && closedOnly < rangeStart) continue
     if (rangeEnd && closedOnly > rangeEnd) continue
 
-    const days = countSchoolDays(created, closed, holidays, closedDays)
+    // Days open are measured from the later of WO creation and the user's join date
+    const createdOnly = toDateOnly(created)
+    const countFrom = joinDate && joinDate > createdOnly ? joinDate : createdOnly
+    const days = countSchoolDays(countFrom, closed, holidays, closedDays)
     totalDays += days
     count++
   }
@@ -576,7 +648,7 @@ export async function computeStudentScoresForWindows(profile, windows) {
 
   const emailLower = (profile.email || '').toLowerCase().trim()
   const displayNameLower = `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim().toLowerCase()
-  const user = { emailLower, role: profile.role, displayNameLower }
+  const user = { emailLower, role: profile.role, displayNameLower, joinDate: parseJoinDate(profile.created_at) }
 
   // 1. Fetch all the static data (mirrors what fetchData does in useWOCRatio).
   const [openRes, closedRes, closedArchiveRes, settingsRes, assignmentsRes, workLogRes] = await Promise.all([
@@ -927,12 +999,13 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
         emailLower: (p.email || '').toLowerCase().trim(),
         role: p.role,
         displayNameLower: `${p.first_name || ''} ${(p.last_name || '').charAt(0)}.`.trim().toLowerCase(),
+        joinDate: parseJoinDate(p.created_at),
       })
 
       // ── My score ──
       const meUser = buildUser(profile)
       const myResult = calculateScore(meUser, ctx)
-      const myCompletion = calcCompletionTime(profile.email, closedWOs, holidays, closedDays, assignmentsMap, rangeStart, rangeEnd)
+      const myCompletion = calcCompletionTime(profile.email, closedWOs, holidays, closedDays, assignmentsMap, rangeStart, rangeEnd, meUser.joinDate)
 
       // Count user's open WOs
       const emailLower = meUser.emailLower
@@ -955,8 +1028,9 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
         const createdDate = wo.created_at ? toDateOnly(new Date(wo.created_at)) : null
         if (rangeEnd && createdDate && createdDate > rangeEnd) continue
         myOpenCount++
-        if (wo.created_at) {
-          myTotalDaysOpen += countSchoolDays(new Date(wo.created_at), effectiveEnd, holidays, closedDays)
+        if (createdDate) {
+          const countFrom = meUser.joinDate && meUser.joinDate > createdDate ? meUser.joinDate : createdDate
+          myTotalDaysOpen += countSchoolDays(countFrom, effectiveEnd, holidays, closedDays)
         }
       }
 
@@ -970,7 +1044,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
         for (const u of users) {
           const userObj = buildUser(u)
           const result = calculateScore(userObj, ctx)
-          const completion = calcCompletionTime(u.email, closedWOs, holidays, closedDays, assignmentsMap, rangeStart, rangeEnd)
+          const completion = calcCompletionTime(u.email, closedWOs, holidays, closedDays, assignmentsMap, rangeStart, rangeEnd, userObj.joinDate)
 
           // Count open WOs for this user
           const ue = userObj.emailLower
@@ -990,8 +1064,9 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
             const createdDate = wo.created_at ? toDateOnly(new Date(wo.created_at)) : null
             if (rangeEnd && createdDate && createdDate > rangeEnd) continue
             userOpenCount++
-            if (wo.created_at) {
-              userTotalDaysOpen += countSchoolDays(new Date(wo.created_at), effectiveEnd, holidays, closedDays)
+            if (createdDate) {
+              const countFrom = userObj.joinDate && userObj.joinDate > createdDate ? userObj.joinDate : createdDate
+              userTotalDaysOpen += countSchoolDays(countFrom, effectiveEnd, holidays, closedDays)
             }
           }
 

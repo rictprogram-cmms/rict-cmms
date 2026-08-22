@@ -29,7 +29,7 @@
  *   - Manage custom closed days (instructor)
  */
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useId } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useWOCRatio, useClosedDaysActions } from '@/hooks/useWOCRatio'
@@ -363,7 +363,7 @@ function ScoreGauge({ score }) {
  *  - `subtitle` adds a small line under the label (e.g. "12 / 18 hr expected").
  *  - `tone` overrides the inferred color: 'positive' | 'negative' | 'neutral' | 'info'.
  */
-function BreakdownCard({ icon: Icon, label, value, isNegative, isPositive, display, subtitle, tone }) {
+function BreakdownCard({ icon: Icon, label, value, isNegative, isPositive, display, subtitle, tone, describedBy }) {
   let color, bg
   if (tone === 'info')      { color = '#7c3aed'; bg = 'rgba(124,58,237,0.08)' }
   else if (tone === 'positive' || isPositive) { color = '#22c55e'; bg = 'rgba(34,197,94,0.08)' }
@@ -376,10 +376,13 @@ function BreakdownCard({ icon: Icon, label, value, isNegative, isPositive, displ
     : `${prefix}${fmt1(Math.abs(Number(value) || 0))}%`
 
   return (
-    <div style={{
-      background: bg, borderRadius: 12, padding: '16px 20px',
-      display: 'flex', alignItems: 'center', gap: 14, minWidth: 0
-    }}>
+    <div
+      aria-describedby={describedBy || undefined}
+      style={{
+        background: bg, borderRadius: 12, padding: '16px 20px',
+        display: 'flex', alignItems: 'center', gap: 14, minWidth: 0
+      }}
+    >
       <div style={{
         width: 40, height: 40, borderRadius: 10,
         background: `${color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -939,6 +942,61 @@ function ClosedDaysManager({ closedDays, onRefresh }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// JOIN-DATE NOTE — explains the join-date clamp on penalties
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Shown above the breakdown when a user's join date excluded any penalty days.
+ * Renders a plain-language note plus a verification line per penalty type:
+ *   "days in range − days before join = days counted".
+ * `id` lets cards/tables reference it via aria-describedby (WCAG 3.3.1 / 1.3.1).
+ */
+function JoinDateNote({ id, score }) {
+  if (!score || !score.joinClampApplied || !score.joinDate) return null
+  const ex = score.preJoinExcluded || { teamLate: 0, personalLate: 0, stale: 0 }
+  const joined = new Date(score.joinDate + 'T00:00:00').toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric'
+  })
+
+  const rows = [
+    { label: 'Team late days',     counted: score.teamLateDays || 0,     excluded: ex.teamLate },
+    { label: 'Personal late days', counted: score.assignedLateDays || 0, excluded: ex.personalLate },
+    { label: 'Stale days',         counted: score.staleDays || 0,        excluded: ex.stale },
+  ].filter(r => r.excluded > 0)
+
+  return (
+    <div
+      id={id}
+      role="note"
+      style={{
+        display: 'flex', gap: 10, alignItems: 'flex-start',
+        background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10,
+        padding: '12px 14px', marginBottom: 14, fontSize: 13, color: '#1e3a8a'
+      }}
+    >
+      <Info size={18} aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600 }}>
+          Penalties counted from {joined} (your join date)
+        </div>
+        <div style={{ marginTop: 2, color: '#1e40af' }}>
+          Work orders that were late or stale before this account existed do not count against this score.
+        </div>
+        {rows.length > 0 && (
+          <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: '#1e40af' }}>
+            {rows.map(r => (
+              <li key={r.label}>
+                {r.label}: {r.counted + r.excluded} in range − {r.excluded} before join = <strong>{r.counted} counted</strong>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // DETAIL TABLE (deduction/reward breakdown)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1013,6 +1071,7 @@ function DetailTable({ details }) {
                 daysCol = '—'
               } else if (d.days != null) {
                 daysCol = `${d.days}d`
+                if (d.preJoinDays > 0) daysCol += ` (${d.preJoinDays}d before join excluded)`
               }
 
               return (
@@ -1198,6 +1257,7 @@ function AllUsersTable({ scores, teamCompletion }) {
                 {isExpanded && (
                   <tr>
                     <td colSpan={11} style={{ padding: '0 14px 16px 14px', background: '#f8fafc' }}>
+                      <JoinDateNote id={`woc-join-note-${u.userId || u.email}`} score={u} />
                       <DetailTable details={u.details} />
                     </td>
                   </tr>
@@ -1232,6 +1292,11 @@ export default function WOCRatioPage() {
   } = useWOCRatio({ canViewAll: isInstructor, startDate: startDate || null, endDate: endDate || null })
 
   const [tab, setTab] = useState('my') // my | team | settings
+
+  // Stable id for the join-date explanation note; cards reference it via aria-describedby
+  // only when the note is actually rendered (join-date clamp excluded penalty days).
+  const myJoinNoteId = useId()
+  const joinNoteDescribedBy = myScore?.joinClampApplied ? myJoinNoteId : undefined
 
   if (loading) {
     return (
@@ -1424,18 +1489,22 @@ export default function WOCRatioPage() {
                 label="Personal (Your Late + Stale)"
                 value={myScore.personalDeduction}
                 isNegative={myScore.personalDeduction > 0}
+                describedBy={joinNoteDescribedBy}
               />
               <BreakdownCard
                 icon={Users}
                 label="Team (All Late WOs)"
                 value={myScore.teamDeduction}
                 isNegative={myScore.teamDeduction > 0}
+                subtitle={myScore.joinClampApplied ? `Counted from ${myScore.joinDate} (join date)` : undefined}
+                describedBy={joinNoteDescribedBy}
               />
               <BreakdownCard
                 icon={Clock}
                 label="Stale (>4 days no update)"
                 value={myScore.staleDays}
                 isNegative={myScore.staleDays > 0}
+                describedBy={joinNoteDescribedBy}
               />
               <BreakdownCard
                 icon={Zap}
@@ -1508,6 +1577,7 @@ export default function WOCRatioPage() {
               </span>
             </div>
             <div style={{ padding: '16px 24px' }}>
+              <JoinDateNote id={myJoinNoteId} score={myScore} />
               <DetailTable details={myScore.details} />
             </div>
           </div>
