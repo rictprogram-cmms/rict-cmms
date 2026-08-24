@@ -143,6 +143,242 @@ export {
   findOverlappingClosure, findClosureForHour,
 }
 
+// ─── Timestamp helper (fake-UTC convention) ─────────────────────────────────
+// Keep the local wall-clock time but tag it +00, per project convention.
+// Used for created_at writes so lab tables match the rest of the app.
+function localToUtcIso(date) {
+  if (date == null) return null
+  const d = (date instanceof Date) ? date : new Date(date)
+  if (isNaN(d.getTime())) return null
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  const ss = String(d.getSeconds()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}:${ss}+00:00`
+}
+
+// ─── Audit-log helpers ──────────────────────────────────────────────────────
+// Every write in this file now leaves an audit_log row so instructors can see
+// who changed lab hours, who cancelled a signup, etc. Audit writes are
+// non-critical: a failure is logged to the console but never blocks the save.
+
+/**
+ * Whether student self-signups / self-cancellations get audit rows.
+ * Set to false if the volume becomes noise — instructor and calendar
+ * actions are always logged regardless of this flag.
+ */
+const AUDIT_STUDENT_SIGNUPS = true
+
+/** "First L." display name for audit rows — matches useSettings / screenshot convention. */
+function auditNameOf(profile) {
+  if (!profile) return ''
+  const first = profile.first_name || ''
+  const last  = profile.last_name || ''
+  return `${first}${last ? ` ${last.charAt(0)}.` : ''}`.trim()
+}
+
+/** Insert one or many audit rows. Never throws. */
+async function writeAudit(profile, entryOrEntries) {
+  const list = Array.isArray(entryOrEntries) ? entryOrEntries : [entryOrEntries]
+  if (list.length === 0) return
+  try {
+    const rows = list.map(e => ({
+      user_email: profile?.email || '',
+      user_name:  auditNameOf(profile),
+      ...e,
+    }))
+    const { error } = await supabase.from('audit_log').insert(rows)
+    if (error) console.warn('Audit log write failed (non-critical):', error.message)
+  } catch (e) {
+    console.warn('Audit log write threw (non-critical):', e?.message || e)
+  }
+}
+
+/** 'YYYY-MM-DD' → 'Mon, Aug 25, 2026' (local parse — no zone shift). */
+function formatDateLabel(dateStr) {
+  if (!dateStr) return ''
+  const d = new Date(String(dateStr).substring(0, 10) + 'T00:00:00')
+  if (isNaN(d.getTime())) return String(dateStr)
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+/** lab_signup.date (ISO of local noon) → 'Mon, Aug 25, 2026'. */
+function formatDateLabelFromIso(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return String(iso)
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+/** 'HH:MM' / 'HH:MM:SS' → '8:00 AM'. */
+function formatTimeLabel(timeStr) {
+  const min = timeToMinutes(timeStr)
+  if (min == null) return timeStr ? String(timeStr) : '—'
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  const h12 = h % 12 || 12
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
+function formatLunchLabel(lunchHour) {
+  if (lunchHour == null || lunchHour === '') return 'None'
+  const n = parseInt(lunchHour, 10)
+  return isNaN(n) ? 'None' : formatHour(n)
+}
+
+function formatBlocksLabel(blocks) {
+  const arr = normalizeClosedBlocks(blocks)
+  if (arr.length === 0) return 'None'
+  return arr
+    .map(b => `${formatTimeLabel(b.start)}–${formatTimeLabel(b.end)}${b.reason ? ` (${b.reason})` : ''}`)
+    .join('; ')
+}
+
+/** One-line snapshot of a lab_calendar payload, for Create/Delete audit rows. */
+function describeLabDay(row) {
+  const parts = [row.status || 'Open']
+  parts.push(`${formatTimeLabel(row.start_time)} – ${formatTimeLabel(row.end_time)}`)
+  parts.push(`max ${row.max_students ?? 24}`)
+  parts.push(`lunch ${formatLunchLabel(row.lunch_hour)}`)
+  const blocks = formatBlocksLabel(row.closed_blocks)
+  if (blocks !== 'None') parts.push(`closed ${blocks}`)
+  if ((row.notes || '').trim()) parts.push(`notes: ${row.notes.trim()}`)
+  return parts.join(', ')
+}
+
+/**
+ * Compare the existing lab_calendar row against the update payload and
+ * return [{ label, before, after }] for every field that actually changed.
+ * Times are compared as minutes so '08:00' vs '08:00:00' is not a change.
+ */
+function diffLabDay(existing, next) {
+  const changes = []
+  const cmp = (label, before, after, beforeLabel, afterLabel) => {
+    if (before !== after) {
+      changes.push({ label, before: beforeLabel ?? String(before), after: afterLabel ?? String(after) })
+    }
+  }
+
+  cmp('Status', existing.status || 'Open', next.status)
+
+  const oldHours = `${timeToMinutes(existing.start_time)}-${timeToMinutes(existing.end_time)}`
+  const newHours = `${timeToMinutes(next.start_time)}-${timeToMinutes(next.end_time)}`
+  cmp('Hours', oldHours, newHours,
+    `${formatTimeLabel(existing.start_time)} – ${formatTimeLabel(existing.end_time)}`,
+    `${formatTimeLabel(next.start_time)} – ${formatTimeLabel(next.end_time)}`)
+
+  cmp('Max students', Number(existing.max_students) || 24, Number(next.max_students) || 24)
+
+  const oldLunch = existing.lunch_hour == null ? null : parseInt(existing.lunch_hour, 10)
+  const newLunch = next.lunch_hour == null ? null : parseInt(next.lunch_hour, 10)
+  cmp('Lunch hour', oldLunch, newLunch, formatLunchLabel(oldLunch), formatLunchLabel(newLunch))
+
+  const oldNotes = (existing.notes || '').trim()
+  const newNotes = (next.notes || '').trim()
+  cmp('Notes', oldNotes, newNotes, oldNotes || '(none)', newNotes || '(none)')
+
+  const oldBlocks = normalizeClosedBlocks(existing.closed_blocks)
+  const newBlocks = normalizeClosedBlocks(next.closed_blocks)
+  cmp('Closed periods', JSON.stringify(oldBlocks), JSON.stringify(newBlocks),
+    formatBlocksLabel(oldBlocks), formatBlocksLabel(newBlocks))
+
+  return changes
+}
+
+// ─── Collision-safe calendar ID ─────────────────────────────────────────────
+/**
+ * Generate the next lab_calendar ID (CAL####) without the MAX+1 race.
+ *
+ * Mirrors the generateSafeAssetId / generateSafeWoId pattern:
+ *  1. Ask the `get_next_id` RPC (p_type = 'lab_calendar').
+ *  2. Always also scan MAX(CAL####) — the counter row may be missing or
+ *     behind reality; the higher of the two wins.
+ *  3. Verify the candidate doesn't exist; bump and retry on collision.
+ *  4. Write the final number back to `counters` so drift self-heals.
+ *
+ * Requires a `counters` row named 'lab_calendar' (see migration in the
+ * release notes). If the row is missing, the MAX-scan path still works and
+ * the sync step is a harmless no-op.
+ */
+const CAL_PREFIX = 'CAL'
+const CAL_PAD = 4
+
+async function generateSafeCalendarId() {
+  let counterNum = null
+
+  // Step 1 — database counter
+  try {
+    const { data: counter, error } = await supabase.rpc('get_next_id', { p_type: 'lab_calendar' })
+    if (error) {
+      console.warn('get_next_id(lab_calendar) RPC error, falling back:', error.message)
+    } else if (counter) {
+      const n = parseInt(String(counter).replace(/\D/g, ''), 10)
+      if (!isNaN(n)) counterNum = n
+    }
+  } catch (e) {
+    console.warn('get_next_id(lab_calendar) threw, falling back:', e?.message || e)
+  }
+
+  // Step 2 — MAX-scan of clean CAL#### IDs (cheap: the table is small)
+  let scanMax = 0
+  try {
+    const { data: rows } = await supabase
+      .from('lab_calendar')
+      .select('calendar_id')
+      .like('calendar_id', `${CAL_PREFIX}%`)
+      .order('calendar_id', { ascending: false })
+      .limit(200)
+    ;(rows || []).forEach(r => {
+      const m = new RegExp(`^${CAL_PREFIX}(\\d{1,8})$`).exec(r.calendar_id || '')
+      if (m) {
+        const n = parseInt(m[1], 10)
+        if (n > scanMax) scanMax = n
+      }
+    })
+  } catch (e) {
+    console.warn('lab_calendar MAX-scan failed (non-critical):', e?.message || e)
+  }
+
+  let numericId = Math.max(counterNum ?? 0, scanMax + 1, 1)
+  const format = n => `${CAL_PREFIX}${String(n).padStart(CAL_PAD, '0')}`
+  let calendarId = format(numericId)
+
+  // Step 3 — collision check
+  const MAX_RETRIES = 10
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { data: exists } = await supabase
+      .from('lab_calendar')
+      .select('calendar_id')
+      .eq('calendar_id', calendarId)
+      .maybeSingle()
+
+    if (!exists) {
+      // Step 4 — keep the counter aligned with reality (no-op if row missing)
+      if (counterNum === null || numericId > counterNum) {
+        try {
+          await supabase
+            .from('counters')
+            .update({ current_value: numericId, updated_at: localToUtcIso(new Date()) })
+            .eq('counter_name', 'lab_calendar')
+        } catch (e) {
+          console.warn('lab_calendar counter sync failed (non-critical):', e?.message || e)
+        }
+      }
+      return calendarId
+    }
+
+    console.warn(`Calendar ID collision for ${calendarId}, retrying (${attempt + 1}/${MAX_RETRIES})`)
+    numericId += 1
+    calendarId = format(numericId)
+  }
+
+  // Pathological fallback — still unique, still CAL-prefixed
+  return `${CAL_PREFIX}${numericId}-${Date.now().toString().slice(-4)}`
+}
+
 // ─── Lab Calendar (Instructor) ──────────────────────────────────────────────
 
 export function useLabCalendar(year, month) {
@@ -217,56 +453,80 @@ export function useLabCalendarActions() {
     setSaving(true)
     try {
       const dateStr = dayData.date
+      const dateLabel = formatDateLabel(dateStr)
+
+      // Pull the full row (not just the id) so we can diff for the audit log.
       const { data: existing } = await supabase
         .from('lab_calendar')
-        .select('calendar_id')
+        .select('*')
         .eq('date', dateStr + 'T12:00:00')
         .maybeSingle()
 
+      // Shared column payload for update + insert
+      const payload = {
+        start_time: dayData.startTime,
+        end_time: dayData.endTime,
+        max_students: dayData.maxStudents || 24,
+        status: dayData.status || 'Open',
+        lunch_hour: dayData.lunchHour || null,
+        notes: dayData.notes || '',
+        closed_blocks: normalizeClosedBlocks(dayData.closedBlocks),
+      }
+
       if (existing) {
-        const { error } = await supabase
+        const changes = diffLabDay(existing, payload)
+
+        const { data: updated, error } = await supabase
           .from('lab_calendar')
-          .update({
-            start_time: dayData.startTime,
-            end_time: dayData.endTime,
-            max_students: dayData.maxStudents || 24,
-            status: dayData.status || 'Open',
-            lunch_hour: dayData.lunchHour || null,
-            notes: dayData.notes || '',
-            closed_blocks: normalizeClosedBlocks(dayData.closedBlocks),
-          })
+          .update(payload)
           .eq('calendar_id', existing.calendar_id)
-        if (error) throw error
-        toast.success('Day updated')
-      } else {
-        const { data: maxRow } = await supabase
-          .from('lab_calendar')
           .select('calendar_id')
-          .order('calendar_id', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        let nextNum = 1
-        if (maxRow?.calendar_id) {
-          const num = parseInt(maxRow.calendar_id.replace('CAL', ''))
-          if (!isNaN(num)) nextNum = num + 1
+        if (error) throw error
+        if (!updated || updated.length === 0) {
+          throw new Error('Update was blocked — no rows changed (check permissions)')
         }
-        const newId = 'CAL' + String(nextNum).padStart(4, '0')
 
-        const { error } = await supabase.from('lab_calendar').insert({
+        if (changes.length > 0) {
+          await writeAudit(profile, {
+            action: 'Update Lab Day',
+            entity_type: 'Lab Calendar',
+            entity_id: existing.calendar_id,
+            field_changed: changes.map(c => c.label).join(', '),
+            old_value: changes.map(c => `${c.label}: ${c.before}`).join('\n'),
+            new_value: changes.map(c => `${c.label}: ${c.after}`).join('\n'),
+            details: `Updated lab day ${dateLabel}: ${changes.map(c => `${c.label} ${c.before} → ${c.after}`).join('; ')}`,
+          })
+          toast.success('Day updated')
+        } else {
+          toast('No changes to save')
+        }
+      } else {
+        const newId = await generateSafeCalendarId()
+
+        const insertRow = {
           calendar_id: newId,
           date: dateStr + 'T12:00:00',
-          start_time: dayData.startTime,
-          end_time: dayData.endTime,
-          max_students: dayData.maxStudents || 24,
-          status: dayData.status || 'Open',
-          lunch_hour: dayData.lunchHour || null,
-          notes: dayData.notes || '',
-          closed_blocks: normalizeClosedBlocks(dayData.closedBlocks),
+          ...payload,
           created_by: profile?.email,
-          created_at: new Date().toISOString(),
-        })
+          created_at: localToUtcIso(new Date()),
+        }
+
+        const { data: inserted, error } = await supabase
+          .from('lab_calendar')
+          .insert(insertRow)
+          .select('calendar_id')
         if (error) throw error
+        if (!inserted || inserted.length === 0) {
+          throw new Error('Insert was blocked — no rows created (check permissions)')
+        }
+
+        await writeAudit(profile, {
+          action: 'Create Lab Day',
+          entity_type: 'Lab Calendar',
+          entity_id: newId,
+          new_value: describeLabDay(insertRow),
+          details: `Added lab day ${dateLabel} (${describeLabDay(insertRow)})`,
+        })
         toast.success('Day added')
       }
     } catch (err) {
@@ -279,11 +539,32 @@ export function useLabCalendarActions() {
   const deleteDay = async (dateStr) => {
     setSaving(true)
     try {
-      const { error } = await supabase
+      // Snapshot first so the audit row records what was removed.
+      const { data: existing } = await supabase
+        .from('lab_calendar')
+        .select('*')
+        .eq('date', dateStr + 'T12:00:00')
+        .maybeSingle()
+
+      const { data: deleted, error } = await supabase
         .from('lab_calendar')
         .delete()
         .eq('date', dateStr + 'T12:00:00')
+        .select('calendar_id')
       if (error) throw error
+      if (existing && (!deleted || deleted.length === 0)) {
+        throw new Error('Delete was blocked — no rows removed (check permissions)')
+      }
+
+      if (existing) {
+        await writeAudit(profile, {
+          action: 'Delete Lab Day',
+          entity_type: 'Lab Calendar',
+          entity_id: existing.calendar_id,
+          old_value: describeLabDay(existing),
+          details: `Removed lab day ${formatDateLabel(dateStr)} (${describeLabDay(existing)})`,
+        })
+      }
       toast.success('Day removed')
     } catch (err) {
       toast.error('Error: ' + err.message)
@@ -326,6 +607,7 @@ export function useLabCalendarActions() {
             classId:   row.class_id || '',
             startTime: row.start_time,
             endTime:   row.end_time,
+            status:    row.status || '',
             startMin:  sMin,
             endMin:    eMin,
             reason,
@@ -359,15 +641,22 @@ export function useLabCalendarActions() {
     setSaving(true)
     try {
       const ids = affectedSignups.map(s => s.signupId).filter(Boolean)
-      const { error: updateErr } = await supabase
+      const { data: cancelledRows, error: updateErr } = await supabase
         .from('lab_signup')
         .update({ status: 'Cancelled' })
         .in('signup_id', ids)
+        .select('signup_id')
       if (updateErr) throw updateErr
+      if (!cancelledRows || cancelledRows.length === 0) {
+        throw new Error('Cancellation was blocked — no signups changed (check permissions)')
+      }
+      const cancelledIds = new Set(cancelledRows.map(r => r.signup_id))
 
       let emailed = 0
       let emailFailed = 0
       const errors = []
+      const failedEmails = new Set()   // per-student email failures, for the audit rows
+      let emailFnDown = false          // whole Edge Function call failed
 
       if (sendEmail) {
         try {
@@ -390,21 +679,48 @@ export function useLabCalendarActions() {
           if (fnErr) {
             // Edge function fully failed (network, deployment, auth, etc.)
             emailFailed = ids.length
+            emailFnDown = true
             errors.push(fnErr.message || String(fnErr))
           } else if (fnData) {
             emailed     = fnData.sent || 0
             emailFailed = fnData.failed || 0
             if (Array.isArray(fnData.errors)) {
-              fnData.errors.forEach(e => errors.push(`${e.email}: ${e.error}`))
+              fnData.errors.forEach(e => {
+                errors.push(`${e.email}: ${e.error}`)
+                if (e.email) failedEmails.add(String(e.email).toLowerCase())
+              })
             }
           }
         } catch (err) {
           emailFailed = ids.length
+          emailFnDown = true
           errors.push(err.message || String(err))
         }
       }
 
-      return { cancelled: ids.length, emailed, emailFailed, errors }
+      // Audit — one row per cancelled signup so each student's record has a trail
+      const dateLabel = formatDateLabel(dateStr)
+      const reasonText = blockReason || 'Lab closed'
+      await writeAudit(profile, affectedSignups
+        .filter(s => cancelledIds.has(s.signupId))
+        .map(s => {
+          let emailNote = ''
+          if (sendEmail) {
+            const failed = emailFnDown || failedEmails.has(String(s.userEmail || '').toLowerCase())
+            emailNote = failed ? '; email notification failed' : '; email notification sent'
+          }
+          return {
+            action: 'Cancel Signup (Closure)',
+            entity_type: 'Lab Signup',
+            entity_id: s.signupId,
+            field_changed: 'status',
+            old_value: s.status || 'Confirmed',
+            new_value: 'Cancelled',
+            details: `Cancelled ${s.userName || s.userEmail} (${s.userEmail}) ${dateLabel} ${formatTimeLabel(s.startTime)}–${formatTimeLabel(s.endTime)}${s.classId ? ` (${s.classId})` : ''} — lab closed: ${reasonText}${emailNote}`,
+          }
+        }))
+
+      return { cancelled: cancelledRows.length, emailed, emailFailed, errors }
     } catch (err) {
       toast.error('Error cancelling signups: ' + err.message)
       return { cancelled: 0, emailed: 0, emailFailed: 0, errors: [err.message || String(err)] }
@@ -707,6 +1023,7 @@ export function useLabSignupActions() {
       }
 
       const rows = []
+      const auditMeta = []   // parallel to rows: { dateStr, hour } for audit details
 
       for (const [classId, selections] of Object.entries(selectionsByClass)) {
         for (const sel of selections) {
@@ -742,16 +1059,33 @@ export function useLabSignupActions() {
             start_time: startTime,
             end_time: endTime,
             status: 'Confirmed',
-            created_at: new Date().toISOString(),
+            created_at: localToUtcIso(new Date()),
             is_makeup: !!makeupTags[sel],
             makeup_request_id: makeupTags[sel] || null,
           })
+          auditMeta.push({ dateStr, hour })
         }
       }
 
       if (rows.length > 0) {
-        const { error } = await supabase.from('lab_signup').insert(rows)
+        const { data: inserted, error } = await supabase
+          .from('lab_signup')
+          .insert(rows)
+          .select('signup_id')
         if (error) throw error
+        if (!inserted || inserted.length === 0) {
+          throw new Error('Signup was blocked — no rows created (check permissions)')
+        }
+
+        if (AUDIT_STUDENT_SIGNUPS) {
+          await writeAudit(profile, rows.map((r, i) => ({
+            action: 'Sign Up',
+            entity_type: 'Lab Signup',
+            entity_id: r.signup_id,
+            details: `Signed up for ${formatDateLabel(auditMeta[i].dateStr)} ${formatHour(auditMeta[i].hour)}${r.class_id ? ` (${r.class_id})` : ''}${r.is_makeup ? ` — make-up for ${r.makeup_request_id}` : ''}`,
+          })))
+        }
+
         const muCount = rows.filter(r => r.is_makeup).length
         toast.success(`Signed up for ${rows.length} slot(s)${muCount > 0 ? ` (${muCount} make-up)` : ''}`)
       }
@@ -772,11 +1106,28 @@ export function useLabSignupActions() {
   const cancelSignup = async (signupId) => {
     setSaving(true)
     try {
-      const { error } = await supabase
+      const { data: updated, error } = await supabase
         .from('lab_signup')
         .update({ status: 'Cancelled' })
         .eq('signup_id', signupId)
+        .select('signup_id, date, start_time, end_time, class_id, is_makeup')
       if (error) throw error
+      if (!updated || updated.length === 0) {
+        throw new Error('Cancellation was blocked — no rows changed (check permissions)')
+      }
+
+      if (AUDIT_STUDENT_SIGNUPS) {
+        const r = updated[0]
+        await writeAudit(profile, {
+          action: 'Cancel Signup',
+          entity_type: 'Lab Signup',
+          entity_id: signupId,
+          field_changed: 'status',
+          new_value: 'Cancelled',
+          details: `Cancelled signup for ${formatDateLabelFromIso(r.date)} ${formatTimeLabel(r.start_time)}–${formatTimeLabel(r.end_time)}${r.class_id ? ` (${r.class_id})` : ''}${r.is_makeup ? ' — make-up slot' : ''}`,
+        })
+      }
+
       toast.success('Signup cancelled')
       return { success: true }
     } catch (err) {
@@ -805,6 +1156,8 @@ export function useLabSignupActions() {
 
       const userName = `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`
 
+      // NOTE: intentionally no .select() here — students may not have a
+      // SELECT policy on lab_signup_requests, and RETURNING would fail.
       const { error } = await supabase.from('lab_signup_requests').insert({
         request_id: requestId,
         user_id: null,
@@ -821,6 +1174,16 @@ export function useLabSignupActions() {
       })
 
       if (error) throw error
+
+      await writeAudit(profile, {
+        action: 'Submit Lab Change',
+        entity_type: 'Lab Signup Request',
+        entity_id: requestId,
+        old_value: `${(currentSlots || []).length} slot(s)`,
+        new_value: `${(requestedSlots || []).length} slot(s)`,
+        details: `Requested lab schedule change for week of ${formatDateLabel(weekStart)}${courseId ? ` (${courseId})` : ''}: ${(currentSlots || []).length} → ${(requestedSlots || []).length} slot(s).${reason ? ` Reason: ${reason}` : ''}`,
+      })
+
       toast.success('Change request submitted for instructor approval')
       return { success: true }
     } catch (err) {
@@ -1012,8 +1375,9 @@ export function useInstructorSignup() {
       }
 
       const userName = `${student.firstName} ${(student.lastName || '').charAt(0)}.`
-      const { error } = await supabase.from('lab_signup').insert({
-        signup_id: 'SU' + String(nextNum).padStart(6, '0'),
+      const signupId = 'SU' + String(nextNum).padStart(6, '0')
+      const { data: inserted, error } = await supabase.from('lab_signup').insert({
+        signup_id: signupId,
         user_id: null,
         user_name: userName,
         user_email: student.email,
@@ -1022,10 +1386,21 @@ export function useInstructorSignup() {
         start_time: `${String(hourNum).padStart(2, '0')}:00:00`,
         end_time: `${String(hourNum + 1).padStart(2, '0')}:00:00`,
         status: 'Confirmed',
-        created_at: new Date().toISOString(),
-      })
+        created_at: localToUtcIso(new Date()),
+      }).select('signup_id')
 
       if (error) throw error
+      if (!inserted || inserted.length === 0) {
+        throw new Error('Signup was blocked — no rows created (check permissions)')
+      }
+
+      await writeAudit(profile, {
+        action: 'Instructor Sign Up',
+        entity_type: 'Lab Signup',
+        entity_id: signupId,
+        details: `Signed up ${userName} (${student.email}) for ${formatDateLabel(dateStr)} ${formatHour(hourNum)}${classId ? ` (${classId})` : ''} — instructor override`,
+      })
+
       toast.success(`Signed up ${userName} (Instructor Override)`)
       return { success: true }
     } catch (err) {

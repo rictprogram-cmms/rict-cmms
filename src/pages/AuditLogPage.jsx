@@ -106,6 +106,10 @@ function actionBadgeClass(action) {
     return 'bg-indigo-50 text-indigo-800 border-indigo-200'
   if (a.startsWith('reset'))
     return 'bg-orange-50 text-orange-800 border-orange-200'
+  if (a.startsWith('cancel'))
+    return 'bg-rose-50 text-rose-800 border-rose-200'
+  if (a.includes('sign up') || a.startsWith('signup'))
+    return 'bg-teal-50 text-teal-800 border-teal-200'
   return 'bg-slate-50 text-slate-700 border-slate-200'
 }
 
