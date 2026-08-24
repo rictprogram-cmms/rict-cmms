@@ -17,7 +17,7 @@
  *   {hasPerm('create_wo') && <button>Create</button>}
  *
  * Behavior:
- *   - Super Admin (rictprogram@gmail.com) always has all permissions (when NOT emulating)
+ *   - Super Admin (see src/lib/superAdmin.js) always has all permissions (when NOT emulating)
  *   - During emulation: super admin bypass is disabled, emulated user's role is used
  *   - All other roles (including Instructor) respect the database toggles
  *   - Active temp permission grants (request_type='permissions') add extra features
@@ -28,8 +28,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
 /**
  * Primary hook — loads permissions for a single page.

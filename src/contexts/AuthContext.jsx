@@ -1,12 +1,12 @@
 import { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
 const AuthContext = createContext(null)
 
 const PROFILE_CACHE_KEY = 'rict_cmms_profile'
 const EMULATION_CACHE_KEY = 'rict_cmms_emulation'
 const SESSION_LOGIN_KEY = 'rict_cmms_login_at'   // epoch ms of last real sign-in
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
 
 // Roles that are subject to lab access mode lockout.
 // Instructors and Super Admin are never locked out.

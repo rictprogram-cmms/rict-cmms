@@ -27,6 +27,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useCheckoutActions, fakeUtcToDisplay, daysOverdue } from '@/hooks/useAssetCheckouts'
+import { excludeSuperAdmin } from '@/lib/superAdmin'
 
 export default function AssetScanPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1053,7 +1054,7 @@ function ScanCheckOutModal({ asset, profile, actions, hasCheckoutPerm, onClose, 
         .select('id, user_id, email, first_name, last_name, role, status')
         .eq('status', 'Active')
         .order('first_name', { ascending: true })
-      if (!cancelled) setAllProfiles((data || []).filter(p => p.email && p.email !== 'rictprogram@gmail.com'))
+      if (!cancelled) setAllProfiles(excludeSuperAdmin((data || []).filter(p => p.email)))
     })()
     return () => { cancelled = true }
   }, [mode])

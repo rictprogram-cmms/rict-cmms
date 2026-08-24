@@ -52,6 +52,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import WeeklyReminderHistoryModal from '@/components/WeeklyReminderHistoryModal'
 import toast from 'react-hot-toast'
+import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SETTING METADATA — every visible setting gets a label, helper text, type, and
@@ -2914,7 +2915,7 @@ function AuditLogSettings() {
   const [edits, setEdits] = useState({})
 
   // Super admin check (matches usePermissions pattern: real super admin AND not emulating)
-  const isSuperAdmin = realProfile?.email?.toLowerCase() === 'rictprogram@gmail.com' && !isEmulating
+  const isSuperAdmin = isSuperAdminEmail(realProfile?.email) && !isEmulating
 
   const userName = profile
     ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()

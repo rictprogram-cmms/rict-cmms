@@ -13,14 +13,20 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
   - [x] Confirm no accounts still use the temp password — only one never-signed-in account (already Archived); delete its auth user in Supabase → Authentication → Users
   - [x] Script no longer needed — users are created through the app. Delete outright.
   - [x] Add `*.local.*` and `seed/` to `.gitignore`. (delivered)
-- [ ] **Implement `firstLastInitial()`** in `src/lib/utils.js` and apply on student-visible surfaces:
+- [ ] **Apply `displayName()`** (already in `src/lib/utils.js`, renders "First L.") on every student/work-study-visible surface. Rule agreed 2026-08-24: students and work study see other people as "First L."; instructors keep full names.
+  - [ ] Lab Signup
+  - [ ] Dashboard widgets
+  - [ ] Weekly Labs tracker
+  - [ ] Equipment Scheduling
+  - [ ] TV Display / Lab Status kiosk screens
   - [ ] Asset checkouts (`AssetCheckoutsPage.jsx`, `useAssetCheckouts.js`)
   - [ ] Absence requests (`AbsenceRequestPage.jsx`)
   - [ ] Audit any other list a student can see that renders another student's full name (Lab Signup, Time Cards, Dashboard widgets)
-- [ ] **Centralize super-admin exclusion.** `rictprogram@gmail.com` is hardcoded in 10+ files.
-  - [ ] Add `SUPER_ADMIN_EMAIL` constant + `excludeSuperAdmin(rows)` helper in `src/lib/`
-  - [ ] Replace inline `.neq('email', …)` / array filters (EmulationBar, AppLayout, useBugTracker, useSettings, useAbsenceRequests, usePermissions, AuthContext, ProgramPlannerPage, AbsenceRequestPage, AccessPage, LabStatusPage, AnnouncementsPage)
-  - [ ] Server-side: `profiles_public` view or RLS predicate so the client can't forget
+- [x] **Centralize super-admin exclusion.** Delivered 2026-08-24.
+  - [x] Add `SUPER_ADMIN_EMAIL` constant + `isSuperAdmin()` / `isSuperAdminEmail()` / `excludeSuperAdmin()` helpers in `src/lib/superAdmin.js`
+  - [x] Replace all 16 hardcoded sites across 15 files (EmulationBar, AppLayout, useBugTracker, useSettings, useAbsenceRequests, usePermissions, AuthContext, ProgramPlannerPage, AbsenceRequestPage, AccessPage, SettingsPage, LabStatusPage, AssetScanPage, AssetsPage, AnnouncementsPage)
+  - [ ] Server-side: `profiles_public` view so the client can't forget. Risk: 30+ files query `profiles` and a few (login, AuthContext, EmulationBar, AccessPage) must still see the super admin — needs its own session with testing.
+  - [ ] Audit the 24 files that query `profiles` with no filter; confirm none feed a student-visible picker
 - [ ] **`xlsx` 0.18.5 — 5 high-severity advisories, no npm fix.** Options: install SheetJS from `cdn.sheetjs.com` tarball (0.20.x) or migrate exports to `exceljs`. Decide and implement.
 - [ ] Strip `console.log` calls that print user emails/names (126 total `console.log`; audit for PII first, then remove or gate behind `import.meta.env.DEV`).
 
@@ -91,6 +97,7 @@ Instructor / admin:
   - [ ] `src/hooks/useSOPs.js`
   - [ ] `src/hooks/useViewTracker.js`
   - [ ] `src/pages/CourseRevisionWizard.jsx`
+  - [ ] `src/pages/AuthContext.jsx` (stale duplicate of `contexts/AuthContext.jsx`)
 - [ ] **Deferred pooled-scanner follow-ups** (not on main):
   - [ ] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx`
   - [ ] Hide pooled asset's checkout indicator in `AssetsPage.jsx`

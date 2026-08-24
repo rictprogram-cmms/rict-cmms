@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import StudentHoldsTab from '@/components/holds/StudentHoldsTab'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Utility / service accounts that must NEVER appear in the messaging picker —
@@ -21,7 +22,7 @@ import StudentHoldsTab from '@/components/holds/StudentHoldsTab'
 // "never shown in instructor-facing UI" convention.
 // ─────────────────────────────────────────────────────────────────────────────
 const HIDDEN_PICKER_EMAILS = new Set([
-  'rictprogram@gmail.com',
+  SUPER_ADMIN_EMAIL,
 ])
 function isHiddenPickerEmail(email) {
   if (!email) return false

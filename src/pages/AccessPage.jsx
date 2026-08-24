@@ -3,7 +3,7 @@
  * Faithfully reproduces the old Google Apps Script Access Control page.
  *
  * Features:
- *  - Super Admin only access (rictprogram@gmail.com)
+ *  - Super Admin only access (see src/lib/superAdmin.js)
  *  - Stats cards: Student / Work Study / Instructor permission counts
  *  - Collapsible page sections with permission tables
  *  - Toggle switches per role (color-coded: gold=Student, blue=Work Study, green=Instructor)
@@ -30,8 +30,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
+import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 const PAGE_ICONS = {
   'Dashboard': 'dashboard',
@@ -347,7 +346,7 @@ export default function AccessPage() {
   const [integrityResult, setIntegrityResult] = useState(null)
   const [seedSQL, setSeedSQL] = useState(null)
 
-  const isSuperAdmin = profile?.email?.toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
+  const isSuperAdmin = isSuperAdminEmail(profile?.email)
   const arrayHasIssues = ARRAY_VALIDATION.hasIssues
 
   // Load permissions

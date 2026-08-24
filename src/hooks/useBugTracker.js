@@ -66,7 +66,7 @@ export function validateScreenshot(file, currentCount) {
 }
 
 // ─── Super Admin Check ────────────────────────────────────────────────────────
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
+// (super admin identity lives in src/lib/superAdmin.js)
 
 // ─── Auto-close delay (days) ─────────────────────────────────────────────────
 const AUTO_CLOSE_DAYS = 15

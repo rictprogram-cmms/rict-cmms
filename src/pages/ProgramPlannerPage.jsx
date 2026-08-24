@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { isSuperAdmin } from '@/lib/superAdmin'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROGRAMS = [
@@ -899,7 +900,7 @@ export function StudentPlanView({ plan, onClose }) {
 export default function ProgramPlannerPage() {
   const { profile } = useAuth()
   const navigate = useNavigate()
-  const isInstructor = profile?.role==='Instructor'||profile?.email==='rictprogram@gmail.com'
+  const isInstructor = profile?.role==='Instructor'||isSuperAdmin(profile)
 
   const [plans,setPlans]=useState([])
   const [masterPlanners,setMasterPlanners]=useState([])

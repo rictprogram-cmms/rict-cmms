@@ -8,7 +8,7 @@
  * The floating button can be click-dragged to any screen edge and remembers
  * its position across page refreshes via localStorage.
  *
- * Only renders for the super admin (rictprogram@gmail.com).
+ * Only renders for the super admin (see src/lib/superAdmin.js).
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
@@ -24,6 +24,7 @@ import {
   Users,
   GripVertical,
 } from 'lucide-react'
+import { excludeSuperAdmin } from '@/lib/superAdmin'
 
 const POSITION_CACHE_KEY = 'rict_cmms_emulation_btn_pos'
 
@@ -211,7 +212,7 @@ export default function EmulationBar() {
           .order('last_name', { ascending: true })
 
         if (!cancelled && !error && data) {
-          setUsers(data.filter(u => u.email?.toLowerCase() !== 'rictprogram@gmail.com'))
+          setUsers(excludeSuperAdmin(data))
         }
       } catch (err) {
         console.error('Failed to load users for emulation:', err)

@@ -56,8 +56,7 @@ import {
   History,
   BookOpen,
 } from 'lucide-react'
-
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
+import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // Sidebar navigation grouped by section
 // permPage maps to the `page` column in the permissions table for view_page check
@@ -1496,7 +1495,7 @@ export default function AppLayout() {
     useChangelog(realProfile, isEmulating, mustChangePassword)
 
   const userRole = profile?.role || 'Student'
-  const isSuperAdmin = profile?.email?.toLowerCase() === SUPER_ADMIN_EMAIL
+  const isSuperAdmin = isSuperAdminEmail(profile?.email)
   // Keep isInstructor for backward-compatible sections (temp access, etc.)
   const isInstructor = userRole === 'Instructor' || isSuperAdmin
 

@@ -31,6 +31,7 @@ import { supabase } from '@/lib/supabase';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mustData } from '@/lib/supabaseData';
 import { useVersionCheck } from '@/hooks/useVersionCheck';
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
 const SCROLL_THRESHOLD = 6;
 
@@ -418,7 +419,7 @@ export default function LabStatusPage() {
     async function loadInstructors() {
       try {
         const { data } = await supabase.from('profiles').select('email, first_name, last_name, role')
-          .eq('role', 'Instructor').eq('status', 'Active').neq('email', 'rictprogram@gmail.com')
+          .eq('role', 'Instructor').eq('status', 'Active').neq('email', SUPER_ADMIN_EMAIL)
           .order('first_name', { ascending: true });
         setInstructors((data || []).map(p => {
           const first = (p.first_name || '').trim(); const last = (p.last_name || '').trim();

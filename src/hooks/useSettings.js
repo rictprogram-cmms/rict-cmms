@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
+import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // ─── Helper: unique realtime channel suffix ──────────────────────────────────
 // Per project rule: channel names must be unique per mounted component to
@@ -738,7 +739,7 @@ export function useStudentsInClass(classId) {
 
       const list = (data || [])
         // Exclude super admin from user-facing picker (defense-in-depth)
-        .filter(p => (p.email || '').toLowerCase() !== 'rictprogram@gmail.com')
+        .filter(p => !isSuperAdminEmail(p.email))
         // Exclude inactive accounts; permissive on unknown statuses
         .filter(p => (p.status || 'Active').toLowerCase() !== 'inactive')
         // Match enrollment via standard comma-separated parse, accepting EITHER

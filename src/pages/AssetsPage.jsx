@@ -28,6 +28,7 @@ import {
   fakeUtcToDisplay,
   daysOverdue,
 } from '@/hooks/useAssetCheckouts'
+import { excludeSuperAdmin } from '@/lib/superAdmin'
 
 function formatDate(iso) {
   if (!iso) return '-'
@@ -2098,7 +2099,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
         .select('id, user_id, email, first_name, last_name, role, status')
         .eq('status', 'Active')
         .order('first_name', { ascending: true })
-      if (!cancelled) setAllProfiles((data || []).filter(p => p.email && p.email !== 'rictprogram@gmail.com'))
+      if (!cancelled) setAllProfiles(excludeSuperAdmin((data || []).filter(p => p.email)))
     })()
     return () => { cancelled = true }
   }, [mode])

@@ -32,8 +32,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
+import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // Per project rule: channel names must be unique per mounted component to
 // prevent conflicts when multiple instances of a hook are alive at once.
@@ -688,7 +687,7 @@ export function useAbsenceStudentOptions({ enabled = true } = {}) {
         const list = (data || []).filter(p =>
           p.role !== 'Instructor' &&
           p.time_clock_only !== 'Yes' &&
-          (p.email || '').toLowerCase() !== SUPER_ADMIN_EMAIL
+          !isSuperAdminEmail(p.email)
         )
         if (!cancelled) setStudents(list)
       } catch (e) {

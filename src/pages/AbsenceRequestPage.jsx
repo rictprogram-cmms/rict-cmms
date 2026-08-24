@@ -47,8 +47,7 @@ import {
   makeupWeekOf,
   makeupPastClassEnd,
 } from '@/hooks/useAbsenceRequests'
-
-const SUPER_ADMIN_EMAIL = 'rictprogram@gmail.com'
+import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -967,7 +966,7 @@ export default function AbsenceRequestPage() {
   // view stays true to what that user would see.
   const isSuperAdmin =
     !isEmulating &&
-    ((realProfile?.email || profile?.email || '').toLowerCase() === SUPER_ADMIN_EMAIL)
+    isSuperAdminEmail(realProfile?.email || profile?.email)
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [showSubmitModal, setShowSubmitModal] = useState(false)
