@@ -34,6 +34,7 @@ import {
   daysUntilDue,
 } from '@/hooks/useAssetCheckouts'
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal'
+import toast from 'react-hot-toast'
 import {
   Box,
   Clock,
@@ -305,7 +306,7 @@ export default function AssetCheckoutsPage() {
       XLSX.writeFile(wb, filename)
     } catch (e) {
       console.error('Excel export error:', e)
-      alert('Excel export failed: ' + e.message)
+      toast.error('Excel export failed: ' + e.message)
     }
   }, [filtered, tab, hasPerm])
 
@@ -383,7 +384,7 @@ export default function AssetCheckoutsPage() {
             <>
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="btn btn-secondary min-h-[44px]"
                 onClick={() => setShowReportModal(true)}
                 aria-label="Generate end-of-semester equipment report"
               >
@@ -392,7 +393,7 @@ export default function AssetCheckoutsPage() {
               </button>
               <button
                 type="button"
-                className="btn btn-secondary"
+                className="btn btn-secondary min-h-[44px]"
                 onClick={exportExcel}
                 aria-label="Export current view to Excel"
               >
@@ -426,7 +427,7 @@ export default function AssetCheckoutsPage() {
               type="button"
               onClick={() => setTab(id)}
               className={[
-                'flex-1 py-2 px-3 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 min-w-[140px]',
+                'flex-1 py-2 px-3 min-h-[44px] rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 min-w-[140px]',
                 active ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500 hover:text-surface-700',
               ].join(' ')}
             >
@@ -483,7 +484,7 @@ export default function AssetCheckoutsPage() {
           <button
             type="button"
             onClick={() => { setSearch(''); setUserFilter('') }}
-            className="btn btn-secondary btn-sm"
+            className="btn btn-secondary btn-sm min-h-[44px]"
             aria-label="Clear filters"
           >
             <X size={12} aria-hidden="true" />
@@ -544,7 +545,7 @@ export default function AssetCheckoutsPage() {
                         <button
                           type="button"
                           onClick={() => navigate(`/assets?focus=${encodeURIComponent(c.asset_id)}`)}
-                          className="text-left font-medium text-surface-900 hover:text-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 rounded"
+                          className="text-left font-medium text-surface-900 hover:text-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 rounded min-h-[44px]"
                           aria-label={`Open asset ${c.asset_name}`}
                           title="Open asset"
                         >
@@ -616,7 +617,7 @@ export default function AssetCheckoutsPage() {
                             <button
                               type="button"
                               onClick={() => setAckTarget(c)}
-                              className="px-2 py-1 text-[11px] rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100 border border-brand-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                              className="px-2 py-1 text-[11px] rounded-md bg-brand-50 text-brand-700 hover:bg-brand-100 border border-brand-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
                               aria-label={`Sign for ${c.asset_name}`}
                             >
                               <ShieldCheck size={11} aria-hidden="true" />
@@ -627,7 +628,7 @@ export default function AssetCheckoutsPage() {
                             <button
                               type="button"
                               onClick={() => setCancelTarget(c)}
-                              className="px-2 py-1 text-[11px] rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                              className="px-2 py-1 text-[11px] rounded-md bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 min-h-[44px]"
                               aria-label={`Cancel pending request for ${c.asset_name}`}
                             >
                               <XCircle size={11} aria-hidden="true" />
@@ -639,7 +640,7 @@ export default function AssetCheckoutsPage() {
                             <button
                               type="button"
                               onClick={() => setCheckInTarget(c)}
-                              className="px-2 py-1 text-[11px] rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                              className="px-2 py-1 text-[11px] rounded-md bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 min-h-[44px]"
                               aria-label={`Check in ${c.asset_name}`}
                             >
                               <RotateCcw size={11} aria-hidden="true" />
@@ -650,7 +651,7 @@ export default function AssetCheckoutsPage() {
                             <button
                               type="button"
                               onClick={() => setExtendTarget(c)}
-                              className="px-2 py-1 text-[11px] rounded-md bg-surface-100 text-surface-700 hover:bg-surface-200 border border-surface-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+                              className="px-2 py-1 text-[11px] rounded-md bg-surface-100 text-surface-700 hover:bg-surface-200 border border-surface-200 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px]"
                               aria-label={`Extend due date for ${c.asset_name}`}
                             >
                               <CalendarClock size={11} aria-hidden="true" />
@@ -828,7 +829,7 @@ function CheckInModal({ dialogRef, checkout, saving, onClose, onSubmit }) {
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="p-1 rounded text-surface-400 hover:bg-surface-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="p-1 rounded text-surface-400 hover:bg-surface-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close check-in dialog"
           >
             <X size={18} aria-hidden="true" />
@@ -892,7 +893,7 @@ function CheckInModal({ dialogRef, checkout, saving, onClose, onSubmit }) {
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px]"
           >
             Cancel
           </button>
@@ -900,7 +901,7 @@ function CheckInModal({ dialogRef, checkout, saving, onClose, onSubmit }) {
             type="button"
             onClick={() => onSubmit({ condition, notes, needsRepair })}
             disabled={saving}
-            className="px-3 py-2 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+            className="px-3 py-2 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 min-h-[44px]"
           >
             {saving
               ? <><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Saving…</>
@@ -939,7 +940,7 @@ function ExtendModal({ dialogRef, checkout, saving, onClose, onSubmit }) {
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="p-1 rounded text-surface-400 hover:bg-surface-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="p-1 rounded text-surface-400 hover:bg-surface-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close extend dialog"
           >
             <X size={18} aria-hidden="true" />
@@ -971,7 +972,7 @@ function ExtendModal({ dialogRef, checkout, saving, onClose, onSubmit }) {
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px]"
           >
             Cancel
           </button>
@@ -985,7 +986,7 @@ function ExtendModal({ dialogRef, checkout, saving, onClose, onSubmit }) {
               onSubmit(newDate)
             }}
             disabled={saving || !dateStr}
-            className="px-3 py-2 text-xs rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="px-3 py-2 text-xs rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
           >
             {saving
               ? <><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Saving…</>
@@ -1023,7 +1024,7 @@ function EquipmentReportModal({ dialogRef, checkouts, onClose }) {
             <section class="grp">
               <h3>${escapeHtml(g.name)} <small>${escapeHtml(g.email || '')}</small></h3>
               <table>
-                <thead><tr><th>Asset</th><th>ID</th><th>Serial #</th><th>Out</th><th>Due</th><th>Days Out</th></tr></thead>
+                <thead><tr><th scope="col">Asset</th><th scope="col">ID</th><th scope="col">Serial #</th><th scope="col">Out</th><th scope="col">Due</th><th scope="col">Days Out</th></tr></thead>
                 <tbody>
                   ${g.items.map(c => itemRow(c)).join('')}
                 </tbody>
@@ -1035,7 +1036,7 @@ function EquipmentReportModal({ dialogRef, checkouts, onClose }) {
         return `
           <section class="grp">
             <table>
-              <thead><tr><th>Asset</th><th>Serial #</th><th>User</th><th>Email</th><th>Out</th><th>Due</th><th>Days Out</th></tr></thead>
+              <thead><tr><th scope="col">Asset</th><th scope="col">Serial #</th><th scope="col">User</th><th scope="col">Email</th><th scope="col">Out</th><th scope="col">Due</th><th scope="col">Days Out</th></tr></thead>
               <tbody>
                 ${checkouts
                   .slice()
@@ -1118,7 +1119,7 @@ function EquipmentReportModal({ dialogRef, checkouts, onClose }) {
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded text-surface-400 hover:bg-surface-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="p-1 rounded text-surface-400 hover:bg-surface-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close report dialog"
           >
             <X size={18} aria-hidden="true" />
@@ -1181,7 +1182,7 @@ function EquipmentReportModal({ dialogRef, checkouts, onClose }) {
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px]"
           >
             Cancel
           </button>
@@ -1189,7 +1190,7 @@ function EquipmentReportModal({ dialogRef, checkouts, onClose }) {
             type="button"
             onClick={printReport}
             disabled={totalOut === 0}
-            className="px-3 py-2 text-xs rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            className="px-3 py-2 text-xs rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
           >
             <Printer size={12} aria-hidden="true" />
             Generate &amp; Print
@@ -1266,7 +1267,7 @@ function CancelPendingModal({ dialogRef, checkout, saving, onClose, onConfirm })
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="p-1 rounded text-surface-400 hover:bg-amber-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+            className="p-1 rounded text-surface-400 hover:bg-amber-100 hover:text-surface-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close cancel dialog"
           >
             <X size={18} aria-hidden="true" />
@@ -1293,7 +1294,7 @@ function CancelPendingModal({ dialogRef, checkout, saving, onClose, onConfirm })
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+            className="px-3 py-2 text-xs rounded-lg border border-surface-300 bg-white hover:bg-surface-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 min-h-[44px]"
           >
             Keep request
           </button>
@@ -1301,7 +1302,7 @@ function CancelPendingModal({ dialogRef, checkout, saving, onClose, onConfirm })
             type="button"
             onClick={onConfirm}
             disabled={saving}
-            className="px-3 py-2 text-xs rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+            className="px-3 py-2 text-xs rounded-lg bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 min-h-[44px]"
           >
             {saving
               ? <><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Cancelling…</>

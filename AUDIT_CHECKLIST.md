@@ -49,7 +49,7 @@ Student-facing first:
 - [x] `TimeCardsPage.jsx` — delivered 2026-08-24: `ModalOverlay` now uses `useDialogA11y` + `role="dialog"`; `Field` links labels via `useId()`; aria-labels on 11 icon buttons; keyboard toggle for week rows; `aria-pressed` on tabs; focus rings + 44px on all buttons; `scope="col"` on all headers; decorative icons hidden; loading spinners announced
 - [x] `LabSignupPage.jsx` — delivered 2026-08-24: Change Request + Slot Detail modals wired to `useDialogA11y` with `role="dialog"`; `window.confirm` on My Signups replaced with `ConfirmDialog`; aria-labels on nav/close/cancel buttons; reason textarea labelled; week title is a live region; tabs `aria-pressed`; focus rings + 44px on all buttons; `scope="col"`; decorative icons hidden
 - [x] `AbsenceRequestPage.jsx` — audited 2026-08-24: already compliant (dialogs, labels, live regions, focus rings); only fix needed was 44px targets on 10 buttons
-- [ ] `AssetCheckoutsPage.jsx`
+- [x] `AssetCheckoutsPage.jsx` — audited 2026-08-24: already compliant (4 dialogs on `useDialogA11y`, tablist, labels, icons hidden); fixed 44px on 21 buttons, `scope="col"` in the printed equipment report, `alert()` → toast
 - [ ] `VolunteerHoursPage.jsx` (~21 unlabeled, 6 clickable divs)
 - [ ] `DashboardPage.jsx`
 - [ ] `BugTrackerPage.jsx` (~12 unlabeled, 1 `outline-none`)
