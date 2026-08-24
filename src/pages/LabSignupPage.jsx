@@ -1196,7 +1196,10 @@ function LabCalendarTab() {
       startTime: entry ? `${String(entry.startHour).padStart(2, '0')}:00` : '08:00',
       endTime: entry ? `${String(entry.endHour).padStart(2, '0')}:00` : '16:00',
       maxStudents: entry?.maxStudents || 24,
-      lunchHour: entry?.lunchHour ?? 12,
+      // Existing days keep their saved lunch (including null = no lunch);
+      // only brand-new days default to a 12 PM lunch. Previously `?? 12`
+      // silently re-added lunch to no-lunch days on every edit.
+      lunchHour: entry ? entry.lunchHour : 12,
       notes: entry?.notes || '',
       // Hour-level closures within an Open day (e.g. 2-3pm faculty meeting)
       closedBlocks: Array.isArray(entry?.closedBlocks)

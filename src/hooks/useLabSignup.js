@@ -379,6 +379,124 @@ async function generateSafeCalendarId() {
   return `${CAL_PREFIX}${numericId}-${Date.now().toString().slice(-4)}`
 }
 
+// ─── Collision-safe signup IDs (batch-aware) ────────────────────────────────
+/**
+ * Reserve `count` consecutive lab_signup IDs (SU######) without the MAX+1
+ * race that let two students submitting at the same moment collide.
+ *
+ *  1. Atomically reserve a block via the `reserve_next_ids` RPC
+ *     (p_type = 'lab_signup'). The RPC bumps the counter by `count` in one
+ *     UPDATE, so concurrent callers get non-overlapping blocks.
+ *  2. Always also MAX-scan existing SU###### IDs — if the counter is behind
+ *     reality (or the RPC/migration isn't deployed yet), start past the max.
+ *  3. Verify the whole candidate block is free in one query; shift past any
+ *     collision and retry (bounded).
+ *  4. If we had to go beyond the reserved block, write the final number back
+ *     to `counters` so drift self-heals.
+ *
+ * Exported so other call sites that insert lab_signup rows (e.g. the
+ * approve-lab-change flow in NotificationBell.jsx) can share it.
+ */
+const SU_PREFIX = 'SU'
+const SU_PAD = 6
+
+export async function generateSafeSignupIds(count) {
+  const n = Math.max(1, parseInt(count, 10) || 1)
+  const format = num => `${SU_PREFIX}${String(num).padStart(SU_PAD, '0')}`
+
+  // Step 1 — atomic block reservation
+  let start = null
+  let reservedEnd = null
+  try {
+    const { data, error } = await supabase.rpc('reserve_next_ids', {
+      p_type: 'lab_signup',
+      p_count: n,
+    })
+    if (error) {
+      console.warn('reserve_next_ids(lab_signup) RPC error, falling back:', error.message)
+    } else if (data != null) {
+      const endNum = parseInt(String(data).replace(/[^0-9]/g, ''), 10)
+      if (!isNaN(endNum) && endNum >= n) {
+        reservedEnd = endNum
+        start = endNum - n + 1
+      }
+    }
+  } catch (e) {
+    console.warn('reserve_next_ids(lab_signup) threw, falling back:', e?.message || e)
+  }
+
+  // Step 2 — MAX-scan safety net (counter behind reality, or RPC missing)
+  let scanMax = 0
+  try {
+    const { data: idRows } = await supabase
+      .from('lab_signup')
+      .select('signup_id')
+      .like('signup_id', `${SU_PREFIX}%`)
+      .order('signup_id', { ascending: false })
+      .limit(50)
+    const rx = new RegExp(`^${SU_PREFIX}([0-9]{1,10})$`)
+    ;(idRows || []).forEach(r => {
+      const m = rx.exec(r.signup_id || '')
+      if (m) {
+        const num = parseInt(m[1], 10)
+        if (num > scanMax) scanMax = num
+      }
+    })
+  } catch (e) {
+    console.warn('lab_signup MAX-scan failed (non-critical):', e?.message || e)
+  }
+  if (start === null || scanMax >= start) start = scanMax + 1
+
+  // Step 3 — verify the whole block is free (single query per attempt)
+  const MAX_RETRIES = 10
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const ids = Array.from({ length: n }, (_, i) => format(start + i))
+    let taken = []
+    try {
+      const { data: existing } = await supabase
+        .from('lab_signup')
+        .select('signup_id')
+        .in('signup_id', ids)
+      taken = existing || []
+    } catch (e) {
+      console.warn('Signup ID collision check failed, assuming free:', e?.message || e)
+    }
+
+    if (taken.length === 0) {
+      // Step 4 — keep the counter aligned if we drifted past the reservation
+      const endNum = start + n - 1
+      if (reservedEnd === null || endNum > reservedEnd) {
+        try {
+          await supabase
+            .from('counters')
+            .update({ current_value: endNum, updated_at: localToUtcIso(new Date()) })
+            .eq('counter_name', 'lab_signup')
+        } catch (e) {
+          console.warn('lab_signup counter sync failed (non-critical):', e?.message || e)
+        }
+      }
+      return ids
+    }
+
+    // Shift past the highest colliding ID and retry
+    let maxHit = start
+    const rx = new RegExp(`^${SU_PREFIX}([0-9]{1,10})$`)
+    taken.forEach(r => {
+      const m = rx.exec(r.signup_id || '')
+      if (m) {
+        const num = parseInt(m[1], 10)
+        if (num > maxHit) maxHit = num
+      }
+    })
+    console.warn(`Signup ID collision at ${format(start)}…, shifting past ${format(maxHit)} (${attempt + 1}/${MAX_RETRIES})`)
+    start = maxHit + 1
+  }
+
+  // Pathological fallback — timestamp-suffixed, still SU-prefixed and unique
+  const stamp = Date.now().toString().slice(-4)
+  return Array.from({ length: n }, (_, i) => `${format(start + i)}-${stamp}`)
+}
+
 // ─── Lab Calendar (Instructor) ──────────────────────────────────────────────
 
 export function useLabCalendar(year, month) {
@@ -1008,23 +1126,9 @@ export function useLabSignupActions() {
   const signUpBatchMultiClass = async (selectionsByClass, makeupTags = {}) => {
     setSaving(true)
     try {
-      // Get next signup ID
-      const { data: maxRow } = await supabase
-        .from('lab_signup')
-        .select('signup_id')
-        .order('signup_id', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      let maxNum = 0
-      if (maxRow?.signup_id) {
-        const num = parseInt(maxRow.signup_id.replace('SU', ''))
-        if (!isNaN(num)) maxNum = num
-      }
-
-      const rows = []
-      const auditMeta = []   // parallel to rows: { dateStr, hour } for audit details
-
+      // Pass 1 — figure out which selected slots actually need a row
+      // (skip ones the student already holds), WITHOUT assigning IDs yet.
+      const pending = []
       for (const [classId, selections] of Object.entries(selectionsByClass)) {
         for (const sel of selections) {
           const [dateStr, hourStr] = sel.split('_')
@@ -1042,29 +1146,35 @@ export function useLabSignupActions() {
             .maybeSingle()
 
           if (existing) continue
+          pending.push({ sel, classId, dateStr, hour, targetDate })
+        }
+      }
 
-          maxNum++
-          const numStr = String(maxNum).padStart(6, '0')
-          const startTime = `${String(hour).padStart(2, '0')}:00:00`
-          const endTime = `${String(hour + 1).padStart(2, '0')}:00:00`
-          const userName = `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`
+      // Pass 2 — reserve exactly the IDs we need in one atomic block, so two
+      // students submitting at the same moment can't collide.
+      const rows = []
+      const auditMeta = []   // parallel to rows: { dateStr, hour } for audit details
+      if (pending.length > 0) {
+        const ids = await generateSafeSignupIds(pending.length)
+        const userName = `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`
 
+        pending.forEach((p, i) => {
           rows.push({
-            signup_id: 'SU' + numStr,
+            signup_id: ids[i],
             user_id: null,
             user_name: userName,
             user_email: profile.email,
-            class_id: classId || '',
-            date: targetDate.toISOString(),
-            start_time: startTime,
-            end_time: endTime,
+            class_id: p.classId || '',
+            date: p.targetDate.toISOString(),
+            start_time: `${String(p.hour).padStart(2, '0')}:00:00`,
+            end_time: `${String(p.hour + 1).padStart(2, '0')}:00:00`,
             status: 'Confirmed',
             created_at: localToUtcIso(new Date()),
-            is_makeup: !!makeupTags[sel],
-            makeup_request_id: makeupTags[sel] || null,
+            is_makeup: !!makeupTags[p.sel],
+            makeup_request_id: makeupTags[p.sel] || null,
           })
-          auditMeta.push({ dateStr, hour })
-        }
+          auditMeta.push({ dateStr: p.dateStr, hour: p.hour })
+        })
       }
 
       if (rows.length > 0) {
@@ -1361,21 +1471,8 @@ export function useInstructorSignup() {
         return { success: false }
       }
 
-      const { data: maxRow } = await supabase
-        .from('lab_signup')
-        .select('signup_id')
-        .order('signup_id', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      let nextNum = 1
-      if (maxRow?.signup_id) {
-        const num = parseInt(maxRow.signup_id.replace('SU', ''))
-        if (!isNaN(num)) nextNum = num + 1
-      }
-
       const userName = `${student.firstName} ${(student.lastName || '').charAt(0)}.`
-      const signupId = 'SU' + String(nextNum).padStart(6, '0')
+      const [signupId] = await generateSafeSignupIds(1)
       const { data: inserted, error } = await supabase.from('lab_signup').insert({
         signup_id: signupId,
         user_id: null,
