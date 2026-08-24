@@ -28,8 +28,11 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
+import { mustData } from '@/lib/supabaseData';
 
 const SCROLL_THRESHOLD = 6;
+
 
 // ─── Weather helpers ────────────────────────────────────────────────────────
 
@@ -460,13 +463,10 @@ export default function LabStatusPage() {
   }, []);
   useEffect(() => { fetchAwayMode(); }, [fetchAwayMode]);
 
-  useEffect(() => {
-    const channel = supabase.channel('lab-status-away-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_away_mode' }, p => setInstructorAway(p.new?.setting_value === 'true'))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_return_time' }, p => setAwayReturnTime(p.new?.setting_value || ''))
-      .subscribe();
-    return () => supabase.removeChannel(channel);
-  }, []);
+  useEffect(() => subscribeWithReconnect('lab-status-away-rt', ch => ch
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_away_mode' }, p => setInstructorAway(p.new?.setting_value === 'true'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_return_time' }, p => setAwayReturnTime(p.new?.setting_value || ''))
+  , { tag: 'LabStatus' }), []);
 
   const toggleAwayOff = useCallback(async () => {
     setAwayToggling(true);
@@ -508,15 +508,12 @@ export default function LabStatusPage() {
       // Previously the nulls were treated as "nobody here" and wiped the
       // roster until the next poll. Treat any failure of the roster queries
       // as fatal for this cycle so the last-known-good list stays on screen.
-      const fatal = [
-        ['time_clock', clockRes.error], ['help_requests', helpRes.error],
-        ['profiles', profilesRes.error], ['lab_signup', signupRes.error],
-      ].find(([, e]) => e);
-      if (fatal) throw new Error(`${fatal[0]}: ${fatal[1].message || 'query failed'}`);
+      const clockData    = mustData(clockRes, 'time_clock');
+      const helpData     = mustData(helpRes, 'help_requests');
+      const profilesData = mustData(profilesRes, 'profiles');
+      const signupData   = mustData(signupRes, 'lab_signup');
       if (calRes.error) console.warn('[LabStatus] lab_calendar query error (closures banner skipped):', calRes.error.message);
-
-      const clockData = clockRes.data, helpData = helpRes.data, profilesData = profilesRes.data,
-            signupData = signupRes.data, calData = calRes.error ? null : calRes.data;
+      const calData = calRes.error ? null : calRes.data;
 
       // ── Today's hour-level closures ──
       // Surface "Lab closed 2-3pm — Faculty Meeting" banner so students walking
@@ -670,15 +667,12 @@ export default function LabStatusPage() {
     return () => { clearInterval(poll); clearTimeout(retryTimerRef.current); window.removeEventListener('online', onOnline); };
   }, [fetchData]);
 
-  useEffect(() => {
-    const channel = supabase.channel('lab-status-rt-' + Date.now())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, fetchData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchData)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, fetchData)
-      .subscribe();
-    return () => supabase.removeChannel(channel);
-  }, [fetchData]);
+  useEffect(() => subscribeWithReconnect('lab-status-rt', ch => ch
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, fetchData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchData)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, fetchData)
+  , { tag: 'LabStatus' }), [fetchData]);
 
   // ── Touch interactions ──
   const acknowledgeRequest = useCallback(async (requestId) => {

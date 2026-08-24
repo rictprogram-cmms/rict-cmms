@@ -24,10 +24,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
+import { mustData } from '@/lib/supabaseData'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 const supabase = createClient(supabaseUrl, supabaseKey)
+// This page uses its own anon client (public route) — hand it to the shared realtime helper
+const TV_RT_OPTS = { client: supabase, tag: 'TVDisplay' }
 
 // ── Weather code helpers ────────────────────────────────────────────
 const WEATHER_EMOJI = {
@@ -73,32 +77,6 @@ function firstLastInit(fullName) {
 // this is a safety net in case a subscription message is missed
 const FALLBACK_POLL_MS = 5 * 60 * 1000
 
-/**
- * subscribeWithReconnect(name, bind)
- * Supabase Realtime does not always re-establish a channel after the Pi's
- * WebSocket drops. On CHANNEL_ERROR / TIMED_OUT / CLOSED the channel is torn
- * down and rebuilt with exponential backoff (2 s → 60 s). Returns cleanup.
- *   bind(channel) attaches the .on(...) listeners and returns the channel.
- */
-function subscribeWithReconnect(name, bind) {
-  let channel = null, timer = null, attempt = 0, stopped = false
-  const connect = () => {
-    if (stopped) return
-    channel = bind(supabase.channel(`${name}-${Date.now()}`))
-    channel.subscribe((status) => {
-      if (stopped) return
-      if (status === 'SUBSCRIBED') { attempt = 0; return }
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        const delay = Math.min(60000, 2000 * 2 ** attempt++)
-        console.warn(`[TVDisplay] Realtime ${name} ${status} — reconnecting in ${delay / 1000}s`)
-        supabase.removeChannel(channel); channel = null
-        clearTimeout(timer); timer = setTimeout(connect, delay)
-      }
-    })
-  }
-  connect()
-  return () => { stopped = true; clearTimeout(timer); if (channel) supabase.removeChannel(channel) }
-}
 
 // ════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
@@ -329,7 +307,7 @@ export default function TVDisplayPage() {
         event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_return_time',
       }, (p) => { setAwayReturnTime(p.new?.setting_value || '') })
-    )
+    , TV_RT_OPTS)
   }, [])
 
   // ── TV slides + rotation setting ───────────────────────────────
@@ -385,7 +363,7 @@ export default function TVDisplayPage() {
         const v = parseInt(p.new?.setting_value, 10)
         if (!isNaN(v) && v >= 5) setRotationSeconds(v)
       })
-    )
+    , TV_RT_OPTS)
 
     // Date windows are checked against "today" — re-evaluate every 10 minutes
     // so slides expire / appear on schedule without a reboot.
@@ -484,14 +462,6 @@ export default function TVDisplayPage() {
   const retryTimerRef   = useRef(null)
   const [loadError, setLoadError] = useState(null)
 
-  // Supabase returns { data: null, error } instead of throwing. Treating
-  // that null as "no rows" is what blanked the roster on the Lab Status
-  // kiosk; this throws so the catch below keeps the current display.
-  const must = (res, label) => {
-    if (res.error) throw new Error(`${label}: ${res.error.message || 'query failed'}`)
-    return res.data
-  }
-
   const loadData = useCallback(async () => {
     if (loadInFlightRef.current) return
     loadInFlightRef.current = true
@@ -537,11 +507,11 @@ export default function TVDisplayPage() {
           .order('requested_at', { ascending: true }),
       ])
       if (seq !== loadSeqRef.current) return // a newer load superseded this one
-      const wos      = must(wosRes, 'work_orders')
-      const allUsers = must(usersRes, 'profiles')
-      const tcRows   = must(tcRes, 'time_clock')
-      const signups  = must(signupRes, 'lab_signup')
-      const helpRows = must(helpRes, 'help_requests')
+      const wos      = mustData(wosRes, 'work_orders')
+      const allUsers = mustData(usersRes, 'profiles')
+      const tcRows   = mustData(tcRes, 'time_clock')
+      const signups  = mustData(signupRes, 'lab_signup')
+      const helpRows = mustData(helpRes, 'help_requests')
 
       let totalLateDays = 0
       let totalDaysOpen = 0
@@ -806,7 +776,7 @@ export default function TVDisplayPage() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { loadData() })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { loadData() })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, () => { loadData() })
-  ), [loadData])
+  , TV_RT_OPTS), [loadData])
 
   // ── Minute-tick refresh so closure "isCurrent / isUpcoming" labels stay accurate ──
   // (The data itself doesn't change, just our derived now-relative flags.)

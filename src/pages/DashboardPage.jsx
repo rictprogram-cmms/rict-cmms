@@ -22,6 +22,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
+import { mustData } from '@/lib/supabaseData';
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useVolunteerData } from '@/hooks/useVolunteerHours';
@@ -186,10 +188,10 @@ function AccountabilityMetrics({ navigate }) {
     };
     fetchWOs();
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
-    const channel = supabase.channel(`dash-wo-count-${Date.now()}`)
+    const unsubscribe = subscribeWithReconnect('dash-wo-count', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, fetchWOs)
-      .subscribe();
-    return () => { cancelled = true; supabase.removeChannel(channel); };
+    , { tag: 'Dashboard' });
+    return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email]);
 
   useEffect(() => {
@@ -202,7 +204,7 @@ function AccountabilityMetrics({ navigate }) {
         // Use local date — toISOString() returns UTC and would shift to tomorrow after ~6 PM CST,
         // causing classes that haven't started yet to be incorrectly included in the filter.
         const todayStr = toLocalDateStr(new Date());
-        const { data: classesData } = await supabase.from('classes').select('start_date, end_date').in('course_id', userClasses).eq('status', 'Active').or(`start_date.is.null,start_date.lte.${todayStr}`);
+        const classesData = mustData(await supabase.from('classes').select('start_date, end_date').in('course_id', userClasses).eq('status', 'Active').or(`start_date.is.null,start_date.lte.${todayStr}`), 'classes');
         if (!classesData || classesData.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
         let startDate = null, endDate = null;
         classesData.forEach(c => {
@@ -220,9 +222,15 @@ function AccountabilityMetrics({ navigate }) {
           if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10;
         } catch {}
         // IMPORTANT: time_clock stores USR#### in user_id — must use profile.user_id, not profile.id (UUID)
-        const { data: tcData } = await supabase.from('time_clock').select('record_id, punch_in, punch_out, status, entry_type').eq('user_id', profile.user_id).gte('punch_in', startDate + 'T00:00:00').lte('punch_in', endDate + 'T23:59:59');
-        const records = tcData || [];
-        const { data: suData } = await supabase.from('lab_signup').select('date, start_time, end_time').eq('user_email', profile.email).eq('status', 'Confirmed').gte('date', startDate).lte('date', endDate + 'T23:59:59');
+        // Both reads are mandatory: a failed lab_signup read with a good
+        // time_clock read would make every punch look like "no signup" and
+        // show the student 0% until the next refresh.
+        const [tcRes, suRes] = await Promise.all([
+          supabase.from('time_clock').select('record_id, punch_in, punch_out, status, entry_type').eq('user_id', profile.user_id).gte('punch_in', startDate + 'T00:00:00').lte('punch_in', endDate + 'T23:59:59'),
+          supabase.from('lab_signup').select('date, start_time, end_time').eq('user_email', profile.email).eq('status', 'Confirmed').gte('date', startDate).lte('date', endDate + 'T23:59:59'),
+        ]);
+        const records = mustData(tcRes, 'time_clock') || [];
+        const suData = mustData(suRes, 'lab_signup');
         const signupsByDate = {};
         (suData || []).forEach(s => {
           const d = (s.date || '').split('T')[0]; if (!d) return;
@@ -247,17 +255,19 @@ function AccountabilityMetrics({ navigate }) {
         if (!cancelled) setAttendanceScore(score);
       } catch (err) {
         console.error('Dashboard attendance error:', err);
-        if (!cancelled) setAttendanceScore(100);
+        // Keep the last good score on a transient failure; only fall back to
+        // 100 if we have never managed to compute one.
+        if (!cancelled) setAttendanceScore(prev => (prev == null ? 100 : prev));
       }
       if (!cancelled) setAttLoading(false);
     };
     fetchAttendance();
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
-    const channel = supabase.channel(`dash-attendance-${Date.now()}`)
+    const unsubscribe = subscribeWithReconnect('dash-attendance', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchAttendance)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchAttendance)
-      .subscribe();
-    return () => { cancelled = true; supabase.removeChannel(channel); };
+    , { tag: 'Dashboard' });
+    return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email, profile?.user_id, profile?.classes]);
 
   const labsThisWeek = useMemo(() => {
@@ -382,12 +392,12 @@ function GradeRelevantScores() {
           return;
         }
         const todayStr = toLocalDateStr(new Date());
-        const { data: classesData } = await supabase
+        const classesData = mustData(await supabase
           .from('classes')
           .select('*')
           .in('course_id', userClasses)
           .eq('status', 'Active')
-          .or(`start_date.is.null,start_date.lte.${todayStr}`);
+          .or(`start_date.is.null,start_date.lte.${todayStr}`), 'classes');
 
         const allActiveClasses = classesData || [];
         const startedClasses = allActiveClasses.filter(c => !c.start_date || c.start_date <= todayStr);
@@ -500,14 +510,14 @@ function GradeRelevantScores() {
 
         let volunteerHours = 0;
         try {
-          const { data: volData } = await supabase
+          const volData = mustData(await supabase
             .from('time_clock')
             .select('total_hours')
             .eq('user_email', profile.email)
             .eq('entry_type', 'Volunteer')
             .eq('approval_status', 'Approved')
             .gte('punch_in', volSemStart + 'T00:00:00')
-            .lte('punch_in', volSemEnd + 'T23:59:59');
+            .lte('punch_in', volSemEnd + 'T23:59:59'), 'time_clock');
           (volData || []).forEach(r => { volunteerHours += parseFloat(r.total_hours) || 0; });
         } catch (e) {
           console.warn('Grade card: volunteer hours fetch failed:', e);
@@ -1315,41 +1325,38 @@ function InstructorOverview({ navigate }) {
   useEffect(() => {
     fetchLateWOs();
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
-    const ch = supabase.channel(`dash-inst-late-${Date.now()}`)
+    return subscribeWithReconnect('dash-inst-late', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, fetchLateWOs)
-      .subscribe();
-    return () => supabase.removeChannel(ch);
+    , { tag: 'Dashboard' });
   }, [fetchLateWOs]);
 
   // ── Fetch asset checkouts (open & overdue) ──
   const fetchCheckoutCounts = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const rows = mustData(await supabase
         .from('asset_checkouts')
         .select('checkout_id, expected_return')
-        .is('returned_at', null);
-      const rows = data || [];
+        .is('returned_at', null), 'asset_checkouts') || [];
       const now = new Date();
       const overdue = rows.filter(r => r.expected_return && new Date(r.expected_return) < now).length;
       setOutCount(rows.length);
       setOverdueCheckoutCount(overdue);
-    } catch { /* ignore — table may not yet exist */ }
+    } catch (err) { console.warn('Dashboard checkout count fetch failed (keeping last counts):', err?.message || err); }
     setCheckoutLoading(false);
   }, []);
 
   useEffect(() => {
     fetchCheckoutCounts();
-    const ch = supabase.channel(`dash-inst-checkouts-${Date.now()}`)
+    return subscribeWithReconnect('dash-inst-checkouts', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, fetchCheckoutCounts)
-      .subscribe();
-    return () => supabase.removeChannel(ch);
+    , { tag: 'Dashboard' });
   }, [fetchCheckoutCounts]);
 
   // ── Fetch day signups + clock ──
   const fetchDayData = useCallback(async () => {
     setDayLoading(true);
     try {
-      const [{ data: su }, { data: tc }, { data: tcoProfiles }] = await Promise.all([
+      const [suRes, tcRes, tcoRes] = await Promise.all([
         supabase.from('lab_signup')
           .select('signup_id, user_name, user_email, start_time, end_time, status')
           .eq('date', dateStr).eq('status', 'Confirmed')
@@ -1363,12 +1370,15 @@ function InstructorOverview({ navigate }) {
           .select('email, time_clock_only')
           .eq('time_clock_only', 'Yes'),
       ]);
+      const su = mustData(suRes, 'lab_signup');
+      const tc = mustData(tcRes, 'time_clock');
+      const tcoProfiles = mustData(tcoRes, 'profiles');
       setSignups(su || []);
       setClockEntries(tc || []);
       const emails = new Set();
       (tcoProfiles || []).forEach(p => { if (p.email) emails.add(p.email.toLowerCase()); });
       setTcoEmails(emails);
-    } catch (err) { console.error('Day view fetch error:', err); }
+    } catch (err) { console.error('Day view fetch error (keeping last loaded day):', err); }
     setDayLoading(false);
   }, [dateStr]);
 
@@ -1376,11 +1386,10 @@ function InstructorOverview({ navigate }) {
 
   useEffect(() => {
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
-    const ch = supabase.channel(`dash-inst-day-${Date.now()}`)
+    return subscribeWithReconnect('dash-inst-day', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchDayData)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchDayData)
-      .subscribe();
-    return () => supabase.removeChannel(ch);
+    , { tag: 'Dashboard' });
   }, [fetchDayData]);
 
 
@@ -1402,10 +1411,9 @@ function InstructorOverview({ navigate }) {
 
   useEffect(() => {
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
-    const ch = supabase.channel(`dash-inst-temp-${Date.now()}`)
+    return subscribeWithReconnect('dash-inst-temp', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'temp_access_requests' }, loadActiveTempAccess)
-      .subscribe();
-    return () => supabase.removeChannel(ch);
+    , { tag: 'Dashboard' });
   }, [loadActiveTempAccess]);
 
   const loadTempHistory = async () => {

@@ -11,6 +11,7 @@ import {
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import toast from 'react-hot-toast'
 import {
   Calendar, Clock, ChevronLeft, ChevronRight, Plus, X, Trash2,
@@ -103,10 +104,11 @@ function WeeklySignupTab() {
 
   useEffect(() => {
     async function loadSettings() {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('settings')
         .select('setting_key, setting_value')
         .in('setting_key', ['lab_visible_days', 'lab_weeks_to_display'])
+      if (error) console.warn('[LabSignup] settings load failed, using defaults:', error.message)
 
       if (data) {
         const map = {}
@@ -149,13 +151,13 @@ function WeeklySignupTab() {
     try {
       const startTime = `${String(hour).padStart(2, '0')}:00:00`
       const targetDate = new Date(dateKey + 'T00:00:00Z').toISOString()
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('lab_signup')
         .select('signup_id, user_name, user_email, class_id, status')
         .eq('date', targetDate)
         .eq('start_time', startTime)
         .neq('status', 'Cancelled')
-        .order('user_name')
+        .order('user_name'), 'lab_signup')
 
       // Look up class names
       const classIds = [...new Set((data || []).map(s => s.class_id).filter(Boolean))]
@@ -171,6 +173,7 @@ function WeeklySignupTab() {
       setSlotDetail(prev => ({
         ...prev,
         loading: false,
+        error: null,
         students: (data || []).map(s => ({
           name: s.user_name,
           email: s.user_email,
@@ -180,7 +183,7 @@ function WeeklySignupTab() {
       }))
     } catch (err) {
       console.error('Slot detail fetch error:', err)
-      setSlotDetail(prev => ({ ...prev, loading: false }))
+      setSlotDetail(prev => ({ ...prev, loading: false, error: 'Could not load this slot. Please try again.' }))
     }
   }, [])
 
@@ -1021,6 +1024,8 @@ function WeeklySignupTab() {
                 <div className="flex justify-center py-8">
                   <Loader2 size={20} className="animate-spin text-brand-600" />
                 </div>
+              ) : slotDetail.error ? (
+                <div role="alert" className="p-6 text-center text-red-700 text-sm">{slotDetail.error}</div>
               ) : slotDetail.students.length === 0 ? (
                 <div className="p-6 text-center text-surface-400 text-sm">No signups for this slot</div>
               ) : (
@@ -1071,10 +1076,11 @@ function MySignupsTab() {
   // Load class name map
   useEffect(() => {
     async function loadClasses() {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('classes')
         .select('course_id, course_name')
         .eq('status', 'Active')
+      if (error) { console.warn('[LabSignup] class-name lookup failed (keeping last map):', error.message); return }
       const map = {}
       ;(data || []).forEach(c => { map[c.course_id] = c.course_name || '' })
       setClassMap(map)
@@ -1806,10 +1812,11 @@ function DailyRosterTab() {
   // Load class name map
   useEffect(() => {
     async function loadClasses() {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('classes')
         .select('course_id, course_name')
         .eq('status', 'Active')
+      if (error) { console.warn('[LabSignup] class-name lookup failed (keeping last map):', error.message); return }
       const map = {}
       ;(data || []).forEach(c => { map[c.course_id] = c.course_name || '' })
       setClassMap(map)
@@ -1906,46 +1913,53 @@ function AdminSignupTab() {
       const targetDate = new Date(dateStr + 'T12:00:00')
       const dateKey = formatDateKey(targetDate)
 
-      // Get calendar config
-      const { data: calData } = await supabase
-        .from('lab_calendar')
-        .select('*')
-        .eq('date', targetDate.toISOString())
-        .maybeSingle()
+      try {
+        // Get calendar config
+        const calData = mustData(await supabase
+          .from('lab_calendar')
+          .select('*')
+          .eq('date', targetDate.toISOString())
+          .maybeSingle(), 'lab_calendar')
 
-      if (!calData || calData.status !== 'Open') {
-        setSlots([])
-        setLoadingSlots(false)
-        return
-      }
-
-      const startH = getHourFromTime(calData.start_time) ?? 8
-      const endH = getHourFromTime(calData.end_time) ?? 16
-      const lunchH = calData.lunch_hour != null ? parseInt(calData.lunch_hour) : null
-      const maxStudents = calData.max_students || 24
-
-      // Get existing signup counts
-      const { data: signupData } = await supabase
-        .from('lab_signup')
-        .select('start_time')
-        .eq('date', targetDate.toISOString())
-        .neq('status', 'Cancelled')
-
-      const counts = {}
-      ;(signupData || []).forEach(s => {
-        const hr = getHourFromTime(s.start_time)
-        if (hr !== null) counts[hr] = (counts[hr] || 0) + 1
-      })
-
-      const available = []
-      for (let h = startH; h < endH; h++) {
-        if (lunchH !== null && h === lunchH) continue
-        const count = counts[h] || 0
-        if (count < maxStudents) {
-          available.push({ hour: h, display: formatHour(h), available: maxStudents - count, maxStudents })
+        if (!calData || calData.status !== 'Open') {
+          setSlots([])
+          setLoadingSlots(false)
+          return
         }
+
+        const startH = getHourFromTime(calData.start_time) ?? 8
+        const endH = getHourFromTime(calData.end_time) ?? 16
+        const lunchH = calData.lunch_hour != null ? parseInt(calData.lunch_hour) : null
+        const maxStudents = calData.max_students || 24
+
+        // Get existing signup counts — required: a failed read would show every
+        // slot as fully available and allow an over-capacity signup.
+        const signupData = mustData(await supabase
+          .from('lab_signup')
+          .select('start_time')
+          .eq('date', targetDate.toISOString())
+          .neq('status', 'Cancelled'), 'lab_signup')
+
+        const counts = {}
+        ;(signupData || []).forEach(s => {
+          const hr = getHourFromTime(s.start_time)
+          if (hr !== null) counts[hr] = (counts[hr] || 0) + 1
+        })
+
+        const available = []
+        for (let h = startH; h < endH; h++) {
+          if (lunchH !== null && h === lunchH) continue
+          const count = counts[h] || 0
+          if (count < maxStudents) {
+            available.push({ hour: h, display: formatHour(h), available: maxStudents - count, maxStudents })
+          }
+        }
+        setSlots(available)
+      } catch (err) {
+        console.error('[LabSignup] slot availability load failed:', err)
+        toast.error('Could not load available slots. Please try again.')
+        setSlots([])
       }
-      setSlots(available)
       setLoadingSlots(false)
     }
     load()
