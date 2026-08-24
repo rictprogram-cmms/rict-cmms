@@ -29,3 +29,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local-only data that must never be committed (seed lists, exports with PII)
+*.local.*
+seed/

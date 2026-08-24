@@ -1,54 +1,120 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { Toaster } from 'react-hot-toast'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import AppLayout from '@/components/layout/AppLayout'
-import LoginPage from '@/pages/LoginPage'
-import DashboardPage from '@/pages/DashboardPage'
-import WorkOrdersPage from '@/pages/WorkOrdersPage'
-import AssetsPage from '@/pages/AssetsPage'
-import AssetCheckoutsPage from '@/pages/AssetCheckoutsPage'
-import InventoryPage from '@/pages/InventoryPage'
-import LabSignupPage from '@/pages/LabSignupPage'
-import EquipmentSchedulingPage from '@/pages/EquipmentSchedulingPage'
-import AbsenceRequestPage from '@/pages/AbsenceRequestPage'
-import WeeklyLabsTrackerPage from '@/pages/WeeklyLabsTrackerPage'
-import PurchaseOrdersPage from '@/pages/PurchaseOrdersPage'
-import PMPage from '@/pages/PMPage'
-import UsersPage from '@/pages/UsersPage'
-import SettingsPage from '@/pages/SettingsPage'
-import AnnouncementsPage from '@/pages/AnnouncementsPage'
-import ProgramBudgetPage from '@/pages/ProgramBudgetPage'
-import BugTrackerPage from '@/pages/BugTrackerPage'
-import TimeCardsPage from '@/pages/TimeCardsPage'
-import AccessPage from '@/pages/AccessPage'
-import AuditLogPage from '@/pages/AuditLogPage'
-import WOCRatioPage from '@/pages/WOCRatioPage'
-import VolunteerHoursPage from '@/pages/VolunteerHoursPage'
-import ComingSoonPage from '@/pages/ComingSoonPage'
-import SOPsPage from '@/pages/SOPsPage'
-import InstructorToolsPage from '@/pages/InstructorToolsPage'
-import ProgramPlannerPage from '@/pages/ProgramPlannerPage'
-import ProgramCostPage from '@/pages/ProgramCostPage'
-import CourseOutlineExportPage from '@/pages/CourseOutlineExportPage'
-import AttendanceReportsPage from '@/pages/AttendanceReportsPage'
-import RequestHistoryPage from '@/pages/RequestHistoryPage'
-import NetworkMapPage from '@/pages/NetworkMapPage'
-import NetworkPrintPage from '@/pages/NetworkPrintPage'
 import EmulationBar from '@/components/EmulationBar'
+import PageErrorBoundary from '@/components/PageErrorBoundary'
 import { PageLoading } from '@/components/ui'
 
-// Protected standalone pages (auth required, no sidebar — fullscreen experiences)
-import InventoryScanPage from '@/pages/InventoryScanPage'
-import AssetScanPage from '@/pages/AssetScanPage'
-
-// Public pages (no auth required - kiosk/TV/QR)
-import OrderReceivePage from '@/pages/OrderReceivePage'
+// ── Eager pages ─────────────────────────────────────────────────────────────
+// These are bundled into the main chunk on purpose:
+//   • Login + Dashboard are the first thing every user sees.
+//   • TV display, Time Clock and Lab Status run unattended on Raspberry Pi
+//     kiosks and must never show a "loading" spinner mid-shift after a deploy.
+import LoginPage from '@/pages/LoginPage'
+import DashboardPage from '@/pages/DashboardPage'
 import TVDisplayPage from '@/pages/TVDisplayPage'
 import TimeClockPage from '@/pages/TimeClockPage'
-import ResetPasswordPage from '@/pages/ResetPasswordPage'
-import ChangePasswordPage from '@/pages/ChangePasswordPage'
 import LabStatusPage from '@/pages/LabStatusPage'
+
+// ── Lazy pages (route-level code splitting) ─────────────────────────────────
+// Each page below is downloaded the first time a user visits it, instead of
+// every page being downloaded on first load. Cuts the initial bundle from
+// ~3.8 MB to a fraction of that.
+//
+// lazyPage() adds one safety net: after a Vercel deploy, chunk filenames
+// change. A user who already had the app open and then visits a page for
+// the first time would request a chunk that no longer exists. When that
+// happens we reload the page once (guarded so it can't loop) so they pick
+// up the new build. useVersionCheck still handles the normal "new version
+// available" prompt; this only covers the gap between deploy and refresh.
+const CHUNK_RELOAD_KEY = 'rict-chunk-reload-at'
+const CHUNK_RELOAD_WINDOW_MS = 60_000
+
+function isChunkLoadError(err) {
+  const msg = String(err?.message || err || '')
+  return (
+    err?.name === 'ChunkLoadError' ||
+    /Failed to fetch dynamically imported module/i.test(msg) ||
+    /Importing a module script failed/i.test(msg) ||
+    /error loading dynamically imported module/i.test(msg)
+  )
+}
+
+function lazyPage(importer) {
+  return lazy(() =>
+    importer()
+      .then(mod => {
+        // Successful load — clear the guard so a *future* deploy can reload again.
+        try { sessionStorage.removeItem(CHUNK_RELOAD_KEY) } catch { /* ignore */ }
+        return mod
+      })
+      .catch(err => {
+        if (isChunkLoadError(err)) {
+          let last = 0
+          try { last = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) || 0) } catch { /* ignore */ }
+          if (Date.now() - last > CHUNK_RELOAD_WINDOW_MS) {
+            try { sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now())) } catch { /* ignore */ }
+            window.location.reload()
+            // Never resolves — the page is reloading. Keeps Suspense showing the spinner.
+            return new Promise(() => {})
+          }
+        }
+        // Not a stale-chunk problem (or we already tried once) → let the
+        // PageErrorBoundary show it.
+        throw err
+      })
+  )
+}
+
+const WorkOrdersPage = lazyPage(() => import('@/pages/WorkOrdersPage'))
+const AssetsPage = lazyPage(() => import('@/pages/AssetsPage'))
+const AssetCheckoutsPage = lazyPage(() => import('@/pages/AssetCheckoutsPage'))
+const InventoryPage = lazyPage(() => import('@/pages/InventoryPage'))
+const LabSignupPage = lazyPage(() => import('@/pages/LabSignupPage'))
+const EquipmentSchedulingPage = lazyPage(() => import('@/pages/EquipmentSchedulingPage'))
+const AbsenceRequestPage = lazyPage(() => import('@/pages/AbsenceRequestPage'))
+const WeeklyLabsTrackerPage = lazyPage(() => import('@/pages/WeeklyLabsTrackerPage'))
+const PurchaseOrdersPage = lazyPage(() => import('@/pages/PurchaseOrdersPage'))
+const PMPage = lazyPage(() => import('@/pages/PMPage'))
+const UsersPage = lazyPage(() => import('@/pages/UsersPage'))
+const SettingsPage = lazyPage(() => import('@/pages/SettingsPage'))
+const AnnouncementsPage = lazyPage(() => import('@/pages/AnnouncementsPage'))
+const ProgramBudgetPage = lazyPage(() => import('@/pages/ProgramBudgetPage'))
+const BugTrackerPage = lazyPage(() => import('@/pages/BugTrackerPage'))
+const TimeCardsPage = lazyPage(() => import('@/pages/TimeCardsPage'))
+const AccessPage = lazyPage(() => import('@/pages/AccessPage'))
+const AuditLogPage = lazyPage(() => import('@/pages/AuditLogPage'))
+const WOCRatioPage = lazyPage(() => import('@/pages/WOCRatioPage'))
+const VolunteerHoursPage = lazyPage(() => import('@/pages/VolunteerHoursPage'))
+const SOPsPage = lazyPage(() => import('@/pages/SOPsPage'))
+const InstructorToolsPage = lazyPage(() => import('@/pages/InstructorToolsPage'))
+const ProgramPlannerPage = lazyPage(() => import('@/pages/ProgramPlannerPage'))
+const ProgramCostPage = lazyPage(() => import('@/pages/ProgramCostPage'))
+const CourseOutlineExportPage = lazyPage(() => import('@/pages/CourseOutlineExportPage'))
+const AttendanceReportsPage = lazyPage(() => import('@/pages/AttendanceReportsPage'))
+const RequestHistoryPage = lazyPage(() => import('@/pages/RequestHistoryPage'))
+const NetworkMapPage = lazyPage(() => import('@/pages/NetworkMapPage'))
+const NetworkPrintPage = lazyPage(() => import('@/pages/NetworkPrintPage'))
+
+// Protected standalone pages (auth required, no sidebar — fullscreen experiences)
+const InventoryScanPage = lazyPage(() => import('@/pages/InventoryScanPage'))
+const AssetScanPage = lazyPage(() => import('@/pages/AssetScanPage'))
+
+// Public pages (no auth required — QR / password flows)
+const OrderReceivePage = lazyPage(() => import('@/pages/OrderReceivePage'))
+const ResetPasswordPage = lazyPage(() => import('@/pages/ResetPasswordPage'))
+const ChangePasswordPage = lazyPage(() => import('@/pages/ChangePasswordPage'))
+
+/**
+ * Lazy — per-route Suspense wrapper. Placing Suspense on each route element
+ * (instead of around <Routes>) keeps the sidebar/header in place while a
+ * page chunk downloads; only the content area shows the spinner.
+ */
+function Lazy({ children }) {
+  return <Suspense fallback={<PageLoading />}>{children}</Suspense>
+}
 
 // ── Kiosk token constant ────────────────────────────────────────────────────
 // Set VITE_KIOSK_TOKEN in .env.local AND in Vercel environment variables.
@@ -296,6 +362,32 @@ function EmulationAwareLayout({ children }) {
   )
 }
 
+/**
+ * StandaloneBoundary — error boundary for routes rendered OUTSIDE AppLayout
+ * (login, kiosks, QR/password pages, fullscreen scan pages). AppLayout already
+ * wraps its <Outlet /> in PageErrorBoundary; these routes had no coverage, so
+ * a render error left a blank screen. kiosk={true} trims the panel to a
+ * Reload button + 30 s auto-reload for unattended displays.
+ */
+function StandaloneBoundary({ kiosk = false, children }) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { profile } = useAuth()
+  return (
+    <PageErrorBoundary
+      resetKey={location.pathname}
+      pathname={location.pathname}
+      kiosk={kiosk}
+      userEmail={profile?.email}
+      userName={profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''}
+      onGoHome={() => navigate('/dashboard')}
+      onReport={(prefill) => navigate('/bug-tracker', { state: { prefill } })}
+    >
+      {children}
+    </PageErrorBoundary>
+  )
+}
+
 function AppRoutes() {
   return (
     <>
@@ -311,42 +403,50 @@ function AppRoutes() {
           <Route
             path="/login"
             element={
-              <PublicRoute>
-                <LoginPage />
-              </PublicRoute>
+              <StandaloneBoundary>
+                <PublicRoute>
+                  <LoginPage />
+                </PublicRoute>
+              </StandaloneBoundary>
             }
           />
 
           {/* Public kiosk pages (no auth required — work even when logged in) */}
-          <Route path="/tv-display" element={<TVDisplayPage />} />
+          <Route path="/tv-display" element={<StandaloneBoundary kiosk><TVDisplayPage /></StandaloneBoundary>} />
           <Route
             path="/time-clock"
             element={
-              <KioskRoute>
-                <TimeClockPage />
-              </KioskRoute>
+              <StandaloneBoundary kiosk>
+                <KioskRoute>
+                  <TimeClockPage />
+                </KioskRoute>
+              </StandaloneBoundary>
             }
           />
-          <Route path="/orders/receive" element={<OrderReceivePage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/change-password" element={<ChangePasswordPage />} />
-          <Route path="/lab-status" element={<LabStatusPage />} />
+          <Route path="/orders/receive" element={<StandaloneBoundary><Lazy><OrderReceivePage /></Lazy></StandaloneBoundary>} />
+          <Route path="/reset-password" element={<StandaloneBoundary><Lazy><ResetPasswordPage /></Lazy></StandaloneBoundary>} />
+          <Route path="/change-password" element={<StandaloneBoundary><Lazy><ChangePasswordPage /></Lazy></StandaloneBoundary>} />
+          <Route path="/lab-status" element={<StandaloneBoundary kiosk><LabStatusPage /></StandaloneBoundary>} />
 
           {/* Protected standalone pages (auth required, no sidebar) */}
           <Route
             path="/inventory/scan"
             element={
-              <ProtectedRoute>
-                <InventoryScanPage />
-              </ProtectedRoute>
+              <StandaloneBoundary>
+                <ProtectedRoute>
+                  <Lazy><InventoryScanPage /></Lazy>
+                </ProtectedRoute>
+              </StandaloneBoundary>
             }
           />
           <Route
             path="/assets/scan"
             element={
-              <ProtectedRoute>
-                <AssetScanPage />
-              </ProtectedRoute>
+              <StandaloneBoundary>
+                <ProtectedRoute>
+                  <Lazy><AssetScanPage /></Lazy>
+                </ProtectedRoute>
+              </StandaloneBoundary>
             }
           />
           {/* Print view lives OUTSIDE AppLayout: the layout's h-screen +
@@ -355,9 +455,11 @@ function AppRoutes() {
           <Route
             path="/network-map/print"
             element={
-              <ProtectedRoute>
-                <NetworkPrintPage />
-              </ProtectedRoute>
+              <StandaloneBoundary>
+                <ProtectedRoute>
+                  <Lazy><NetworkPrintPage /></Lazy>
+                </ProtectedRoute>
+              </StandaloneBoundary>
             }
           />
 
@@ -371,40 +473,40 @@ function AppRoutes() {
           >
             {/* Main */}
             <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/work-orders" element={<WorkOrdersPage />} />
-            <Route path="/inventory" element={<InventoryPage />} />
-            <Route path="/assets" element={<AssetsPage />} />
-            <Route path="/asset-checkouts" element={<AssetCheckoutsPage />} />
-            <Route path="/sops" element={<SOPsPage />} />
-            <Route path="/purchase-orders" element={<PurchaseOrdersPage />} />
-            <Route path="/network-map" element={<NetworkMapPage />} />
+            <Route path="/work-orders" element={<Lazy><WorkOrdersPage /></Lazy>} />
+            <Route path="/inventory" element={<Lazy><InventoryPage /></Lazy>} />
+            <Route path="/assets" element={<Lazy><AssetsPage /></Lazy>} />
+            <Route path="/asset-checkouts" element={<Lazy><AssetCheckoutsPage /></Lazy>} />
+            <Route path="/sops" element={<Lazy><SOPsPage /></Lazy>} />
+            <Route path="/purchase-orders" element={<Lazy><PurchaseOrdersPage /></Lazy>} />
+            <Route path="/network-map" element={<Lazy><NetworkMapPage /></Lazy>} />
 
             {/* Scheduling */}
-            <Route path="/pm-schedules" element={<PMPage />} />
-            <Route path="/lab-signup" element={<LabSignupPage />} />
-            <Route path="/equipment-scheduling" element={<EquipmentSchedulingPage />} />
-            <Route path="/absence-requests" element={<AbsenceRequestPage />} />
+            <Route path="/pm-schedules" element={<Lazy><PMPage /></Lazy>} />
+            <Route path="/lab-signup" element={<Lazy><LabSignupPage /></Lazy>} />
+            <Route path="/equipment-scheduling" element={<Lazy><EquipmentSchedulingPage /></Lazy>} />
+            <Route path="/absence-requests" element={<Lazy><AbsenceRequestPage /></Lazy>} />
 
             {/* Reports */}
-            <Route path="/time-cards" element={<TimeCardsPage />} />
-            <Route path="/woc-ratio" element={<WOCRatioPage />} />
-            <Route path="/program-budget" element={<ProgramBudgetPage />} />
-            <Route path="/bug-tracker" element={<BugTrackerPage />} />
-            <Route path="/weekly-labs" element={<WeeklyLabsTrackerPage />} />
-            <Route path="/volunteer-hours" element={<VolunteerHoursPage />} />
-            <Route path="/attendance-reports" element={<AttendanceReportsPage />} />
-            <Route path="/request-history" element={<RequestHistoryPage />} />
+            <Route path="/time-cards" element={<Lazy><TimeCardsPage /></Lazy>} />
+            <Route path="/woc-ratio" element={<Lazy><WOCRatioPage /></Lazy>} />
+            <Route path="/program-budget" element={<Lazy><ProgramBudgetPage /></Lazy>} />
+            <Route path="/bug-tracker" element={<Lazy><BugTrackerPage /></Lazy>} />
+            <Route path="/weekly-labs" element={<Lazy><WeeklyLabsTrackerPage /></Lazy>} />
+            <Route path="/volunteer-hours" element={<Lazy><VolunteerHoursPage /></Lazy>} />
+            <Route path="/attendance-reports" element={<Lazy><AttendanceReportsPage /></Lazy>} />
+            <Route path="/request-history" element={<Lazy><RequestHistoryPage /></Lazy>} />
 
             {/* Administration */}
-            <Route path="/users" element={<UsersPage />} />
-            <Route path="/announcements" element={<AnnouncementsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/access" element={<AccessPage />} />
-            <Route path="/audit-log" element={<AuditLogPage />} />
-            <Route path="/instructor-tools" element={<InstructorToolsPage />} />
-            <Route path="/program-planner" element={<ProgramPlannerPage />} />
-            <Route path="/program-cost" element={<ProgramCostPage />} />
-            <Route path="/course-outline-export" element={<CourseOutlineExportPage />} />
+            <Route path="/users" element={<Lazy><UsersPage /></Lazy>} />
+            <Route path="/announcements" element={<Lazy><AnnouncementsPage /></Lazy>} />
+            <Route path="/settings" element={<Lazy><SettingsPage /></Lazy>} />
+            <Route path="/access" element={<Lazy><AccessPage /></Lazy>} />
+            <Route path="/audit-log" element={<Lazy><AuditLogPage /></Lazy>} />
+            <Route path="/instructor-tools" element={<Lazy><InstructorToolsPage /></Lazy>} />
+            <Route path="/program-planner" element={<Lazy><ProgramPlannerPage /></Lazy>} />
+            <Route path="/program-cost" element={<Lazy><ProgramCostPage /></Lazy>} />
+            <Route path="/course-outline-export" element={<Lazy><CourseOutlineExportPage /></Lazy>} />
           </Route>
 
           {/* Catch-all redirect */}

@@ -17,6 +17,11 @@
  *   - Best-effort audit_log row (action 'Client Error') so instructors can
  *     see crashes students never report
  *   - Resets automatically when the route changes (resetKey)
+ *   - kiosk mode (kiosk prop): used on unattended screens (/tv-display,
+ *     /time-clock, /lab-status). Hides "Go to Dashboard", "Copy details" and
+ *     "Report this bug" (nobody is logged in, and a Pi in the lab shouldn't
+ *     offer them), keeps "Reload", and auto-reloads after 30 s so a display
+ *     recovers on its own overnight.
  *
  * Accessibility (WCAG 2.1 AA)
  *   - Panel is role="alert" so it's announced immediately
@@ -53,11 +58,15 @@ function buildDetails({ error, info, pathname, appVersion, userEmail }) {
   return lines.join('\n')
 }
 
+// Unattended kiosk screens reload themselves after this many seconds.
+const KIOSK_AUTO_RELOAD_SECONDS = 30
+
 export default class PageErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
-    this.state = { error: null, info: null, copied: false }
+    this.state = { error: null, info: null, copied: false, secondsLeft: KIOSK_AUTO_RELOAD_SECONDS }
     this.panelRef = React.createRef()
+    this.kioskTimer = null
   }
 
   static getDerivedStateFromError(error) {
@@ -67,6 +76,8 @@ export default class PageErrorBoundary extends React.Component {
   componentDidCatch(error, info) {
     this.setState({ info })
     console.error('[PageErrorBoundary]', error, info?.componentStack)
+
+    if (this.props.kiosk) this.startKioskCountdown()
 
     // Best-effort audit row — never let logging throw inside the boundary
     try {
@@ -90,10 +101,38 @@ export default class PageErrorBoundary extends React.Component {
   componentDidUpdate(prevProps) {
     // Route changed → clear the error so the next page renders normally
     if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ error: null, info: null, copied: false })
+      this.stopKioskCountdown()
+      this.setState({ error: null, info: null, copied: false, secondsLeft: KIOSK_AUTO_RELOAD_SECONDS })
     }
     if (this.state.error && !prevProps.error && this.panelRef.current) {
       this.panelRef.current.focus()
+    }
+  }
+
+  componentWillUnmount() {
+    this.stopKioskCountdown()
+  }
+
+  startKioskCountdown() {
+    this.stopKioskCountdown()
+    this.setState({ secondsLeft: KIOSK_AUTO_RELOAD_SECONDS })
+    this.kioskTimer = setInterval(() => {
+      this.setState(prev => {
+        const next = prev.secondsLeft - 1
+        if (next <= 0) {
+          this.stopKioskCountdown()
+          window.location.reload()
+          return { secondsLeft: 0 }
+        }
+        return { secondsLeft: next }
+      })
+    }, 1000)
+  }
+
+  stopKioskCountdown() {
+    if (this.kioskTimer) {
+      clearInterval(this.kioskTimer)
+      this.kioskTimer = null
     }
   }
 
@@ -124,8 +163,8 @@ export default class PageErrorBoundary extends React.Component {
   render() {
     if (!this.state.error) return this.props.children
 
-    const { error, copied } = this.state
-    const { onGoHome } = this.props
+    const { error, copied, secondsLeft } = this.state
+    const { onGoHome, kiosk } = this.props
 
     return (
       <div
@@ -143,7 +182,9 @@ export default class PageErrorBoundary extends React.Component {
           <div className="min-w-0">
             <h2 id="page-error-title" className="text-lg font-bold text-red-800">Something went wrong on this page</h2>
             <p id="page-error-desc" className="text-sm text-red-700 mt-0.5">
-              The rest of the app still works. Reloading usually fixes it — if it keeps happening, send us the details below.
+              {kiosk
+                ? 'This screen will reload itself shortly. If it keeps happening, let an instructor know.'
+                : 'The rest of the app still works. Reloading usually fixes it — if it keeps happening, send us the details below.'}
             </p>
           </div>
         </div>
@@ -171,6 +212,7 @@ export default class PageErrorBoundary extends React.Component {
             >
               <RefreshCw size={16} aria-hidden="true" /> Reload page
             </button>
+            {!kiosk && (
             <button
               type="button"
               onClick={() => (typeof onGoHome === 'function' ? onGoHome() : (window.location.href = '/dashboard'))}
@@ -178,6 +220,8 @@ export default class PageErrorBoundary extends React.Component {
             >
               <Home size={16} aria-hidden="true" /> Go to Dashboard
             </button>
+            )}
+            {!kiosk && (
             <button
               type="button"
               onClick={this.copy}
@@ -186,6 +230,8 @@ export default class PageErrorBoundary extends React.Component {
               {copied ? <CheckCircle2 size={16} className="text-emerald-600" aria-hidden="true" /> : <Copy size={16} aria-hidden="true" />}
               {copied ? 'Copied' : 'Copy details'}
             </button>
+            )}
+            {!kiosk && (
             <button
               type="button"
               onClick={this.report}
@@ -193,9 +239,15 @@ export default class PageErrorBoundary extends React.Component {
             >
               <Bug size={16} aria-hidden="true" /> Report this bug
             </button>
+            )}
           </div>
-          <p className="text-xs text-surface-400" role="status" aria-live="polite">
-            {copied ? 'Error details copied to your clipboard.' : 'Report this bug copies the details and opens the Bug Tracker.'}
+          {/* Kiosk countdown changes every second — keep it out of the live
+              region so screen readers aren't re-announced 30 times. The
+              role="alert" panel already announced the error on mount. */}
+          <p className="text-xs text-surface-400" role={kiosk ? undefined : 'status'} aria-live={kiosk ? 'off' : 'polite'}>
+            {kiosk
+              ? `Reloading automatically in ${secondsLeft} second${secondsLeft === 1 ? '' : 's'}.`
+              : copied ? 'Error details copied to your clipboard.' : 'Report this bug copies the details and opens the Bug Tracker.'}
           </p>
         </div>
       </div>
