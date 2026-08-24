@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { fetchMakeupOverlay, getMakeupInfo, mondayKeyOf, firstTwoLabDays } from '@/hooks/useMakeupHours'
@@ -574,11 +575,11 @@ export function useLabCalendarActions() {
       const dateLabel = formatDateLabel(dateStr)
 
       // Pull the full row (not just the id) so we can diff for the audit log.
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('lab_calendar')
         .select('*')
         .eq('date', dateStr + 'T12:00:00')
-        .maybeSingle()
+        .maybeSingle(), 'lab_calendar')
 
       // Shared column payload for update + insert
       const payload = {
@@ -658,11 +659,11 @@ export function useLabCalendarActions() {
     setSaving(true)
     try {
       // Snapshot first so the audit row records what was removed.
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('lab_calendar')
         .select('*')
         .eq('date', dateStr + 'T12:00:00')
-        .maybeSingle()
+        .maybeSingle(), 'lab_calendar')
 
       const { data: deleted, error } = await supabase
         .from('lab_calendar')
@@ -884,12 +885,12 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
         const cutoff = new Date()
         cutoff.setDate(cutoff.getDate() + SIGNUP_LEAD_DAYS)
         const cutoffStr = formatDateKey(cutoff)
-        const { data: classData } = await supabase
+        const classData = mustData(await supabase
           .from('classes')
           .select('class_id, course_id, course_name, required_hours')
           .in('course_id', userClasses)
           .eq('status', 'Active')
-          .or(`start_date.is.null,start_date.lte.${cutoffStr}`)
+          .or(`start_date.is.null,start_date.lte.${cutoffStr}`), 'classes')
 
         classes = (classData || []).map(c => ({
           classId: c.class_id,
@@ -900,11 +901,14 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
       }
 
       // 2. Get calendar entries
-      const { data: calData } = await supabase
+      // These reads are required. A failed read used to render as an empty
+      // grid / "no signups" for the student; mustData throws so the catch
+      // below reports it and the previous grid stays on screen.
+      const calData = mustData(await supabase
         .from('lab_calendar')
         .select('*')
         .gte('date', firstWeek.toISOString())
-        .lte('date', overallEnd.toISOString())
+        .lte('date', overallEnd.toISOString()), 'lab_calendar')
 
       const calByDate = {}
       const allHoursSet = new Set()
@@ -932,12 +936,12 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
       if (allHours.length === 0) allHours = [8, 9, 10, 11, 12, 13, 14, 15]
 
       // 3. Get signups
-      const { data: signupData } = await supabase
+      const signupData = mustData(await supabase
         .from('lab_signup')
         .select('signup_id, user_email, class_id, date, start_time, is_makeup, makeup_request_id')
         .neq('status', 'Cancelled')
         .gte('date', firstWeek.toISOString())
-        .lte('date', overallEnd.toISOString())
+        .lte('date', overallEnd.toISOString()), 'lab_signup')
 
       // 3b. Make-up hours overlay (approved absences → next week's requirement)
       let makeupOverlay = { byKey: {}, requests: [] }
@@ -1136,14 +1140,14 @@ export function useLabSignupActions() {
           const targetDate = new Date(dateStr + 'T12:00:00')
 
           // Check if already exists
-          const { data: existing } = await supabase
+          const existing = mustData(await supabase
             .from('lab_signup')
             .select('signup_id')
             .eq('user_id', profile.id || profile.user_id)
             .eq('date', targetDate.toISOString())
             .eq('start_time', `${String(hour).padStart(2, '0')}:00:00`)
             .neq('status', 'Cancelled')
-            .maybeSingle()
+            .maybeSingle(), 'lab_signup duplicate check')
 
           if (existing) continue
           pending.push({ sel, classId, dateStr, hour, targetDate })
@@ -1457,14 +1461,14 @@ export function useInstructorSignup() {
       const targetDate = new Date(dateStr + 'T12:00:00')
       const hourNum = parseInt(hour)
 
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('lab_signup')
         .select('signup_id')
         .eq('user_id', student.userId)
         .eq('date', targetDate.toISOString())
         .eq('start_time', `${String(hourNum).padStart(2, '0')}:00:00`)
         .neq('status', 'Cancelled')
-        .maybeSingle()
+        .maybeSingle(), 'lab_signup duplicate check')
 
       if (existing) {
         toast.error('Student already signed up for this slot')
