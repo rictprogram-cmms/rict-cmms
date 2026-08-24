@@ -12,9 +12,10 @@
  * silently stopped until the next midnight reload.
  *
  * This wraps channel creation so that when the subscription reports
- * CHANNEL_ERROR, TIMED_OUT, or CLOSED the channel is removed and rebuilt
+ * CHANNEL_ERROR or TIMED_OUT the channel is removed and rebuilt
  * with exponential backoff (2 s → 4 s → 8 s … capped at 60 s). A successful
- * SUBSCRIBED resets the backoff.
+ * SUBSCRIBED resets the backoff. CLOSED is ignored — it also fires when the
+ * helper itself removes a channel, and reacting to it looped.
  *
  * USAGE
  * ─────
@@ -40,7 +41,11 @@
 
 import { supabase as defaultClient } from '@/lib/supabase'
 
-const RETRY_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'])
+// Only these indicate a channel that will NOT come back on its own.
+// CLOSED is deliberately NOT here: it is also what fires when we ourselves
+// remove a channel (cleanup or rebuild), and reacting to it created a
+// reconnect loop where every rebuild spawned two channels.
+const RETRY_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT'])
 
 export function subscribeWithReconnect(name, bind, options = {}) {
   const client = options.client || defaultClient
@@ -52,17 +57,24 @@ export function subscribeWithReconnect(name, bind, options = {}) {
   let attempt = 0
   let stopped = false
 
+  const teardown = () => {
+    const old = channel
+    channel = null           // set BEFORE removing so old callbacks are ignored
+    if (old) client.removeChannel(old)
+  }
+
   const connect = () => {
     if (stopped) return
-    channel = bind(client.channel(`${name}-${Date.now()}`))
-    channel.subscribe((status) => {
-      if (stopped) return
+    const ch = bind(client.channel(`${name}-${Date.now()}`))
+    channel = ch
+    ch.subscribe((status) => {
+      // Ignore anything from a channel we have already replaced or torn down.
+      if (stopped || ch !== channel) return
       if (status === 'SUBSCRIBED') { attempt = 0; return }
       if (RETRY_STATUSES.has(status)) {
         const delay = Math.min(maxDelay, 2000 * 2 ** attempt++)
         console.warn(`[${tag}] Realtime ${status} — reconnecting in ${delay / 1000}s`)
-        client.removeChannel(channel)
-        channel = null
+        teardown()
         clearTimeout(timer)
         timer = setTimeout(connect, delay)
       }
@@ -74,6 +86,6 @@ export function subscribeWithReconnect(name, bind, options = {}) {
   return () => {
     stopped = true
     clearTimeout(timer)
-    if (channel) client.removeChannel(channel)
+    teardown()
   }
 }
