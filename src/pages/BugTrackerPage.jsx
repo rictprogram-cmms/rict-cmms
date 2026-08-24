@@ -253,49 +253,50 @@ export default function BugTrackerPage() {
         <div className="flex flex-wrap items-center gap-2">
           {/* Search */}
           <div className="flex items-center bg-white border border-surface-200 rounded-lg px-3 py-2 gap-2 w-full sm:w-auto">
-            <Search size={15} className="text-surface-400 shrink-0" />
+            <Search size={15} className="text-surface-400 shrink-0" aria-hidden="true" />
             <input
               type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search requests…"
-              className="bg-transparent outline-none text-sm text-surface-700 placeholder:text-surface-400 w-full sm:w-48"
+              aria-label="Search requests"
+              className="bg-transparent outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded text-sm text-surface-700 placeholder:text-surface-400 w-full sm:w-48"
             />
           </div>
           {/* Filters */}
-          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
-            className="text-xs border border-surface-200 rounded-lg px-3 py-2 bg-white text-surface-700">
+          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by type"
+            className="text-xs min-h-[44px] border border-surface-200 rounded-lg px-3 py-2 bg-white text-surface-700">
             <option value="">All Types</option>
             {TYPES.map(t => <option key={t} value={t}>{t}s</option>)}
           </select>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-            className="text-xs border border-surface-200 rounded-lg px-3 py-2 bg-white text-surface-700">
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status"
+            className="text-xs min-h-[44px] border border-surface-200 rounded-lg px-3 py-2 bg-white text-surface-700">
             <option value="">All Statuses</option>
             {STATUSES_FILTER.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}
-            className="text-xs border border-surface-200 rounded-lg px-3 py-2 bg-white text-surface-700">
+          <select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} aria-label="Filter by priority"
+            className="text-xs min-h-[44px] border border-surface-200 rounded-lg px-3 py-2 bg-white text-surface-700">
             <option value="">All Priorities</option>
             {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
         {canSubmit && (
           <button onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors shrink-0">
-            <Plus size={15} /> New Request
+            className="flex items-center gap-1.5 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-medium rounded-lg transition-colors shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Plus size={15} aria-hidden="true" /> New Request
           </button>
         )}
       </div>
 
       {/* ─── Stat Cards ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <StatCard icon={<Hourglass size={20} />} label="Pending Approval" value={stats.pending}
+        <StatCard icon={<Hourglass size={20} aria-hidden="true" />} label="Pending Approval" value={stats.pending}
           gradient="from-yellow-400 to-amber-500" />
-        <StatCard icon={<Bug size={20} />} label="Open Bugs" value={stats.openBugs}
+        <StatCard icon={<Bug size={20} aria-hidden="true" />} label="Open Bugs" value={stats.openBugs}
           gradient="from-red-500 to-red-600" />
-        <StatCard icon={<Lightbulb size={20} />} label="Feature Requests" value={stats.features}
+        <StatCard icon={<Lightbulb size={20} aria-hidden="true" />} label="Feature Requests" value={stats.features}
           gradient="from-amber-400 to-yellow-500" />
-        <StatCard icon={<Clock size={20} />} label="In Progress" value={stats.inProgress}
+        <StatCard icon={<Clock size={20} aria-hidden="true" />} label="In Progress" value={stats.inProgress}
           gradient="from-blue-500 to-blue-600" />
-        <StatCard icon={<CheckCircle2 size={20} />} label="Completed" value={stats.completed}
+        <StatCard icon={<CheckCircle2 size={20} aria-hidden="true" />} label="Completed" value={stats.completed}
           gradient="from-emerald-500 to-green-600" />
       </div>
 
@@ -310,7 +311,7 @@ export default function BugTrackerPage() {
 
         {loading ? (
           <div className="flex items-center justify-center py-16 text-surface-400 gap-2 text-sm">
-            <Loader2 size={16} className="animate-spin" /> Loading requests…
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading requests…
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-surface-400 text-sm">
@@ -321,14 +322,14 @@ export default function BugTrackerPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-24">ID</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Type</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Title</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Priority</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Submitted By</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Date</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-28">Actions</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-24">ID</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Type</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Title</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Priority</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Status</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Submitted By</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Date</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-28">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -354,23 +355,23 @@ export default function BugTrackerPage() {
                     <td className="px-4 py-2.5 text-surface-500 text-xs">{formatDate(item.submitted_date)}</td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-0.5">
-                        <ActionBtn icon={<Eye size={14} />} tip="View" onClick={() => handleView(item)} />
+                        <ActionBtn icon={<Eye size={14} aria-hidden="true" />} tip="View" onClick={() => handleView(item)} />
                         {/* Approve/Reject: super admin only, pending items */}
                         {canApprove && item.status === 'Pending' && (
                           <>
-                            <ActionBtn icon={<CheckCircle size={14} />} tip="Approve"
+                            <ActionBtn icon={<CheckCircle size={14} aria-hidden="true" />} tip="Approve"
                               className="text-green-500 hover:bg-green-50" onClick={() => handleApprove(item)} />
-                            <ActionBtn icon={<XCircle size={14} />} tip="Reject"
+                            <ActionBtn icon={<XCircle size={14} aria-hidden="true" />} tip="Reject"
                               className="text-red-400 hover:bg-red-50" onClick={() => handleReject(item)} />
                           </>
                         )}
                         {/* Edit: requires update_status permission, non-pending */}
                         {canUpdateStatus && item.status !== 'Pending' && (
-                          <ActionBtn icon={<Edit3 size={14} />} tip="Edit" onClick={() => handleEdit(item)} />
+                          <ActionBtn icon={<Edit3 size={14} aria-hidden="true" />} tip="Edit" onClick={() => handleEdit(item)} />
                         )}
                         {/* Delete: requires delete_bugs permission, non-pending */}
                         {canDelete && item.status !== 'Pending' && (
-                          <ActionBtn icon={<Trash2 size={14} />} tip="Delete"
+                          <ActionBtn icon={<Trash2 size={14} aria-hidden="true" />} tip="Delete"
                             className="text-red-400 hover:bg-red-50" onClick={() => handleDelete(item)} />
                         )}
                       </div>
@@ -386,7 +387,7 @@ export default function BugTrackerPage() {
       {/* ─── Changelog Section ─────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-surface-200 shadow-sm overflow-hidden">
         <div className="px-4 py-3 border-b border-surface-100 flex items-center gap-2">
-          <History size={16} className="text-brand-600" />
+          <History size={16} className="text-brand-600" aria-hidden="true" />
           <h3 className="text-sm font-semibold text-surface-900">Changelog</h3>
           <div className="ml-auto flex items-center gap-2">
             {changelogEntries.length > 0 && (
@@ -398,7 +399,7 @@ export default function BugTrackerPage() {
               <button
                 onClick={() => setShowAddChangelogModal(true)}
                 aria-label="Add manual changelog entry"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 text-white text-xs font-medium rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-1 text-white text-xs font-medium rounded-lg transition-colors min-h-[44px]"
               >
                 <Plus size={13} aria-hidden="true" /> Add Entry
               </button>
@@ -407,7 +408,7 @@ export default function BugTrackerPage() {
         </div>
         {changelogLoading ? (
           <div className="flex items-center justify-center py-12 text-surface-400 gap-2 text-sm">
-            <Loader2 size={16} className="animate-spin" /> Loading changelog…
+            <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading changelog…
           </div>
         ) : changelogEntries.length === 0 ? (
           <div className="text-center py-12 text-surface-400 text-sm">
@@ -496,9 +497,11 @@ function StatCard({ icon, label, value, gradient }) {
 function ActionBtn({ icon, tip, onClick, className = '' }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={tip}
-      className={`p-1.5 rounded-lg text-surface-400 hover:bg-surface-100 hover:text-brand-600 transition-colors ${className}`}
+      aria-label={tip}
+      className={`p-1.5 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-surface-400 hover:bg-surface-100 hover:text-brand-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${className}`}
     >
       {icon}
     </button>
@@ -548,13 +551,13 @@ function ChangelogTable({ entries, onItemClick }) {
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-surface-50 text-left">
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-28">Version</th>
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Release Date</th>
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Request ID</th>
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Type</th>
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Description</th>
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500">Released By</th>
-            <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-16"></th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-28">Version</th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Release Date</th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Request ID</th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Type</th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Description</th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Released By</th>
+            <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-16"></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-surface-100">
@@ -568,13 +571,19 @@ function ChangelogTable({ entries, onItemClick }) {
                   onClick={() => toggleCollapse(group.version)}
                 >
                   <td className="px-4 py-2.5 font-bold text-brand-600 text-base">
-                    <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      aria-expanded={!isCollapsed}
+                      aria-label={`Version ${group.version}, ${isCollapsed ? 'expand' : 'collapse'} ${group.items.length} ${group.items.length === 1 ? 'change' : 'changes'}`}
+                      onClick={ev => { ev.stopPropagation(); toggleCollapse(group.version) }}
+                      className="flex items-center gap-1.5 min-h-[44px] px-1 -mx-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                    >
                       {isCollapsed
-                        ? <ChevronRight size={14} className="text-surface-400" />
-                        : <ChevronDown size={14} className="text-surface-400" />
+                        ? <ChevronRight size={14} className="text-surface-400" aria-hidden="true" />
+                        : <ChevronDown size={14} className="text-surface-400" aria-hidden="true" />
                       }
                       v{group.version}
-                    </div>
+                    </button>
                   </td>
                   <td colSpan={6} className="px-4 py-2.5 text-surface-500 text-xs">
                     {group.items.length} {group.items.length === 1 ? 'change' : 'changes'}
@@ -604,7 +613,15 @@ function ChangelogTable({ entries, onItemClick }) {
                       )}
                     </td>
                     <td className="px-4 py-2.5"><Badge text={item.type} styleMap={TYPE_STYLES} /></td>
-                    <td className="px-4 py-2.5 text-surface-700">{item.title}</td>
+                    <td className="px-4 py-2.5 text-surface-700">
+                      <button
+                        type="button"
+                        onClick={ev => { ev.stopPropagation(); onItemClick(item) }}
+                        className="text-left min-h-[44px] px-1 -mx-1 rounded hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                      >
+                        {item.title}
+                      </button>
+                    </td>
                     <td className="px-4 py-2.5 text-surface-500 text-xs">{item.released_by}</td>
                     <td className="px-4 py-2.5 text-surface-300 group-hover:text-brand-500">
                       <ExternalLink size={13} aria-hidden="true" />
@@ -626,10 +643,12 @@ function ChangelogTable({ entries, onItemClick }) {
 
 function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
   const isManual = !changelogItem.request_id
+  const dialogRef = useDialogA11y(true, onClose)
 
   return (
     <ModalOverlay onClose={onClose}>
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="changelog-detail-title"
@@ -656,7 +675,7 @@ function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0"
+            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
           >
             <X size={18} aria-hidden="true" />
           </button>
@@ -766,7 +785,7 @@ function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
             </div>
           ) : (
             <div className="p-3 bg-amber-50 rounded-lg border border-amber-100 flex items-start gap-2">
-              <AlertCircle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+              <AlertCircle size={16} className="text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
               <div>
                 <p className="text-sm font-medium text-amber-800">Original request not found</p>
                 <p className="text-xs text-amber-600 mt-0.5">
@@ -779,7 +798,7 @@ function ChangelogDetailModal({ changelogItem, bugData, loading, onClose }) {
 
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end">
           <button onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Close
           </button>
         </div>
@@ -1021,12 +1040,12 @@ function AddEditModal({ item, initial, onClose, onSaved, actions, canUpdateStatu
 
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
           <button onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button onClick={handleSave} disabled={actions.saving || !form.title.trim()}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5">
-            {actions.saving && <Loader2 size={14} className="animate-spin" />}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            {actions.saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
             {isEdit ? 'Save Changes' : 'Submit'}
           </button>
         </div>
@@ -1094,7 +1113,7 @@ function ViewModal({ item, onClose, onEdit }) {
                       type="button"
                       onClick={() => setLightbox(i)}
                       aria-label={`Open screenshot ${i + 1} of ${shots.length}: ${shot.name || 'image'}`}
-                      className="group relative block w-full aspect-video rounded-lg overflow-hidden border border-surface-200 bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                      className="group relative block w-full aspect-video rounded-lg overflow-hidden border border-surface-200 bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
                     >
                       <img src={shot.url} alt="" className="w-full h-full object-cover" loading="lazy" />
                       <span className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
@@ -1118,13 +1137,13 @@ function ViewModal({ item, onClose, onEdit }) {
 
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
           <button onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Close
           </button>
           {onEdit && (
             <button onClick={onEdit}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 flex items-center gap-1.5">
-              <Edit3 size={14} /> Edit
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Edit3 size={14} aria-hidden="true" /> Edit
             </button>
           )}
         </div>
@@ -1216,7 +1235,7 @@ function ScreenshotDropZone({ pending, existing, onAdd, onRemovePending, onRemov
                   onClick={() => onRemoveExisting(shot)}
                   disabled={busy}
                   aria-label={`Remove screenshot ${shot.name || ''}`}
-                  className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white min-h-[44px]"
                 >
                   <X size={14} aria-hidden="true" />
                 </button>
@@ -1231,7 +1250,7 @@ function ScreenshotDropZone({ pending, existing, onAdd, onRemovePending, onRemov
                 type="button"
                 onClick={() => onRemovePending(i)}
                 aria-label={`Remove ${f.name} (not yet uploaded)`}
-                className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-white min-h-[44px]"
               >
                 <X size={14} aria-hidden="true" />
               </button>
@@ -1314,6 +1333,9 @@ function ScreenshotLightbox({ shots, index, onIndex, onClose }) {
 function ConfirmModal({ title, message, okText, danger, prompt, promptLabel, onOk, onCancel }) {
   const [reason, setReason] = useState('')
   const [working, setWorking] = useState(false)
+  const titleId = useId()
+  const reasonId = useId()
+  const dialogRef = useDialogA11y(true, onCancel)
 
   const handleOk = async () => {
     setWorking(true)
@@ -1326,31 +1348,31 @@ function ConfirmModal({ title, message, okText, danger, prompt, promptLabel, onO
 
   return (
     <ModalOverlay onClose={onCancel} zIndex="z-[60]">
-      <div className="bg-white rounded-xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="alertdialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center gap-2">
-          <HelpCircle size={18} className="text-amber-500 shrink-0" />
-          <h3 className="font-semibold text-surface-900">{title || 'Confirm'}</h3>
+          <HelpCircle size={18} className="text-amber-500 shrink-0" aria-hidden="true" />
+          <h3 id={titleId} className="font-semibold text-surface-900">{title || 'Confirm'}</h3>
         </div>
         <div className="px-5 py-4">
           <p className="text-sm text-surface-600 text-center">{message}</p>
           {prompt && (
             <div className="mt-3">
-              <label className="text-[11px] font-medium text-surface-500">{promptLabel || 'Reason'}</label>
-              <input type="text" value={reason} onChange={e => setReason(e.target.value)}
+              <label htmlFor={reasonId} className="text-[11px] font-medium text-surface-500">{promptLabel || 'Reason'}</label>
+              <input id={reasonId} type="text" value={reason} onChange={e => setReason(e.target.value)}
                 className="input text-sm mt-1" placeholder="Optional…" />
             </div>
           )}
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-center gap-3">
           <button onClick={onCancel}
-            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button onClick={handleOk} disabled={working}
-            className={`px-4 py-2 rounded-lg text-sm font-medium text-white flex items-center gap-1.5 ${
+            className={`px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium text-white flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
               danger ? 'bg-red-500 hover:bg-red-600' : 'bg-brand-600 hover:bg-brand-700'
             } disabled:opacity-40`}>
-            {working && <Loader2 size={14} className="animate-spin" />}
+            {working && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
             {okText || 'OK'}
           </button>
         </div>
@@ -1372,11 +1394,19 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50' }) {
   )
 }
 
+// Label + control. If htmlFor isn't supplied and the child is a bare
+// input/select/textarea, an id is generated and injected so the label is
+// programmatically linked (WCAG 1.3.1 / 4.1.2).
+const FORM_TAGS = new Set(['input', 'select', 'textarea'])
 function Field({ label, htmlFor, children }) {
+  const autoId = useId()
+  const child = React.Children.only(children)
+  const injectable = !htmlFor && React.isValidElement(child) && FORM_TAGS.has(child.type)
+  const id = htmlFor || (injectable ? (child.props.id || autoId) : undefined)
   return (
     <div>
-      <label htmlFor={htmlFor} className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
-      {children}
+      <label htmlFor={id} className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
+      {injectable ? React.cloneElement(child, { id }) : children}
     </div>
   )
 }
@@ -1395,6 +1425,7 @@ function MetaItem({ label, children }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function AddChangelogModal({ onClose, onSaved, actions }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [form, setForm] = useState({
     type: 'Bug',
     title: '',
@@ -1448,6 +1479,7 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
   return (
     <ModalOverlay onClose={onClose}>
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="add-changelog-title"
@@ -1470,7 +1502,7 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0"
+            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
           >
             <X size={18} aria-hidden="true" />
           </button>
@@ -1603,14 +1635,14 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-surface-400 border border-surface-200"
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-surface-400 border border-surface-200 min-h-[44px]"
           >
             Cancel
           </button>
           <button
             onClick={handleSave}
             disabled={actions.saving || !form.title.trim()}
-            className={`px-4 py-2 rounded-lg text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 flex items-center gap-1.5 ${
+            className={`px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 flex items-center gap-1.5 ${
               form.versionMode === 'major'
                 ? 'bg-amber-600 hover:bg-amber-700 focus:ring-amber-500'
                 : 'bg-brand-600 hover:bg-brand-700 focus:ring-brand-500'

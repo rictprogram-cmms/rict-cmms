@@ -52,7 +52,7 @@ Student-facing first:
 - [x] `AssetCheckoutsPage.jsx` — audited 2026-08-24: already compliant (4 dialogs on `useDialogA11y`, tablist, labels, icons hidden); fixed 44px on 21 buttons, `scope="col"` in the printed equipment report, `alert()` → toast
 - [x] `VolunteerHoursPage.jsx` — delivered 2026-08-24: 4 remaining modals (Log Volunteer, Log Club, Edit Request, Report) wired to `useDialogA11y` with `role="dialog"`; aria-labels on refresh/close/correction buttons; keyboard toggle for student rows; `aria-pressed` on filters and report-type toggles; `alert()` → toast; focus rings + 44px; `scope="col"`; icons hidden. (Fields were already labelled — `Field` wraps in `<label>`.)
 - [x] `DashboardPage.jsx` — audited 2026-08-24: already compliant (3 dialogs on `useDialogA11y`, card headers are keyboard buttons with `aria-expanded`, focus styles in `dashboard.css`, 6 live regions, headers scoped). Fixed 44px targets via `dashboard.css` (`.dash-btn-sm`, `.dash-btn-reject`, `.dash-btn-primary`, `.dash-btn-cancel`, `.dash-modal-close` at all viewports)
-- [ ] `BugTrackerPage.jsx` (~12 unlabeled, 1 `outline-none`)
+- [x] `BugTrackerPage.jsx` — delivered 2026-08-24: `Field` auto-links labels via `useId()`; Changelog Detail, Add Changelog and Confirm dialogs wired to `useDialogA11y` (Confirm is `alertdialog`); `ActionBtn` icon buttons named from their tooltip; search/filter controls labelled with focus ring; changelog version rows and item titles are keyboard buttons with `aria-expanded`; focus rings + 44px; `scope="col"`; icons hidden
 - [ ] `AssetScanPage.jsx` (dialog without `useDialogA11y`)
 - [ ] `TimeClockPage.jsx` (kiosk)
 - [ ] `LabStatusPage.jsx` (dialog without `useDialogA11y`)
