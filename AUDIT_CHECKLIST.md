@@ -13,12 +13,15 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
   - [x] Confirm no accounts still use the temp password — only one never-signed-in account (already Archived); delete its auth user in Supabase → Authentication → Users
   - [x] Script no longer needed — users are created through the app. Delete outright.
   - [x] Add `*.local.*` and `seed/` to `.gitignore`. (delivered)
-- [ ] **Apply `displayName()`** (already in `src/lib/utils.js`, renders "First L.") on every student/work-study-visible surface. Rule agreed 2026-08-24: students and work study see other people as "First L."; instructors keep full names.
-  - [ ] Lab Signup
-  - [ ] Dashboard widgets
-  - [ ] Weekly Labs tracker
-  - [ ] Equipment Scheduling
-  - [ ] TV Display / Lab Status kiosk screens
+- [x] **Student name privacy sweep** — audited 2026-08-24 against `207e69a`. Rule: students and work study see other people as "First L."; instructors keep full names. Added `shortName(fullName)` to `src/lib/utils.js` for `user_name` strings (use `displayName(profile)` for profile objects).
+  - [x] Lab Signup — clean (students see counts only; name lists behind `manage_others`)
+  - [x] Dashboard — clean (name lists only in `InstructorOverview`, behind `Users → view_page`)
+  - [x] Weekly Labs — clean (student view shows own name / instructor only)
+  - [x] Equipment Scheduling — fixed: grid cell + aria-label for other people's bookings now "First L."
+  - [x] TV Display — already abbreviated via local `firstLastInit()`
+  - [x] Lab Status kiosk — fixed: help-request card now "First L." (people list was already abbreviated)
+  - [ ] Review Access page: if any Work Study role holds `manage_others`, `view_all_students`, `manage_all_bookings`, or `Users → view_page`, they see full names on those screens
+  - [ ] Cleanup: replace the local `firstLastInit()` copies in `TVDisplayPage.jsx` and `LabStatusPage.jsx` with `shortName()` from utils
   - [ ] Asset checkouts (`AssetCheckoutsPage.jsx`, `useAssetCheckouts.js`)
   - [ ] Absence requests (`AbsenceRequestPage.jsx`)
   - [ ] Audit any other list a student can see that renders another student's full name (Lab Signup, Time Cards, Dashboard widgets)
@@ -97,7 +100,7 @@ Instructor / admin:
   - [ ] `src/hooks/useSOPs.js`
   - [ ] `src/hooks/useViewTracker.js`
   - [ ] `src/pages/CourseRevisionWizard.jsx`
-  - [ ] `src/pages/AuthContext.jsx` (stale duplicate of `contexts/AuthContext.jsx`)
+  - [x] `src/pages/AuthContext.jsx` (deleted 2026-08-24)
 - [ ] **Deferred pooled-scanner follow-ups** (not on main):
   - [ ] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx`
   - [ ] Hide pooled asset's checkout indicator in `AssetsPage.jsx`

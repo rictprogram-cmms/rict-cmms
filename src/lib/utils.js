@@ -109,6 +109,21 @@ export function displayName(profile) {
 }
 
 /**
+ * Shorten a stored "First Last" string to "First L." for student-visible
+ * surfaces. Use displayName() when you have a profile object; use this when
+ * all you have is a user_name column value.
+ *
+ * Privacy rule (agreed 2026-08-24): students and work study see other
+ * people as "First L."; instructors keep full names.
+ */
+export function shortName(fullName) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0]
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`
+}
+
+/**
  * Role permission checks
  */
 export function isInstructor(profile) {

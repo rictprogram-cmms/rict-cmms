@@ -32,6 +32,7 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mustData } from '@/lib/supabaseData';
 import { useVersionCheck } from '@/hooks/useVersionCheck';
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
+import { shortName } from '@/lib/utils';
 
 const SCROLL_THRESHOLD = 6;
 
@@ -325,7 +326,7 @@ function HelpRequestCard({ req, onAcknowledge, onResolve }) {
           color: isPending ? '#fca5a5' : '#4ade80', border: `2px solid ${isPending ? '#7f1d1d' : '#1a4d2e'}` }}>{initials}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: isPending ? '#fca5a5' : '#86efac',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{req.user_name || 'Unknown'}</div>
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{shortName(req.user_name) || 'Unknown'}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
             {req.location && (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: '0.75rem', color: '#94a3b8' }}>
               <span className="material-icons" style={{ fontSize: '0.8rem', color: '#6c757d' }}>place</span>{req.location}</span>)}

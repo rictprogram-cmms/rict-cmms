@@ -5,6 +5,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useLabVisibleDays } from '@/hooks/useLabDays'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { shortName } from '@/lib/utils'
 import {
   useAllEquipmentList,
   useAssetPickerData,
@@ -638,12 +639,12 @@ function GridCell({ slot, isSelected, equipment, onClick, canBook, canManageAll 
       break
     case 'other':
       interactive = canManageAll && !slot.isPast
-      ariaLabel = `Booked by ${slot.booking?.userName || 'another user'}, ${equipment.name}, ${timeRange}${interactive ? ', click to manage' : ''}`
+      ariaLabel = `Booked by ${shortName(slot.booking?.userName) || 'another user'}, ${equipment.name}, ${timeRange}${interactive ? ', click to manage' : ''}`
       styles = { bg: '#d3d1c7', border: '#888780', color: '#2c2c2a' }
       content = (
         <span className="inline-flex items-center gap-1 text-[11px] truncate">
           <UserIcon size={11} aria-hidden="true" className="flex-shrink-0" />
-          <span className="truncate">{slot.booking?.userName || '—'}</span>
+          <span className="truncate">{shortName(slot.booking?.userName) || '—'}</span>
         </span>
       )
       break
