@@ -109,6 +109,7 @@
 .dash-btn-sm {
   background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px;
   padding: 4px 12px; font-size: 0.75rem; cursor: pointer; color: #495057;
+  min-height: 44px; /* WCAG 2.5.5 target size */
   display: inline-flex; align-items: center;
 }
 .dash-btn-sm:hover { background: #e9ecef; }
@@ -231,6 +232,7 @@
 .dash-btn-reject {
   background: #fa5252; color: white; border: none; border-radius: 6px;
   padding: 6px 14px; font-size: 0.78rem; font-weight: 500;
+  min-height: 44px; /* WCAG 2.5.5 target size */
   cursor: pointer; transition: opacity 0.2s;
 }
 .dash-btn-reject:hover { opacity: 0.85; }
@@ -257,7 +259,7 @@
 .dash-modal-close {
   background: none; border: none;
   font-size: 1.5rem; cursor: pointer; color: #868e96;
-  min-width: 32px; min-height: 32px;
+  min-width: 44px; min-height: 44px; /* WCAG 2.5.5 target size (all viewports) */
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 4px;
 }
@@ -287,6 +289,7 @@ textarea.dash-input { resize: vertical; font-family: inherit; }
 .dash-btn-primary {
   background: #228be6; color: white; border: none; border-radius: 8px;
   padding: 10px 20px; font-size: 0.88rem; font-weight: 500;
+  min-height: 44px; /* WCAG 2.5.5 target size */
   cursor: pointer; transition: background 0.2s;
 }
 .dash-btn-primary:hover { background: #1c7ed6; }
@@ -294,6 +297,7 @@ textarea.dash-input { resize: vertical; font-family: inherit; }
 .dash-btn-cancel {
   background: #f1f3f5; color: #495057; border: none; border-radius: 8px;
   padding: 10px 20px; font-size: 0.88rem; cursor: pointer;
+  min-height: 44px; /* WCAG 2.5.5 target size */
 }
 
 /* ── Tables ──────────────────────────────────────────────────────────────── */
@@ -331,8 +335,6 @@ textarea.dash-input { resize: vertical; font-family: inherit; }
   .dash-card-header { padding: 14px 16px; }
   /* Match for the new day nav row */
   .dash-day-nav-row { padding: 10px 12px; }
-  /* Modal close — bump to 44x44 on mobile (WCAG 2.5.5 AAA) */
-  .dash-modal-close { min-width: 44px; min-height: 44px; }
 }
 
 /* ── Respect prefers-reduced-motion (WCAG 2.3.3) ─────────────────────────── */

@@ -34,6 +34,7 @@ import { useDialogA11y } from '@/hooks/useDialogA11y';
 import {
   useUserPendingAcknowledgments,
   formatCountdown,
+  POOLED_SCANNER_ASSET_ID,
 } from '@/hooks/useAssetCheckouts';
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
 import '@/styles/dashboard.css';
@@ -1336,7 +1337,10 @@ function InstructorOverview({ navigate }) {
       const rows = mustData(await supabase
         .from('asset_checkouts')
         .select('checkout_id, expected_return')
-        .is('returned_at', null), 'asset_checkouts') || [];
+        .is('returned_at', null)
+        // Pooled scanner sign-outs are tracked on their own card; excluding
+        // them keeps "Assets Out" / "Overdue" to real per-asset checkouts.
+        .neq('asset_id', POOLED_SCANNER_ASSET_ID), 'asset_checkouts') || [];
       const now = new Date();
       const overdue = rows.filter(r => r.expected_return && new Date(r.expected_return) < now).length;
       setOutCount(rows.length);

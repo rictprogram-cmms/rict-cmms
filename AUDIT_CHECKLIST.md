@@ -51,7 +51,7 @@ Student-facing first:
 - [x] `AbsenceRequestPage.jsx` — audited 2026-08-24: already compliant (dialogs, labels, live regions, focus rings); only fix needed was 44px targets on 10 buttons
 - [x] `AssetCheckoutsPage.jsx` — audited 2026-08-24: already compliant (4 dialogs on `useDialogA11y`, tablist, labels, icons hidden); fixed 44px on 21 buttons, `scope="col"` in the printed equipment report, `alert()` → toast
 - [x] `VolunteerHoursPage.jsx` — delivered 2026-08-24: 4 remaining modals (Log Volunteer, Log Club, Edit Request, Report) wired to `useDialogA11y` with `role="dialog"`; aria-labels on refresh/close/correction buttons; keyboard toggle for student rows; `aria-pressed` on filters and report-type toggles; `alert()` → toast; focus rings + 44px; `scope="col"`; icons hidden. (Fields were already labelled — `Field` wraps in `<label>`.)
-- [ ] `DashboardPage.jsx`
+- [x] `DashboardPage.jsx` — audited 2026-08-24: already compliant (3 dialogs on `useDialogA11y`, card headers are keyboard buttons with `aria-expanded`, focus styles in `dashboard.css`, 6 live regions, headers scoped). Fixed 44px targets via `dashboard.css` (`.dash-btn-sm`, `.dash-btn-reject`, `.dash-btn-primary`, `.dash-btn-cancel`, `.dash-modal-close` at all viewports)
 - [ ] `BugTrackerPage.jsx` (~12 unlabeled, 1 `outline-none`)
 - [ ] `AssetScanPage.jsx` (dialog without `useDialogA11y`)
 - [ ] `TimeClockPage.jsx` (kiosk)
@@ -84,7 +84,8 @@ Instructor / admin:
 
 ## P3 — House conventions
 
-- [ ] **Date convention sweep** (~450 `new Date().toISOString()` / `toLocale*String()` uses). Replace with `localToUtcIso()` / `getUTC*` helpers. Highest counts: `WorkOrdersPage`, `NotificationBell`, `useBugTracker`, `SOPsPage`, `AssetsPage`, `AnnouncementsPage`, `usePurchaseOrders`, `SyllabusWizard`, `useWeeklyLabs`, `usePMSchedules`, `useNetworkMap`, `useEquipment`, `AppLayout`, `WeeklyLabsTrackerPage`, `UsersPage`, `TimeCardsPage`, `ProgramBudgetPage`, `DashboardPage`
+- [ ] **Date convention sweep** — note: `reverted_date` is written as real-UTC `new Date().toISOString()` in both `DashboardPage.jsx` (revoke) and `AppLayout.jsx`; change both together with `localToUtcIso()` when doing the sweep so they stay consistent
+- [ ] **Date convention sweep (list)** (~450 `new Date().toISOString()` / `toLocale*String()` uses). Replace with `localToUtcIso()` / `getUTC*` helpers. Highest counts: `WorkOrdersPage`, `NotificationBell`, `useBugTracker`, `SOPsPage`, `AssetsPage`, `AnnouncementsPage`, `usePurchaseOrders`, `SyllabusWizard`, `useWeeklyLabs`, `usePMSchedules`, `useNetworkMap`, `useEquipment`, `AppLayout`, `WeeklyLabsTrackerPage`, `UsersPage`, `TimeCardsPage`, `ProgramBudgetPage`, `DashboardPage`
 - [ ] **`.select()` + row-count validation on all writes** (~380 chains missing it). Highest counts: `NotificationBell`, `usePurchaseOrders`, `useBugTracker`, `SOPsPage`, `usePMSchedules`, `useVolunteerHours`, `WorkOrdersPage`, `useTimeCards`, `UsersPage`, `AnnouncementsPage`, `AppLayout`, `useSettings`
 - [ ] **`mustData()`** on reads that gate a write or feed a user-visible number (currently 6 files use it)
 - [ ] **`subscribeWithReconnect()`** replaces raw `supabase.channel()` in: `NotificationBell`, `usePurchaseOrders`, `useStudentHolds`, `AuthContext` (5 channels), `InstructorToolsPage`, `WorkOrdersPage`, `ProgramCostPage`, `SettingsPage`, `SOPsPage`
@@ -103,8 +104,8 @@ Instructor / admin:
   - [ ] `src/pages/CourseRevisionWizard.jsx`
   - [x] `src/pages/AuthContext.jsx` (deleted 2026-08-24)
 - [ ] **Deferred pooled-scanner follow-ups** (not on main):
-  - [ ] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx`
-  - [ ] Hide pooled asset's checkout indicator in `AssetsPage.jsx`
+  - [x] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx` (delivered 2026-08-24)
+  - [x] Hide pooled asset's checkout indicator in `AssetsPage.jsx` (delivered 2026-08-24)
 - [ ] Add `.gitattributes` with `*.bat text eol=crlf` so batch files keep CRLF on commit
 - [ ] Dependency bumps (minor, safe): `@supabase/supabase-js`, `react-router-dom`, `react`, `date-fns`, `docx`, `fflate`
 - [ ] Dependency bumps (major, plan separately): `vite` 6→8, `@vitejs/plugin-react` 4→6, `tailwindcss` 3→4, `lucide-react` 0.468→1.x

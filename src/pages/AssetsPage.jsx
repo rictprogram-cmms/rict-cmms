@@ -27,6 +27,7 @@ import {
   useCheckoutActions,
   fakeUtcToDisplay,
   daysOverdue,
+  POOLED_SCANNER_ASSET_ID,
 } from '@/hooks/useAssetCheckouts'
 import { excludeSuperAdmin } from '@/lib/superAdmin'
 
@@ -189,6 +190,9 @@ export default function AssetsPage() {
         .from('asset_checkouts')
         .select('checkout_id, asset_id, user_email, user_name, checked_out_at, expected_return')
         .is('returned_at', null)
+        // The pooled scanner has many simultaneous sign-outs on one asset
+        // record; it must not show a single "Out" indicator here.
+        .neq('asset_id', POOLED_SCANNER_ASSET_ID)
       const map = {}
       const now = new Date()
       ;(data || []).forEach(c => {
