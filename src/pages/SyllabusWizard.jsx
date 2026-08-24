@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useId } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -777,7 +777,7 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
               <p id="ccm-desc" className="text-xs text-surface-400">Add this course to the CMMS for student enrollment</p>
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60">
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
             <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
@@ -903,52 +903,65 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
 }
 
 // ─── Reusable Form Helpers ─────────────────────────────────────────────────────
+// Field links its label to the control (WCAG 1.3.1 / 4.1.2): an id from
+// useId() is injected into TI / NI / TA / Sel or a bare input/select/textarea
+// child. ItemList (several inputs) labels each row itself.
+const LINKABLE = new Set(['input', 'select', 'textarea'])
 function Field({ label, required, hint, children }) {
+  const autoId = useId()
+  const hintId = `${autoId}-hint`
+  const child = React.Children.only(children)
+  const linkable = React.isValidElement(child) && (LINKABLE.has(child.type) || child.type === TI || child.type === NI || child.type === TA || child.type === Sel)
+  const id = linkable ? (child.props.id || autoId) : undefined
+  const isList = React.isValidElement(child) && child.type === ItemList
   return (
     <div>
-      <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label htmlFor={id} className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">
+        {label}{required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}{required && <span className="sr-only"> (required)</span>}
       </label>
-      {children}
-      {hint && <p className="text-xs text-surface-400 mt-1">{hint}</p>}
+      {linkable
+        ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : undefined })
+        : isList ? React.cloneElement(child, { label }) : children}
+      {hint && <p id={hintId} className="text-xs text-surface-400 mt-1">{hint}</p>}
     </div>
   )
 }
-function TI({ value, onChange, placeholder, type = 'text', className = '' }) {
-  return <input type={type} value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+function TI({ value, onChange, placeholder, type = 'text', className = '', ...rest }) {
+  return <input type={type} value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} {...rest}
     className={`w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 ${className}`} />
 }
-function NI({ value, onChange, min, max, step = 1, ariaLabel }) {
-  return <input type="number" value={value ?? ''} onChange={e => onChange(e.target.value)} min={min} max={max} step={step} aria-label={ariaLabel}
+function NI({ value, onChange, min, max, step = 1, ariaLabel, ...rest }) {
+  return <input type="number" value={value ?? ''} onChange={e => onChange(e.target.value)} min={min} max={max} step={step} aria-label={ariaLabel} {...rest}
     className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400" />
 }
-function TA({ value, onChange, rows = 4, placeholder }) {
-  return <textarea value={value ?? ''} onChange={e => onChange(e.target.value)} rows={rows} placeholder={placeholder}
+function TA({ value, onChange, rows = 4, placeholder, ...rest }) {
+  return <textarea value={value ?? ''} onChange={e => onChange(e.target.value)} rows={rows} placeholder={placeholder} {...rest}
     className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 resize-y" />
 }
-function Sel({ value, onChange, options }) {
+function Sel({ value, onChange, options, ...rest }) {
   return (
-    <select value={value ?? ''} onChange={e => onChange(e.target.value)}
+    <select value={value ?? ''} onChange={e => onChange(e.target.value)} {...rest}
       className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 bg-white">
       {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
   )
 }
-function ItemList({ items, onChange, placeholder, addLabel = 'Add Item' }) {
+function ItemList({ items, onChange, placeholder, addLabel = 'Add Item', label = 'Item' }) {
   return (
     <div className="space-y-2">
       {items.map((item, i) => (
         <div key={i} className="flex gap-2">
           <input value={item} onChange={e => onChange(items.map((x, idx) => idx === i ? e.target.value : x))} placeholder={placeholder}
+            aria-label={`${label} ${i + 1}`}
             className="flex-1 px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
-          <button onClick={() => onChange(items.filter((_, idx) => idx !== i))}
-            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-            <Trash2 size={14} />
+          <button type="button" onClick={() => onChange(items.filter((_, idx) => idx !== i))} aria-label={`Remove ${label} ${i + 1}`}
+            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+            <Trash2 size={14} aria-hidden="true" />
           </button>
         </div>
       ))}
-      <button onClick={() => onChange([...items, ''])} className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-700 py-1">
-        <Plus size={13} /> {addLabel}
+      <button type="button" onClick={() => onChange([...items, ''])} className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-700 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+        <Plus size={13} aria-hidden="true" /> {addLabel}
       </button>
     </div>
   )
@@ -1026,13 +1039,14 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
             Course <span className="text-red-500">*</span>
           </label>
           <button onClick={() => setShowAddCourse(v => !v)}
-            className="flex items-center gap-1 text-xs text-brand-600 font-medium hover:text-brand-700 transition-colors">
-            <PlusCircle size={13} />
+            className="flex items-center gap-1 text-xs text-brand-600 font-medium hover:text-brand-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <PlusCircle size={13} aria-hidden="true" />
             {showAddCourse ? 'Cancel' : 'Add Course to Catalog'}
           </button>
         </div>
 
         <select
+          aria-label="Select course"
           value={data.course_id || ''}
           onChange={e => {
             const course = courseCatalog.find(c => c.course_id === e.target.value)
@@ -1112,39 +1126,39 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
         {showAddCourse && (
           <div className="border border-brand-100 bg-brand-50/50 rounded-xl p-4 space-y-3">
             <p className="text-xs font-semibold text-brand-700 uppercase tracking-wide flex items-center gap-1.5">
-              <PlusCircle size={12} /> New Course Entry
+              <PlusCircle size={12} aria-hidden="true" /> New Course Entry
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Course ID <span className="text-red-500">*</span></label>
-                <input value={newCourse.course_id} onChange={e => setNewCourse(p => ({ ...p, course_id: e.target.value.toUpperCase() }))}
+                <label htmlFor="sy-fld-course-id-1" className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Course ID <span className="text-red-500">*</span></label>
+                <input id="sy-fld-course-id-1" value={newCourse.course_id} onChange={e => setNewCourse(p => ({ ...p, course_id: e.target.value.toUpperCase() }))}
                   placeholder="RICT1650"
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Course Name <span className="text-red-500">*</span></label>
-                <input value={newCourse.course_name} onChange={e => setNewCourse(p => ({ ...p, course_name: e.target.value }))}
+                <label htmlFor="sy-fld-course-name-2" className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Course Name <span className="text-red-500">*</span></label>
+                <input id="sy-fld-course-name-2" value={newCourse.course_name} onChange={e => setNewCourse(p => ({ ...p, course_name: e.target.value }))}
                   placeholder="e.g. Advanced Robotics"
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Lecture Credits</label>
-                <input type="number" value={newCourse.credits_lecture} min={0} max={6} onChange={e => setNewCourse(p => ({ ...p, credits_lecture: parseInt(e.target.value) || 0 }))}
+                <label htmlFor="sy-fld-lecture-credits-3" className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Lecture Credits</label>
+                <input id="sy-fld-lecture-credits-3" type="number" value={newCourse.credits_lecture} min={0} max={6} onChange={e => setNewCourse(p => ({ ...p, credits_lecture: parseInt(e.target.value) || 0 }))}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Lab Credits</label>
-                <input type="number" value={newCourse.credits_lab} min={0} max={6} onChange={e => setNewCourse(p => ({ ...p, credits_lab: parseInt(e.target.value) || 0 }))}
+                <label htmlFor="sy-fld-lab-credits-4" className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Lab Credits</label>
+                <input id="sy-fld-lab-credits-4" type="number" value={newCourse.credits_lab} min={0} max={6} onChange={e => setNewCourse(p => ({ ...p, credits_lab: parseInt(e.target.value) || 0 }))}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Campus Hrs/Week</label>
-                <input type="number" value={newCourse.required_hours} min={1} max={40} step={0.5} onChange={e => setNewCourse(p => ({ ...p, required_hours: parseFloat(e.target.value) || 4 }))}
+                <label htmlFor="sy-fld-campus-hrs-week-5" className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Campus Hrs/Week</label>
+                <input id="sy-fld-campus-hrs-week-5" type="number" value={newCourse.required_hours} min={1} max={40} step={0.5} onChange={e => setNewCourse(p => ({ ...p, required_hours: parseFloat(e.target.value) || 4 }))}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
               </div>
             </div>
             <button onClick={handleAddCourse} disabled={savingCourse || !newCourse.course_id || !newCourse.course_name}
-              className="w-full py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
+              className="w-full py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               {savingCourse ? 'Saving…' : 'Save to Catalog & Select'}
             </button>
           </div>
@@ -1163,28 +1177,28 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-semibold text-surface-700 flex items-center gap-1.5">
-                <Copy size={14} className="text-surface-400" /> Duplicate to New Semester
+                <Copy size={14} className="text-surface-400" aria-hidden="true" /> Duplicate to New Semester
               </p>
               <p className="text-xs text-surface-400 mt-0.5">
                 Copy all content to a new semester — dates will be cleared for re-entry.
               </p>
             </div>
             <button onClick={() => { setShowDuplicate(v => !v); setDupSemester(availableSemesters[0] || '') }}
-              className="px-3 py-1.5 text-xs font-medium text-brand-600 border border-brand-200 bg-white rounded-lg hover:bg-brand-50 transition-colors">
+              className="px-3 py-1.5 text-xs font-medium text-brand-600 border border-brand-200 bg-white rounded-lg hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               {showDuplicate ? 'Cancel' : 'Duplicate'}
             </button>
           </div>
           {showDuplicate && (
             <div className="mt-4 pt-4 border-t border-surface-200 flex items-end gap-3">
               <div className="flex-1">
-                <label className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Target Semester</label>
-                <select value={dupSemester} onChange={e => setDupSemester(e.target.value)}
+                <label htmlFor="sy-fld-target-semester-6" className="block text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1">Target Semester</label>
+                <select id="sy-fld-target-semester-6" value={dupSemester} onChange={e => setDupSemester(e.target.value)}
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/40">
                   {availableSemesters.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
               <button onClick={handleDuplicate} disabled={!dupSemester || duplicating}
-                className="px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50">
+                className="px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                 {duplicating ? 'Duplicating…' : 'Confirm Duplicate'}
               </button>
             </div>
@@ -1241,7 +1255,7 @@ function Step2Instructor({ data, update, commonSections }) {
       {/* Primary instructor */}
       <div className="rounded-xl border border-surface-200 p-4 space-y-4">
         <p className="text-xs font-semibold text-surface-600 flex items-center gap-1.5 uppercase tracking-wide">
-          <User size={13} className="text-brand-500" /> Primary Instructor
+          <User size={13} className="text-brand-500" aria-hidden="true" /> Primary Instructor
         </p>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Name" required><TI value={data.instructor_name} onChange={v => update('instructor_name', v)} placeholder="Aaron Barker" /></Field>
@@ -1257,8 +1271,8 @@ function Step2Instructor({ data, update, commonSections }) {
       {/* Co-instructor */}
       <div className="rounded-xl border border-surface-200 overflow-hidden">
         <button onClick={() => update('instructor2_enabled', !data.instructor2_enabled)}
-          className={`w-full flex items-center justify-between px-4 py-3 text-sm font-medium transition-colors ${data.instructor2_enabled ? 'bg-violet-50 text-violet-700' : 'bg-surface-50 text-surface-600 hover:bg-surface-100'}`}>
-          <span className="flex items-center gap-2"><UserPlus size={15} /> Co-Instructor (optional)</span>
+          className={`w-full flex items-center justify-between px-4 py-3 min-h-[44px] text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${data.instructor2_enabled ? 'bg-violet-50 text-violet-700' : 'bg-surface-50 text-surface-600 hover:bg-surface-100'}`}>
+          <span className="flex items-center gap-2"><UserPlus size={15} aria-hidden="true" /> Co-Instructor (optional)</span>
           <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${data.instructor2_enabled ? 'bg-violet-100 text-violet-700' : 'bg-surface-200 text-surface-500'}`}>
             {data.instructor2_enabled ? 'Enabled' : 'Off'}
           </span>
@@ -1291,7 +1305,7 @@ function Step2Instructor({ data, update, commonSections }) {
           {/* Status badge */}
           {logoSource === 'shared' && sharedLogo && (
             <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
-              <Check size={11} /> Using shared logo
+              <Check size={11} aria-hidden="true" /> Using shared logo
             </span>
           )}
           {logoSource === 'custom' && (
@@ -1318,15 +1332,15 @@ function Step2Instructor({ data, update, commonSections }) {
                   <p className="text-xs text-amber-600 font-medium">
                     Custom logo for this course only.
                     {sharedLogo && (
-                      <button onClick={resetToShared} className="ml-2 underline hover:no-underline">
+                      <button onClick={resetToShared} className="ml-2 underline hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                         Reset to shared logo
                       </button>
                     )}
                   </p>
                 )}
               </div>
-              <button onClick={removeLogo} className="p-1.5 text-surface-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors shrink-0" title="Remove logo">
-                <Trash2 size={14} />
+              <button type="button" onClick={removeLogo} aria-label="Remove logo" className="p-1.5 text-surface-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Remove logo">
+                <Trash2 size={14} aria-hidden="true" />
               </button>
             </div>
           )}
@@ -1344,7 +1358,7 @@ function Step2Instructor({ data, update, commonSections }) {
                 cross-site image access. Upload the image file itself instead
                 {sharedLogo && (
                   <>, or{' '}
-                    <button onClick={resetToShared} className="underline font-semibold hover:no-underline">
+                    <button onClick={resetToShared} className="underline font-semibold hover:no-underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       switch to the shared college logo
                     </button>
                   </>
@@ -1357,11 +1371,11 @@ function Step2Instructor({ data, update, commonSections }) {
           {logoSource !== 'shared' || !sharedLogo ? (
             <div className="flex items-center gap-3 flex-wrap">
               <label className="flex items-center gap-2 px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg cursor-pointer hover:bg-surface-50 transition-colors text-surface-600">
-                <Upload size={13} /> Upload Logo
+                <Upload size={13} aria-hidden="true" /> Upload Logo
                 <input type="file" accept="image/png,image/jpeg,image/gif,image/svg+xml" className="hidden" onChange={handleLogoUpload} />
               </label>
-              <span className="text-xs text-surface-400">or paste URL:</span>
-              <input type="url"
+              <span className="text-xs text-surface-400" aria-hidden="true">or paste URL:</span>
+              <input type="url" aria-label="Logo image URL"
                 value={data.logo_url && !data.logo_url.startsWith('data:') ? data.logo_url : ''}
                 onChange={e => update('logo_url', e.target.value)}
                 placeholder="https://..."
@@ -1374,7 +1388,7 @@ function Step2Instructor({ data, update, commonSections }) {
                 To use a different logo for this course only:
               </p>
               <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg cursor-pointer hover:bg-surface-50 transition-colors text-surface-500">
-                <Upload size={12} /> Override for this course
+                <Upload size={12} aria-hidden="true" /> Override for this course
                 <input type="file" accept="image/png,image/jpeg,image/gif,image/svg+xml" className="hidden" onChange={handleLogoUpload} />
               </label>
             </div>
@@ -1402,7 +1416,7 @@ function Step2Instructor({ data, update, commonSections }) {
           </div>
           {data.course_photo_url && (
             <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-full">
-              <Check size={11} /> Photo set
+              <Check size={11} aria-hidden="true" /> Photo set
             </span>
           )}
         </div>
@@ -1413,15 +1427,15 @@ function Step2Instructor({ data, update, commonSections }) {
               <div className="flex-1 text-xs text-surface-500">
                 {data.course_photo_url.startsWith('data:') ? 'Uploaded image' : data.course_photo_url.slice(0, 60) + '…'}
               </div>
-              <button onClick={() => update('course_photo_url', '')}
-                className="p-1.5 text-surface-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Remove photo">
-                <Trash2 size={14} />
+              <button type="button" onClick={() => update('course_photo_url', '')} aria-label="Remove course photo"
+                className="p-1.5 text-surface-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Remove photo">
+                <Trash2 size={14} aria-hidden="true" />
               </button>
             </div>
           )}
           <div className="flex items-center gap-3 flex-wrap">
             <label className="flex items-center gap-2 px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg cursor-pointer hover:bg-surface-50 transition-colors text-surface-600">
-              <Upload size={13} /> {data.course_photo_url ? 'Replace Photo' : 'Upload Photo'}
+              <Upload size={13} aria-hidden="true" /> {data.course_photo_url ? 'Replace Photo' : 'Upload Photo'}
               <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={e => {
                 const file = e.target.files?.[0]
                 if (!file) return
@@ -1431,8 +1445,8 @@ function Step2Instructor({ data, update, commonSections }) {
                 reader.readAsDataURL(file)
               }} />
             </label>
-            <span className="text-xs text-surface-400">or paste URL:</span>
-            <input type="url"
+            <span className="text-xs text-surface-400" aria-hidden="true">or paste URL:</span>
+            <input type="url" aria-label="Course photo URL"
               value={data.course_photo_url && !data.course_photo_url.startsWith('data:') ? data.course_photo_url : ''}
               onChange={e => update('course_photo_url', e.target.value)}
               placeholder="https://…"
@@ -1548,7 +1562,7 @@ function Step3CourseInfo({ data, update }) {
             <button
               key={opt.val}
               onClick={() => handleSemLenChange(opt.val)}
-              className={`flex-1 flex flex-col items-start px-4 py-3 rounded-xl border text-left transition-colors ${
+              className={`flex-1 flex flex-col items-start px-4 py-3 min-h-[44px] rounded-xl border text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 semLen === opt.val
                   ? 'bg-brand-50 border-brand-300 text-brand-700'
                   : 'border-surface-200 text-surface-600 hover:bg-surface-50'
@@ -1585,7 +1599,7 @@ function Step3CourseInfo({ data, update }) {
                 setManualOverride(true)
               }
             }}
-            className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
+            className={`text-xs px-2.5 py-1 min-h-[44px] rounded-lg font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
               manualOverride
                 ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
                 : 'bg-surface-200 text-surface-500 hover:bg-surface-300'
@@ -1686,6 +1700,7 @@ function Step4Dates({ data, update }) {
 
 // ─── Catalog Picker Modal (used by Step5Materials) ────────────────────────────
 function CatalogPickerModal({ currentMaterials, onAdd, onRemove, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [tools, setTools]       = useState([])
   const [loading, setLoading]   = useState(true)
   const [search, setSearch]     = useState('')
@@ -1717,31 +1732,31 @@ function CatalogPickerModal({ currentMaterials, onAdd, onRemove, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="sy-catalog-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-200 shrink-0">
           <div>
-            <h3 className="text-sm font-bold text-surface-900">Browse Materials Catalog</h3>
+            <h3 id="sy-catalog-title" className="text-sm font-bold text-surface-900">Browse Materials Catalog</h3>
             <p className="text-xs text-surface-500 mt-0.5">Click items to add or remove from this syllabus</p>
           </div>
-          <button onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-surface-100 flex items-center justify-center transition-colors">
-            <X size={15} className="text-surface-400" />
+          <button type="button" onClick={onClose} aria-label="Close catalog" className="w-11 h-11 rounded-lg hover:bg-surface-100 flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <X size={15} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
 
         {/* Search + filter */}
         <div className="flex gap-2 px-5 py-3 border-b border-surface-100 shrink-0">
           <div className="relative flex-1">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" />
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
             <input
-              type="text" value={search} onChange={e => setSearch(e.target.value)}
+              type="text" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search catalog"
               placeholder="Search catalog…"
-              className="w-full pl-7 pr-3 py-1.5 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400"
+              className="w-full pl-7 pr-3 py-1.5 min-h-[44px] text-sm border border-surface-200 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-400"
             />
           </div>
-          <select value={typeFilter} onChange={e => setType(e.target.value)}
-            className="px-2.5 py-1.5 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white">
+          <select value={typeFilter} onChange={e => setType(e.target.value)} aria-label="Filter by type"
+            className="px-2.5 py-1.5 min-h-[44px] text-sm border border-surface-200 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-400 bg-white">
             <option value="All">All</option>
             <option>Tool</option>
             <option>Material</option>
@@ -1755,7 +1770,7 @@ function CatalogPickerModal({ currentMaterials, onAdd, onRemove, onClose }) {
         <div className="flex-1 overflow-y-auto">
           {loading ? (
             <div className="flex items-center justify-center py-12 text-surface-400 gap-2">
-              <RefreshCw size={16} className="animate-spin" /><span className="text-sm">Loading…</span>
+              <RefreshCw size={16} className="animate-spin" aria-hidden="true" /><span className="text-sm">Loading…</span>
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-surface-400">
@@ -1774,13 +1789,13 @@ function CatalogPickerModal({ currentMaterials, onAdd, onRemove, onClose }) {
                     key={tool.tool_id}
                     type="button"
                     onClick={() => added ? onRemove(fmt(tool)) : onAdd(fmt(tool))}
-                    className={`w-full flex items-center gap-3 px-5 py-3 text-left transition-colors
+                    className={`w-full flex items-center gap-3 px-5 py-3 min-h-[44px] text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1
                       ${added ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-surface-50'}`}
                   >
                     {/* Check / circle */}
                     <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors
                       ${added ? 'bg-emerald-500 border-emerald-500' : 'border-surface-300'}`}>
-                      {added && <Check size={10} className="text-white" strokeWidth={3} />}
+                      {added && <Check size={10} className="text-white" strokeWidth={3} aria-hidden="true" />}
                     </div>
 
                     {/* Info */}
@@ -1820,7 +1835,7 @@ function CatalogPickerModal({ currentMaterials, onAdd, onRemove, onClose }) {
             {currentMaterials.length} item{currentMaterials.length !== 1 ? 's' : ''} added to syllabus
           </span>
           <button onClick={onClose}
-            className="px-4 py-1.5 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors">
+            className="px-4 py-1.5 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Done
           </button>
         </div>
@@ -2014,7 +2029,7 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
       {/* ── Course context reminder ── */}
       {data.course_id && (
         <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-xl px-4 py-2.5 text-sm text-blue-800">
-          <BookOpen size={14} className="text-blue-500 flex-shrink-0" />
+          <BookOpen size={14} className="text-blue-500 flex-shrink-0" aria-hidden="true" />
           <span>
             Materials for <span className="font-semibold">{data.course_id}</span>
             {data.course_name ? ` — ${data.course_name}` : ''}
@@ -2033,17 +2048,17 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
             <button
               type="button"
               onClick={() => { setShowAddNew(false); setShowPicker(true) }}
-              className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 text-xs font-semibold text-brand-600 hover:text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              <BookOpen size={12} />
+              <BookOpen size={12} aria-hidden="true" />
               Browse Catalog
             </button>
             <button
               type="button"
               onClick={() => { setShowPicker(false); setShowAddNew(v => !v) }}
-              className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              <Plus size={12} />
+              <Plus size={12} aria-hidden="true" />
               Add New Item
             </button>
           </div>
@@ -2072,21 +2087,21 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
                   {isEditingThis ? (
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <span className="text-xs text-surface-400">$</span>
-                      <input
+                      <input aria-label="New price in dollars"
                         type="number" step="0.01" min="0"
                         value={editingPrice.value}
                         onChange={e => setEditingPrice(p => ({ ...p, value: e.target.value }))}
                         onKeyDown={e => { if (e.key === 'Enter') handleSavePrice(); if (e.key === 'Escape') setEditingPrice(null) }}
-                        className="w-20 px-2 py-0.5 text-sm border border-brand-300 rounded outline-none focus:border-brand-500 bg-white"
+                        className="w-20 px-2 py-0.5 text-sm border border-brand-300 rounded outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-500 bg-white"
                         autoFocus
                       />
-                      <button type="button" onClick={handleSavePrice} disabled={savingPrice}
-                        className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors">
-                        <Check size={13} />
+                      <button type="button" onClick={handleSavePrice} disabled={savingPrice} aria-label="Save price"
+                        className="p-1 text-emerald-600 hover:bg-emerald-50 rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                        <Check size={13} aria-hidden="true" />
                       </button>
-                      <button type="button" onClick={() => setEditingPrice(null)}
-                        className="p-1 text-surface-400 hover:bg-surface-100 rounded transition-colors">
-                        <X size={13} />
+                      <button type="button" onClick={() => setEditingPrice(null)} aria-label="Cancel price edit"
+                        className="p-1 text-surface-400 hover:bg-surface-100 rounded transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                        <X size={13} aria-hidden="true" />
                       </button>
                     </div>
                   ) : (
@@ -2106,10 +2121,10 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
                           part_number: partNum || null,
                           value: entry?.cost != null ? String(entry.cost) : ''
                         })}
-                        className="opacity-0 group-hover:opacity-100 p-1 text-surface-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-all ml-0.5"
-                        title={entry ? "Edit price" : "Set price (will add to catalog)"}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-surface-400 hover:text-amber-600 hover:bg-amber-50 rounded transition-all ml-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
+                        title={entry ? "Edit price" : "Set price (will add to catalog)"} aria-label={`Edit price for ${displayName}`}
                       >
-                        <Pencil size={11} />
+                        <Pencil size={11} aria-hidden="true" />
                       </button>
                     </div>
                   )}
@@ -2117,9 +2132,10 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
                   <button
                     type="button"
                     onClick={() => removeItem(i)}
-                    className="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 transition-all ml-1 flex-shrink-0"
+                    aria-label={`Remove ${displayName} from materials`}
+                    className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-red-400 hover:text-red-600 transition-all ml-1 flex-shrink-0"
                   >
-                    <X size={13} />
+                    <X size={13} aria-hidden="true" />
                   </button>
                 </div>
               )
@@ -2136,13 +2152,13 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
         {showAddNew && (
           <div className="border border-amber-200 bg-amber-50/60 rounded-xl p-4 space-y-3">
             <p className="text-xs font-bold text-amber-800 uppercase tracking-wide flex items-center gap-1.5">
-              <Plus size={11} /> New Item — Saves to Master Catalog
+              <Plus size={11} aria-hidden="true" /> New Item — Saves to Master Catalog
             </p>
             <div>
-              <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">
+              <label htmlFor="sy-fld-item-name-7" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">
                 Item Name <span className="text-red-500">*</span>
               </label>
-              <input
+              <input id="sy-fld-item-name-7"
                 type="text"
                 value={newItem.item_name}
                 onChange={e => { setNI('item_name', e.target.value); setNewItemError('') }}
@@ -2158,7 +2174,7 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
               <div className={`rounded-lg border px-3 py-2.5 text-xs space-y-1.5
                 ${dupMatch.type === 'syllabus' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
                 <p className={`font-semibold flex items-center gap-1.5 ${dupMatch.type === 'syllabus' ? 'text-red-700' : 'text-amber-800'}`}>
-                  <AlertCircle size={12} />
+                  <AlertCircle size={12} aria-hidden="true" />
                   {dupMatch.type === 'syllabus'
                     ? 'Already on this syllabus'
                     : 'Similar item exists in catalog'}
@@ -2185,12 +2201,12 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
                         setNewItem({ item_name: '', item_type: 'Tool', part_number: '', cost: '' })
                         setDupMatch(null)
                       }}
-                      className="px-2.5 py-1 text-[11px] font-semibold bg-amber-600 text-white rounded-md hover:bg-amber-700 transition-colors">
+                      className="px-2.5 py-1 text-[11px] font-semibold bg-amber-600 text-white rounded-md hover:bg-amber-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       Use Existing Item
                     </button>
                   )}
                   <button type="button" onClick={() => setDupMatch(null)}
-                    className="px-2.5 py-1 text-[11px] font-semibold border border-surface-300 text-surface-600 rounded-md hover:bg-surface-50 transition-colors">
+                    className="px-2.5 py-1 text-[11px] font-semibold border border-surface-300 text-surface-600 rounded-md hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                     Add Anyway
                   </button>
                 </div>
@@ -2199,9 +2215,9 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
 
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Type</label>
-                <select value={newItem.item_type} onChange={e => setNI('item_type', e.target.value)}
-                  className="w-full px-2.5 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white">
+                <label htmlFor="sy-fld-type-8" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Type</label>
+                <select id="sy-fld-type-8" value={newItem.item_type} onChange={e => setNI('item_type', e.target.value)}
+                  className="w-full px-2.5 py-2 text-sm border border-surface-200 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-400 bg-white">
                   <option>Tool</option>
                   <option>Material</option>
                   <option>Supply</option>
@@ -2210,31 +2226,31 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">ISBN Number</label>
-                <input type="text" value={newItem.part_number} onChange={e => setNI('part_number', e.target.value)}
+                <label htmlFor="sy-fld-isbn-number-9" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">ISBN Number</label>
+                <input id="sy-fld-isbn-number-9" type="text" value={newItem.part_number} onChange={e => setNI('part_number', e.target.value)}
                   placeholder="e.g. 12120-N"
-                  className="w-full px-2.5 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white" />
+                  className="w-full px-2.5 py-2 text-sm border border-surface-200 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-400 bg-white" />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Cost</label>
                 <div className="relative">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-surface-400 select-none">$</span>
-                  <input type="number" step="0.01" min="0" value={newItem.cost} onChange={e => setNI('cost', e.target.value)}
+                  <input type="number" step="0.01" min="0" value={newItem.cost} aria-label="Cost in dollars" onChange={e => setNI('cost', e.target.value)}
                     placeholder="0.00"
-                    className="w-full pl-5 pr-2 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white" />
+                    className="w-full pl-5 pr-2 py-2 text-sm border border-surface-200 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-400 bg-white" />
                 </div>
               </div>
             </div>
             <div className="flex gap-2 pt-1">
               <button type="button" onClick={() => { setShowAddNew(false); setNewItemError(''); setDupMatch(null) }}
-                className="flex-1 py-2 text-sm font-medium border border-surface-200 text-surface-600 rounded-lg hover:bg-surface-50 transition-colors bg-white">
+                className="flex-1 py-2 text-sm font-medium border border-surface-200 text-surface-600 rounded-lg hover:bg-surface-50 transition-colors bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                 Cancel
               </button>
               <button type="button" onClick={handleSaveNew} disabled={savingNew}
-                className="flex-1 py-2 text-sm font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5">
+                className="flex-1 py-2 text-sm font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                 {savingNew
-                  ? <><RefreshCw size={13} className="animate-spin" /> Saving…</>
-                  : <><Check size={13} /> Save & Add to Syllabus</>
+                  ? <><RefreshCw size={13} className="animate-spin" aria-hidden="true" /> Saving…</>
+                  : <><Check size={13} aria-hidden="true" /> Save & Add to Syllabus</>
                 }
               </button>
             </div>
@@ -2351,7 +2367,7 @@ function Step7Grading({ data, update }) {
     update('assessments', list)
   }
   const inputCls = 'w-full px-2.5 py-1.5 border border-surface-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-brand-400'
-  const moveBtnCls = 'p-1 text-surface-400 hover:text-brand-600 hover:bg-brand-50 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 transition-colors'
+  const moveBtnCls = 'p-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-surface-400 hover:text-brand-600 hover:bg-brand-50 rounded disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 transition-colors'
 
   return (
     <div className="space-y-6">
@@ -2377,7 +2393,7 @@ function Step7Grading({ data, update }) {
                   value={opt.value}
                   checked={checked}
                   onChange={() => setMode(opt.value)}
-                  className="mt-0.5 h-4 w-4 border-surface-300 text-brand-600 focus:outline-none"
+                  className="mt-0.5 h-4 w-4 border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                 />
                 <span className="select-none">
                   <span className="block text-sm font-semibold text-surface-800">{opt.title}</span>
@@ -2461,14 +2477,14 @@ function Step7Grading({ data, update }) {
                     </div>
                   </td>
                   <td className="border border-l-0 border-surface-100 rounded-r-lg px-1 py-1 align-middle text-center">
-                    <button type="button" onClick={() => removeA(a.id)} aria-label={`Remove ${rowName}`} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 transition-colors"><Trash2 size={13} aria-hidden="true" /></button>
+                    <button type="button" onClick={() => removeA(a.id)} aria-label={`Remove ${rowName}`} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40 transition-colors min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><Trash2 size={13} aria-hidden="true" /></button>
                   </td>
                 </tr>
               )
             })}
           </tbody>
         </table>
-        <button type="button" onClick={addA} className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-700 py-1 mt-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 rounded"><Plus size={13} aria-hidden="true" /> {passFail ? 'Add Required Activity' : 'Add Assessment Item'}</button>
+        <button type="button" onClick={addA} className="flex items-center gap-1.5 text-xs text-brand-600 font-medium hover:text-brand-700 py-1 mt-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 rounded min-h-[44px]"><Plus size={13} aria-hidden="true" /> {passFail ? 'Add Required Activity' : 'Add Assessment Item'}</button>
       </div>
       {!passFail && (
         <div className="border-t border-surface-100 pt-4 grid grid-cols-3 gap-4">
@@ -2598,7 +2614,7 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
             </div>
           </div>
           <div className="border border-surface-100 rounded-xl p-3 bg-surface-50">
-            <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Clock size={11} /> PDF Export History</p>
+            <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Clock size={11} aria-hidden="true" /> PDF Export History</p>
             {data.pdf_generated_at ? (
               <div className="space-y-0.5">
                 <p className="text-xs text-surface-600">Last exported:</p>
@@ -2640,11 +2656,11 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
             syllabus will fail the Ally check.
           </div>
           <button onClick={onDownloadDocx} disabled={saving || docxBusy}
-            className="w-full py-2.5 bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm">
+            className="w-full py-2.5 bg-brand-600 text-white font-semibold rounded-xl hover:bg-brand-700 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             <Download size={15} aria-hidden="true" />{docxBusy ? 'Building Word file…' : 'Download Accessible Word (.docx)'}
           </button>
           <button onClick={onGenerate} disabled={saving || docxBusy}
-            className="w-full py-2.5 bg-white text-surface-700 font-semibold rounded-xl border border-surface-200 hover:bg-surface-50 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm">
+            className="w-full py-2.5 bg-white text-surface-700 font-semibold rounded-xl border border-surface-200 hover:bg-surface-50 transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             <Printer size={15} aria-hidden="true" />{saving ? 'Saving…' : 'Print PDF (browser — not fully accessible)'}
           </button>
 
@@ -2652,16 +2668,16 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
           {data.pdf_generated_at && (
             <div className="border border-emerald-200 rounded-xl bg-emerald-50 p-3 space-y-2">
               <p className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
-                <GraduationCap size={13} /> Add to CMMS?
+                <GraduationCap size={13} aria-hidden="true" /> Add to CMMS?
               </p>
               <p className="text-xs text-emerald-700 leading-snug">
                 Create a class entry in the CMMS so students can be enrolled for <strong>{data.semester}</strong>.
               </p>
               <button
                 onClick={onCreateClass}
-                className="w-full py-2 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center gap-1.5"
+                className="w-full py-2 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
-                <PlusCircle size={13} /> Add Class to CMMS
+                <PlusCircle size={13} aria-hidden="true" /> Add Class to CMMS
               </button>
             </div>
           )}
@@ -2671,21 +2687,21 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
       {/* Preview */}
       <div className="flex-1 flex flex-col bg-surface-100 min-w-0 min-h-0">
         <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-surface-100 shrink-0">
-          <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide flex items-center gap-1.5"><Eye size={12} /> Live Preview</p>
+          <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide flex items-center gap-1.5"><Eye size={12} aria-hidden="true" /> Live Preview</p>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs text-surface-400">Zoom</span>
-              <input type="range" min={40} max={100} step={5} value={scale} onChange={e => setScale(parseInt(e.target.value))} className="w-20 accent-brand-600" />
+              <span className="text-xs text-surface-400" aria-hidden="true">Zoom</span>
+              <input type="range" aria-label="Preview zoom percent" min={40} max={100} step={5} value={scale} onChange={e => setScale(parseInt(e.target.value))} className="w-20 accent-brand-600" />
               <span className="text-xs text-surface-500 font-medium w-8">{scale}%</span>
             </div>
-            <button onClick={refresh} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-surface-600 border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors" title="Regenerate preview with latest data">
-              <RefreshCw size={12} /> Refresh
+            <button onClick={refresh} className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-surface-600 border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" title="Regenerate preview with latest data">
+              <RefreshCw size={12} aria-hidden="true" /> Refresh
             </button>
           </div>
         </div>
         <div className="flex-1 overflow-auto p-4">
           <div style={{ width: Math.round(816 * scale / 100), margin: '0 auto', position: 'relative' }}>
-            {loading && <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 rounded"><RefreshCw size={20} className="animate-spin text-surface-400" /></div>}
+            {loading && <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 rounded"><RefreshCw size={20} className="animate-spin text-surface-400" aria-hidden="true" /></div>}
             {previewUrl && (
               <iframe key={previewUrl} src={previewUrl} title="Syllabus Preview" onLoad={() => setLoading(false)}
                 style={{ width: 816, height: 1100, border: 'none', background: 'white', display: 'block', transformOrigin: 'top left', transform: `scale(${scale / 100})`, boxShadow: '0 4px 24px rgba(0,0,0,0.15)', borderRadius: 3 }} />
@@ -2706,8 +2722,8 @@ function StepProgress({ current, onClickStep }) {
           <div key={step.id} className="flex items-center flex-1 last:flex-none">
             <div className="flex flex-col items-center gap-0.5 min-w-0">
               <button onClick={() => { if (step.id < current) { if (step.id === 5) setCatalogRefreshKey && setCatalogRefreshKey(k => k + 1); onClickStep(step.id) } }} disabled={step.id > current}
-                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${step.id < current ? 'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer' : step.id === current ? 'bg-brand-600 text-white ring-2 ring-brand-200' : 'bg-surface-100 text-surface-400 cursor-default'}`}>
-                {step.id < current ? <Check size={12} /> : step.id}
+                className={`w-11 h-11 rounded-full flex items-center justify-center text-xs font-bold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${step.id < current ? 'bg-brand-600 text-white hover:bg-brand-700 cursor-pointer' : step.id === current ? 'bg-brand-600 text-white ring-2 ring-brand-200' : 'bg-surface-100 text-surface-400 cursor-default'}`}>
+                {step.id < current ? <Check size={12} aria-hidden="true" /> : step.id}
               </button>
               <span className={`text-[10px] font-medium leading-tight text-center hidden sm:block ${step.id === current ? 'text-brand-600' : 'text-surface-400'}`}>{step.label}</span>
             </div>
@@ -2728,6 +2744,8 @@ function StepProgress({ current, onClickStep }) {
 // allow walking backward through the wizard from there.
 // Defaults preserve the original blank-start behavior exactly.
 export default function SyllabusWizard({ onClose, initialCourseId = null, initialSemester = null, initialStep = 1 }) {
+  // Wizard shell is a modal dialog: focus trap, Escape closes (same as the X button), focus restored on close.
+  const wizardDialogRef = useDialogA11y(true, onClose)
   const { user } = useAuth()
   const [step, setStep] = useState(initialStep)
   const [catalogRefreshKey, setCatalogRefreshKey] = useState(0)
@@ -2952,23 +2970,23 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
-        <div className={`bg-white rounded-2xl shadow-2xl w-full flex flex-col transition-all duration-300 ${isPreview ? 'max-w-[92vw] h-[92vh]' : 'max-w-3xl max-h-[92vh]'}`}>
+        <div ref={wizardDialogRef} role="dialog" aria-modal="true" aria-labelledby="sy-wizard-title" className={`bg-white rounded-2xl shadow-2xl w-full flex flex-col transition-all duration-300 ${isPreview ? 'max-w-[92vw] h-[92vh]' : 'max-w-3xl max-h-[92vh]'}`}>
 
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
-                <BookOpen size={16} className="text-blue-600" />
+                <BookOpen size={16} className="text-blue-600" aria-hidden="true" />
               </div>
               <div>
-                <h2 className="text-base font-bold text-surface-900">Syllabus Generator</h2>
+                <h2 id="sy-wizard-title" className="text-base font-bold text-surface-900">Syllabus Generator</h2>
                 <p className="text-xs text-surface-400">
                   {data.course_id ? `${data.course_id} · ${data.semester} · ` : ''}{STEPS[step - 1].desc}
                 </p>
               </div>
             </div>
-            <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-              <X size={18} className="text-surface-400" />
+            <button type="button" onClick={onClose} aria-label="Close syllabus generator" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+              <X size={18} className="text-surface-400" aria-hidden="true" />
             </button>
           </div>
 
@@ -2989,18 +3007,18 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
           {!isPreview && (
             <div className="border-t border-surface-100 px-6 py-4 flex items-center justify-between shrink-0">
               <button onClick={() => setStep(s => s - 1)} disabled={step === 1}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-                <ChevronLeft size={15} /> Back
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <ChevronLeft size={15} aria-hidden="true" /> Back
               </button>
               <div className="flex items-center gap-2">
                 <button onClick={() => handleSave()} disabled={saving || !data.course_id}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40">
-                  <Save size={14} />{saving ? 'Saving…' : 'Save Draft'}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Save size={14} aria-hidden="true" />{saving ? 'Saving…' : 'Save Draft'}
                 </button>
                 {step < STEPS.length && (
                   <button onClick={() => { const next = step + 1; if (next === 5) setCatalogRefreshKey(k => k + 1); setStep(next) }} disabled={step === 1 && !data.course_id}
-                    className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-40">
-                    Next <ChevronRight size={15} />
+                    className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                    Next <ChevronRight size={15} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -3010,12 +3028,12 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
           {/* Footer — preview step */}
           {isPreview && (
             <div className="border-t border-surface-100 px-6 py-3 flex items-center justify-between shrink-0">
-              <button onClick={() => setStep(7)} className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors">
-                <ChevronLeft size={15} /> Back to Grading
+              <button onClick={() => setStep(7)} className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <ChevronLeft size={15} aria-hidden="true" /> Back to Grading
               </button>
               <button onClick={() => handleSave()} disabled={saving || !data.course_id}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40">
-                <Save size={14} />{saving ? 'Saving…' : 'Save Draft'}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <Save size={14} aria-hidden="true" />{saving ? 'Saving…' : 'Save Draft'}
               </button>
             </div>
           )}
