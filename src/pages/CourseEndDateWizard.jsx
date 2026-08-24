@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useId } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, BorderStyle, UnderlineType,
@@ -296,7 +297,7 @@ function StepBar({ step }) {
                 ? 'bg-orange-600 border-orange-600 text-white'
                 : 'border-surface-300 bg-white text-surface-400'
             }`}>
-              {step > s.id ? <Check size={13} /> : s.id}
+              {step > s.id ? <Check size={13} aria-hidden="true" /> : s.id}
             </div>
             {i < STEPS.length - 1 && (
               <div className={`flex-1 h-0.5 mx-1.5 rounded transition-colors ${step > s.id ? 'bg-emerald-300' : 'bg-surface-200'}`} />
@@ -386,8 +387,8 @@ function Step1({ data, update }) {
             {data.courses.map(c => (
               <span key={c.course_id} className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-orange-200 rounded-full text-xs font-medium text-orange-800">
                 {c.course_id} — {c.course_name}
-                <button onClick={() => removeSelected(c.course_id)} className="hover:text-red-500 transition-colors">
-                  <X size={11} />
+                <button type="button" aria-label={`Remove ${c.course_id}`} onClick={() => removeSelected(c.course_id)} className="hover:text-red-500 transition-colors min-h-[44px] min-w-[44px] inline-flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                  <X size={11} aria-hidden="true" />
                 </button>
               </span>
             ))}
@@ -397,8 +398,9 @@ function Step1({ data, update }) {
 
       {/* Search */}
       <div className="relative">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
         <input
+          aria-label="Search courses"
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Search by course ID or name…"
@@ -409,7 +411,7 @@ function Step1({ data, update }) {
       {/* Catalog list */}
       <div className="border border-surface-200 rounded-xl overflow-hidden max-h-72 overflow-y-auto">
         {loading
-          ? <div className="flex items-center justify-center py-8 text-surface-400 text-sm gap-2"><Loader2 size={16} className="animate-spin" /> Loading catalog…</div>
+          ? <div className="flex items-center justify-center py-8 text-surface-400 text-sm gap-2"><Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading catalog…</div>
           : filtered.length === 0
           ? <div className="py-8 text-center text-sm text-surface-400">No courses match your search.</div>
           : filtered.map(c => {
@@ -419,14 +421,14 @@ function Step1({ data, update }) {
                 <button
                   key={c.course_id}
                   onClick={() => toggle(c)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left border-b border-surface-100 last:border-b-0 transition-colors ${
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left border-b border-surface-100 last:border-b-0 transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                     sel ? 'bg-orange-50 hover:bg-orange-100' : 'bg-white hover:bg-surface-50'
                   }`}
                 >
                   <div className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-all ${
                     sel ? 'bg-orange-500 border-orange-500' : 'border-surface-300'
                   }`}>
-                    {sel && <Check size={11} className="text-white" />}
+                    {sel && <Check size={11} className="text-white" aria-hidden="true" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-xs font-bold text-surface-700">{c.course_id}</span>
@@ -443,7 +445,7 @@ function Step1({ data, update }) {
 
       {(data.courses || []).length === 0 && (
         <p className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
-          <AlertCircle size={13} /> Select at least one course to continue.
+          <AlertCircle size={13} aria-hidden="true" /> Select at least one course to continue.
         </p>
       )}
     </div>
@@ -478,7 +480,7 @@ function Step2({ data, update }) {
         {(data.courses || []).map((c, i) => (
           <div key={c.course_id} className="border border-surface-200 rounded-xl p-4 space-y-3 bg-surface-50">
             <div className="flex items-center gap-2">
-              <BookOpen size={14} className="text-orange-500" />
+              <BookOpen size={14} className="text-orange-500" aria-hidden="true" />
               <span className="text-sm font-bold text-surface-800">{c.course_id}</span>
               <span className="text-sm text-surface-500">— {c.course_name}</span>
               {c.credits && <span className="ml-auto text-xs text-surface-400">{c.credits} credits</span>}
@@ -486,10 +488,10 @@ function Step2({ data, update }) {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-surface-700 mb-1.5">
+                <label htmlFor="wz-fld-last-semester-offered-1" className="block text-xs font-semibold text-surface-700 mb-1.5">
                   Last Semester Offered <span className="text-red-400">*</span>
                 </label>
-                <select
+                <select id="wz-fld-last-semester-offered-1"
                   value={c.last_semester || ''}
                   onChange={e => updateCourse(i, 'last_semester', e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/40 bg-white"
@@ -500,6 +502,7 @@ function Step2({ data, update }) {
                 </select>
                 {c.last_semester === 'OTHER' && (
                   <input
+                    aria-label={`Other last semester for ${c.course_id}`}
                     className="mt-1.5 w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/40"
                     placeholder="e.g. Spring 2028"
                     value={c.last_semester_custom || ''}
@@ -509,10 +512,10 @@ function Step2({ data, update }) {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-surface-700 mb-1.5">
+                <label htmlFor="wz-fld-effective-end-date-2" className="block text-xs font-semibold text-surface-700 mb-1.5">
                   Effective End Date <span className="text-red-400">*</span>
                 </label>
-                <input
+                <input id="wz-fld-effective-end-date-2"
                   type="date"
                   value={c.effective_end_date || ''}
                   onChange={e => updateCourse(i, 'effective_end_date', e.target.value)}
@@ -529,7 +532,7 @@ function Step2({ data, update }) {
 
       {(data.courses || []).some(c => !c.last_semester || !c.effective_end_date) && (
         <p className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
-          <AlertCircle size={13} /> Fill in both fields for every course.
+          <AlertCircle size={13} aria-hidden="true" /> Fill in both fields for every course.
         </p>
       )}
     </div>
@@ -547,10 +550,10 @@ function Step3({ data, update }) {
 
       {/* Reason */}
       <div>
-        <label className="block text-xs font-semibold text-surface-700 mb-1.5">
+        <label htmlFor="wz-fld-reason-for-end-dating-co-3" className="block text-xs font-semibold text-surface-700 mb-1.5">
           Reason for End-Dating Course(s) <span className="text-red-400">*</span>
         </label>
-        <textarea
+        <textarea id="wz-fld-reason-for-end-dating-co-3"
           rows={4}
           value={data.reason || ''}
           onChange={e => update('reason', e.target.value)}
@@ -561,10 +564,10 @@ function Step3({ data, update }) {
 
       {/* Student impact */}
       <div>
-        <label className="block text-xs font-semibold text-surface-700 mb-1.5">
+        <label htmlFor="wz-fld-student-impact-4" className="block text-xs font-semibold text-surface-700 mb-1.5">
           Student Impact <span className="text-red-400">*</span>
         </label>
-        <textarea
+        <textarea id="wz-fld-student-impact-4"
           rows={4}
           value={data.student_impact || ''}
           onChange={e => update('student_impact', e.target.value)}
@@ -581,21 +584,21 @@ function Step3({ data, update }) {
             <button
               key={val}
               onClick={() => update('registrar_checked', val)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-all min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 data.registrar_checked === val
                   ? 'bg-orange-500 border-orange-500 text-white'
                   : 'bg-white border-surface-200 text-surface-600 hover:border-orange-300'
               }`}
             >
-              {data.registrar_checked === val && <Check size={12} />}
+              {data.registrar_checked === val && <Check size={12} aria-hidden="true" />}
               {label}
             </button>
           ))}
         </div>
         {data.registrar_checked === 'yes' && (
           <div>
-            <label className="block text-xs font-semibold text-surface-700 mb-1.5">Staff Name / Contact</label>
-            <input
+            <label htmlFor="wz-fld-staff-name-contact-5" className="block text-xs font-semibold text-surface-700 mb-1.5">Staff Name / Contact</label>
+            <input id="wz-fld-staff-name-contact-5"
               value={data.registrar_contact || ''}
               onChange={e => update('registrar_contact', e.target.value)}
               placeholder="Name of the Registrar's Office staff member consulted"
@@ -607,8 +610,8 @@ function Step3({ data, update }) {
 
       {/* Impacted instructors */}
       <div>
-        <label className="block text-xs font-semibold text-surface-700 mb-1.5">Impacted Instructors</label>
-        <textarea
+        <label htmlFor="wz-fld-impacted-instructors-6" className="block text-xs font-semibold text-surface-700 mb-1.5">Impacted Instructors</label>
+        <textarea id="wz-fld-impacted-instructors-6"
           rows={3}
           value={data.impacted_instructors || ''}
           onChange={e => update('impacted_instructors', e.target.value)}
@@ -638,12 +641,12 @@ function Step4({ data }) {
         <div className="space-y-1.5">
           {(data.courses || []).map(c => (
             <div key={c.course_id} className="flex items-center gap-2 text-sm text-surface-700">
-              <BookOpen size={12} className="text-orange-400 shrink-0" />
+              <BookOpen size={12} className="text-orange-400 shrink-0" aria-hidden="true" />
               <span className="font-semibold">{c.course_id}</span>
               <span className="text-surface-500">— {c.course_name}</span>
               {c.effective_end_date && (
                 <span className="ml-auto text-xs text-surface-400 shrink-0 flex items-center gap-1">
-                  <Calendar size={10} /> ends {c.effective_end_date}
+                  <Calendar size={10} aria-hidden="true" /> ends {c.effective_end_date}
                 </span>
               )}
             </div>
@@ -676,6 +679,8 @@ function Step4({ data }) {
 
 // ─── Main Wizard ───────────────────────────────────────────────────────────────
 export default function CourseEndDateWizard({ initialData, onClose }) {
+  // Wizard shell is a modal dialog: focus trap, Escape closes (same as the X button), focus restored on close.
+  const wizardDialogRef = useDialogA11y(true, onClose)
   const { user } = useAuth()
   const [step,   setStep]   = useState(1)
   const [data,   setData]   = useState(() => ({ ...EMPTY, ...(initialData || {}), created_by: initialData?.created_by || user?.email || '' }))
@@ -799,32 +804,32 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col relative">
+      <div ref={wizardDialogRef} role="dialog" aria-modal="true" aria-labelledby="wz-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col relative">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-orange-100 flex items-center justify-center">
-              <Archive size={18} className="text-orange-600" />
+              <Archive size={18} className="text-orange-600" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">Course End Date</h2>
+              <h2 id="wz-title" className="text-base font-bold text-surface-900">Course End Date</h2>
               <p className="text-xs text-surface-400">SCTCC Course End Date Form — {data.record_id || 'New'}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {isApproved && (
               <span className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-full border border-emerald-200">
-                <CheckCircle2 size={12} /> Approved
+                <CheckCircle2 size={12} aria-hidden="true" /> Approved
               </span>
             )}
             {!isApproved && data.status === 'draft' && (
               <span className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-semibold rounded-full border border-amber-200">
-                <Clock size={12} /> Draft
+                <Clock size={12} aria-hidden="true" /> Draft
               </span>
             )}
-            <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-              <X size={18} className="text-surface-400" />
+            <button type="button" onClick={onClose} aria-label="Close course end date" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+              <X size={18} className="text-surface-400" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -845,17 +850,17 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
             {step > 1 && (
               <button
                 onClick={() => setStep(s => s - 1)}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
-                <ChevronLeft size={14} /> Back
+                <ChevronLeft size={14} aria-hidden="true" /> Back
               </button>
             )}
             <button
               onClick={() => handleSave()}
               disabled={saving}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors disabled:opacity-40"
+              className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+              {saving ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Save size={13} aria-hidden="true" />}
               Save Draft
             </button>
             {/* Delete draft — only show if not approved */}
@@ -866,14 +871,14 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
                   <button
                     onClick={handleDelete}
                     disabled={deleting}
-                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-40"
+                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   >
-                    {deleting ? <Loader2 size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                    {deleting ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Trash2 size={11} aria-hidden="true" />}
                     Yes, delete
                   </button>
                   <button
                     onClick={() => setConfirmDelete(false)}
-                    className="px-2.5 py-1.5 text-xs text-surface-600 hover:bg-surface-100 border border-surface-200 rounded-lg transition-colors"
+                    className="px-2.5 py-1.5 text-xs text-surface-600 hover:bg-surface-100 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   >
                     Cancel
                   </button>
@@ -881,9 +886,9 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
               ) : (
                 <button
                   onClick={() => setConfirmDelete(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-500 hover:bg-red-50 border border-red-100 hover:border-red-200 rounded-lg transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-500 hover:bg-red-50 border border-red-100 hover:border-red-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 >
-                  <Trash2 size={13} /> Delete Draft
+                  <Trash2 size={13} aria-hidden="true" /> Delete Draft
                 </button>
               )
             )}
@@ -896,18 +901,18 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
                 <button
                   onClick={handleDownload}
                   disabled={dl}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-surface-700 hover:bg-surface-900 text-white rounded-lg transition-colors disabled:opacity-40"
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-surface-700 hover:bg-surface-900 text-white rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 >
-                  {dl ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                  {dl ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Download size={13} aria-hidden="true" />}
                   Download .docx
                 </button>
                 {!isApproved && (
                   <button
                     onClick={() => setConfirmApprove(true)}
                     disabled={saving}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors disabled:opacity-40"
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   >
-                    <Archive size={13} /> Approve &amp; Archive
+                    <Archive size={13} aria-hidden="true" /> Approve &amp; Archive
                   </button>
                 )}
               </>
@@ -916,9 +921,9 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
               <button
                 onClick={() => setStep(s => s + 1)}
                 disabled={!canNext()}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
-                Next <ChevronRight size={14} />
+                Next <ChevronRight size={14} aria-hidden="true" />
               </button>
             )}
           </div>
@@ -932,7 +937,7 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
             {/* Icon + title */}
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center shrink-0">
-                <Archive size={20} className="text-red-600" />
+                <Archive size={20} className="text-red-600" aria-hidden="true" />
               </div>
               <div>
                 <h3 className="text-base font-bold text-surface-900">Approve &amp; Archive Courses</h3>
@@ -947,7 +952,7 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
             <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-1.5">
               {(data.courses || []).map(c => (
                 <div key={c.course_id} className="flex items-center gap-2 text-sm">
-                  <BookOpen size={12} className="text-red-400 shrink-0" />
+                  <BookOpen size={12} className="text-red-400 shrink-0" aria-hidden="true" />
                   <span className="font-semibold text-red-800">{c.course_id}</span>
                   <span className="text-red-600">— {c.course_name}</span>
                   {c.effective_end_date && (
@@ -967,16 +972,16 @@ export default function CourseEndDateWizard({ initialData, onClose }) {
             <div className="flex gap-2 pt-1">
               <button
                 onClick={() => setConfirmApprove(false)}
-                className="flex-1 px-4 py-2.5 text-sm font-semibold border border-surface-200 text-surface-700 hover:bg-surface-50 rounded-xl transition-colors"
+                className="flex-1 px-4 py-2.5 text-sm font-semibold border border-surface-200 text-surface-700 hover:bg-surface-50 rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
                 Cancel — Go Back
               </button>
               <button
                 onClick={() => { setConfirmApprove(false); handleApprove() }}
                 disabled={saving}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold bg-red-600 hover:bg-red-700 text-white rounded-xl transition-colors disabled:opacity-40"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold bg-red-600 hover:bg-red-700 text-white rounded-xl transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
-                {saving ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
+                {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
                 Yes, Approve &amp; Archive
               </button>
             </div>

@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useId } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, ShadingType, BorderStyle,
@@ -549,12 +550,12 @@ function StepProgress({ current, maxStep, onStep }) {
                   onClick={() => unlocked && onStep(step.id)}
                   disabled={!unlocked}
                   title={unlocked ? step.label : undefined}
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all
+                  className={`w-11 h-11 rounded-full flex items-center justify-center text-xs font-bold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1
                     ${done || active ? 'bg-rose-600 text-white' : 'bg-surface-100 text-surface-400'}
                     ${active ? 'ring-4 ring-rose-100' : ''}
                     ${unlocked && !active ? 'cursor-pointer hover:scale-110 hover:shadow-sm' : ''}
                     ${!unlocked ? 'cursor-default' : ''}`}>
-                  {done ? <Check size={13}/> : step.id}
+                  {done ? <Check size={13} aria-hidden="true" /> : step.id}
                 </button>
                 <span className={`text-[10px] mt-1 whitespace-nowrap font-medium
                   ${active ? 'text-rose-600' : done ? 'text-rose-500' : 'text-surface-300'}`}>
@@ -573,24 +574,36 @@ function StepProgress({ current, maxStep, onStep }) {
 }
 
 // ─── Shared inputs ────────────────────────────────────────────────────────────
-function Field({ label, required, children }) {
+// Field links its label to the control (WCAG 1.3.1 / 4.1.2): an id from
+// useId() is injected into a bare input/select/textarea child. Required
+// state is announced; hint text is tied via aria-describedby.
+const LINKABLE = new Set(['input', 'select', 'textarea'])
+function Field({ label, required, hint, children }) {
+  const autoId = useId()
+  const hintId = `${autoId}-hint`
+  const child = React.Children.only(children)
+  const linkable = React.isValidElement(child) && (LINKABLE.has(child.type) || child.type?.__linkable === true)
+  const id = linkable ? (child.props.id || autoId) : undefined
   return (
     <div>
-      <label className="block text-xs font-semibold text-surface-700 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label htmlFor={id} className="block text-xs font-semibold text-surface-700 mb-1.5">
+        {label}{required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}{required && <span className="sr-only"> (required)</span>}
       </label>
-      {children}
+      {linkable ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : undefined }) : children}
+      {hint && <p id={hintId} className="text-[10px] text-surface-400 mt-1">{hint}</p>}
     </div>
   )
 }
 const ic = 'w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent'
-const Inp = ({value,onChange,placeholder,className=''}) => (
-  <input value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`${ic} ${className}`}/>
+const Inp = ({value,onChange,placeholder,className='',...rest}) => (
+  <input value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`${ic} ${className}`} {...rest}/>
 )
-const Tex = ({value,onChange,placeholder,rows=3}) => (
+const Tex = ({value,onChange,placeholder,rows=3,...rest}) => (
   <textarea value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows}
-    className={`${ic} resize-vertical`}/>
+    className={`${ic} resize-vertical`} {...rest}/>
 )
+// Let Field inject ids into these helpers (see Field).
+Inp.__linkable = Tex.__linkable = true
 
 // ─── Step 1: Program + Basic Info ─────────────────────────────────────────────
 function Step1({data, update}) {
@@ -645,6 +658,7 @@ function Step1({data, update}) {
 
 // ─── Step 2: Name + Credit + Description changes ──────────────────────────────
 function DiffRow({ label, currentVal, proposedVal, onProposedChange, isTextarea=false, rows=2 }) {
+  const fieldId = useId()
   const changed = proposedVal && proposedVal !== currentVal
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -657,16 +671,16 @@ function DiffRow({ label, currentVal, proposedVal, onProposedChange, isTextarea=
         </div>
       </div>
       <div>
-        <label className="block text-[11px] font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5">
+        <label htmlFor={fieldId} className="block text-[11px] font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5">
           <span className={changed ? 'text-rose-700' : 'text-surface-500'}>
             Proposed {label}
           </span>
           {changed && <span className="text-[10px] font-bold px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full">CHANGED</span>}
         </label>
         {isTextarea
-          ? <textarea value={proposedVal||''} onChange={e=>onProposedChange(e.target.value)} rows={rows}
+          ? <textarea id={fieldId} value={proposedVal||''} onChange={e=>onProposedChange(e.target.value)} rows={rows}
               className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 resize-vertical ${changed?'border-rose-300 bg-rose-50 focus:ring-rose-400':'border-surface-200 focus:ring-rose-400'}`}/>
-          : <input value={proposedVal||''} onChange={e=>onProposedChange(e.target.value)}
+          : <input id={fieldId} value={proposedVal||''} onChange={e=>onProposedChange(e.target.value)}
               className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 ${changed?'border-rose-300 bg-rose-50 focus:ring-rose-400':'border-surface-200 focus:ring-rose-400'}`}/>
         }
       </div>
@@ -754,8 +768,9 @@ function Step2({data,update}) {
               const changed = val !== '' && val !== null && val !== undefined && val !== currentVal
               return (
                 <div key={label}>
-                  <label className="block text-[10px] text-surface-400 mb-1">{label}</label>
+                  <label htmlFor={`wz-credit-${label}`} className="block text-[10px] text-surface-400 mb-1">{label}</label>
                   <input
+                    id={`wz-credit-${label}`}
                     type="number" min={0} max={10} step={1}
                     value={val || ''}
                     onChange={e => updateProposedCredit(field, e.target.value)}
@@ -820,20 +835,20 @@ function Step3({data,update}) {
           {outcomes.map((o,i)=>(
             <div key={i} className="flex gap-2 items-center">
               <span className="text-xs text-surface-400 min-w-[2rem] shrink-0">{i+1})</span>
-              <input value={o} onChange={e=>updOutcome(i,e.target.value)}
+              <input aria-label={`Program outcome ${i + 1}`} value={o} onChange={e=>updOutcome(i,e.target.value)}
                 placeholder={`Outcome ${i+1}…`} className={`flex-1 ${ic}`}/>
               {outcomes.length>3&&(
-                <button onClick={()=>update('program_outcomes',outcomes.filter((_,j)=>j!==i))}
-                  className="p-1.5 hover:bg-red-50 rounded-lg text-surface-300 hover:text-red-500 transition-colors">
-                  <Trash2 size={14}/>
+                <button type="button" aria-label={`Remove program outcome ${i + 1}`} onClick={()=>update('program_outcomes',outcomes.filter((_,j)=>j!==i))}
+                  className="p-1.5 hover:bg-red-50 rounded-lg text-surface-300 hover:text-red-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                  <Trash2 size={14} aria-hidden="true" />
                 </button>
               )}
             </div>
           ))}
         </div>
         <button onClick={()=>update('program_outcomes',[...outcomes,''])}
-          className="flex items-center gap-1.5 text-xs text-rose-600 hover:text-rose-700 font-medium mt-2">
-          <Plus size={14}/> Add Outcome
+          className="flex items-center gap-1.5 text-xs text-rose-600 hover:text-rose-700 font-medium mt-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+          <Plus size={14} aria-hidden="true" /> Add Outcome
         </button>
       </div>
     </div>
@@ -868,7 +883,7 @@ function Step4({data,update}) {
       </Field>
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex gap-2">
-        <AlertCircle size={15} className="text-amber-500 mt-0.5 shrink-0"/>
+        <AlertCircle size={15} className="text-amber-500 mt-0.5 shrink-0" aria-hidden="true" />
         <div>
           <p className="text-xs font-semibold text-amber-800">Registrar Check</p>
           <label className="flex items-center gap-2 mt-1.5 cursor-pointer">
@@ -1017,13 +1032,13 @@ function Step5({data,update,catalog}) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-surface-50 border-b border-surface-200">
-                  <th className="p-2 w-5"></th>{/* drag handle col */}
-                  <th className="text-left p-2 font-semibold text-surface-600 w-[13%]">Course #</th>
-                  <th className="text-left p-2 font-semibold text-surface-600 w-[30%]">Course Title</th>
-                  <th className="text-left p-2 font-semibold text-surface-600 w-[25%]">Prerequisites</th>
-                  <th className="text-center p-2 font-semibold text-surface-600 w-[8%]">Credits</th>
-                  <th className="text-center p-2 font-semibold text-surface-600 w-[12%]">Offered</th>
-                  <th className="p-2 w-8"></th>
+                  <th scope="col" className="p-2 w-5"></th>{/* drag handle col */}
+                  <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[13%]">Course #</th>
+                  <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[30%]">Course Title</th>
+                  <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[25%]">Prerequisites</th>
+                  <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[8%]">Credits</th>
+                  <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[12%]">Offered</th>
+                  <th scope="col" className="p-2 w-8"></th>
                 </tr>
               </thead>
               <tbody>
@@ -1064,6 +1079,7 @@ function Step5({data,update,catalog}) {
                           Typing a known course ID auto-fills title/credits/prereqs.
                           Typing anything else (gen-ed, elective, etc.) saves as typed. */}
                       <input
+                        aria-label={`Course number, section ${si + 1} row ${ri + 1}`}
                         list={`catalog-list-${si}-${ri}`}
                         value={course.course_num || ''}
                         onChange={e => {
@@ -1089,28 +1105,28 @@ function Step5({data,update,catalog}) {
                       </datalist>
                     </td>
                     <td className="p-1">
-                      <input value={course.course_title || ''} onChange={e=>updRow(si,ri,'course_title',e.target.value)}
+                      <input aria-label={`Course title, section ${si + 1} row ${ri + 1}`} value={course.course_title || ''} onChange={e=>updRow(si,ri,'course_title',e.target.value)}
                         className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-rose-500"/>
                     </td>
                     <td className="p-1">
-                      <input value={course.prerequisites || ''} onChange={e=>updRow(si,ri,'prerequisites',e.target.value)}
+                      <input aria-label={`Prerequisites, section ${si + 1} row ${ri + 1}`} value={course.prerequisites || ''} onChange={e=>updRow(si,ri,'prerequisites',e.target.value)}
                         className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-rose-500"/>
                     </td>
                     <td className="p-1">
-                      <input value={course.credits || ''} onChange={e=>updRow(si,ri,'credits',e.target.value)}
+                      <input aria-label={`Credits, section ${si + 1} row ${ri + 1}`} value={course.credits || ''} onChange={e=>updRow(si,ri,'credits',e.target.value)}
                         className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-rose-500 text-center"/>
                     </td>
                     <td className="p-1">
-                      <select value={course.offered || ''} onChange={e=>updRow(si,ri,'offered',e.target.value)}
+                      <select aria-label={`Offered, section ${si + 1} row ${ri + 1}`} value={course.offered || ''} onChange={e=>updRow(si,ri,'offered',e.target.value)}
                         className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-rose-500 bg-white text-center">
                         <option value=""></option>
                         {SEMESTERS_OFFERED.map(s=><option key={s} value={s}>{s}</option>)}
                       </select>
                     </td>
                     <td className="p-1 text-center">
-                      <button onClick={()=>delRow(si,ri)}
-                        className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors">
-                        <Trash2 size={12}/>
+                      <button type="button" aria-label={`Remove row ${ri + 1} from section ${si + 1}`} onClick={()=>delRow(si,ri)}
+                        className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                        <Trash2 size={12} aria-hidden="true" />
                       </button>
                     </td>
                   </tr>
@@ -1119,8 +1135,8 @@ function Step5({data,update,catalog}) {
             </table>
           </div>
           <div className="px-4 py-2 border-t border-surface-100 flex justify-between items-center">
-            <button onClick={()=>addRow(si)} className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium">
-              <Plus size={12}/> Add row
+            <button onClick={()=>addRow(si)} className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Plus size={12} aria-hidden="true" /> Add row
             </button>
             <span className="text-xs font-semibold text-surface-600">
               Semester total: {sem.courses.reduce((s,c)=>s+(parseFloat(c.credits)||0),0)} cr
@@ -1230,7 +1246,7 @@ function ChangeSummary({ data }) {
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs font-semibold text-surface-700 uppercase tracking-wider">Changes Summary</p>
         <button onClick={handlePrint}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-rose-200 text-rose-700 bg-rose-50 rounded-lg hover:bg-rose-100 transition-colors">
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-rose-200 text-rose-700 bg-rose-50 rounded-lg hover:bg-rose-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           🖨 Print Summary
         </button>
       </div>
@@ -1310,22 +1326,22 @@ function Step6({data,status,saving,downloading,onDownload,onApprove}) {
 
       <div className="space-y-3 pt-2">
         <button onClick={onDownload} disabled={downloading||!data.course_id}
-          className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-rose-600 text-white text-sm font-semibold rounded-xl hover:bg-rose-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm">
+          className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-rose-600 text-white text-sm font-semibold rounded-xl hover:bg-rose-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           {downloading
             ?<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Generating…</>
-            :<><Download size={16}/>Download Word Document (.docx)</>}
+            :<><Download size={16} aria-hidden="true" />Download Word Document (.docx)</>}
         </button>
         <p className="text-xs text-surface-400 text-center">Generates the 4-page SCTCC Program Revision form matching the official format.</p>
         <div className="flex gap-3 pt-1">
           {status!=='approved'&&(
             <button onClick={onApprove} disabled={saving||!data.course_id}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl hover:bg-emerald-100 transition-colors disabled:opacity-40">
-              <CheckCircle2 size={14}/> Mark as Approved
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl hover:bg-emerald-100 transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <CheckCircle2 size={14} aria-hidden="true" /> Mark as Approved
             </button>
           )}
           {status==='approved'&&(
             <div className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl">
-              <CheckCircle2 size={14}/> ✓ Approved — Program revision complete
+              <CheckCircle2 size={14} aria-hidden="true" /> ✓ Approved — Program revision complete
             </div>
           )}
         </div>
@@ -1336,6 +1352,8 @@ function Step6({data,status,saving,downloading,onDownload,onApprove}) {
 
 // ─── Main Wizard ──────────────────────────────────────────────────────────────
 export default function ProgramRevisionWizard({ onClose, initialData=null, programSettings=null }) {
+  // Wizard shell is a modal dialog: focus trap, Escape closes (same as the X button), focus restored on close.
+  const wizardDialogRef = useDialogA11y(true, onClose)
   const { user } = useAuth()
   const [step, setStep]       = useState(1)
   const [maxStep, setMaxStep] = useState(() => initialData?.revision_id ? STEPS.length : 1)
@@ -1449,22 +1467,22 @@ export default function ProgramRevisionWizard({ onClose, initialData=null, progr
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
+      <div ref={wizardDialogRef} role="dialog" aria-modal="true" aria-labelledby="wz-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-rose-50 rounded-lg flex items-center justify-center">
-              <FileEdit size={16} className="text-rose-600"/>
+              <FileEdit size={16} className="text-rose-600" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">Course / Program Revision</h2>
+              <h2 id="wz-title" className="text-base font-bold text-surface-900">Course / Program Revision</h2>
               <p className="text-xs text-surface-400">
                 {data.course_id?`${data.course_id} · `:''}
                 {STEPS[step-1].desc}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-            <X size={18} className="text-surface-400"/>
+          <button type="button" onClick={onClose} aria-label="Close program revision" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+            <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
         <div className="pt-4 shrink-0"><StepProgress current={step} maxStep={maxStep} onStep={setStep}/></div>
@@ -1472,8 +1490,8 @@ export default function ProgramRevisionWizard({ onClose, initialData=null, progr
         <div className="border-t border-surface-100 px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <button onClick={()=>setStep(s=>s-1)} disabled={step===1}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-              <ChevronLeft size={15}/> Back
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <ChevronLeft size={15} aria-hidden="true" /> Back
             </button>
             {/* Delete draft — hidden once approved */}
             {data.status !== 'approved' && (
@@ -1481,32 +1499,32 @@ export default function ProgramRevisionWizard({ onClose, initialData=null, progr
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-red-600 font-medium">Delete this draft?</span>
                   <button onClick={handleDelete} disabled={deleting}
-                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-40">
-                    {deleting ? <Loader2 size={11} className="animate-spin"/> : <Trash2 size={11}/>}
+                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                    {deleting ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Trash2 size={11} aria-hidden="true" />}
                     Yes, delete
                   </button>
                   <button onClick={()=>setConfirmDelete(false)}
-                    className="px-2.5 py-1.5 text-xs text-surface-600 hover:bg-surface-100 border border-surface-200 rounded-lg transition-colors">
+                    className="px-2.5 py-1.5 text-xs text-surface-600 hover:bg-surface-100 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                     Cancel
                   </button>
                 </div>
               ) : (
                 <button onClick={()=>setConfirmDelete(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-500 hover:bg-red-50 border border-red-100 hover:border-red-200 rounded-lg transition-colors">
-                  <Trash2 size={13}/> Delete Draft
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-500 hover:bg-red-50 border border-red-100 hover:border-red-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Trash2 size={13} aria-hidden="true" /> Delete Draft
                 </button>
               )
             )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>handleSave()} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40">
-              <Save size={14}/>{saving?'Saving…':'Save Draft'}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Save size={14} aria-hidden="true" />{saving?'Saving…':'Save Draft'}
             </button>
             {step<STEPS.length&&(
               <button onClick={goNext}
-                className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors">
-                Next <ChevronRight size={15}/>
+                className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                Next <ChevronRight size={15} aria-hidden="true" />
               </button>
             )}
           </div>

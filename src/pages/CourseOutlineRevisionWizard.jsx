@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef, useId } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, ShadingType, BorderStyle,
@@ -404,12 +405,12 @@ function StepProgress({ current, maxStep, onStep }) {
                   onClick={() => unlocked && onStep(step.id)}
                   disabled={!unlocked}
                   title={unlocked ? step.label : undefined}
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all
+                  className={`w-11 h-11 rounded-full flex items-center justify-center text-xs font-bold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1
                     ${done || active ? 'bg-blue-600 text-white' : 'bg-surface-100 text-surface-400'}
                     ${active ? 'ring-2 ring-blue-200' : ''}
                     ${unlocked && !active ? 'cursor-pointer hover:scale-110 hover:shadow-sm' : ''}
                     ${!unlocked ? 'cursor-default' : ''}`}>
-                  {done ? <Check size={12}/> : step.id}
+                  {done ? <Check size={12} aria-hidden="true" /> : step.id}
                 </button>
                 <span className={`text-[10px] font-medium text-center hidden sm:block mt-0.5
                   ${active ? 'text-blue-600' : done ? 'text-blue-500' : 'text-surface-300'}`}>
@@ -427,37 +428,48 @@ function StepProgress({ current, maxStep, onStep }) {
   )
 }
 
+// Field links its label to the control (WCAG 1.3.1 / 4.1.2): an id from
+// useId() is injected into a bare input/select/textarea child. Required
+// state is announced; hint text is tied via aria-describedby.
+const LINKABLE = new Set(['input', 'select', 'textarea'])
 function Field({ label, required, hint, children }) {
+  const autoId = useId()
+  const hintId = `${autoId}-hint`
+  const child = React.Children.only(children)
+  const linkable = React.isValidElement(child) && (LINKABLE.has(child.type) || child.type?.__linkable === true)
+  const id = linkable ? (child.props.id || autoId) : undefined
   return (
     <div>
-      <label className="block text-xs font-semibold text-surface-700 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      <label htmlFor={id} className="block text-xs font-semibold text-surface-700 mb-1.5">
+        {label}{required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}{required && <span className="sr-only"> (required)</span>}
       </label>
-      {children}
-      {hint && <p className="text-[10px] text-surface-400 mt-1">{hint}</p>}
+      {linkable ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : undefined }) : children}
+      {hint && <p id={hintId} className="text-[10px] text-surface-400 mt-1">{hint}</p>}
     </div>
   )
 }
 const ic = 'w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-400'
-const Inp = ({value,onChange,placeholder,className=''}) => <input value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`${ic} ${className}`}/>
-const Tex = ({value,onChange,placeholder,rows=3}) => <textarea value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} className={`${ic} resize-vertical`}/>
-const Num = ({value,onChange,min=0,max=10}) => <input type="number" value={value||''} onChange={e=>onChange(e.target.value)} min={min} max={max} className={ic}/>
+const Inp = ({value,onChange,placeholder,className='',...rest}) => <input value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`${ic} ${className}`} {...rest}/>
+const Tex = ({value,onChange,placeholder,rows=3,...rest}) => <textarea value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} className={`${ic} resize-vertical`} {...rest}/>
+const Num = ({value,onChange,min=0,max=10,...rest}) => <input type="number" value={value||''} onChange={e=>onChange(e.target.value)} min={min} max={max} className={ic} {...rest}/>
+// Let Field inject ids into these helpers (see Field).
+Inp.__linkable = Tex.__linkable = Num.__linkable = true
 
 function ItemList({ items, onChange, placeholder, addLabel='Add Item' }) {
   return (
     <div className="space-y-2">
       {items.map((item,i) => (
         <div key={i} className="flex gap-2">
-          <input value={item} onChange={e=>onChange(items.map((x,j)=>j===i?e.target.value:x))} placeholder={placeholder}
+          <input value={item} aria-label={`Item ${i + 1}`} onChange={e=>onChange(items.map((x,j)=>j===i?e.target.value:x))} placeholder={placeholder}
             className="flex-1 px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"/>
-          <button onClick={()=>onChange(items.filter((_,j)=>j!==i))}
-            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-            <Trash2 size={14}/>
+          <button type="button" aria-label={`Remove item ${i + 1}`} onClick={()=>onChange(items.filter((_,j)=>j!==i))}
+            className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+            <Trash2 size={14} aria-hidden="true" />
           </button>
         </div>
       ))}
-      <button onClick={()=>onChange([...items,''])} className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:text-blue-700 py-1">
-        <Plus size={13}/> {addLabel}
+      <button onClick={()=>onChange([...items,''])} className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:text-blue-700 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+        <Plus size={13} aria-hidden="true" /> {addLabel}
       </button>
     </div>
   )
@@ -647,11 +659,12 @@ function Step2({ data, update }) {
             </div>
           </div>
           <div>
-            <label className={`block text-[11px] font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 ${nameChanged ? 'text-blue-700' : 'text-surface-500'}`}>
+            <label htmlFor="wz-new-course-name" className={`block text-[11px] font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 ${nameChanged ? 'text-blue-700' : 'text-surface-500'}`}>
               Proposed Course Name (50 char max)
               {nameChanged && <span className="text-[10px] font-bold px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">CHANGED</span>}
             </label>
             <input
+              id="wz-new-course-name" aria-describedby="wz-new-course-name-help"
               value={data.new_course_name||''}
               onChange={e=>update('new_course_name', e.target.value)}
               placeholder="Leave blank if not changing"
@@ -672,11 +685,12 @@ function Step2({ data, update }) {
             </div>
           </div>
           <div>
-            <label className={`block text-[11px] font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 ${numberChanged ? 'text-blue-700' : 'text-surface-500'}`}>
+            <label htmlFor="wz-new-course-number" className={`block text-[11px] font-semibold uppercase tracking-wide mb-1 flex items-center gap-1.5 ${numberChanged ? 'text-blue-700' : 'text-surface-500'}`}>
               New Course Number (from AA office)
               {numberChanged && <span className="text-[10px] font-bold px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full">CHANGED</span>}
             </label>
             <input
+              id="wz-new-course-number"
               value={data.new_course_number||''}
               onChange={e=>update('new_course_number', e.target.value.toUpperCase())}
               placeholder="Leave blank if not changing"
@@ -735,8 +749,8 @@ function Step2({ data, update }) {
               const changed = data[field] !== '' && data[field] !== null && data[field] !== undefined && String(data[field]) !== String(data[curField])
               return (
                 <div key={field}>
-                  <label className="block text-[10px] text-surface-400 mb-1">{label}</label>
-                  <input type="number" min={0} max={10} step={1}
+                  <label htmlFor={`wz-credit-${field}`} className="block text-[10px] text-surface-400 mb-1">{label}</label>
+                  <input id={`wz-credit-${field}`} type="number" min={0} max={10} step={1}
                     value={data[field]||''}
                     onChange={e=>updPropCredit(field, e.target.value)}
                     placeholder={data[curField] !== undefined ? String(data[curField]) : '0'}
@@ -892,10 +906,10 @@ function Step4({ data, update }) {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-surface-50 border-b border-surface-200">
-                <th className="text-left p-2 font-semibold text-surface-600 w-[38%]">Student Learning Outcome</th>
-                <th className="text-left p-2 font-semibold text-surface-600 w-[25%]">Assessment Method</th>
-                <th className="text-left p-2 font-semibold text-surface-600 w-[28%]">College Outcome / Competency</th>
-                <th className="p-2 w-8"></th>
+                <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[38%]">Student Learning Outcome</th>
+                <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[25%]">Assessment Method</th>
+                <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[28%]">College Outcome / Competency</th>
+                <th scope="col" className="p-2 w-8"></th>
               </tr>
             </thead>
             <tbody>
@@ -910,6 +924,7 @@ function Step4({ data, update }) {
                           <span className="absolute -top-0.5 -right-0.5 text-[8px] font-bold text-amber-600 bg-amber-100 px-1 rounded z-10">catalog</span>
                         )}
                         <textarea
+                          aria-label={`Outcome ${i + 1}`}
                           value={row.outcome || ''}
                           onChange={e => updOutcome(i, 'outcome', e.target.value)}
                           rows={2}
@@ -921,6 +936,7 @@ function Step4({ data, update }) {
                     </td>
                     <td className="p-1.5">
                       <input
+                        aria-label={`Assessment for outcome ${i + 1}`}
                         value={row.assessment || ''}
                         onChange={e => updOutcome(i, 'assessment', e.target.value)}
                         placeholder="e.g. Lab practical, Quiz"
@@ -929,6 +945,7 @@ function Step4({ data, update }) {
                     </td>
                     <td className="p-1.5">
                       <select
+                        aria-label={`College outcome for outcome ${i + 1}`}
                         value={row.college_outcome || ''}
                         onChange={e => updOutcome(i, 'college_outcome', e.target.value)}
                         className="w-full px-2 py-1.5 text-xs border border-surface-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
@@ -946,10 +963,11 @@ function Step4({ data, update }) {
                     </td>
                     <td className="p-1.5 text-center">
                       <button
+                        type="button" aria-label={`Remove outcome ${i + 1}`}
                         onClick={() => update('outcomes_alignment', outcomes.filter((_, j) => j !== i))}
-                        className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors"
+                        className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                       >
-                        <Trash2 size={12}/>
+                        <Trash2 size={12} aria-hidden="true" />
                       </button>
                     </td>
                   </tr>
@@ -961,9 +979,9 @@ function Step4({ data, update }) {
         <div className="flex items-center justify-between mt-2">
           <button
             onClick={() => update('outcomes_alignment', [...outcomes, { outcome: '', assessment: '', college_outcome: '', _from_catalog: false }])}
-            className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:text-blue-700"
+            className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:text-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <Plus size={13}/> Add row
+            <Plus size={13} aria-hidden="true" /> Add row
           </button>
           {(catalogLearningOutcomes.length > 0 || catalogSlos.some(s => s?.trim())) && (
             <button
@@ -980,7 +998,7 @@ function Step4({ data, update }) {
                 }
                 update('outcomes_alignment', [...seeded, { outcome: '', assessment: '', college_outcome: '', _from_catalog: false }])
               }}
-              className="flex items-center gap-1.5 text-xs text-amber-600 font-medium hover:text-amber-700"
+              className="flex items-center gap-1.5 min-h-[44px] text-xs text-amber-600 font-medium hover:text-amber-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
             >
               ↺ Reset from catalog
             </button>
@@ -1019,25 +1037,25 @@ function Step4({ data, update }) {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-surface-50 border-b border-surface-200">
-                    <th className="text-left p-2 font-semibold text-surface-600">Goal Area Competency</th>
-                    <th className="text-left p-2 font-semibold text-surface-600">Student Learning Outcome</th>
-                    <th className="text-left p-2 font-semibold text-surface-600">Assessment</th>
+                    <th scope="col" className="text-left p-2 font-semibold text-surface-600">Goal Area Competency</th>
+                    <th scope="col" className="text-left p-2 font-semibold text-surface-600">Student Learning Outcome</th>
+                    <th scope="col" className="text-left p-2 font-semibold text-surface-600">Assessment</th>
                   </tr>
                 </thead>
                 <tbody>
                   {mntcComps.map((row,i) => (
                     <tr key={i} className="border-b border-surface-100 last:border-0">
-                      <td className="p-1"><input value={row.goal_area_competency||''} onChange={e=>updComp(i,'goal_area_competency',e.target.value)} className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"/></td>
-                      <td className="p-1"><input value={row.outcome||''} onChange={e=>updComp(i,'outcome',e.target.value)} className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"/></td>
-                      <td className="p-1"><input value={row.assessment||''} onChange={e=>updComp(i,'assessment',e.target.value)} className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"/></td>
+                      <td className="p-1"><input aria-label={`Goal area competency ${i + 1}`} value={row.goal_area_competency||''} onChange={e=>updComp(i,'goal_area_competency',e.target.value)} className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"/></td>
+                      <td className="p-1"><input aria-label={`Outcome for competency ${i + 1}`} value={row.outcome||''} onChange={e=>updComp(i,'outcome',e.target.value)} className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"/></td>
+                      <td className="p-1"><input aria-label={`Assessment for competency ${i + 1}`} value={row.assessment||''} onChange={e=>updComp(i,'assessment',e.target.value)} className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"/></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
             <button onClick={()=>update('mntc_competency_alignment',[...mntcComps,{goal_area_competency:'',outcome:'',assessment:''}])}
-              className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:text-blue-700 mt-2">
-              <Plus size={13}/> Add row
+              className="flex items-center gap-1.5 text-xs text-blue-600 font-medium hover:text-blue-700 mt-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Plus size={13} aria-hidden="true" /> Add row
             </button>
           </div>
         </div>
@@ -1278,7 +1296,7 @@ function ChangeSummaryPanel({ data }) {
         <div class="change">
           <div class="change-label">${escHtml(c.section)}</div>
           <table class="outcomes-table">
-            <thead><tr><th>#</th><th>Student Learning Outcome</th><th>Assessment Method</th><th>College Outcome / Competency</th></tr></thead>
+            <thead><tr><th scope="col">#</th><th scope="col">Student Learning Outcome</th><th scope="col">Assessment Method</th><th scope="col">College Outcome / Competency</th></tr></thead>
             <tbody>${c.rows.map(row => `
               <tr>
                 <td>${row._index}</td>
@@ -1348,7 +1366,7 @@ function ChangeSummaryPanel({ data }) {
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs font-semibold text-surface-700 uppercase tracking-wider">Change Summary</p>
         <button onClick={handlePrint}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-blue-200 text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-blue-200 text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           🖨 Print Summary
         </button>
       </div>
@@ -1444,20 +1462,20 @@ function Step6({ data, status, saving, downloading, onDownload, onApprove }) {
 
       <div className="space-y-3 pt-2">
         <button onClick={onDownload} disabled={downloading||!data.current_course_num}
-          className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-40 shadow-sm">
+          className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-40 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           {downloading
             ?<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/>Generating…</>
-            :<><Download size={16}/>Download Word Document (.docx)</>}
+            :<><Download size={16} aria-hidden="true" />Download Word Document (.docx)</>}
         </button>
         <p className="text-xs text-surface-400 text-center">Generates the 4-page SCTCC Course Revision form matching the official format.</p>
         {status !== 'approved' ? (
           <button onClick={onApprove} disabled={saving||!data.current_course_num}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl hover:bg-emerald-100 transition-colors disabled:opacity-40">
-            <CheckCircle2 size={14}/> Mark as Approved
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl hover:bg-emerald-100 transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <CheckCircle2 size={14} aria-hidden="true" /> Mark as Approved
           </button>
         ) : (
           <div className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold rounded-xl">
-            <CheckCircle2 size={14}/> ✓ Approved
+            <CheckCircle2 size={14} aria-hidden="true" /> ✓ Approved
           </div>
         )}
       </div>
@@ -1467,6 +1485,8 @@ function Step6({ data, status, saving, downloading, onDownload, onApprove }) {
 
 // ─── Main Wizard ──────────────────────────────────────────────────────────────
 export default function CourseOutlineRevisionWizard({ onClose, initialData=null }) {
+  // Wizard shell is a modal dialog: focus trap, Escape closes (same as the X button), focus restored on close.
+  const wizardDialogRef = useDialogA11y(true, onClose)
   const { user } = useAuth()
   const [step, setStep]       = useState(1)
   const [maxStep, setMaxStep] = useState(() => initialData?.revision_id ? STEPS.length : 1)
@@ -1606,21 +1626,21 @@ export default function CourseOutlineRevisionWizard({ onClose, initialData=null 
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
+      <div ref={wizardDialogRef} role="dialog" aria-modal="true" aria-labelledby="wz-title" className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center">
-              <FileEdit size={16} className="text-blue-600"/>
+              <FileEdit size={16} className="text-blue-600" aria-hidden="true" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-surface-900">Course Revision</h2>
+              <h2 id="wz-title" className="text-base font-bold text-surface-900">Course Revision</h2>
               <p className="text-xs text-surface-400">
                 {data.current_course_num ? `${data.current_course_num} · ` : ''}{STEPS[step-1].desc}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
-            <X size={18} className="text-surface-400"/>
+          <button type="button" onClick={onClose} aria-label="Close course revision" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+            <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
         <div className="pt-4 shrink-0"><StepProgress current={step} maxStep={maxStep} onStep={setStep}/></div>
@@ -1628,8 +1648,8 @@ export default function CourseOutlineRevisionWizard({ onClose, initialData=null 
         <div className="border-t border-surface-100 px-6 py-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <button onClick={()=>setStep(s=>s-1)} disabled={step===1}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-              <ChevronLeft size={15}/> Back
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-surface-600 hover:text-surface-800 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <ChevronLeft size={15} aria-hidden="true" /> Back
             </button>
             {/* Delete draft — hidden once approved */}
             {data.status !== 'approved' && (
@@ -1637,32 +1657,32 @@ export default function CourseOutlineRevisionWizard({ onClose, initialData=null 
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-red-600 font-medium">Delete this draft?</span>
                   <button onClick={handleDelete} disabled={deleting}
-                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-40">
-                    {deleting ? <Loader2 size={11} className="animate-spin"/> : <Trash2 size={11}/>}
+                    className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                    {deleting ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Trash2 size={11} aria-hidden="true" />}
                     Yes, delete
                   </button>
                   <button onClick={()=>setConfirmDelete(false)}
-                    className="px-2.5 py-1.5 text-xs text-surface-600 hover:bg-surface-100 border border-surface-200 rounded-lg transition-colors">
+                    className="px-2.5 py-1.5 text-xs text-surface-600 hover:bg-surface-100 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                     Cancel
                   </button>
                 </div>
               ) : (
                 <button onClick={()=>setConfirmDelete(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-500 hover:bg-red-50 border border-red-100 hover:border-red-200 rounded-lg transition-colors">
-                  <Trash2 size={13}/> Delete Draft
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-red-500 hover:bg-red-50 border border-red-100 hover:border-red-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Trash2 size={13} aria-hidden="true" /> Delete Draft
                 </button>
               )
             )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>handleSave()} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40">
-              <Save size={14}/>{saving?'Saving…':'Save Draft'}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 rounded-lg transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Save size={14} aria-hidden="true" />{saving?'Saving…':'Save Draft'}
             </button>
             {step < STEPS.length && (
               <button onClick={goNext}
-                className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
-                {step === 1 && data.no_changes ? 'Skip to Review' : 'Next'} <ChevronRight size={15}/>
+                className="flex items-center gap-1.5 px-5 py-2 text-sm font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {step === 1 && data.no_changes ? 'Skip to Review' : 'Next'} <ChevronRight size={15} aria-hidden="true" />
               </button>
             )}
           </div>
