@@ -15,6 +15,7 @@ import React from 'react';
 import { supabase } from '@/lib/supabase';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 import StatusSelect from '@/components/StatusSelect';
+import { shortName } from '@/lib/utils';
 
 export default function WorkOrderDetailModal({
   // The work order being viewed
@@ -83,6 +84,9 @@ export default function WorkOrderDetailModal({
   if (!wo) return null;
 
   const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
+  // Privacy rule: students / work study see other people as "First L.";
+  // instructors keep full names.
+  const showName = (n) => (isInstructor ? n : shortName(n));
   const myEmail = user?.email?.toLowerCase() || '';
   const alreadyAssigned = assignees.some(a => a.email.toLowerCase() === myEmail);
 
@@ -165,7 +169,7 @@ export default function WorkOrderDetailModal({
             {/* Assigned To — derived from assignees[0] to stay in sync without DB race */}
             <div className="detail-item">
               <label>Primary Assignee</label>
-              <span>{assignees[0]?.name || 'Unassigned'}</span>
+              <span>{assignees[0]?.name ? showName(assignees[0].name) : 'Unassigned'}</span>
             </div>
 
             {/* Due Date */}
@@ -193,7 +197,7 @@ export default function WorkOrderDetailModal({
             {/* Created */}
             <div className="detail-item">
               <label>Created</label>
-              <span>{formatDate(wo.created_at)} by {wo.created_by || '-'}</span>
+              <span>{formatDate(wo.created_at)} by {wo.created_by ? showName(wo.created_by) : '-'}</span>
             </div>
 
             {/* Status */}
@@ -245,7 +249,7 @@ export default function WorkOrderDetailModal({
                     fontSize: '0.82rem', fontWeight: isPrimary ? 600 : 400
                   }}>
                     <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.95rem' }}>person</span>
-                    {a.name || a.email}
+                    {a.name ? showName(a.name) : a.email}
                     {isPrimary && (
                       <span style={{ fontSize: '0.68rem', color: '#1971c2', marginLeft: 2 }} title="Lead assignee">★</span>
                     )}
@@ -480,7 +484,7 @@ export default function WorkOrderDetailModal({
                 {workLogs.map(log => (
                   <div key={log.log_id} className="worklog-item">
                     <div className="worklog-info">
-                      <h5>{log.user_name || log.user_email || 'Unknown'}</h5>
+                      <h5>{log.user_name ? showName(log.user_name) : (log.user_email || 'Unknown')}</h5>
                       <p>{formatDateTime(log.timestamp)}</p>
                       <p>{log.work_description || ''}</p>
                     </div>

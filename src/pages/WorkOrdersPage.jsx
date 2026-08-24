@@ -2130,18 +2130,18 @@ export default function WorkOrdersPage() {
         <div className="toolbar-left">
           <div className="view-toggle">
             <button className={`toggle-btn ${currentView === 'open' ? 'active' : ''}`} onClick={() => switchView('open')}>
-              <span className="material-icons">folder_open</span>Open
+              <span className="material-icons" aria-hidden="true">folder_open</span>Open
             </button>
             <button className={`toggle-btn ${currentView === 'closed' ? 'active' : ''}`} onClick={() => switchView('closed')}>
-              <span className="material-icons">check_circle</span>Closed
+              <span className="material-icons" aria-hidden="true">check_circle</span>Closed
             </button>
             <button className={`toggle-btn ${currentView === 'requests' ? 'active' : ''}`} onClick={() => switchView('requests')}>
-              <span className="material-icons">inbox</span>Requests
+              <span className="material-icons" aria-hidden="true">inbox</span>Requests
               {pendingRequestCount > 0 && <span className="request-badge">{pendingRequestCount}</span>}
             </button>
           </div>
           <div className="search-box" style={{ position: 'relative' }}>
-            <span className="material-icons">search</span>
+            <span className="material-icons" aria-hidden="true">search</span>
             <input type="text" placeholder="Search work orders..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingRight: search ? 22 : 0 }} aria-label="Search work orders" />
             {search && (
               <button
@@ -2155,7 +2155,7 @@ export default function WorkOrdersPage() {
               >✕</button>
             )}
           </div>
-          <select className="filter-select" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
+          <select className="filter-select" aria-label="Filter by priority" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
             <option value="">All Priorities</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
@@ -2184,13 +2184,13 @@ export default function WorkOrdersPage() {
             onClick={() => setAssignedToMeFilter(v => !v)}
             title="Show only work orders assigned to me (including as additional assignee)"
           >
-            <span className="material-icons">person</span>Assigned to Me
+            <span className="material-icons" aria-hidden="true">person</span>Assigned to Me
           </button>
         </div>
         <div className="toolbar-right">
           {hasPerm('create_wo') && currentView !== 'requests' && (
             <button className="btn btn-primary" onClick={openCreateWOModal}>
-              <span className="material-icons">add</span>Create Work Order
+              <span className="material-icons" aria-hidden="true">add</span>Create Work Order
             </button>
           )}
         </div>
@@ -2340,8 +2340,8 @@ export default function WorkOrdersPage() {
                     <td>
                       {hasPerm('create_wo') && (
                         <>
-                          <button className="action-btn approve" onClick={() => openApproveModalFn(req)} title="Approve"><span className="material-icons">check_circle</span></button>
-                          <button className="action-btn reject" onClick={() => rejectRequest(req)} title="Reject"><span className="material-icons">cancel</span></button>
+                          <button type="button" className="action-btn approve" onClick={() => openApproveModalFn(req)} title="Approve" aria-label={`Approve request ${req.request_id || ''}`}><span className="material-icons" aria-hidden="true">check_circle</span></button>
+                          <button type="button" className="action-btn reject" onClick={() => rejectRequest(req)} title="Reject" aria-label={`Reject request ${req.request_id || ''}`}><span className="material-icons" aria-hidden="true">cancel</span></button>
                         </>
                       )}
                     </td>
@@ -2371,13 +2371,13 @@ export default function WorkOrdersPage() {
             </div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">Description *</label>
-                <textarea className="form-input" rows="3" placeholder="Describe the work..." value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
+                <label htmlFor="wo-fld-description-1" className="form-label">Description *</label>
+                <textarea id="wo-fld-description-1" className="form-input" rows="3" placeholder="Describe the work..." value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Asset</label>
-                  <select className="form-input" value={formData.asset_id || ''} onChange={e => {
+                  <label htmlFor="wo-fld-asset-2" className="form-label">Asset</label>
+                  <select id="wo-fld-asset-2" className="form-input" value={formData.asset_id || ''} onChange={e => {
                     const a = assets.find(a => a.asset_id === e.target.value);
                     setFormData({ ...formData, asset_id: e.target.value, asset_name: a?.name || '' });
                   }}>
@@ -2386,8 +2386,8 @@ export default function WorkOrdersPage() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Priority *</label>
-                  <select className="form-input" value={formData.priority || 'Medium'} onChange={e => setFormData({ ...formData, priority: e.target.value })}>
+                  <label htmlFor="wo-fld-priority-3" className="form-label">Priority *</label>
+                  <select id="wo-fld-priority-3" className="form-input" value={formData.priority || 'Medium'} onChange={e => setFormData({ ...formData, priority: e.target.value })}>
                     <option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option>
                   </select>
                 </div>
@@ -2396,8 +2396,8 @@ export default function WorkOrdersPage() {
                 <>
                   <div className="form-row">
                     <div className="form-group">
-                      <label className="form-label">Assign To</label>
-                      <select className="form-input" value={formData.assigned_email || ''} onChange={e => setFormData({ ...formData, assigned_email: e.target.value })}>
+                      <label htmlFor="wo-fld-assign-to-4" className="form-label">Assign To</label>
+                      <select id="wo-fld-assign-to-4" className="form-input" value={formData.assigned_email || ''} onChange={e => setFormData({ ...formData, assigned_email: e.target.value })}>
                         <option value="">Unassigned</option>
                         {assignOptions.map(u => <option key={u.email} value={u.email}>{u.name}</option>)}
                       </select>
@@ -2414,8 +2414,8 @@ export default function WorkOrdersPage() {
                   </div>
                   <div className="form-row">
                     <div className="form-group">
-                      <label className="form-label">Due Date</label>
-                      <input type="date" className="form-input" value={formData.due_date ? formData.due_date.split('T')[0] : ''} onChange={e => setFormData({ ...formData, due_date: e.target.value })} />
+                      <label htmlFor="wo-fld-due-date-5" className="form-label">Due Date</label>
+                      <input id="wo-fld-due-date-5" type="date" className="form-input" value={formData.due_date ? formData.due_date.split('T')[0] : ''} onChange={e => setFormData({ ...formData, due_date: e.target.value })} />
                     </div>
                     <div className="form-group" />
                   </div>
@@ -2498,21 +2498,21 @@ export default function WorkOrdersPage() {
             <div className="modal-header"><h3 id="wo-worklog-modal-title">Add Work Log</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowWorkLogModal(false)}>&times;</button></div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">Time Worked *</label>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <div id="wo-time-worked-label" className="form-label">Time Worked *</div>
+                <div role="group" aria-labelledby="wo-time-worked-label" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input type="number" className="form-input" min="0" max="23" value={workLogForm.hours} onChange={e => setWorkLogForm({ ...workLogForm, hours: parseInt(e.target.value) || 0 })} style={{ width: 70, textAlign: 'center' }} />
+                    <input type="number" className="form-input" aria-label="Hours worked" min="0" max="23" value={workLogForm.hours} onChange={e => setWorkLogForm({ ...workLogForm, hours: parseInt(e.target.value) || 0 })} style={{ width: 70, textAlign: 'center' }} />
                     <span>hrs</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <input type="number" className="form-input" min="0" max="59" step={timeIncrement} value={workLogForm.mins} onChange={e => setWorkLogForm({ ...workLogForm, mins: parseInt(e.target.value) || 0 })} style={{ width: 70, textAlign: 'center' }} />
+                    <input type="number" className="form-input" aria-label="Minutes worked" min="0" max="59" step={timeIncrement} value={workLogForm.mins} onChange={e => setWorkLogForm({ ...workLogForm, mins: parseInt(e.target.value) || 0 })} style={{ width: 70, textAlign: 'center' }} />
                     <span>mins</span>
                   </div>
                 </div>
               </div>
               <div className="form-group">
-                <label className="form-label">Work Performed *</label>
-                <textarea className="form-input" rows="3" placeholder="Describe work done..." value={workLogForm.notes} onChange={e => setWorkLogForm({ ...workLogForm, notes: e.target.value })} />
+                <label htmlFor="wo-fld-work-performed-6" className="form-label">Work Performed *</label>
+                <textarea id="wo-fld-work-performed-6" className="form-input" rows="3" placeholder="Describe work done..." value={workLogForm.notes} onChange={e => setWorkLogForm({ ...workLogForm, notes: e.target.value })} />
               </div>
             </div>
             <div className="modal-footer">
@@ -2536,27 +2536,28 @@ export default function WorkOrdersPage() {
             <div className="modal-header"><h3 id="wo-parts-modal-title">Add Parts</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowPartsModal(false)}>&times;</button></div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">Search Inventory</label>
-                <input type="text" className="form-input" placeholder="Type to search inventory..." value={partsSearch} onChange={e => setPartsSearch(e.target.value)} />
+                <label htmlFor="wo-fld-search-inventory-7" className="form-label">Search Inventory</label>
+                <input id="wo-fld-search-inventory-7" type="text" className="form-input" placeholder="Type to search inventory..." value={partsSearch} onChange={e => setPartsSearch(e.target.value)} />
               </div>
               <div className="parts-results">
                 {partsResults.length > 0 ? partsResults.map(p => (
-                  <div key={p.part_id} className="part-result" onClick={() => addPartToSelection(p)}>
+                  <button type="button" key={p.part_id} className="part-result" onClick={() => addPartToSelection(p)}
+                    aria-label={`Add ${p.part_name} (${p.part_id}), ${p.qty_in_stock} in stock`}>
                     <div><strong>{p.part_name}</strong><br /><small>{p.part_id}</small></div>
                     <span>Qty: {p.qty_in_stock}</span>
-                  </div>
+                  </button>
                 )) : partsSearch && <p style={{ padding: 16, color: '#868e96' }}>No parts found. Use custom part below.</p>}
               </div>
               <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #e9ecef' }}>
                 <h4 style={{ fontSize: '0.9rem', marginBottom: 12, color: '#495057' }}>Or Add Custom Part (not in inventory)</h4>
                 <div className="form-row" style={{ gridTemplateColumns: '2fr 1fr auto' }}>
                   <div className="form-group">
-                    <label className="form-label">Part Name</label>
-                    <input type="text" className="form-input" placeholder="Enter part name..." value={customPartName} onChange={e => setCustomPartName(e.target.value)} />
+                    <label htmlFor="wo-fld-part-name-8" className="form-label">Part Name</label>
+                    <input id="wo-fld-part-name-8" type="text" className="form-input" placeholder="Enter part name..." value={customPartName} onChange={e => setCustomPartName(e.target.value)} />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Qty</label>
-                    <input type="number" className="form-input" value={customPartQty} min="1" onChange={e => setCustomPartQty(parseInt(e.target.value) || 1)} />
+                    <label htmlFor="wo-fld-qty-9" className="form-label">Qty</label>
+                    <input id="wo-fld-qty-9" type="number" className="form-input" value={customPartQty} min="1" onChange={e => setCustomPartQty(parseInt(e.target.value) || 1)} />
                   </div>
                   <div className="form-group" style={{ alignSelf: 'flex-end', marginBottom: 16 }}>
                     <button className="btn btn-secondary" onClick={addCustomPart}>Add</button>
@@ -2568,12 +2569,12 @@ export default function WorkOrdersPage() {
                 {selectedParts.length === 0 ? <div>None</div> : selectedParts.map((p, i) => (
                   <div key={i} className="selected-part-item">
                     <span>{p.partName}{!p.fromInventory ? ' (custom)' : ''}</span>
-                    <input type="number" value={p.qty} min="1" onChange={e => {
+                    <input type="number" aria-label={`Quantity for ${p.partName}`} value={p.qty} min="1" onChange={e => {
                       const u = [...selectedParts];
                       u[i].qty = parseInt(e.target.value) || 1;
                       setSelectedParts(u);
                     }} />
-                    <span className="remove-part material-icons" onClick={() => setSelectedParts(selectedParts.filter((_, idx) => idx !== i))}>close</span>
+                    <button type="button" className="remove-part" aria-label={`Remove ${p.partName}`} onClick={() => setSelectedParts(selectedParts.filter((_, idx) => idx !== i))}><span className="material-icons" aria-hidden="true">close</span></button>
                   </div>
                 ))}
               </div>
@@ -2600,8 +2601,8 @@ export default function WorkOrdersPage() {
             <div className="modal-body">
               <p style={{ marginBottom: 16 }}>Are you sure you want to close this work order?</p>
               <div className="form-group">
-                <label className="form-label">Final Notes</label>
-                <textarea className="form-input" rows="2" placeholder="Optional closing notes..." value={closeNotes} onChange={e => setCloseNotes(e.target.value)} />
+                <label htmlFor="wo-fld-final-notes-10" className="form-label">Final Notes</label>
+                <textarea id="wo-fld-final-notes-10" className="form-input" rows="2" placeholder="Optional closing notes..." value={closeNotes} onChange={e => setCloseNotes(e.target.value)} />
               </div>
             </div>
             <div className="modal-footer">
@@ -2627,14 +2628,14 @@ export default function WorkOrdersPage() {
               <p><strong>From:</strong> {currentRequest.name || currentRequest.email}</p>
               <p><strong>Description:</strong> {currentRequest.description}</p>
               <div className="form-group" style={{ marginTop: 16 }}>
-                <label className="form-label">Priority</label>
-                <select className="form-input" value={approveForm.priority} onChange={e => setApproveForm({ ...approveForm, priority: e.target.value })}>
+                <label htmlFor="wo-fld-priority-11" className="form-label">Priority</label>
+                <select id="wo-fld-priority-11" className="form-input" value={approveForm.priority} onChange={e => setApproveForm({ ...approveForm, priority: e.target.value })}>
                   <option value="Low">Low</option><option value="Medium">Medium</option><option value="High">High</option>
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">Assign To</label>
-                <select className="form-input" value={approveForm.assignEmail} onChange={e => setApproveForm({ ...approveForm, assignEmail: e.target.value })}>
+                <label htmlFor="wo-fld-assign-to-12" className="form-label">Assign To</label>
+                <select id="wo-fld-assign-to-12" className="form-input" value={approveForm.assignEmail} onChange={e => setApproveForm({ ...approveForm, assignEmail: e.target.value })}>
                   <option value="">Unassigned</option>
                   {assignOptions.map(u => <option key={u.email} value={u.email}>{u.name}</option>)}
                 </select>
@@ -2698,8 +2699,8 @@ export default function WorkOrdersPage() {
               {!addToExisting && (
                 <>
                   <div style={{ marginBottom: 16 }}>
-                    <label className="form-label">Vendor *</label>
-                    <select value={poForm.vendorId || (poForm.otherVendor ? 'OTHER' : '')}
+                    <label htmlFor="wo-fld-vendor-13" className="form-label">Vendor *</label>
+                    <select id="wo-fld-vendor-13" value={poForm.vendorId || (poForm.otherVendor ? 'OTHER' : '')}
                       onChange={e => handlePOVendorChange(e.target.value)}
                       className="form-input" style={{ width: '100%' }}>
                       <option value="">Select vendor...</option>
@@ -2709,8 +2710,8 @@ export default function WorkOrdersPage() {
                   </div>
                   {poForm.vendorId === '' && !poForm.vendorName && (
                     <div style={{ marginBottom: 16 }}>
-                      <label className="form-label">Other Vendor Name</label>
-                      <input value={poForm.otherVendor || ''} onChange={e => {
+                      <label htmlFor="wo-fld-other-vendor-name-14" className="form-label">Other Vendor Name</label>
+                      <input id="wo-fld-other-vendor-name-14" value={poForm.otherVendor || ''} onChange={e => {
                         setPoForm(f => ({ ...f, otherVendor: e.target.value }));
                         // Debounced check for "Other" vendors
                         clearTimeout(window._otherVendorTimer);
@@ -2726,7 +2727,7 @@ export default function WorkOrdersPage() {
               {existingPO && !addToExisting && (
                 <div style={{ background: '#e7f5ff', border: '1px solid #a5d8ff', borderRadius: 8, padding: 14, marginBottom: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                    <span className="material-icons" style={{ color: '#228be6', fontSize: '1.2rem' }}>merge_type</span>
+                    <span className="material-icons" aria-hidden="true" style={{ color: '#228be6', fontSize: '1.2rem' }}>merge_type</span>
                     <span style={{ fontWeight: 600, color: '#1864ab', fontSize: '0.88rem' }}>Existing PO found for this vendor</span>
                   </div>
                   <div style={{ background: '#fff', borderRadius: 6, padding: 10, marginBottom: 10, fontSize: '0.82rem' }}>
@@ -2745,7 +2746,7 @@ export default function WorkOrdersPage() {
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => setAddToExisting(true)}
                       style={{ flex: 1, padding: '8px 12px', borderRadius: 6, border: '1px solid #228be6', background: '#228be6', color: '#fff', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer' }}>
-                      <span className="material-icons" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>add_circle</span>
+                      <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem', verticalAlign: 'middle', marginRight: 4 }}>add_circle</span>
                       Add my items to {existingPO.order_id}
                     </button>
                     <button onClick={() => { setExistingPO(null); }}
@@ -2760,7 +2761,7 @@ export default function WorkOrdersPage() {
               {addToExisting && existingPO && (
                 <div style={{ background: '#e7f5ff', border: '1px solid #a5d8ff', borderRadius: 8, padding: 14, marginBottom: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span className="material-icons" style={{ color: '#228be6', fontSize: '1.1rem' }}>info</span>
+                    <span className="material-icons" aria-hidden="true" style={{ color: '#228be6', fontSize: '1.1rem' }}>info</span>
                     <span style={{ fontWeight: 600, color: '#1864ab', fontSize: '0.85rem' }}>Adding items to {existingPO.order_id}</span>
                   </div>
                   <p style={{ fontSize: '0.78rem', color: '#495057', margin: 0 }}>
@@ -2782,8 +2783,8 @@ export default function WorkOrdersPage() {
               {/* Notes - only for new PO */}
               {!addToExisting && (
                 <div style={{ marginBottom: 16 }}>
-                  <label className="form-label">Notes</label>
-                  <input value={poForm.notes} onChange={e => setPoForm(f => ({ ...f, notes: e.target.value }))}
+                  <label htmlFor="wo-fld-notes-15" className="form-label">Notes</label>
+                  <input id="wo-fld-notes-15" value={poForm.notes} onChange={e => setPoForm(f => ({ ...f, notes: e.target.value }))}
                     className="form-input" style={{ width: '100%' }} placeholder="Notes..." />
                 </div>
               )}
@@ -2794,7 +2795,7 @@ export default function WorkOrdersPage() {
                   {addToExisting ? `New Items for ${currentWO.wo_id}` : 'Line Items'}
                 </label>
                 <button className="btn btn-secondary btn-sm" onClick={() => setPoLines(l => [...l, { partNumber: '', description: '', link: '', unitPrice: '', quantity: 1, inventoryPartId: '' }])}>
-                  <span className="material-icons" style={{ fontSize: '0.9rem' }}>add</span>Add Line
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem' }}>add</span>Add Line
                 </button>
               </div>
 
@@ -2803,9 +2804,9 @@ export default function WorkOrdersPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#868e96' }}>Item {i + 1}</span>
                     {poLines.length > 1 && (
-                      <button onClick={() => setPoLines(l => l.filter((_, idx) => idx !== i))}
-                        style={{ background: 'none', border: 'none', color: '#fa5252', cursor: 'pointer', padding: 2 }}>
-                        <span className="material-icons" style={{ fontSize: '1rem' }}>delete</span>
+                      <button type="button" aria-label={`Remove item ${i + 1}`} onClick={() => setPoLines(l => l.filter((_, idx) => idx !== i))}
+                        style={{ background: 'none', border: 'none', color: '#fa5252', cursor: 'pointer', padding: 2, minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <span className="material-icons" style={{ fontSize: '1rem' }} aria-hidden="true">delete</span>
                       </button>
                     )}
                   </div>
@@ -2813,24 +2814,24 @@ export default function WorkOrdersPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
                     <div>
                       <label style={{ fontSize: '0.72rem', color: '#868e96' }}>Part Number</label>
-                      <input value={li.partNumber} onChange={e => { const updated = [...poLines]; updated[i].partNumber = e.target.value; setPoLines(updated); }}
+                      <input aria-label={`Item ${i + 1} part number`} value={li.partNumber} onChange={e => { const updated = [...poLines]; updated[i].partNumber = e.target.value; setPoLines(updated); }}
                         className="form-input form-input-sm" style={{ width: '100%' }} placeholder="Part #" />
                     </div>
                     <div>
                       <label style={{ fontSize: '0.72rem', color: '#868e96' }}>Description *</label>
-                      <input value={li.description} onChange={e => { const updated = [...poLines]; updated[i].description = e.target.value; setPoLines(updated); }}
+                      <input aria-label={`Item ${i + 1} description`} value={li.description} onChange={e => { const updated = [...poLines]; updated[i].description = e.target.value; setPoLines(updated); }}
                         className="form-input form-input-sm" style={{ width: '100%' }} placeholder="Description" />
                     </div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 8 }}>
                     <div>
                       <label style={{ fontSize: '0.72rem', color: '#868e96' }}>Unit Price</label>
-                      <input type="number" step="0.01" value={li.unitPrice} onChange={e => { const updated = [...poLines]; updated[i].unitPrice = e.target.value; setPoLines(updated); }}
+                      <input aria-label={`Item ${i + 1} unit price`} type="number" step="0.01" value={li.unitPrice} onChange={e => { const updated = [...poLines]; updated[i].unitPrice = e.target.value; setPoLines(updated); }}
                         className="form-input form-input-sm" style={{ width: '100%' }} placeholder="0.00" />
                     </div>
                     <div>
                       <label style={{ fontSize: '0.72rem', color: '#868e96' }}>Quantity</label>
-                      <input type="number" min={1} value={li.quantity} onChange={e => { const updated = [...poLines]; updated[i].quantity = e.target.value; setPoLines(updated); }}
+                      <input aria-label={`Item ${i + 1} quantity`} type="number" min={1} value={li.quantity} onChange={e => { const updated = [...poLines]; updated[i].quantity = e.target.value; setPoLines(updated); }}
                         className="form-input form-input-sm" style={{ width: '100%' }} />
                     </div>
                     <div>
@@ -2842,7 +2843,7 @@ export default function WorkOrdersPage() {
                   </div>
                   <div>
                     <label style={{ fontSize: '0.72rem', color: '#868e96' }}>Link (optional)</label>
-                    <input value={li.link} onChange={e => { const updated = [...poLines]; updated[i].link = e.target.value; setPoLines(updated); }}
+                    <input aria-label={`Item ${i + 1} link`} value={li.link} onChange={e => { const updated = [...poLines]; updated[i].link = e.target.value; setPoLines(updated); }}
                       className="form-input form-input-sm" style={{ width: '100%' }} placeholder="https://..." />
                   </div>
                 </div>
@@ -2867,7 +2868,7 @@ export default function WorkOrdersPage() {
               )}
 
               <div style={{ background: '#fff3bf', borderRadius: 8, padding: 12, marginTop: 12, fontSize: '0.82rem', color: '#e67700', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span className="material-icons" style={{ fontSize: '1.1rem' }}>info</span>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>info</span>
                 {addToExisting
                   ? `Items will be added to ${existingPO?.order_id} and the PO will require instructor re-approval.`
                   : 'This PO will be sent to instructors for approval. The work order will change to "Awaiting Parts".'}
@@ -2877,7 +2878,7 @@ export default function WorkOrdersPage() {
               <button className="btn btn-secondary" onClick={() => setShowGeneratePO(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={submitGeneratePO} disabled={poSaving}
                 style={{ background: addToExisting ? '#228be6' : '#40c057', borderColor: addToExisting ? '#228be6' : '#40c057' }}>
-                <span className="material-icons" style={{ fontSize: '1rem' }}>{poSaving ? 'hourglass_empty' : (addToExisting ? 'add_circle' : 'local_shipping')}</span>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>{poSaving ? 'hourglass_empty' : (addToExisting ? 'add_circle' : 'local_shipping')}</span>
                 {poSaving ? 'Submitting...' : (addToExisting ? `Add to ${existingPO?.order_id}` : 'Submit Purchase Order')}
               </button>
             </div>
@@ -2925,7 +2926,7 @@ export default function WorkOrdersPage() {
         .request-badge { position: absolute; top: -4px; right: -4px; background: #fa5252; color: white; font-size: 0.65rem; padding: 2px 6px; border-radius: 10px; }
         .search-box { display: flex; align-items: center; gap: 8px; background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 8px 12px; }
         .search-box input { border: none; outline: none; font-size: 0.9rem; min-width: 200px; }
-        .filter-select { padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; background: white; }
+        .filter-select { padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; background: white; min-height: 44px; }
         .card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
         .card-header { padding: 16px 20px; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
         .badge { background: #228be6; color: white; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; }
@@ -2952,7 +2953,7 @@ export default function WorkOrdersPage() {
         .due-date.soon { color: #a05500; }                               /* 5.53:1 (was #e67700, 3.00:1 — FAILED) */
         .hours-cell { font-weight: 500; }
         .wo-assignee-more { position: relative; }
-        .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; }
+        .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .action-btn:hover { background: #e9ecef; }
         .action-btn.approve { color: #40c057; }
         .action-btn.reject { color: #fa5252; }
@@ -2963,7 +2964,7 @@ export default function WorkOrdersPage() {
         .modal-xl { max-width: 900px; }
         .modal-header { padding: 20px; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
         .modal-header h3 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; }
-        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; }
+        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
         .modal-footer { padding: 16px 20px; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -2971,12 +2972,12 @@ export default function WorkOrdersPage() {
         .form-label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; }
         .form-input { width: 100%; padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
         .form-input-sm { padding: 6px 10px; font-size: 0.85rem; }
-        .form-input:focus { outline: none; border-color: #228be6; }
-        .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; }
+        .form-input:focus { outline: none; border-color: #228be6; box-shadow: 0 0 0 3px rgba(34,139,230,0.35); } /* visible focus ring (WCAG 2.4.7) */
+        .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
         .btn-primary { background: #228be6; color: white; }
         .btn-secondary { background: #f8f9fa; color: #495057; }
         .btn-danger { background: #fa5252; color: white; }
-        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; min-height: 44px; }
         .wo-detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid #e9ecef; }
         .wo-detail-title { flex: 1; }
         .wo-detail-title h2 { margin: 0 0 8px; font-size: 1.25rem; }
@@ -2999,12 +3000,12 @@ export default function WorkOrdersPage() {
         .btn-delete-log .material-icons { font-size: 1.1rem; }
         .part-qty { font-weight: 600; }
         .parts-results { max-height: 200px; overflow-y: auto; margin-bottom: 16px; }
-        .part-result { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #e9ecef; cursor: pointer; }
+        .part-result { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #e9ecef; cursor: pointer; width: 100%; background: none; border-left: none; border-right: none; border-top: none; text-align: left; font: inherit; color: inherit; min-height: 44px; }
         .part-result:hover { background: #f8f9fa; }
         .selected-parts h4 { font-size: 0.9rem; margin-bottom: 8px; }
         .selected-part-item { display: flex; align-items: center; gap: 12px; padding: 8px; background: #e7f5ff; border-radius: 6px; margin-bottom: 8px; }
         .selected-part-item input { width: 60px; padding: 4px 8px; border: 1px solid #dee2e6; border-radius: 4px; }
-        .remove-part { cursor: pointer; color: #fa5252; }
+        .remove-part { cursor: pointer; color: #fa5252; background: none; border: none; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .empty-state { text-align: center; padding: 30px; color: #868e96; }
         .empty-state .material-icons { font-size: 2.5rem; margin-bottom: 8px; }
         .docs-list { display: flex; flex-wrap: wrap; gap: 12px; }

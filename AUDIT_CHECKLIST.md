@@ -20,6 +20,8 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
   - [x] Equipment Scheduling — fixed: grid cell + aria-label for other people's bookings now "First L."
   - [x] TV Display — already abbreviated via local `firstLastInit()`
   - [x] Lab Status kiosk — fixed: help-request card now "First L." (people list was already abbreviated)
+  - [x] Work Orders detail modal (`components/WorkOrderDetailModal.jsx`) — assignee chips, primary assignee, created-by and work-log authors now "First L." for non-instructors (2026-08-24). List page already shortened.
+  - [ ] Sweep remaining instructor-tier pages for other students' full names as each gets its accessibility pass (Inventory, Assets, SOPs, PM, Purchase Orders, Equipment/Network, Announcements)
   - [ ] Review Access page: if any Work Study role holds `manage_others`, `view_all_students`, `manage_all_bookings`, or `Users → view_page`, they see full names on those screens
   - [ ] Cleanup: replace the local `firstLastInit()` copy in `TVDisplayPage.jsx` with `shortName()` from utils (LabStatusPage done 2026-08-24)
   - [ ] Asset checkouts (`AssetCheckoutsPage.jsx`, `useAssetCheckouts.js`)
@@ -59,7 +61,7 @@ Student-facing first:
 - [x] `LabStatusPage.jsx` (kiosk) — delivered 2026-08-24: instructor-select overlay already had its own dialog semantics + keyboard handling (audit flag was a false positive); help-card action button now names the student; 18 decorative material icons hidden; local `firstLastInit()` replaced with shared `shortName()`
 
 Instructor / admin:
-- [ ] `WorkOrdersPage.jsx` (~24 unlabeled, 10 clickable divs)
+- [x] `WorkOrdersPage.jsx` — delivered 2026-08-24: all 7 dialogs were already on `useDialogA11y` and the row open-link was already a button; fixed 15 form labels linked by id + 8 loose controls labelled (PO line items, hours/mins group, filters); parts search results and remove-part are real buttons; approve/reject/remove icon buttons named; `scope="col"`; 15 material icons hidden; embedded CSS: 44px on `.btn`, `.btn-sm`, `.action-btn`, `.modal-close`, `.filter-select`, visible `.form-input:focus` ring
 - [ ] `SettingsPage.jsx` (~22 unlabeled, 6 clickable divs)
 - [ ] `ProgramBudgetPage.jsx` (~23 unlabeled, 1 icon-only button)
 - [ ] `SyllabusWizard.jsx` (~21 unlabeled, 7 `outline-none`, 1 icon-only button)
