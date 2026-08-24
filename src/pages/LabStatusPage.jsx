@@ -387,6 +387,14 @@ export default function LabStatusPage() {
   const [helpRequests, setHelpRequests] = useState([]);
   const [loading, setLoading]           = useState(true);
   const [lastUpdated, setLastUpdated]   = useState(null);
+  // Set when the most recent poll failed (network blip, auth refresh, etc.).
+  // The previous roster is kept on screen while this is true.
+  const [fetchError, setFetchError]     = useState(null);
+  // Guards for overlapping fetches: a slow/old response must never overwrite
+  // a newer one, and a fetch already in flight is not duplicated.
+  const fetchSeqRef      = useRef(0);
+  const fetchInFlightRef = useRef(false);
+  const retryTimerRef    = useRef(null);
 
   const [audioUnlocked, setAudioUnlocked]           = useState(false);
   const [selectedInstructor, setSelectedInstructor]  = useState(null);
@@ -470,12 +478,18 @@ export default function LabStatusPage() {
   // ── Data Fetching — unified people list ──────────────────────────────────
 
   const fetchData = useCallback(async () => {
+    // Coalesce: the 30 s poll, realtime events and manual refreshes can all
+    // fire at once. If a fetch is already running, let it finish.
+    if (fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
+    const seq = ++fetchSeqRef.current;
+
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const now = new Date();
     const todayStr = toLocalDateStr(today);
 
     try {
-      const [{ data: clockData }, { data: helpData }, { data: profilesData }, { data: signupData }, { data: calData }] = await Promise.all([
+      const [clockRes, helpRes, profilesRes, signupRes, calRes] = await Promise.all([
         supabase.from('time_clock').select('record_id, user_name, user_email, punch_in, course_id, entry_type')
           .eq('status', 'Punched In').gte('punch_in', todayStr + 'T00:00:00').lte('punch_in', todayStr + 'T23:59:59')
           .order('punch_in', { ascending: true }),
@@ -486,6 +500,23 @@ export default function LabStatusPage() {
           .eq('date', todayStr).neq('status', 'Cancelled'),
         supabase.from('lab_calendar').select('closed_blocks').eq('date', todayStr + 'T12:00:00').maybeSingle(),
       ]);
+
+      // A newer fetch has already started — discard this (stale) response.
+      if (seq !== fetchSeqRef.current) return;
+
+      // Supabase does NOT throw on failure; it returns { data: null, error }.
+      // Previously the nulls were treated as "nobody here" and wiped the
+      // roster until the next poll. Treat any failure of the roster queries
+      // as fatal for this cycle so the last-known-good list stays on screen.
+      const fatal = [
+        ['time_clock', clockRes.error], ['help_requests', helpRes.error],
+        ['profiles', profilesRes.error], ['lab_signup', signupRes.error],
+      ].find(([, e]) => e);
+      if (fatal) throw new Error(`${fatal[0]}: ${fatal[1].message || 'query failed'}`);
+      if (calRes.error) console.warn('[LabStatus] lab_calendar query error (closures banner skipped):', calRes.error.message);
+
+      const clockData = clockRes.data, helpData = helpRes.data, profilesData = profilesRes.data,
+            signupData = signupRes.data, calData = calRes.error ? null : calRes.data;
 
       // ── Today's hour-level closures ──
       // Surface "Lab closed 2-3pm — Faculty Meeting" banner so students walking
@@ -615,11 +646,29 @@ export default function LabStatusPage() {
       setPeopleList(finalList);
       setHelpRequests(helpData || []);
       setLastUpdated(new Date());
-    } catch (err) { console.error('[LabStatus] Fetch error:', err); }
-    setLoading(false);
+      setFetchError(null);
+      setLoading(false);
+    } catch (err) {
+      console.error('[LabStatus] Fetch error:', err);
+      if (seq === fetchSeqRef.current) {
+        setFetchError(err?.message || 'Connection problem');
+        // Don't wait a full poll cycle — try once more shortly.
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = setTimeout(() => { fetchInFlightRef.current = false; fetchData(); }, 5000);
+      }
+    } finally {
+      fetchInFlightRef.current = false;
+    }
   }, []);
 
-  useEffect(() => { fetchData(); const poll = setInterval(fetchData, 30000); return () => clearInterval(poll); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    const poll = setInterval(fetchData, 30000);
+    // Refetch immediately when the browser reports connectivity restored.
+    const onOnline = () => fetchData();
+    window.addEventListener('online', onOnline);
+    return () => { clearInterval(poll); clearTimeout(retryTimerRef.current); window.removeEventListener('online', onOnline); };
+  }, [fetchData]);
 
   useEffect(() => {
     const channel = supabase.channel('lab-status-rt-' + Date.now())
@@ -629,12 +678,6 @@ export default function LabStatusPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, fetchData)
       .subscribe();
     return () => supabase.removeChannel(channel);
-  }, [fetchData]);
-
-  // Minute-tick to keep closure isCurrent labels fresh
-  useEffect(() => {
-    const id = setInterval(fetchData, 60000);
-    return () => clearInterval(id);
   }, [fetchData]);
 
   // ── Touch interactions ──
@@ -808,7 +851,9 @@ export default function LabStatusPage() {
           </div>
           <div ref={namesScrollRef} style={{ height: 'calc(100vh - 132px)', overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             {loading ? <CenterMsg icon="hourglass_empty" text="Loading…" />
-             : peopleList.length === 0 ? <CenterMsg icon="person_off" text="No one in lab or expected today" />
+             : peopleList.length === 0 ? (fetchError
+                 ? <CenterMsg icon="wifi_off" text="Reconnecting…" color="#fbbf24" />
+                 : <CenterMsg icon="person_off" text="No one in lab or expected today" />)
              : (<>
                 {peopleList.map((person, idx) => <PersonRow key={'a-' + (person.email || idx)} person={person} />)}
                 {peopleList.length > SCROLL_THRESHOLD && peopleList.map((person, idx) => <PersonRow key={'b-' + (person.email || idx)} person={person} />)}
@@ -863,7 +908,11 @@ export default function LabStatusPage() {
         ) : (
           <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>{lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : ''}</span>
         )}
-        <span style={{ fontSize: '0.6rem', color: '#2d3748' }}>Auto-refreshes every 30 s</span>
+        <span role="status" aria-live="polite" style={{ fontSize: '0.6rem', color: fetchError ? '#fbbf24' : '#2d3748', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          {fetchError
+            ? (<><span className="material-icons" aria-hidden="true" style={{ fontSize: '0.75rem' }}>wifi_off</span>Connection issue — showing last update{lastUpdated ? ` from ${lastUpdated.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : ''}</>)
+            : 'Auto-refreshes every 30 s'}
+        </span>
       </footer>
 
       <MaterialIconsLoader />

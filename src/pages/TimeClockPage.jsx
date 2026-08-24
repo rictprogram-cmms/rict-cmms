@@ -598,12 +598,13 @@ function InstructorApproveScreen({ user, onApproved, onCancel, loading: parentLo
     setLoading(true)
 
     try {
-      const { data: profile } = await supabase
+      const { data: profile, error: profileErr } = await supabase
         .from('profiles')
         .select('*')
         .eq('card_id', cardId)
         .eq('status', 'Active')
         .maybeSingle()
+      if (profileErr) throw profileErr
 
       if (!profile) {
         setError('Badge not recognized. Please try again.')
@@ -817,14 +818,18 @@ export default function TimeClockPage() {
 
   const fetchLabMode = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'lab_access_mode')
         .maybeSingle()
+      if (error) throw error
       setLabMode(data?.setting_value || 'in_session')
-    } catch {
-      setLabMode('in_session') // default to open on error
+    } catch (e) {
+      console.warn('[TimeClock] lab_access_mode fetch error:', e?.message || e)
+      // Only fall back to "open" if we have never learned the real mode;
+      // otherwise keep the last known value rather than flipping on a blip.
+      setLabMode(m => (m === 'unknown' ? 'in_session' : m))
     }
   }, [])
 
@@ -1012,37 +1017,31 @@ export default function TimeClockPage() {
     }
   }
 
+  // Throws on query error. A failed read must never be treated as "no open
+  // punch" — that would show Punch In to a student who is already punched in
+  // and create a duplicate open record. The caller's catch shows a retry error.
   async function findOpenPunch(profile) {
-    const { data: p1 } = await supabase
+    const openPunchQuery = (col, val) => supabase
       .from('time_clock')
       .select('*')
-      .eq('user_id', profile.id)
+      .eq(col, val)
       .eq('status', 'Punched In')
       .order('punch_in', { ascending: false })
       .limit(1)
       .maybeSingle()
+
+    const { data: p1, error: e1 } = await openPunchQuery('user_id', profile.id)
+    if (e1) throw new Error('time_clock lookup failed: ' + e1.message)
     if (p1) return p1
 
     if (profile.user_id) {
-      const { data: p2 } = await supabase
-        .from('time_clock')
-        .select('*')
-        .eq('user_id', profile.user_id)
-        .eq('status', 'Punched In')
-        .order('punch_in', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const { data: p2, error: e2 } = await openPunchQuery('user_id', profile.user_id)
+      if (e2) throw new Error('time_clock lookup failed: ' + e2.message)
       if (p2) return p2
     }
 
-    const { data: p3 } = await supabase
-      .from('time_clock')
-      .select('*')
-      .eq('user_email', profile.email)
-      .eq('status', 'Punched In')
-      .order('punch_in', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    const { data: p3, error: e3 } = await openPunchQuery('user_email', profile.email)
+    if (e3) throw new Error('time_clock lookup failed: ' + e3.message)
     return p3 || null
   }
 
@@ -1050,12 +1049,17 @@ export default function TimeClockPage() {
   async function fetchClassesData() {
     if (classesDataRef.current) return classesDataRef.current
     try {
-      const todayStr = new Date().toISOString().substring(0, 10)
-      const { data } = await supabase
+      // Local date (not toISOString, which is UTC and rolls over at 6–7 PM CT)
+      const d = new Date()
+      const todayStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
+      const { data, error } = await supabase
         .from('classes')
         .select('*')
         .eq('status', 'Active')
         .or(`start_date.is.null,start_date.lte.${todayStr}`)
+      // A failed read must not be cached as "no classes" for the rest of the
+      // session — throw so the caller reports the error and can retry.
+      if (error) throw new Error('classes lookup failed: ' + error.message)
       classesDataRef.current = data || []
       console.log('[TimeClock] Cached classes data:', (classesDataRef.current).map(c =>
         `${c.course_id} -> "${c.course_name}" (class_id: ${c.class_id})`
@@ -1063,7 +1067,8 @@ export default function TimeClockPage() {
       return classesDataRef.current
     } catch (e) {
       console.error('[TimeClock] Classes fetch error:', e)
-      return []
+      classesDataRef.current = null // leave uncached so the next scan retries
+      throw e // handleLookup / handleSelectStudent catch this and show a retry message
     }
   }
 
