@@ -50,7 +50,7 @@ Student-facing first:
 - [x] `LabSignupPage.jsx` — delivered 2026-08-24: Change Request + Slot Detail modals wired to `useDialogA11y` with `role="dialog"`; `window.confirm` on My Signups replaced with `ConfirmDialog`; aria-labels on nav/close/cancel buttons; reason textarea labelled; week title is a live region; tabs `aria-pressed`; focus rings + 44px on all buttons; `scope="col"`; decorative icons hidden
 - [x] `AbsenceRequestPage.jsx` — audited 2026-08-24: already compliant (dialogs, labels, live regions, focus rings); only fix needed was 44px targets on 10 buttons
 - [x] `AssetCheckoutsPage.jsx` — audited 2026-08-24: already compliant (4 dialogs on `useDialogA11y`, tablist, labels, icons hidden); fixed 44px on 21 buttons, `scope="col"` in the printed equipment report, `alert()` → toast
-- [ ] `VolunteerHoursPage.jsx` (~21 unlabeled, 6 clickable divs)
+- [x] `VolunteerHoursPage.jsx` — delivered 2026-08-24: 4 remaining modals (Log Volunteer, Log Club, Edit Request, Report) wired to `useDialogA11y` with `role="dialog"`; aria-labels on refresh/close/correction buttons; keyboard toggle for student rows; `aria-pressed` on filters and report-type toggles; `alert()` → toast; focus rings + 44px; `scope="col"`; icons hidden. (Fields were already labelled — `Field` wraps in `<label>`.)
 - [ ] `DashboardPage.jsx`
 - [ ] `BugTrackerPage.jsx` (~12 unlabeled, 1 `outline-none`)
 - [ ] `AssetScanPage.jsx` (dialog without `useDialogA11y`)

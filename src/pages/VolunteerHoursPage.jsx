@@ -30,6 +30,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useVolunteerData, useVolunteerOverview, useStudentVolunteerDetail } from '@/hooks/useVolunteerHours'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
+import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,8 @@ function fmtHoursMin(h) {
 
 // ─── Shared UI Components ────────────────────────────────────────────────────
 
+// Backdrop only. Each modal puts ref/role="dialog"/aria-labelledby on its own
+// card div and calls useDialogA11y (focus trap, Escape, focus restore).
 function ModalOverlay({ children, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4" onClick={onClose}>
@@ -301,7 +304,7 @@ function StudentView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 className="animate-spin text-brand-500" size={32} />
+        <Loader2 className="animate-spin text-brand-500" size={32} aria-hidden="true" />
       </div>
     )
   }
@@ -312,7 +315,7 @@ function StudentView() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
-            <Heart size={20} className="text-purple-600" />
+            <Heart size={20} className="text-purple-600" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">Volunteer Hours</h1>
@@ -320,20 +323,20 @@ function StudentView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={refresh} className="p-2 rounded-lg hover:bg-surface-100 text-surface-400" title="Refresh">
-            <RefreshCw size={16} />
+          <button type="button" onClick={refresh} aria-label="Refresh" className="p-2 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Refresh">
+            <RefreshCw size={16} aria-hidden="true" />
           </button>
           <button
             onClick={() => setShowClubModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <Plus size={16} /> Log Club Hours
+            <Plus size={16} aria-hidden="true" /> Log Club Hours
           </button>
           <button
             onClick={() => setShowLogModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 transition-colors"
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <Plus size={16} /> Log Volunteer Hours
+            <Plus size={16} aria-hidden="true" /> Log Volunteer Hours
           </button>
         </div>
       </div>
@@ -341,7 +344,7 @@ function StudentView() {
       {/* Stats Row */}
       {!stats.hasRequirement || stats.totalRequired === 0 ? (
         <div className="bg-white rounded-xl border border-surface-200 p-6 text-center">
-          <Heart size={32} className="mx-auto mb-2 text-surface-300" />
+          <Heart size={32} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
           <p className="text-sm font-medium text-surface-600">No volunteer hours required</p>
           <p className="text-xs text-surface-400 mt-1">None of your current classes require volunteer hours this semester.</p>
         </div>
@@ -352,14 +355,14 @@ function StudentView() {
           <div className="mt-3 text-center">
             <p className="text-sm font-medium text-surface-700">
               {stats.isComplete ? (
-                <span className="text-emerald-600 flex items-center gap-1 justify-center"><CheckCircle2 size={16} /> Complete!</span>
+                <span className="text-emerald-600 flex items-center gap-1 justify-center"><CheckCircle2 size={16} aria-hidden="true" /> Complete!</span>
               ) : (
                 <>{fmtHoursMin(stats.remaining)} remaining</>
               )}
             </p>
             {stats.pendingHours > 0 && (
               <p className="text-xs text-amber-600 mt-1 flex items-center gap-1 justify-center">
-                <Clock size={12} /> {fmtHoursMin(stats.pendingHours)} pending approval
+                <Clock size={12} aria-hidden="true" /> {fmtHoursMin(stats.pendingHours)} pending approval
               </p>
             )}
           </div>
@@ -368,7 +371,7 @@ function StudentView() {
         {stats.midpointApplies && (
         <div className="bg-white rounded-xl border border-surface-200 p-6">
           <div className="flex items-center gap-2 mb-3">
-            <Target size={18} className="text-purple-500" />
+            <Target size={18} className="text-purple-500" aria-hidden="true" />
             <h3 className="text-sm font-semibold text-surface-700">1st Half Checkpoint</h3>
           </div>
           <div className="space-y-3">
@@ -391,7 +394,7 @@ function StudentView() {
         {stats.secondHalfApplies && (
         <div className="bg-white rounded-xl border border-surface-200 p-6">
           <div className="flex items-center gap-2 mb-3">
-            <Target size={18} className="text-indigo-500" />
+            <Target size={18} className="text-indigo-500" aria-hidden="true" />
             <h3 className="text-sm font-semibold text-surface-700">2nd Half Checkpoint</h3>
           </div>
           <div className="space-y-3">
@@ -413,7 +416,7 @@ function StudentView() {
 
         <div className="bg-white rounded-xl border border-surface-200 p-6">
           <div className="flex items-center gap-2 mb-3">
-            <TrendingUp size={18} className="text-blue-500" />
+            <TrendingUp size={18} className="text-blue-500" aria-hidden="true" />
             <h3 className="text-sm font-semibold text-surface-700">Summary</h3>
           </div>
           <div className="space-y-3">
@@ -440,7 +443,7 @@ function StudentView() {
 
       {/* How to Log Hours Info */}
       <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
-        <Info size={16} className="text-blue-500 mt-0.5 flex-shrink-0" />
+        <Info size={16} className="text-blue-500 mt-0.5 flex-shrink-0" aria-hidden="true" />
         <div className="text-sm text-blue-800">
           <strong>Two ways to log volunteer hours:</strong> Use the <strong>Time Clock kiosk</strong> to punch in/out when volunteering on-site,
           or click <strong>"Log Volunteer Hours"</strong> above to manually submit hours for approval.
@@ -456,7 +459,7 @@ function StudentView() {
         </div>
         {allEntries.length === 0 ? (
           <div className="text-center py-12 text-surface-400">
-            <Heart size={32} className="mx-auto mb-2 text-surface-300" />
+            <Heart size={32} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
             <p className="text-sm">No volunteer hours logged yet</p>
             <p className="text-xs mt-1">Use the Time Clock or click "Log Volunteer Hours" to get started</p>
           </div>
@@ -465,13 +468,13 @@ function StudentView() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Date</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Time</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-right">Hours</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Source</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Status</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Description</th>
-                  <th className="px-4 py-2.5 w-16 print:hidden"></th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Date</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Time</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-right">Hours</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Source</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Status</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Description</th>
+                  <th scope="col" className="px-4 py-2.5 w-16 print:hidden"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -512,16 +515,18 @@ function StudentView() {
                     <td className="px-4 py-2.5 print:hidden">
                       {e.source === 'Time Clock' && e.status === 'Approved' && !e.hasPendingEdit && (
                         <button
+                          type="button"
                           onClick={() => setEditRequestEntry(e.rawEntry)}
-                          className="p-1.5 rounded-lg text-surface-400 hover:text-purple-600 hover:bg-purple-50 transition-colors"
+                          className="p-1.5 rounded-lg text-surface-400 hover:text-purple-600 hover:bg-purple-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                           title="Request time correction"
+                          aria-label={`Request time correction for ${e.dateDisplay || e.date || 'this entry'}`}
                         >
-                          <FilePenLine size={14} />
+                          <FilePenLine size={14} aria-hidden="true" />
                         </button>
                       )}
                       {e.hasPendingEdit && (
                         <span className="text-[10px] text-orange-500" title="Edit request pending instructor review">
-                          <Clock size={13} />
+                          <Clock size={13} aria-hidden="true" />
                         </span>
                       )}
                     </td>
@@ -584,6 +589,8 @@ function MidpointBadge({ status }) {
 // ─── Log Volunteer Hours Modal ───────────────────────────────────────────────
 
 function LogVolunteerModal({ saving, onSubmit, onClose }) {
+  const titleId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
   const [form, setForm] = useState({
     date: toDateStr(new Date()),
     startTime: '08:00',
@@ -607,15 +614,15 @@ function LogVolunteerModal({ saving, onSubmit, onClose }) {
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-surface-900 flex items-center gap-2">
-              <Heart size={16} className="text-purple-500" /> Log Volunteer Hours
+            <h3 id={titleId} className="font-semibold text-surface-900 flex items-center gap-2">
+              <Heart size={16} className="text-purple-500" aria-hidden="true" /> Log Volunteer Hours
             </h3>
             <p className="text-xs text-surface-400 mt-0.5">Requires instructor approval</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <Field label="Date *">
@@ -637,7 +644,7 @@ function LogVolunteerModal({ saving, onSubmit, onClose }) {
           </div>
           {previewHours > 0 && (
             <div className="flex items-center gap-2 text-sm text-surface-600 bg-purple-50 rounded-lg px-3 py-2">
-              <Clock size={14} className="text-purple-500" /> <span className="font-medium">{previewHours} hours</span>
+              <Clock size={14} className="text-purple-500" aria-hidden="true" /> <span className="font-medium">{previewHours} hours</span>
             </div>
           )}
           <Field label="Description *">
@@ -651,16 +658,16 @@ function LogVolunteerModal({ saving, onSubmit, onClose }) {
           </Field>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button
             onClick={handleSubmit}
             disabled={saving || !form.reason.trim() || previewHours <= 0}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            <Send size={14} /> Submit for Approval
+            {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Send size={14} aria-hidden="true" /> Submit for Approval
           </button>
         </div>
       </div>
@@ -672,6 +679,8 @@ function LogVolunteerModal({ saving, onSubmit, onClose }) {
 // ─── Log Club Activity Hours Modal ──────────────────────────────────────────
 
 function LogClubModal({ saving, onSubmit, onClose }) {
+  const titleId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
   const [form, setForm] = useState({
     date: toDateStr(new Date()),
     startTime: '08:00',
@@ -698,10 +707,10 @@ function LogClubModal({ saving, onSubmit, onClose }) {
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-surface-900 flex items-center gap-2">
+            <h3 id={titleId} className="font-semibold text-surface-900 flex items-center gap-2">
               <span className="w-5 h-5 rounded-full bg-orange-100 flex items-center justify-center">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ea580c" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
@@ -711,7 +720,7 @@ function LogClubModal({ saving, onSubmit, onClose }) {
             </h3>
             <p className="text-xs text-surface-400 mt-0.5">Requires instructor approval · 0.25 hrs credit per hour</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <Field label="Date *">
@@ -735,7 +744,7 @@ function LogClubModal({ saving, onSubmit, onClose }) {
             <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2.5 space-y-1">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-surface-500 flex items-center gap-1.5">
-                  <Clock size={13} className="text-orange-400" /> Actual time attended
+                  <Clock size={13} className="text-orange-400" aria-hidden="true" /> Actual time attended
                 </span>
                 <span className="font-medium text-surface-700">{rawHours}h</span>
               </div>
@@ -761,16 +770,16 @@ function LogClubModal({ saving, onSubmit, onClose }) {
           </Field>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button
             onClick={handleSubmit}
             disabled={saving || !form.reason.trim() || rawHours <= 0}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-40 flex items-center gap-1.5"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-40 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            <Send size={14} /> Submit for Approval
+            {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Send size={14} aria-hidden="true" /> Submit for Approval
           </button>
         </div>
       </div>
@@ -783,6 +792,8 @@ function LogClubModal({ saving, onSubmit, onClose }) {
 // Submitted as time_entry_requests → entry_type='Edit', needs instructor approval.
 
 function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
+  const titleId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
   const currentPunchIn  = isoToTimeInput(entry.punch_in)
   const currentPunchOut = isoToTimeInput(entry.punch_out)
   const currentDate     = isoToDateInput(entry.punch_in)
@@ -811,15 +822,15 @@ function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-surface-900 flex items-center gap-2">
-              <FilePenLine size={16} className="text-purple-500" /> Request Time Correction
+            <h3 id={titleId} className="font-semibold text-surface-900 flex items-center gap-2">
+              <FilePenLine size={16} className="text-purple-500" aria-hidden="true" /> Request Time Correction
             </h3>
             <p className="text-xs text-surface-400 mt-0.5">An instructor will review your request</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
 
         <div className="px-5 py-4 space-y-4">
@@ -860,7 +871,7 @@ function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
             </div>
             {previewHours > 0 && hasChanges && (
               <div className="mt-2 flex items-center gap-2 text-sm">
-                <Clock size={14} className="text-purple-500" />
+                <Clock size={14} className="text-purple-500" aria-hidden="true" />
                 <span className="text-surface-500">{fmtHoursMin(Number(currentHours))}</span>
                 <span className="text-purple-500 font-medium">→</span>
                 <span className="font-medium text-purple-700">{fmtHoursMin(previewHours)}</span>
@@ -890,16 +901,16 @@ function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
         </div>
 
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button
             onClick={handleSubmit}
             disabled={saving || !form.reason.trim() || !hasChanges || previewHours <= 0}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            {saving && <Loader2 size={14} className="animate-spin" />}
-            <Send size={14} /> Submit Request
+            {saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Send size={14} aria-hidden="true" /> Submit Request
           </button>
         </div>
       </div>
@@ -942,7 +953,7 @@ function InstructorView() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 className="animate-spin text-brand-500" size={32} />
+        <Loader2 className="animate-spin text-brand-500" size={32} aria-hidden="true" />
       </div>
     )
   }
@@ -953,7 +964,7 @@ function InstructorView() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
-            <Heart size={20} className="text-purple-600" />
+            <Heart size={20} className="text-purple-600" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">Volunteer Hours</h1>
@@ -963,14 +974,14 @@ function InstructorView() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={refresh} className="p-2 rounded-lg hover:bg-surface-100 text-surface-400" title="Refresh">
-            <RefreshCw size={16} />
+          <button type="button" onClick={refresh} aria-label="Refresh" className="p-2 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Refresh">
+            <RefreshCw size={16} aria-hidden="true" />
           </button>
           <button
             onClick={() => setShowReportModal(true)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium rounded-lg"
+            className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <FileText size={14} /> Report
+            <FileText size={14} aria-hidden="true" /> Report
           </button>
         </div>
       </div>
@@ -981,21 +992,21 @@ function InstructorView() {
           color="text-surface-700" bg="bg-surface-50" border="border-surface-200" />
         <SummaryCard label="Complete" value={summary.complete}
           color="text-emerald-700" bg="bg-emerald-50" border="border-emerald-200"
-          icon={<CheckCircle2 size={14} />} />
+          icon={<CheckCircle2 size={14} aria-hidden="true" />} />
         <SummaryCard label="On Track" value={summary.onTrack}
           color="text-blue-700" bg="bg-blue-50" border="border-blue-200"
-          icon={<TrendingUp size={14} />} />
+          icon={<TrendingUp size={14} aria-hidden="true" />} />
         <SummaryCard label="At Risk" value={summary.atRisk}
           color="text-amber-700" bg="bg-amber-50" border="border-amber-200"
-          icon={<AlertTriangle size={14} />} />
+          icon={<AlertTriangle size={14} aria-hidden="true" />} />
         <SummaryCard label="Behind" value={summary.behind}
           color="text-red-700" bg="bg-red-50" border="border-red-200"
-          icon={<XCircle size={14} />} />
+          icon={<XCircle size={14} aria-hidden="true" />} />
       </div>
 
       {/* Requirements Info */}
       <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-start gap-3">
-        <Award size={16} className="text-purple-500 mt-0.5 flex-shrink-0" />
+        <Award size={16} className="text-purple-500 mt-0.5 flex-shrink-0" aria-hidden="true" />
         <div className="text-sm text-purple-800">
           <strong>Requirements:</strong> {settings.midpointHours}h per half
           &nbsp;·&nbsp; Based on enrolled classes with volunteer requirement
@@ -1009,22 +1020,25 @@ function InstructorView() {
       {/* Search & Filter */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
           <input
             type="text"
             placeholder="Search students..."
+            aria-label="Search students"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
             className="input text-sm pl-9 w-full"
           />
         </div>
         <div className="flex items-center gap-1.5">
-          <Filter size={14} className="text-surface-400" />
+          <Filter size={14} className="text-surface-400" aria-hidden="true" />
           {['all', 'complete', 'on_track', 'at_risk', 'behind'].map(f => (
             <button
               key={f}
+              type="button"
+              aria-pressed={statusFilter === f}
               onClick={() => setStatusFilter(f)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-2.5 py-1 min-h-[44px] rounded-lg text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 statusFilter === f
                   ? 'bg-purple-600 text-white'
                   : 'bg-surface-100 text-surface-600 hover:bg-surface-200'
@@ -1040,7 +1054,7 @@ function InstructorView() {
       <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
         {filteredStudents.length === 0 ? (
           <div className="text-center py-12 text-surface-400">
-            <Heart size={32} className="mx-auto mb-2 text-surface-300" />
+            <Heart size={32} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
             <p className="text-sm">
               {students.length === 0 ? 'No students found' : 'No students match the current filter'}
             </p>
@@ -1050,15 +1064,15 @@ function InstructorView() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Student</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Approved</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Required</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Pending</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase w-[140px]">Progress</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">1st Half</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">2nd Half</th>
-                  <th className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Status</th>
-                  <th className="px-4 py-2.5 w-8"></th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase">Student</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Approved</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Required</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Pending</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase w-[140px]">Progress</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">1st Half</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">2nd Half</th>
+                  <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 uppercase text-center">Status</th>
+                  <th scope="col" className="px-4 py-2.5 w-8"><span className="sr-only">Details</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -1107,9 +1121,17 @@ function InstructorView() {
                       </td>
                       <td className="px-4 py-3 text-center"><OverallStatusBadge status={s.overallStatus} /></td>
                       <td className="px-4 py-3 text-center">
-                        {expandedStudent === s.email
-                          ? <ChevronUp size={16} className="text-surface-400" />
-                          : <ChevronDown size={16} className="text-surface-400" />}
+                        <button
+                          type="button"
+                          aria-expanded={expandedStudent === s.email}
+                          aria-label={`${expandedStudent === s.email ? 'Collapse' : 'Expand'} details for ${s.name}`}
+                          onClick={ev => { ev.stopPropagation(); setExpandedStudent(expandedStudent === s.email ? null : s.email) }}
+                          className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] rounded-lg text-surface-400 hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                        >
+                          {expandedStudent === s.email
+                            ? <ChevronUp size={16} aria-hidden="true" />
+                            : <ChevronDown size={16} aria-hidden="true" />}
+                        </button>
                       </td>
                     </tr>
                     {expandedStudent === s.email && (
@@ -1319,7 +1341,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
         <button
           type="button"
           onClick={() => setShowAddModal(true)}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-1 transition-colors print:hidden"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-1 transition-colors print:hidden min-h-[44px]"
           aria-label={`Add a new volunteer or club activity entry for ${studentName}`}
         >
           <Plus size={14} aria-hidden="true" /> Add Entry
@@ -1374,7 +1396,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                     <button
                       type="button"
                       onClick={() => setEditTarget(e)}
-                      className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 transition-colors"
+                      className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 transition-colors min-h-[44px]"
                       aria-label={`Edit ${e.source} entry from ${fmtDate(e.date)}`}
                       title="Edit this entry directly"
                     >
@@ -1383,7 +1405,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                     <button
                       type="button"
                       onClick={() => setDeleteTarget(e)}
-                      className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors"
+                      className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors min-h-[44px]"
                       aria-label={`Delete ${e.source} entry from ${fmtDate(e.date)}`}
                       title="Delete this entry"
                     >
@@ -1439,7 +1461,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                           endTimeInput: (ed.end_time || '').substring(0, 5),
                           hours: parseFloat(ed.total_hours) || 0,
                         })}
-                        className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 transition-colors"
+                        className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-brand-600 hover:bg-brand-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 transition-colors min-h-[44px]"
                         aria-label={`Edit pending edit request ${ed.request_id}`}
                         title="Edit this request"
                       >
@@ -1457,7 +1479,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
                           timeIn: fmtTime(ed.start_time),
                           timeOut: fmtTime(ed.end_time),
                         })}
-                        className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors"
+                        className="inline-flex items-center justify-center w-7 h-8 rounded text-surface-300 hover:text-red-600 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 transition-colors min-h-[44px]"
                         aria-label={`Delete pending edit request ${ed.request_id}`}
                         title="Delete this request"
                       >
@@ -1580,7 +1602,7 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
             aria-label="Close dialog without saving"
           >
             <X size={18} aria-hidden="true" />
@@ -1767,7 +1789,7 @@ function InstructorAddVolunteerModal({ studentName, studentEmail, saving, onSave
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
             aria-label="Close dialog"
           >
             <X size={18} aria-hidden="true" />
@@ -1985,7 +2007,7 @@ function InstructorDeleteVolunteerModal({ entry, studentName, saving, onConfirm,
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-surface-100 text-surface-400 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
             aria-label="Close dialog without deleting"
           >
             <X size={18} aria-hidden="true" />
@@ -2059,6 +2081,8 @@ function InstructorDeleteVolunteerModal({ entry, studentName, saving, onConfirm,
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function VolunteerReportModal({ students, settings, summary, onClose, onGenerate }) {
+  const titleId = useId()
+  const dialogRef = useDialogA11y(true, onClose)
   const [mode, setMode] = useState('all') // 'all' | 'individual'
   const [selectedEmail, setSelectedEmail] = useState('')
   const [loading, setLoading] = useState(false)
@@ -2080,7 +2104,7 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
         : sortedStudents.filter(s => s.email === selectedEmail)
 
       if (targetStudents.length === 0) {
-        alert('No students found for selection.')
+        toast.error('No students found for selection.')
         return
       }
 
@@ -2188,45 +2212,49 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="bg-white rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-teal-100 flex items-center justify-center">
-              <FileText size={16} className="text-teal-600" />
+              <FileText size={16} className="text-teal-600" aria-hidden="true" />
             </div>
             <div>
-              <h3 className="font-semibold text-surface-900">Generate Volunteer Report</h3>
+              <h3 id={titleId} className="font-semibold text-surface-900">Generate Volunteer Report</h3>
               <p className="text-xs text-surface-400">Printable summary with entry detail</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
 
         <div className="px-5 py-5 space-y-4">
           {/* Mode Toggle */}
           <div>
-            <label className="block text-xs font-medium text-surface-600 mb-1.5">Report Type</label>
-            <div className="flex gap-2">
+            <div id="vh-report-type-label" className="block text-xs font-medium text-surface-600 mb-1.5">Report Type</div>
+            <div className="flex gap-2" role="group" aria-labelledby="vh-report-type-label">
               <button
+                type="button"
+                aria-pressed={mode === 'all'}
                 onClick={() => setMode('all')}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] rounded-lg text-sm font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                   mode === 'all'
                     ? 'bg-teal-50 border-teal-300 text-teal-700'
                     : 'bg-white border-surface-200 text-surface-500 hover:bg-surface-50'
                 }`}
               >
-                <Users size={15} /> All Students
+                <Users size={15} aria-hidden="true" /> All Students
               </button>
               <button
+                type="button"
+                aria-pressed={mode === 'individual'}
                 onClick={() => setMode('individual')}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] rounded-lg text-sm font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                   mode === 'individual'
                     ? 'bg-teal-50 border-teal-300 text-teal-700'
                     : 'bg-white border-surface-200 text-surface-500 hover:bg-surface-50'
                 }`}
               >
-                <User size={15} /> Individual Student
+                <User size={15} aria-hidden="true" /> Individual Student
               </button>
             </div>
           </div>
@@ -2251,7 +2279,7 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
 
           {/* Info */}
           <div className="bg-surface-50 rounded-lg px-3 py-2.5 text-xs text-surface-500 flex items-start gap-2">
-            <Calendar size={14} className="text-surface-400 mt-0.5 shrink-0" />
+            <Calendar size={14} className="text-surface-400 mt-0.5 shrink-0" aria-hidden="true" />
             <span>
               {mode === 'all'
                 ? `Generates a full report for all ${students.length} students showing hours, progress, and entry detail. Each student gets their own section with page breaks for printing.`
@@ -2277,15 +2305,15 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
         </div>
 
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button
             onClick={handleGenerate}
             disabled={loading || !isValid}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-40 flex items-center gap-1.5"
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-40 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+            {loading ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
             {loading ? 'Generating…' : mode === 'all' ? 'Generate Class Report' : 'Generate Report'}
           </button>
         </div>
@@ -2323,15 +2351,15 @@ function VolunteerReportView({ reportData, onClose }) {
       <div className="flex items-center justify-between mb-5 print:hidden">
         <button
           onClick={onClose}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-100 rounded-lg border border-surface-200"
+          className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-100 rounded-lg border border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
-          <ArrowLeft size={14} /> Back to Volunteer Hours
+          <ArrowLeft size={14} aria-hidden="true" /> Back to Volunteer Hours
         </button>
         <button
           onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-lg"
+          className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
-          <Printer size={14} /> Print Report
+          <Printer size={14} aria-hidden="true" /> Print Report
         </button>
       </div>
 
@@ -2343,7 +2371,7 @@ function VolunteerReportView({ reportData, onClose }) {
           <div className="flex items-start justify-between">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <Heart size={20} className="text-purple-600 print:hidden" />
+                <Heart size={20} className="text-purple-600 print:hidden" aria-hidden="true" />
                 <h1 className="text-2xl font-bold text-surface-900">
                   {mode === 'all' ? 'Volunteer Hours — Class Report' : 'Volunteer Hours — Individual Report'}
                 </h1>
@@ -2406,14 +2434,14 @@ function VolunteerReportView({ reportData, onClose }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 print:bg-gray-100">
-                  <th className="px-3 py-2 text-left text-xs font-semibold text-surface-500 uppercase">Student</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Approved Hrs</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Required</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Progress</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">1st Half</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">2nd Half</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Status</th>
-                  <th className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Entries</th>
+                  <th scope="col" className="px-3 py-2 text-left text-xs font-semibold text-surface-500 uppercase">Student</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Approved Hrs</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Required</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Progress</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">1st Half</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">2nd Half</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Status</th>
+                  <th scope="col" className="px-3 py-2 text-center text-xs font-semibold text-surface-500 uppercase">Entries</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -2555,13 +2583,13 @@ function VolunteerReportView({ reportData, onClose }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-surface-50 print:bg-gray-100 text-left">
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Date</th>
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Time</th>
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase text-right">Hours</th>
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Source</th>
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Status</th>
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Description</th>
-                    <th className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Approved By</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Date</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Time</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase text-right">Hours</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Source</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Status</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Description</th>
+                    <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 uppercase">Approved By</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-surface-100">
