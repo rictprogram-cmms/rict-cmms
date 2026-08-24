@@ -65,7 +65,8 @@ export default function LabSignupPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
+              aria-pressed={activeTab === tab.id}
+              className={`flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-lg text-sm font-medium whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 activeTab === tab.id
                   ? 'bg-brand-600 text-white shadow-sm'
                   : 'bg-white text-surface-600 hover:bg-surface-50 border border-surface-200'
@@ -139,6 +140,9 @@ function WeeklySignupTab() {
   const [reason, setReason] = useState('')
   // Instructor slot detail modal
   const [slotDetail, setSlotDetail] = useState(null) // { date, hour, students: [], loading }
+  // a11y: dialog refs for the two modals owned by this tab (focus trap / Escape / focus restore)
+  const reasonDialogRef = useDialogA11y(!!reasonModal, () => { setReasonModal(null); setReason('') })
+  const slotDialogRef = useDialogA11y(!!slotDetail, () => setSlotDetail(null))
   // Make-up shortfall warning before submit: { weekIdx, lines: [string] }
   const [makeupWarn, setMakeupWarn] = useState(null)
 
@@ -547,7 +551,7 @@ function WeeklySignupTab() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Loader2 size={24} className="animate-spin text-brand-600" />
+        <Loader2 size={24} className="animate-spin text-brand-600" aria-hidden="true" />
       </div>
     )
   }
@@ -557,14 +561,14 @@ function WeeklySignupTab() {
       {/* Week Navigation */}
       <div className="bg-white rounded-xl border border-surface-200 p-4">
         <div className="flex items-center justify-center gap-4">
-          <button onClick={prevWeek} className="p-2 rounded-lg hover:bg-surface-100">
-            <ChevronLeft size={20} />
+          <button type="button" onClick={prevWeek} aria-label="Previous weeks" className="p-2 rounded-lg hover:bg-surface-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center">
+            <ChevronLeft size={20} aria-hidden="true" />
           </button>
-          <span className="text-sm font-semibold text-surface-900 min-w-[200px] text-center">
+          <span className="text-sm font-semibold text-surface-900 min-w-[200px] text-center" role="status" aria-live="polite">
             {weeks.length > 0 ? `${weeks[0].weekTitle} — ${weeks[weeks.length - 1].weekTitle}` : 'Loading...'}
           </span>
-          <button onClick={nextWeek} className="p-2 rounded-lg hover:bg-surface-100">
-            <ChevronRight size={20} />
+          <button type="button" onClick={nextWeek} aria-label="Next weeks" className="p-2 rounded-lg hover:bg-surface-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center">
+            <ChevronRight size={20} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -582,7 +586,7 @@ function WeeklySignupTab() {
               <div className="flex items-center gap-2">
                 {week.deadlinePassed && !isInstructor && (
                   <span className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded-md flex items-center gap-1">
-                    <AlertTriangle size={12} /> Deadline Passed — Changes Require Approval
+                    <AlertTriangle size={12} aria-hidden="true" /> Deadline Passed — Changes Require Approval
                   </span>
                 )}
               </div>
@@ -610,7 +614,7 @@ function WeeklySignupTab() {
                         aria-pressed={isActive}
                         aria-label={`${cls.courseId} ${cls.courseName}: ${progress} of ${required} hours.${muLabel}`}
                         title={muHours > 0 ? muLabel.trim() : undefined}
-                        className={`flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg text-left border-2 transition-all min-w-[140px] ${
+                        className={`flex flex-col items-start gap-0.5 px-3 py-2.5 min-h-[44px] rounded-lg text-left border-2 transition-all min-w-[140px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                           isActive
                             ? 'border-brand-500 bg-brand-50 shadow-sm'
                             : 'border-surface-200 hover:border-surface-300 hover:bg-surface-50'
@@ -650,7 +654,7 @@ function WeeklySignupTab() {
                             }`}
                             aria-hidden="true"
                           >
-                            <RotateCcw size={9} /> +{muHours} make-up{muStatus ? ` · ${muStatus.covered}/${muStatus.needed}` : ''}
+                            <RotateCcw size={9} aria-hidden="true" /> +{muHours} make-up{muStatus ? ` · ${muStatus.covered}/${muStatus.needed}` : ''}
                           </span>
                         )}
                       </button>
@@ -665,9 +669,9 @@ function WeeklySignupTab() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-surface-50">
-                    <th className="px-3 py-2 text-left text-surface-500 font-medium w-20">Time</th>
+                    <th scope="col" className="px-3 py-2 text-left text-surface-500 font-medium w-20">Time</th>
                     {week.days.map(day => (
-                      <th key={day.date} className="px-2 py-2 text-center font-medium text-surface-500">
+                      <th scope="col" key={day.date} className="px-2 py-2 text-center font-medium text-surface-500">
                         <div>{day.dayShort}</div>
                         <div className="text-surface-900 text-sm">{day.dayNum}</div>
                       </th>
@@ -701,7 +705,7 @@ function WeeklySignupTab() {
                         const canToggleCancel = isMine
 
                         // Build cell styles
-                        let cellClass = 'w-full h-11 rounded text-[10px] font-bold transition-all relative flex flex-col items-center justify-center '
+                        let cellClass = 'w-full h-11 rounded text-[10px] font-bold transition-all relative flex flex-col items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 '
                         let cellContent = null
 
                         // Helper: render course ID + name
@@ -830,13 +834,13 @@ function WeeklySignupTab() {
                     {/* New selections by class */}
                     {Object.entries(getWeekAllNewSelections(wIdx)).map(([cid, arr]) => (
                       <span key={cid} className="inline-flex items-center gap-1 px-2 py-1 bg-brand-100 text-brand-700 rounded-md">
-                        <Plus size={10} /> {arr.length} new for <strong>{cid === '__instructor__' ? 'Override' : cid}</strong>
+                        <Plus size={10} aria-hidden="true" /> {arr.length} new for <strong>{cid === '__instructor__' ? 'Override' : cid}</strong>
                       </span>
                     ))}
                     {/* Cancellations */}
                     {getWeekCancellations(wIdx).length > 0 && (
                       <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded-md">
-                        <Trash2 size={10} /> {getWeekCancellations(wIdx).length} to cancel
+                        <Trash2 size={10} aria-hidden="true" /> {getWeekCancellations(wIdx).length} to cancel
                       </span>
                     )}
                   </div>
@@ -862,16 +866,16 @@ function WeeklySignupTab() {
                           return prev.filter(id => !weekCancelIds.includes(id))
                         })
                       }}
-                      className="px-3 py-2 text-xs font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-50"
+                      className="px-3 py-2 text-xs font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
                     >
                       Clear Changes
                     </button>
                     <button
                       onClick={() => handleSubmit(wIdx)}
                       disabled={saving}
-                      className="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2"
+                      className="px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
                     >
-                      {saving ? <Loader2 size={14} className="animate-spin" /> : (
+                      {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : (
                         <>
                           {week.deadlinePassed && !isInstructor ? 'Submit for Approval' : 'Submit'}
                           <span className="bg-white/20 px-1.5 py-0.5 rounded text-[10px]">{changeCount}</span>
@@ -946,9 +950,9 @@ function WeeklySignupTab() {
       {/* Post-Deadline Reason Modal */}
       {reasonModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => { setReasonModal(null); setReason('') }}>
-          <div className="bg-white rounded-xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+          <div ref={reasonDialogRef} role="dialog" aria-modal="true" aria-labelledby="ls-reason-title" className="bg-white rounded-xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-surface-200">
-              <h3 className="text-base font-semibold text-surface-900">Change Request</h3>
+              <h3 id="ls-reason-title" className="text-base font-semibold text-surface-900">Change Request</h3>
               <p className="text-xs text-surface-500 mt-1">
                 The Sunday midnight deadline has passed. Your changes will be sent to your instructor for approval.
               </p>
@@ -971,10 +975,12 @@ function WeeklySignupTab() {
                 )}
               </div>
 
-              <label className="block text-sm font-medium text-surface-700 mb-1.5">
-                Reason for change <span className="text-red-500">*</span>
+              <label htmlFor="ls-reason" className="block text-sm font-medium text-surface-700 mb-1.5">
+                Reason for change <span className="text-red-500" aria-hidden="true">*</span><span className="sr-only"> (required)</span>
               </label>
               <textarea
+                id="ls-reason"
+                required
                 value={reason}
                 onChange={e => setReason(e.target.value)}
                 rows={3}
@@ -987,16 +993,16 @@ function WeeklySignupTab() {
             <div className="px-5 py-3 border-t border-surface-200 flex justify-end gap-2">
               <button
                 onClick={() => { setReasonModal(null); setReason('') }}
-                className="px-4 py-2.5 text-sm font-medium text-surface-600 bg-surface-100 rounded-lg hover:bg-surface-200"
+                className="px-4 py-2.5 text-sm font-medium text-surface-600 bg-surface-100 rounded-lg hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
               >
                 Cancel
               </button>
               <button
                 onClick={handlePostDeadlineSubmit}
                 disabled={saving || !reason.trim()}
-                className="px-4 py-2.5 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2"
+                className="px-4 py-2.5 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
               >
-                {saving ? <Loader2 size={14} className="animate-spin" /> : 'Submit Request'}
+                {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : 'Submit Request'}
               </button>
             </div>
           </div>
@@ -1006,23 +1012,23 @@ function WeeklySignupTab() {
       {/* Instructor Slot Detail Modal */}
       {slotDetail && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={e => e.target === e.currentTarget && setSlotDetail(null)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+          <div ref={slotDialogRef} role="dialog" aria-modal="true" aria-labelledby="ls-slot-title" className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="px-5 py-4 border-b border-surface-200 flex items-center justify-between bg-brand-50">
               <div>
-                <h3 className="text-sm font-bold text-surface-900">{slotDetail.label}</h3>
+                <h3 id="ls-slot-title" className="text-sm font-bold text-surface-900">{slotDetail.label}</h3>
                 <p className="text-xs text-surface-500 mt-0.5">
                   {slotDetail.currentSignups}/{slotDetail.maxStudents} signed up
                 </p>
               </div>
-              <button onClick={() => setSlotDetail(null)} className="p-1 hover:bg-surface-200 rounded-lg">
-                <X size={18} className="text-surface-400" />
+              <button type="button" onClick={() => setSlotDetail(null)} aria-label="Close" className="p-1 hover:bg-surface-200 rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center">
+                <X size={18} className="text-surface-400" aria-hidden="true" />
               </button>
             </div>
 
             <div className="max-h-80 overflow-y-auto">
               {slotDetail.loading ? (
                 <div className="flex justify-center py-8">
-                  <Loader2 size={20} className="animate-spin text-brand-600" />
+                  <Loader2 size={20} className="animate-spin text-brand-600" aria-hidden="true" />
                 </div>
               ) : slotDetail.error ? (
                 <div role="alert" className="p-6 text-center text-red-700 text-sm">{slotDetail.error}</div>
@@ -1051,7 +1057,7 @@ function WeeklySignupTab() {
             <div className="px-5 py-3 border-t border-surface-100 bg-surface-50 text-right">
               <button
                 onClick={() => setSlotDetail(null)}
-                className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-50"
+                className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
               >
                 Close
               </button>
@@ -1072,6 +1078,7 @@ function MySignupsTab() {
   const { signups, loading, refresh } = useMySignups()
   const { cancelSignup, saving } = useLabSignupActions()
   const [classMap, setClassMap] = useState({})
+  const [confirmCancelId, setConfirmCancelId] = useState(null)
 
   // Load class name map
   useEffect(() => {
@@ -1088,18 +1095,32 @@ function MySignupsTab() {
     loadClasses()
   }, [])
 
-  const handleCancel = async (signupId) => {
-    if (!confirm('Cancel this signup?')) return
-    const result = await cancelSignup(signupId)
+  // Cancel flow: button → ConfirmDialog (accessible, replaces window.confirm) → cancelSignup
+  const handleCancel = (signupId) => setConfirmCancelId(signupId)
+  const confirmCancel = async () => {
+    const id = confirmCancelId
+    setConfirmCancelId(null)
+    if (!id) return
+    const result = await cancelSignup(id)
     if (result.success) refresh()
   }
 
   if (loading) {
-    return <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" /></div>
+    return <div className="flex justify-center py-20" role="status" aria-label="Loading your signups"><Loader2 size={24} className="animate-spin text-brand-600" aria-hidden="true" /></div>
   }
 
   return (
     <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
+      <ConfirmDialog
+        open={!!confirmCancelId}
+        title="Cancel this signup?"
+        message="The slot will be released so another student can take it."
+        confirmLabel="Cancel signup"
+        cancelLabel="Keep it"
+        busy={saving}
+        onConfirm={confirmCancel}
+        onClose={() => setConfirmCancelId(null)}
+      />
       <div className="px-4 py-3 border-b border-surface-200 bg-surface-50">
         <h3 className="text-sm font-semibold text-surface-900">My Upcoming Signups</h3>
       </div>
@@ -1131,9 +1152,11 @@ function MySignupsTab() {
               </div>
               {s.canCancel && (
                 <button
+                  type="button"
                   onClick={() => handleCancel(s.signupId)}
                   disabled={saving}
-                  className="px-3 py-1.5 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50"
+                  aria-label={`Cancel signup for ${s.dateDisplay}`}
+                  className="px-3 py-1.5 text-xs font-medium bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
                 >
                   Cancel
                 </button>
@@ -1332,9 +1355,9 @@ function LabCalendarTab() {
       <div className="px-4 py-3 border-b border-surface-200 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-surface-900">Lab Calendar</h3>
         <div className="flex items-center gap-2">
-          <button onClick={prevMonth} className="p-1.5 rounded hover:bg-surface-100"><ChevronLeft size={16} /></button>
+          <button type="button" onClick={prevMonth} aria-label="Previous month" className="p-1.5 rounded hover:bg-surface-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><ChevronLeft size={16} aria-hidden="true" /></button>
           <span className="text-sm font-medium min-w-[140px] text-center">{monthNames[month]} {year}</span>
-          <button onClick={nextMonth} className="p-1.5 rounded hover:bg-surface-100"><ChevronRight size={16} /></button>
+          <button type="button" onClick={nextMonth} aria-label="Next month" className="p-1.5 rounded hover:bg-surface-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><ChevronRight size={16} aria-hidden="true" /></button>
         </div>
       </div>
 
@@ -1428,21 +1451,21 @@ function LabCalendarTab() {
           <div className="bg-white rounded-xl w-full max-w-md shadow-xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="px-4 py-3 border-b border-surface-200 flex items-center justify-between flex-shrink-0">
               <span className="font-semibold text-sm">{editingDay.date}</span>
-              <button onClick={() => setEditingDay(null)} aria-label="Close" className="text-surface-400 hover:text-surface-600"><X size={18} /></button>
+              <button onClick={() => setEditingDay(null)} aria-label="Close" className="text-surface-400 hover:text-surface-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"><X size={18} aria-hidden="true" /></button>
             </div>
             <div className="p-4 space-y-4 overflow-y-auto">
               {/* Status Toggle */}
               <div className="flex gap-2">
                 <button
                   onClick={() => setEditingDay(d => ({ ...d, status: 'Open' }))}
-                  className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-medium transition-colors ${
+                  className={`flex-1 py-2.5 min-h-[44px] rounded-lg border-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                     editingDay.status === 'Open' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-surface-200 text-surface-500'
                   }`}
                   aria-pressed={editingDay.status === 'Open'}
                 >Lab Open</button>
                 <button
                   onClick={() => setEditingDay(d => ({ ...d, status: 'Closed' }))}
-                  className={`flex-1 py-2.5 rounded-lg border-2 text-sm font-medium transition-colors ${
+                  className={`flex-1 py-2.5 min-h-[44px] rounded-lg border-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                     editingDay.status === 'Closed' ? 'border-red-500 bg-red-50 text-red-700' : 'border-surface-200 text-surface-500'
                   }`}
                   aria-pressed={editingDay.status === 'Closed'}
@@ -1499,15 +1522,15 @@ function LabCalendarTab() {
             </div>
             <div className="px-4 py-3 border-t border-surface-200 flex justify-between flex-shrink-0">
               <button onClick={handleDelete} disabled={saving}
-                className="px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50">
+                className="px-3 py-2 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
                 Remove
               </button>
               <div className="flex gap-2">
-                <button onClick={() => setEditingDay(null)} className="px-3 py-2 text-xs font-medium bg-surface-100 rounded-lg hover:bg-surface-200">
+                <button onClick={() => setEditingDay(null)} className="px-3 py-2 text-xs font-medium bg-surface-100 rounded-lg hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
                   Cancel
                 </button>
                 <button onClick={handleSave} disabled={saving}
-                  className="px-4 py-2 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
+                  className="px-4 py-2 text-xs font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
                   {saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : 'Save'}
                 </button>
               </div>
@@ -1612,11 +1635,11 @@ function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
           <button
             type="button"
             onClick={() => removeBlock(idx)}
-            className="p-1.5 text-red-500 hover:bg-red-50 rounded border border-transparent hover:border-red-200 self-end"
+            className="p-1.5 text-red-500 hover:bg-red-50 rounded border border-transparent hover:border-red-200 self-end min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"
             aria-label={`Remove closed period ${idx + 1}`}
             title="Remove this closed period"
           >
-            <Trash2 size={14} />
+            <Trash2 size={14} aria-hidden="true" />
           </button>
         </div>
       ))}
@@ -1625,7 +1648,7 @@ function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
         <button
           type="button"
           onClick={() => addBlock()}
-          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-brand-700 bg-brand-50 border border-brand-200 rounded hover:bg-brand-100"
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-brand-700 bg-brand-50 border border-brand-200 rounded hover:bg-brand-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
         >
           <Plus size={12} aria-hidden="true" /> Add closed period
         </button>
@@ -1634,7 +1657,7 @@ function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
         <button
           type="button"
           onClick={() => addBlock({ start: '14:00', end: '15:00', reason: '' })}
-          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200"
+          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
           title="Add a 2:00–3:00 PM block"
         >
           + 2-3 PM
@@ -1642,7 +1665,7 @@ function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
         <button
           type="button"
           onClick={() => addBlock({ start: '09:00', end: '10:00', reason: '' })}
-          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200"
+          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
           title="Add a 9:00–10:00 AM block"
         >
           + 9-10 AM
@@ -1657,7 +1680,7 @@ function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
             if (closeStart >= endMin) return
             addBlock({ start: minutesToTimeStr(closeStart), end: minutesToTimeStr(endMin), reason: '' })
           }}
-          className="px-2.5 py-1.5 text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200"
+          className="px-2.5 py-1.5 min-h-[44px] text-[11px] font-medium text-surface-700 bg-surface-100 border border-surface-200 rounded hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
           title="Closed afternoon (noon to end of day)"
         >
           + Afternoon
@@ -1721,8 +1744,8 @@ function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmai
               Existing signups will be cancelled
             </span>
           </div>
-          <button onClick={onCancel} aria-label="Cancel" className="text-surface-500 hover:text-surface-700">
-            <X size={18} />
+          <button onClick={onCancel} aria-label="Cancel" className="text-surface-500 hover:text-surface-700 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
@@ -1782,14 +1805,14 @@ function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmai
           <button
             onClick={onCancel}
             disabled={saving}
-            className="px-3 py-2 text-xs font-medium bg-surface-100 rounded-lg hover:bg-surface-200 disabled:opacity-50"
+            className="px-3 py-2 text-xs font-medium bg-surface-100 rounded-lg hover:bg-surface-200 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
           >
             Back to edit
           </button>
           <button
             onClick={onConfirm}
             disabled={saving}
-            className="px-4 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-1.5"
+            className="px-4 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
           >
             {saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />}
             {saving ? 'Working…' : `Cancel ${conflicts.length} signup${conflicts.length === 1 ? '' : 's'} & save closure`}
@@ -1840,17 +1863,17 @@ function DailyRosterTab() {
       <div className="px-4 py-3 border-b border-surface-200 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-surface-900">Daily Roster</h3>
         <div className="flex items-center gap-2">
-          <input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)}
-            className="px-3 py-1.5 border border-surface-200 rounded-lg text-sm" />
+          <input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)} aria-label="Roster date"
+            className="px-3 py-1.5 min-h-[44px] border border-surface-200 rounded-lg text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
           <button onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600">
-            <Printer size={14} /> Print
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 text-white text-sm font-medium rounded-lg hover:bg-emerald-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <Printer size={14} aria-hidden="true" /> Print
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 size={24} className="animate-spin text-brand-600" /></div>
+        <div className="flex justify-center py-12"><Loader2 size={24} className="animate-spin text-brand-600" aria-hidden="true" /></div>
       ) : grouped.length === 0 ? (
         <div className="p-8 text-center text-surface-400 text-sm">No signups for this date</div>
       ) : (
@@ -1985,7 +2008,7 @@ function AdminSignupTab() {
       <div className="p-4 space-y-4">
         {/* Warning */}
         <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
-          <Info size={16} className="flex-shrink-0 mt-0.5" />
+          <Info size={16} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
           <span>This bypasses the Sunday midnight deadline. Use when a student needs to sign up after the deadline has passed.</span>
         </div>
 
@@ -2051,9 +2074,9 @@ function AdminSignupTab() {
         <button
           onClick={handleSignup}
           disabled={saving || !selectedStudent || !selectedSlot || !dateStr}
-          className="w-full py-3 bg-emerald-500 text-white font-semibold rounded-lg hover:bg-emerald-600 disabled:bg-surface-300 disabled:cursor-not-allowed transition-colors"
+          className="w-full py-3 bg-emerald-500 text-white font-semibold rounded-lg hover:bg-emerald-600 disabled:bg-surface-300 disabled:cursor-not-allowed transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
         >
-          {saving ? <Loader2 size={16} className="animate-spin mx-auto" /> : 'Sign Up Student'}
+          {saving ? <Loader2 size={16} className="animate-spin mx-auto" aria-hidden="true" /> : 'Sign Up Student'}
         </button>
       </div>
     </div>

@@ -47,7 +47,7 @@ Do one page per session. Start with student-facing pages.
 
 Student-facing first:
 - [x] `TimeCardsPage.jsx` — delivered 2026-08-24: `ModalOverlay` now uses `useDialogA11y` + `role="dialog"`; `Field` links labels via `useId()`; aria-labels on 11 icon buttons; keyboard toggle for week rows; `aria-pressed` on tabs; focus rings + 44px on all buttons; `scope="col"` on all headers; decorative icons hidden; loading spinners announced
-- [ ] `LabSignupPage.jsx` (4 icon-only buttons, 6 clickable divs)
+- [x] `LabSignupPage.jsx` — delivered 2026-08-24: Change Request + Slot Detail modals wired to `useDialogA11y` with `role="dialog"`; `window.confirm` on My Signups replaced with `ConfirmDialog`; aria-labels on nav/close/cancel buttons; reason textarea labelled; week title is a live region; tabs `aria-pressed`; focus rings + 44px on all buttons; `scope="col"`; decorative icons hidden
 - [ ] `AbsenceRequestPage.jsx`
 - [ ] `AssetCheckoutsPage.jsx`
 - [ ] `VolunteerHoursPage.jsx` (~21 unlabeled, 6 clickable divs)
