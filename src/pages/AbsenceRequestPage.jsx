@@ -68,15 +68,17 @@ function formatWeekLabel(weekStartStr) {
 /**
  * Semester label for a date-only string, matching the classes-table naming
  * convention ("Spring 2026"). Derived from the date so every request gets a
- * semester even when no class was selected: Jan-May = Spring, Jun-Aug = Summer,
- * Sep-Dec = Fall.
+ * semester even when no class was selected: Jan-Jun = Spring, Jul-Dec = Fall
+ * (no summer term).
  */
 function semesterOf(dateStr) {
   if (!dateStr) return null
   const d = new Date(dateStr + 'T00:00:00')
   if (isNaN(d.getTime())) return null
+  // RICT has no summer term: Jan–Jun = Spring, Jul–Dec = Fall. (Fall classes
+  // start in August; a late-August absence must land in Fall, not "Summer".)
   const m = d.getMonth()
-  const season = m <= 4 ? 'Spring' : m <= 7 ? 'Summer' : 'Fall'
+  const season = m <= 5 ? 'Spring' : 'Fall'
   return `${season} ${d.getFullYear()}`
 }
 
@@ -330,7 +332,7 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
             onClick={onClose}
             disabled={saving}
             className="p-2 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close"
           >
             <X size={18} aria-hidden="true" />
@@ -512,7 +514,7 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
               onClick={onClose}
               disabled={saving}
               className="px-4 py-2 text-sm font-medium text-surface-600 rounded-lg hover:bg-surface-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
             >
               Cancel
             </button>
@@ -521,7 +523,7 @@ function SubmitAbsenceModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
               disabled={saving}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-brand-600 text-white
                 rounded-lg hover:bg-brand-700 active:bg-brand-800 disabled:opacity-50 shadow-sm
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 min-h-[44px]"
             >
               {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <CalendarOff size={14} aria-hidden="true" />}
               Submit Request
@@ -686,7 +688,7 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
               onClick={onClose}
               disabled={saving}
               className="px-4 py-2 text-sm font-medium text-surface-600 rounded-lg hover:bg-surface-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
             >
               Cancel
             </button>
@@ -695,7 +697,7 @@ function ApproveAbsenceModal({ open, request, onClose, onConfirm, saving }) {
               disabled={saving}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-green-600 text-white
                 rounded-lg hover:bg-green-700 active:bg-green-800 disabled:opacity-50 shadow-sm
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 min-h-[44px]"
             >
               {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
               Approve
@@ -748,7 +750,7 @@ function DeleteConfirmModal({ open, request, onClose, onConfirm, saving }) {
               onClick={onClose}
               disabled={saving}
               className="px-4 py-2 text-sm font-medium text-surface-600 rounded-lg hover:bg-surface-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
             >
               Cancel
             </button>
@@ -757,7 +759,7 @@ function DeleteConfirmModal({ open, request, onClose, onConfirm, saving }) {
               disabled={saving}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-red-600 text-white
                 rounded-lg hover:bg-red-700 active:bg-red-800 disabled:opacity-50 shadow-sm
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 min-h-[44px]"
             >
               {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
               Delete
@@ -810,7 +812,7 @@ function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onAppr
               disabled={saving}
               className="p-1.5 rounded-lg text-surface-400 hover:text-red-600 hover:bg-red-50
                 disabled:opacity-50 disabled:cursor-not-allowed
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               aria-label={`Delete request ${req.request_id}`}
               title="Delete (super admin)"
             >
@@ -889,7 +891,7 @@ function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onAppr
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
                 bg-green-600 text-white rounded-lg hover:bg-green-700 active:bg-green-800
                 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 min-h-[44px]"
               aria-label={`Approve request ${req.request_id}`}
             >
               <CheckCircle2 size={12} aria-hidden="true" />
@@ -901,7 +903,7 @@ function RequestCard({ req, isReviewer, canMarkMakeup, canDelete, saving, onAppr
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
                 bg-white text-red-600 border border-red-200 rounded-lg hover:bg-red-50 active:bg-red-100
                 disabled:opacity-50 disabled:cursor-not-allowed
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 min-h-[44px]"
               aria-label={`Reject request ${req.request_id}`}
             >
               <XCircle size={12} aria-hidden="true" />
@@ -975,7 +977,7 @@ export default function AbsenceRequestPage() {
   const [deleteTarget, setDeleteTarget] = useState(null)
 
   // Instructor filters
-  const [statusFilter, setStatusFilter] = useState('Pending')
+  const [statusFilter, setStatusFilter] = useState('All') // default: show every status
   const [semesterFilter, setSemesterFilter] = useState(() => semesterOf(todayStr()) || 'All')
   const [weekFilter, setWeekFilter] = useState('All')
   const [searchTerm, setSearchTerm] = useState('')

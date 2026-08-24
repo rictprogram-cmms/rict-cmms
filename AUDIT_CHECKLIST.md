@@ -48,7 +48,7 @@ Do one page per session. Start with student-facing pages.
 Student-facing first:
 - [x] `TimeCardsPage.jsx` — delivered 2026-08-24: `ModalOverlay` now uses `useDialogA11y` + `role="dialog"`; `Field` links labels via `useId()`; aria-labels on 11 icon buttons; keyboard toggle for week rows; `aria-pressed` on tabs; focus rings + 44px on all buttons; `scope="col"` on all headers; decorative icons hidden; loading spinners announced
 - [x] `LabSignupPage.jsx` — delivered 2026-08-24: Change Request + Slot Detail modals wired to `useDialogA11y` with `role="dialog"`; `window.confirm` on My Signups replaced with `ConfirmDialog`; aria-labels on nav/close/cancel buttons; reason textarea labelled; week title is a live region; tabs `aria-pressed`; focus rings + 44px on all buttons; `scope="col"`; decorative icons hidden
-- [ ] `AbsenceRequestPage.jsx`
+- [x] `AbsenceRequestPage.jsx` — audited 2026-08-24: already compliant (dialogs, labels, live regions, focus rings); only fix needed was 44px targets on 10 buttons
 - [ ] `AssetCheckoutsPage.jsx`
 - [ ] `VolunteerHoursPage.jsx` (~21 unlabeled, 6 clickable divs)
 - [ ] `DashboardPage.jsx`
@@ -75,7 +75,8 @@ Instructor / admin:
 - [ ] `WeeklyLabsTrackerPage.jsx` (overlay)
 - [ ] `PMPage.jsx` (`outline-none`)
 - [ ] `components/NotificationBell.jsx` (7 clickable divs)
-- [ ] `components/RejectionModal.jsx`, `components/holds/StudentHoldsTab.jsx`, `components/EmulationBar.jsx` (dialog/overlay without hook)
+- [x] `components/RejectionModal.jsx` — verified: has its own focus trap/Escape; audit flag was a false positive
+- [ ] `components/holds/StudentHoldsTab.jsx`, `components/EmulationBar.jsx` (dialog/overlay without hook)
 - [ ] `AppLayout.jsx` (5 clickable divs, overlay)
 
 ### Documents
