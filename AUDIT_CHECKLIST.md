@@ -62,7 +62,7 @@ Student-facing first:
 
 Instructor / admin:
 - [x] `WorkOrdersPage.jsx` — delivered 2026-08-24: all 7 dialogs were already on `useDialogA11y` and the row open-link was already a button; fixed 15 form labels linked by id + 8 loose controls labelled (PO line items, hours/mins group, filters); parts search results and remove-part are real buttons; approve/reject/remove icon buttons named; `scope="col"`; 15 material icons hidden; embedded CSS: 44px on `.btn`, `.btn-sm`, `.action-btn`, `.modal-close`, `.filter-select`, visible `.form-input:focus` ring
-- [ ] `SettingsPage.jsx` (~22 unlabeled, 6 clickable divs)
+- [x] `SettingsPage.jsx` — delivered 2026-08-24: 22 form controls linked to labels (CRUD sections via `useId`, class form, duplicate-class form); both `window.confirm` deletes (CRUD items, classes) → `ConfirmDialog`; Duplicate Class + Manage Enrollment modals on `useDialogA11y` with `role="dialog"`; `scope="col"` on 13 headers; focus rings + 44px on all buttons; `settings.css` tab/segmented/day/clear buttons raised to 44px. (Icons, live regions, and the three other dialogs were already compliant.)
 - [ ] `ProgramBudgetPage.jsx` (~23 unlabeled, 1 icon-only button)
 - [ ] `SyllabusWizard.jsx` (~21 unlabeled, 7 `outline-none`, 1 icon-only button)
 - [ ] `InstructorToolsPage.jsx` (6 `outline-none`)

@@ -52,6 +52,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import WeeklyReminderHistoryModal from '@/components/WeeklyReminderHistoryModal'
 import toast from 'react-hot-toast'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2095,7 +2096,7 @@ function ReminderEditor({ scope, initialMessage, onSave }) {
             <button
               type="button"
               onClick={() => handleChange('')}
-              className="text-[11px] text-surface-400 hover:text-red-500 transition-colors focus-visible:ring-2 focus-visible:ring-red-400 rounded px-1"
+              className="text-[11px] text-surface-400 hover:text-red-500 transition-colors focus-visible:ring-2 focus-visible:ring-red-400 rounded px-1 min-h-[44px]"
             >
               Clear message
             </button>
@@ -2708,7 +2709,7 @@ function WeeklyLabsSettings() {
           <button
             type="button"
             onClick={() => setHistoryOpen(true)}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700 px-2.5 py-1.5 rounded-md hover:bg-indigo-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700 px-2.5 py-1.5 rounded-md hover:bg-indigo-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 min-h-[44px]"
           >
             <History size={13} aria-hidden="true" />
             View history
@@ -3374,6 +3375,8 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
   const { items, loading, refresh } = useItemsHook()
   const actions = useActionsHook()
   const [editing, setEditing] = useState(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const fieldIdBase = useId()
   const [form, setForm] = useState({})
   const [search, setSearch] = useState('')
 
@@ -3408,8 +3411,11 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
     } catch {}
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('Delete this item?')) return
+  const handleDelete = (id) => setConfirmDeleteId(id)
+  const deleteConfirmed = async () => {
+    const id = confirmDeleteId
+    setConfirmDeleteId(null)
+    if (id == null) return
     try {
       await actions.deleteItem(id)
       refresh()
@@ -3444,7 +3450,7 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
       <button
         type="button"
         onClick={startAdd}
-        className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 px-2 py-1 rounded"
+        className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 px-2 py-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
       >
         <Plus size={12} aria-hidden="true" /> Add
       </button>
@@ -3453,6 +3459,15 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
 
   return (
     <SettingCard icon={Icon} title={title} count={items.length} actions={headerActions}>
+      <ConfirmDialog
+        open={confirmDeleteId != null}
+        title="Delete this item?"
+        message="This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        onConfirm={deleteConfirmed}
+        onClose={() => setConfirmDeleteId(null)}
+      />
       {/* Add/Edit Form */}
       {editing && (
         <div className="px-4 py-3 bg-brand-50 border-b border-brand-100 space-y-2">
@@ -3462,9 +3477,10 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
           <div className="flex flex-wrap gap-2">
             {columns.filter(col => col.key !== idColumn || editing === 'new').map(col => (
               <div key={col.key} className={`${col.wide ? 'flex-[2]' : 'flex-1'} min-w-[120px]`}>
-                <label className="text-[10px] text-surface-500 font-medium block mb-0.5">{col.label}</label>
+                <label htmlFor={`${fieldIdBase}-${col.key}`} className="text-[10px] text-surface-500 font-medium block mb-0.5">{col.label}</label>
                 {col.type === 'select' ? (
                   <select
+                    id={`${fieldIdBase}-${col.key}`}
                     value={form[col.key] || ''}
                     onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
                     className="input text-sm"
@@ -3491,6 +3507,7 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
                   </div>
                 ) : (
                   <input
+                    id={`${fieldIdBase}-${col.key}`}
                     type={col.type || 'text'}
                     value={form[col.key] || ''}
                     onChange={e => setForm(f => ({ ...f, [col.key]: e.target.value }))}
@@ -3507,14 +3524,14 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
               type="button"
               onClick={handleSave}
               disabled={actions.saving}
-              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 hover:bg-brand-700 disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 hover:bg-brand-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
               {actions.saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />} Save
             </button>
             <button
               type="button"
               onClick={cancel}
-              className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs hover:bg-surface-200"
+              className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
               Cancel
             </button>
@@ -3533,9 +3550,9 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
             <thead>
               <tr className="bg-surface-50 text-left">
                 {columns.map(col => (
-                  <th key={col.key} className="px-4 py-2 text-xs font-semibold text-surface-600">{col.label}</th>
+                  <th scope="col" key={col.key} className="px-4 py-2 text-xs font-semibold text-surface-600">{col.label}</th>
                 ))}
-                <th className="px-4 py-2 text-xs font-semibold text-surface-600 w-20">Actions</th>
+                <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 w-20">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-100">
@@ -3566,7 +3583,7 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
                       <button
                         type="button"
                         onClick={() => startEdit(item)}
-                        className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600"
+                        className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                         aria-label={`Edit ${item[idColumn] || 'item'}`}
                         title="Edit"
                       >
@@ -3575,7 +3592,7 @@ function CrudSection({ title, icon: Icon, useItemsHook, useActionsHook, idColumn
                       <button
                         type="button"
                         onClick={() => handleDelete(item[idColumn])}
-                        className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500"
+                        className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                         aria-label={`Delete ${item[idColumn] || 'item'}`}
                         title="Delete"
                       >
@@ -3769,6 +3786,7 @@ function ClassesSection() {
   // weeks counter. Updates in real time when the Lab Open Days toggle changes.
   const { weekEndOffset } = useLabVisibleDays()
   const [editing, setEditing] = useState(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
   const [form, setForm] = useState({})
   const [enrollmentClass, setEnrollmentClass] = useState(null)
   const [duplicateClass, setDuplicateClass] = useState(null)
@@ -3896,8 +3914,11 @@ function ClassesSection() {
     } catch {}
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('Delete this class? Students will need to be re-enrolled in any replacement.')) return
+  const handleDelete = (id) => setConfirmDeleteId(id)
+  const deleteConfirmed = async () => {
+    const id = confirmDeleteId
+    setConfirmDeleteId(null)
+    if (id == null) return
     try {
       await actions.deleteItem(id)
       refresh()
@@ -3991,7 +4012,7 @@ function ClassesSection() {
         <button
           type="button"
           onClick={() => setShowInactive(v => !v)}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] rounded-lg text-xs font-medium transition-colors border ${
             showInactive
               ? 'bg-surface-100 text-surface-700 border-surface-200'
               : 'bg-white text-surface-400 border-surface-200 hover:text-surface-600'
@@ -4005,7 +4026,7 @@ function ClassesSection() {
       <button
         type="button"
         onClick={startAdd}
-        className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 px-2 py-1 rounded"
+        className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 px-2 py-1 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
       >
         <Plus size={12} aria-hidden="true" /> Add Class
       </button>
@@ -4018,6 +4039,15 @@ function ClassesSection() {
 
   return (
     <div className="space-y-4">
+      <ConfirmDialog
+        open={confirmDeleteId != null}
+        title="Delete this class?"
+        message="Students will need to be re-enrolled in any replacement class. This cannot be undone."
+        confirmLabel="Delete class"
+        cancelLabel="Cancel"
+        onConfirm={deleteConfirmed}
+        onClose={() => setConfirmDeleteId(null)}
+      />
       <SettingCard
         icon={GraduationCap}
         title="Classes"
@@ -4033,44 +4063,44 @@ function ClassesSection() {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Course ID *</label>
-                <input value={form.course_id} onChange={e => setForm(f => ({ ...f, course_id: e.target.value }))}
+                <label htmlFor="st-fld-course-id-1" className="text-[10px] text-surface-500 font-medium">Course ID *</label>
+                <input id="st-fld-course-id-1" value={form.course_id} onChange={e => setForm(f => ({ ...f, course_id: e.target.value }))}
                   className="input text-sm" placeholder="RICT1630" />
               </div>
               <div className="col-span-2 md:col-span-1">
-                <label className="text-[10px] text-surface-500 font-medium">Course Name</label>
-                <input value={form.course_name} onChange={e => setForm(f => ({ ...f, course_name: e.target.value }))}
+                <label htmlFor="st-fld-course-name-2" className="text-[10px] text-surface-500 font-medium">Course Name</label>
+                <input id="st-fld-course-name-2" value={form.course_name} onChange={e => setForm(f => ({ ...f, course_name: e.target.value }))}
                   className="input text-sm" placeholder="Production Automation" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Required Hours/wk</label>
-                <input type="number" value={form.required_hours}
+                <label htmlFor="st-fld-required-hours-wk-3" className="text-[10px] text-surface-500 font-medium">Required Hours/wk</label>
+                <input id="st-fld-required-hours-wk-3" type="number" value={form.required_hours}
                   onChange={e => setForm(f => ({ ...f, required_hours: parseFloat(e.target.value) || 0 }))}
                   className="input text-sm" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Instructor</label>
-                <input value={form.instructor} onChange={e => setForm(f => ({ ...f, instructor: e.target.value }))}
+                <label htmlFor="st-fld-instructor-4" className="text-[10px] text-surface-500 font-medium">Instructor</label>
+                <input id="st-fld-instructor-4" value={form.instructor} onChange={e => setForm(f => ({ ...f, instructor: e.target.value }))}
                   className="input text-sm" />
               </div>
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Semester</label>
-                <input value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
+                <label htmlFor="st-fld-semester-5" className="text-[10px] text-surface-500 font-medium">Semester</label>
+                <input id="st-fld-semester-5" value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
                   className="input text-sm" placeholder="Spring 2026" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Status</label>
-                <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
+                <label htmlFor="st-fld-status-6" className="text-[10px] text-surface-500 font-medium">Status</label>
+                <select id="st-fld-status-6" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
                   <option>Active</option>
                   <option>Inactive</option>
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Tracking Type</label>
-                <select value={form.tracking_type} onChange={e => setForm(f => ({ ...f, tracking_type: e.target.value }))} className="input text-sm">
+                <label htmlFor="st-fld-tracking-type-7" className="text-[10px] text-surface-500 font-medium">Tracking Type</label>
+                <select id="st-fld-tracking-type-7" value={form.tracking_type} onChange={e => setForm(f => ({ ...f, tracking_type: e.target.value }))} className="input text-sm">
                   <option value="Weekly">Weekly</option>
                   <option value="Daily">Daily</option>
                   <option value="None">None</option>
@@ -4091,12 +4121,12 @@ function ClassesSection() {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Start Date *</label>
-                <input type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
+                <label htmlFor="st-fld-start-date-8" className="text-[10px] text-surface-500 font-medium">Start Date *</label>
+                <input id="st-fld-start-date-8" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">End Date *</label>
-                <input type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} className="input text-sm" />
+                <label htmlFor="st-fld-end-date-9" className="text-[10px] text-surface-500 font-medium">End Date *</label>
+                <input id="st-fld-end-date-9" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} className="input text-sm" />
               </div>
             </div>
 
@@ -4109,20 +4139,20 @@ function ClassesSection() {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
-                <input type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
+                <label htmlFor="st-fld-spring-break-start-10" className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
+                <input id="st-fld-spring-break-start-10" type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Spring Break End</label>
-                <input type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} className="input text-sm" />
+                <label htmlFor="st-fld-spring-break-end-11" className="text-[10px] text-surface-500 font-medium">Spring Break End</label>
+                <input id="st-fld-spring-break-end-11" type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} className="input text-sm" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Finals Start</label>
-                <input type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} className="input text-sm" />
+                <label htmlFor="st-fld-finals-start-12" className="text-[10px] text-surface-500 font-medium">Finals Start</label>
+                <input id="st-fld-finals-start-12" type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} className="input text-sm" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-500 font-medium">Finals End</label>
-                <input type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} className="input text-sm" />
+                <label htmlFor="st-fld-finals-end-13" className="text-[10px] text-surface-500 font-medium">Finals End</label>
+                <input id="st-fld-finals-end-13" type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} className="input text-sm" />
               </div>
             </div>
 
@@ -4161,14 +4191,14 @@ function ClassesSection() {
                 type="button"
                 onClick={handleSave}
                 disabled={actions.saving}
-                className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 hover:bg-brand-700 disabled:opacity-50"
+                className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 hover:bg-brand-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
                 {actions.saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />} Save
               </button>
               <button
                 type="button"
                 onClick={() => { setEditing(null); setForm({}) }}
-                className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs hover:bg-surface-200"
+                className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
                 Cancel
               </button>
@@ -4186,17 +4216,17 @@ function ClassesSection() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">ID</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Course ID</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Course Name</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Hrs/wk</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Weeks</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Instructor</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Semester</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Dates</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Enrolled</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600">Status</th>
-                  <th className="px-4 py-2 text-xs font-semibold text-surface-600 w-32">Actions</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">ID</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Course ID</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Course Name</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Hrs/wk</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Weeks</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Instructor</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Semester</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Dates</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Enrolled</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Status</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 w-32">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -4281,12 +4311,12 @@ function ClassesSection() {
                         <div className="flex gap-1">
                           <button type="button" onClick={() => setEnrollmentClass(cls)}
                             title="Manage Enrollment" aria-label={`Manage enrollment for ${cls.course_id}`}
-                            className="p-1 rounded hover:bg-blue-50 text-surface-400 hover:text-blue-600">
+                            className="p-1 rounded hover:bg-blue-50 text-surface-400 hover:text-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                             <Users size={13} aria-hidden="true" />
                           </button>
                           <button type="button" onClick={() => setDuplicateClass(cls)}
                             title="Duplicate Class (new semester)" aria-label={`Duplicate ${cls.course_id} for new semester`}
-                            className="p-1 rounded hover:bg-violet-50 text-surface-400 hover:text-violet-600">
+                            className="p-1 rounded hover:bg-violet-50 text-surface-400 hover:text-violet-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                             <Copy size={13} aria-hidden="true" />
                           </button>
                           <button type="button" onClick={() => handleToggleStatus(cls, enrolledCount)}
@@ -4295,7 +4325,7 @@ function ClassesSection() {
                             aria-label={isInactive
                               ? `Reactivate ${cls.course_id} — currently inactive, show to students`
                               : `Archive ${cls.course_id} — currently active, hide from students`}
-                            className={`p-1 rounded text-surface-400 disabled:opacity-40 disabled:cursor-not-allowed ${
+                            className={`p-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded text-surface-400 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
                               isInactive
                                 ? 'hover:bg-emerald-50 hover:text-emerald-600'
                                 : 'hover:bg-amber-50 hover:text-amber-600'
@@ -4306,12 +4336,12 @@ function ClassesSection() {
                           </button>
                           <button type="button" onClick={() => startEdit(cls)}
                             title="Edit Class" aria-label={`Edit ${cls.course_id}`}
-                            className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600">
+                            className="p-1 rounded hover:bg-surface-100 text-surface-400 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                             <Edit3 size={13} aria-hidden="true" />
                           </button>
                           <button type="button" onClick={() => handleDelete(cls.class_id)}
                             title="Delete Class" aria-label={`Delete ${cls.course_id}`}
-                            className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500">
+                            className="p-1 rounded hover:bg-red-50 text-surface-400 hover:text-red-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                             <Trash2 size={13} aria-hidden="true" />
                           </button>
                         </div>
@@ -4446,6 +4476,7 @@ function ClassArchiveConfirmModal({ confirm, saving, onCancel, onConfirm }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
+  const dialogRef = useDialogA11y(true, onClose)
   // Live lab-open days — keeps this modal's Week Preview consistent with the
   // Classes-tab preview and the actual tracker weeks.
   const { weekEndOffset } = useLabVisibleDays()
@@ -4513,15 +4544,15 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="st-dup-title" className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-surface-900 flex items-center gap-2">
+            <h3 id="st-dup-title" className="text-sm font-bold text-surface-900 flex items-center gap-2">
               <Copy size={14} className="text-violet-500" aria-hidden="true" /> Duplicate Class
             </h3>
             <p className="text-xs text-surface-500 mt-0.5">{cls.course_id} — {cls.course_name}</p>
           </div>
-          <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close">
+          <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close">
             <X size={16} aria-hidden="true" />
           </button>
         </div>
@@ -4534,36 +4565,36 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">New Semester *</label>
-              <input value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
+              <label htmlFor="st-fld-new-semester-14" className="text-[10px] text-surface-500 font-medium">New Semester *</label>
+              <input id="st-fld-new-semester-14" value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
                 className="input text-sm" placeholder="Fall 2026" />
             </div>
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">Start Date *</label>
-              <input type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
+              <label htmlFor="st-fld-start-date-15" className="text-[10px] text-surface-500 font-medium">Start Date *</label>
+              <input id="st-fld-start-date-15" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
             </div>
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">End Date *</label>
-              <input type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} className="input text-sm" />
+              <label htmlFor="st-fld-end-date-16" className="text-[10px] text-surface-500 font-medium">End Date *</label>
+              <input id="st-fld-end-date-16" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} className="input text-sm" />
             </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
-              <input type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
+              <label htmlFor="st-fld-spring-break-start-17" className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
+              <input id="st-fld-spring-break-start-17" type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
             </div>
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">Spring Break End</label>
-              <input type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} className="input text-sm" />
+              <label htmlFor="st-fld-spring-break-end-18" className="text-[10px] text-surface-500 font-medium">Spring Break End</label>
+              <input id="st-fld-spring-break-end-18" type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} className="input text-sm" />
             </div>
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">Finals Start</label>
-              <input type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} className="input text-sm" />
+              <label htmlFor="st-fld-finals-start-19" className="text-[10px] text-surface-500 font-medium">Finals Start</label>
+              <input id="st-fld-finals-start-19" type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} className="input text-sm" />
             </div>
             <div>
-              <label className="text-[10px] text-surface-500 font-medium">Finals End</label>
-              <input type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} className="input text-sm" />
+              <label htmlFor="st-fld-finals-end-20" className="text-[10px] text-surface-500 font-medium">Finals End</label>
+              <input id="st-fld-finals-end-20" type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} className="input text-sm" />
             </div>
           </div>
 
@@ -4591,12 +4622,12 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
         <div className="px-5 py-3 border-t border-surface-100 flex gap-2">
           <button type="button" onClick={handleSave} disabled={saving}
-            className="btn-primary text-sm gap-1.5 flex-1">
+            className="btn-primary text-sm gap-1.5 flex-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
             {saving ? 'Creating…' : 'Create Duplicate'}
           </button>
           <button type="button" onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">
+            className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
         </div>
@@ -4610,6 +4641,7 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function EnrollmentModal({ cls, onClose, onSaved }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -4717,13 +4749,13 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="st-enroll-title" className="bg-white rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-surface-900">Manage Enrollment</h3>
+            <h3 id="st-enroll-title" className="text-sm font-bold text-surface-900">Manage Enrollment</h3>
             <p className="text-xs text-surface-500">{cls.course_id} — {cls.course_name}</p>
           </div>
-          <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close">
+          <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close">
             <X size={16} aria-hidden="true" />
           </button>
         </div>
@@ -4794,12 +4826,12 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
 
         <div className="px-5 py-3 border-t border-surface-100 flex gap-2">
           <button type="button" onClick={handleSave} disabled={saving}
-            className="btn-primary text-sm gap-1.5 flex-1">
+            className="btn-primary text-sm gap-1.5 flex-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
             {saving ? 'Saving...' : 'Save Enrollment'}
           </button>
           <button type="button" onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">
+            className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
         </div>

@@ -38,7 +38,7 @@
   position: absolute; right: 6px; top: 50%;
   transform: translateY(-50%);
   background: none; border: none;
-  width: 32px; height: 32px;
+  width: 44px; height: 44px; /* WCAG 2.5.5 target size */
   border-radius: 6px; cursor: pointer; color: #868e96;
   display: inline-flex; align-items: center; justify-content: center;
 }
@@ -114,7 +114,7 @@
   border-radius: 8px; cursor: pointer;
   white-space: nowrap;
   transition: background 0.15s, color 0.15s;
-  min-height: 36px;
+  min-height: 44px; /* WCAG 2.5.5 target size */
   flex-shrink: 0;
   font-family: inherit;
 }
@@ -287,7 +287,7 @@ details[open] .settings-disclosure-summary-icon { transform: rotate(90deg); }
 }
 .settings-segmented-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 14px;
+  padding: 8px 14px; min-height: 44px; /* WCAG 2.5.5 target size */
   font-size: 0.8rem; font-weight: 600;
   background: white; color: #6c757d;
   border: none; cursor: pointer;
@@ -362,7 +362,7 @@ textarea.settings-input {
 /* ── Day picker (for lab_visible_days) ───────────────────────────────────── */
 .settings-day-picker { display: flex; gap: 4px; }
 .settings-day-btn {
-  width: 36px; height: 36px;
+  width: 44px; height: 44px; /* WCAG 2.5.5 target size */
   border-radius: 8px;
   border: 1px solid #dee2e6;
   background: white; color: #adb5bd;
