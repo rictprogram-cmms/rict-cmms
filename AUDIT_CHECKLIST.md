@@ -9,8 +9,8 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
 
 ## P1 — Privacy & security
 
-- [ ] **Remove `create-users.mjs` from the repo and rewrite history** — script delivered (`scripts/purge-create-users.bat`); run on Aaron's machine (`git filter-repo --path create-users.mjs --invert-paths`). File contains 24 real names/emails + shared temp password `RICTtemp2026!` in a public repo.
-  - [ ] Confirm no accounts still use the temp password; force reset for any that do.
+- [x] **Remove `create-users.mjs` from the repo and rewrite history** — done 2026-08-24 (`8e51988`); working copies re-cloned (`git filter-repo --path create-users.mjs --invert-paths`). File contained real names, emails and a shared temp password in a public repo.
+  - [x] Confirm no accounts still use the temp password — only one never-signed-in account (already Archived); delete its auth user in Supabase → Authentication → Users
   - [x] Script no longer needed — users are created through the app. Delete outright.
   - [x] Add `*.local.*` and `seed/` to `.gitignore`. (delivered)
 - [ ] **Implement `firstLastInitial()`** in `src/lib/utils.js` and apply on student-visible surfaces:
@@ -32,7 +32,7 @@ Do one page per session. Start with student-facing pages.
 - [ ] Add skip-to-content link in `AppLayout.jsx` (target `<main id="main-content">`) — WCAG 2.4.1
 - [ ] Build `LabeledField` / `LabeledSelect` helper using `useId()` so new forms are correct by default
 - [ ] Replace `window.confirm` / `alert` (72 uses) with `ConfirmDialog` — also fixes kiosk behaviour
-- [x] Wrap non-`AppLayout` routes in `PageErrorBoundary` (delivered — `App.jsx`, `PageErrorBoundary.jsx` kiosk mode): `/tv-display`, `/time-clock`, `/lab-status`, `/login`, `/orders/receive`, `/reset-password`, `/change-password`
+- [x] Wrap non-`AppLayout` routes in `PageErrorBoundary` — on main `8e51988`: `/tv-display`, `/time-clock`, `/lab-status`, `/login`, `/orders/receive`, `/reset-password`, `/change-password`
 
 ### Per-page sweep — for each: labels (`htmlFor`/`id` or `aria-label`), keyboard-operable clickables (`role`, `tabIndex`, `onKeyDown`), `useDialogA11y` on every modal, `focus-visible` rings, icon-button `aria-label`, `alt` text, 44px targets, live regions
 
@@ -82,7 +82,7 @@ Instructor / admin:
 
 ## P4 — Code health
 
-- [x] **Route-level code splitting** (delivered — main chunk 3.8 MB → 1.0 MB) — `React.lazy()` + `<Suspense fallback={<PageLoading />}>` in `App.jsx`. Main chunk is 3.8 MB (984 KB gz). Keep `LoginPage`, `DashboardPage`, kiosk pages eager.
+- [x] **Route-level code splitting** — on main `8e51988` (main chunk 3.8 MB → 1.0 MB) — `React.lazy()` + `<Suspense fallback={<PageLoading />}>` in `App.jsx`. Main chunk is 3.8 MB (984 KB gz). Keep `LoginPage`, `DashboardPage`, kiosk pages eager.
 - [ ] **Delete dead files** (verify unreferenced first):
   - [ ] `src/pages/NotificationBell.jsx` (1,461-line stale duplicate of `components/NotificationBell.jsx`)
   - [ ] `src/hooks/useWorkOrders.js`
@@ -94,6 +94,7 @@ Instructor / admin:
 - [ ] **Deferred pooled-scanner follow-ups** (not on main):
   - [ ] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx`
   - [ ] Hide pooled asset's checkout indicator in `AssetsPage.jsx`
+- [ ] Add `.gitattributes` with `*.bat text eol=crlf` so batch files keep CRLF on commit
 - [ ] Dependency bumps (minor, safe): `@supabase/supabase-js`, `react-router-dom`, `react`, `date-fns`, `docx`, `fflate`
 - [ ] Dependency bumps (major, plan separately): `vite` 6→8, `@vitejs/plugin-react` 4→6, `tailwindcss` 3→4, `lucide-react` 0.468→1.x
 - [ ] Main chunk still ~1 MB: `docx`/`fflate` are pulled in statically somewhere eager (likely `AppLayout` → `SyllabusLibraryModal` or `syllabusDocx.js`). Make those imports dynamic to shrink it further.
