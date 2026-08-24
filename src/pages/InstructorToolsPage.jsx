@@ -123,7 +123,7 @@ function CommonSectionsModal({ onClose }) {
               <p className="text-xs text-surface-400">Shared settings and boilerplate that appear in all syllabi</p>
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
             <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
@@ -135,13 +135,13 @@ function CommonSectionsModal({ onClose }) {
             {/* Logo — pinned at top with a special style */}
             <button
               onClick={() => setActiveKey('shared_logo')}
-              className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+              className={`w-full text-left px-3 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 activeKey === 'shared_logo'
                   ? 'bg-brand-50 text-brand-700'
                   : 'text-surface-600 hover:bg-surface-50'
               }`}
             >
-              <ImageIcon size={13} className={activeKey === 'shared_logo' ? 'text-brand-500' : 'text-surface-400'} />
+              <ImageIcon size={13} className={activeKey === 'shared_logo' ? 'text-brand-500' : 'text-surface-400'} aria-hidden="true" />
               <span>College Logo</span>
               {sharedLogo && (
                 <span className="ml-auto w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="Logo uploaded" />
@@ -156,7 +156,7 @@ function CommonSectionsModal({ onClose }) {
               <button
                 key={k}
                 onClick={() => setActiveKey(k)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`w-full text-left px-3 py-2 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                   activeKey === k
                     ? 'bg-brand-50 text-brand-700'
                     : 'text-surface-600 hover:bg-surface-50'
@@ -197,7 +197,7 @@ function CommonSectionsModal({ onClose }) {
                     </div>
                     <div className="flex flex-col gap-3 pt-1">
                       <div className="flex items-center gap-2 text-sm text-emerald-700 font-medium">
-                        <Check size={15} className="text-emerald-500" />
+                        <Check size={15} className="text-emerald-500" aria-hidden="true" />
                         Logo uploaded — auto-applied to all syllabi
                       </div>
                       <p className="text-xs text-surface-400 leading-relaxed">
@@ -206,20 +206,20 @@ function CommonSectionsModal({ onClose }) {
                       </p>
                       <div className="flex gap-2 mt-1">
                         <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg cursor-pointer hover:bg-surface-50 transition-colors text-surface-600">
-                          <Upload size={12} /> Replace
+                          <Upload size={12} aria-hidden="true" /> Replace
                           <input type="file" accept="image/png,image/jpeg,image/gif,image/svg+xml" className="hidden" onChange={handleLogoUpload} />
                         </label>
                         <button
                           onClick={() => setSharedLogo('')}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-red-100 text-red-500 rounded-lg hover:bg-red-50 transition-colors"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-red-100 text-red-500 rounded-lg hover:bg-red-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                         >
-                          <Trash2 size={12} /> Remove
+                          <Trash2 size={12} aria-hidden="true" /> Remove
                         </button>
                       </div>
                       <div className="mt-1">
-                        <p className="text-xs text-surface-400 mb-1">Or replace with a URL:</p>
+                        <p className="text-xs text-surface-400 mb-1" aria-hidden="true">Or replace with a URL:</p>
                         <input
-                          type="url"
+                          type="url" aria-label="Replace logo with image URL"
                           value={sharedLogo && !sharedLogo.startsWith('data:') ? sharedLogo : ''}
                           onChange={e => setSharedLogo(e.target.value)}
                           placeholder="https://..."
@@ -232,7 +232,7 @@ function CommonSectionsModal({ onClose }) {
                   /* Upload prompt */
                   <label className="flex flex-col items-center justify-center gap-3 border-2 border-dashed border-surface-200 rounded-2xl p-10 cursor-pointer hover:border-brand-300 hover:bg-brand-50/30 transition-colors group">
                     <div className="w-14 h-14 rounded-2xl bg-surface-100 group-hover:bg-brand-100 flex items-center justify-center transition-colors">
-                      <Upload size={24} className="text-surface-400 group-hover:text-brand-500 transition-colors" />
+                      <Upload size={24} className="text-surface-400 group-hover:text-brand-500 transition-colors" aria-hidden="true" />
                     </div>
                     <div className="text-center">
                       <p className="text-sm font-semibold text-surface-700 group-hover:text-brand-700 transition-colors">
@@ -247,9 +247,9 @@ function CommonSectionsModal({ onClose }) {
                 {/* URL fallback */}
                 {!sharedLogo && (
                   <div>
-                    <p className="text-xs text-surface-400 mb-1.5">Or enter a direct image URL:</p>
+                    <p className="text-xs text-surface-400 mb-1.5" aria-hidden="true">Or enter a direct image URL:</p>
                     <input
-                      type="url"
+                      type="url" aria-label="Logo image URL"
                       value=""
                       onChange={e => setSharedLogo(e.target.value)}
                       placeholder="https://www.sctcc.edu/path/to/logo.png"
@@ -288,15 +288,15 @@ function CommonSectionsModal({ onClose }) {
             These settings are shared across all courses. The wizard only touches course-specific data.
           </p>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              <Save size={14} />
+              <Save size={14} aria-hidden="true" />
               {saving ? 'Saving…' : 'Save All Settings'}
             </button>
           </div>
@@ -445,7 +445,7 @@ function Tile({ tile, onOpen, onSettings }) {
         {/* Icon + badge + settings row */}
         <div className="flex items-start justify-between mb-4">
           <div className={`w-11 h-11 rounded-xl ${tile.iconBg} flex items-center justify-center`}>
-            <Icon size={22} className={tile.iconColor} />
+            <Icon size={22} className={tile.iconColor} aria-hidden="true" />
           </div>
           <div className="flex items-center gap-2">
             <span className={`text-[11px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full ${tile.badgeColor}`}>
@@ -456,9 +456,9 @@ function Tile({ tile, onOpen, onSettings }) {
                 onClick={e => { e.stopPropagation(); onSettings() }}
                 aria-label="Edit common sections"
                 title="Edit common sections"
-                className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
+                className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               >
-                <Settings size={14} />
+                <Settings size={14} aria-hidden="true" />
               </button>
             )}
           </div>
@@ -480,13 +480,18 @@ function Tile({ tile, onOpen, onSettings }) {
         {/* Bottom action row */}
         <div className="border-t border-surface-100 mt-5 pt-4">
           {tile.clickable ? (
-            <div className={`flex items-center gap-1.5 text-xs font-medium ${tile.key === 'required-tools' ? 'text-amber-600' : 'text-brand-600'}`}>
-              <ChevronRight size={13} />
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); onOpen() }}
+              aria-label={`Open ${tile.title}`}
+              className={`flex items-center gap-1.5 min-h-[44px] px-1 -mx-1 rounded text-xs font-medium ${tile.key === 'required-tools' ? 'text-amber-600' : 'text-brand-600'}`+' focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1'}
+            >
+              <ChevronRight size={13} aria-hidden="true" />
               <span>{tile.key === 'required-tools' ? 'Open catalog' : tile.key === 'syllabus-library' ? 'Open Syllabus Library' : tile.key === 'new-course-proposal' ? 'Open Course Proposal Wizard' : tile.key === 'course-revision' ? 'Open Revision Wizards' : tile.key === 'program-planner' ? 'Open Program Planner' : tile.key === 'program-cost' ? 'Open Program Cost' : tile.key === 'course-outline-export' ? 'Open Course Outline Export' : tile.key === 'course-end-date' ? 'Open Course End Date' : 'Open Syllabus Generator'}</span>
-            </div>
+            </button>
           ) : (
             <div className="flex items-center gap-1.5 text-xs text-surface-400">
-              <ChevronRight size={13} className="text-surface-300" />
+              <ChevronRight size={13} className="text-surface-300" aria-hidden="true" />
               <span>Under construction — check back soon</span>
             </div>
           )}
@@ -539,7 +544,7 @@ function ToolModal({ tool, onSave, onClose, saving }) {
             </div>
             <h2 id="tool-modal-title" className="text-base font-bold text-surface-900">{isEdit ? 'Edit Item' : 'Add Item'}</h2>
           </div>
-          <button onClick={onClose} aria-label="Close dialog" className="w-7 h-7 rounded-lg hover:bg-surface-100 flex items-center justify-center transition-colors">
+          <button onClick={onClose} aria-label="Close dialog" className="w-7 h-7 rounded-lg hover:bg-surface-100 flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             <X size={15} className="text-surface-500" aria-hidden="true" />
           </button>
         </div>
@@ -559,7 +564,7 @@ function ToolModal({ tool, onSave, onClose, saving }) {
             <div>
               <label htmlFor="tool-item-type" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">Type</label>
               <select id="tool-item-type" value={form.item_type} onChange={e => set('item_type', e.target.value)}
-                className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white">
+                className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white focus-visible:ring-2 focus-visible:ring-brand-500">
                 <option>Tool</option><option>Material</option><option>Supply</option>
               </select>
             </div>
@@ -567,7 +572,7 @@ function ToolModal({ tool, onSave, onClose, saving }) {
               <label htmlFor="tool-part-number" className="block text-xs font-semibold text-surface-700 uppercase tracking-wide mb-1.5">ISBN Number</label>
               <input id="tool-part-number" type="text" value={form.part_number} onChange={e => set('part_number', e.target.value)}
                 placeholder="e.g. 12120-N"
-                className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400" />
+                className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 focus-visible:ring-2 focus-visible:ring-brand-500" />
             </div>
           </div>
           <div>
@@ -589,18 +594,18 @@ function ToolModal({ tool, onSave, onClose, saving }) {
             </label>
             <textarea id="tool-notes" rows={2} value={form.notes} onChange={e => set('notes', e.target.value)}
               placeholder="Where to purchase, specifications, etc."
-              className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 resize-none" />
+              className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 resize-none focus-visible:ring-2 focus-visible:ring-brand-500" />
           </div>
         </div>
 
         <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-surface-200 bg-surface-50">
           <button onClick={onClose} disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors disabled:opacity-50">
+            className="px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
           <button onClick={() => { if (validate()) onSave(form) }} disabled={saving}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-amber-500 rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 shadow-sm">
-            {saving ? <><Loader2 size={14} className="animate-spin" />Saving…</> : <><Check size={14} />{isEdit ? 'Save Changes' : 'Add Item'}</>}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-amber-500 rounded-lg hover:bg-amber-600 transition-colors disabled:opacity-50 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            {saving ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" />Saving…</> : <><Check size={14} aria-hidden="true" />{isEdit ? 'Save Changes' : 'Add Item'}</>}
           </button>
         </div>
       </div>
@@ -628,10 +633,10 @@ function DeleteModal({ tool, onConfirm, onClose, saving }) {
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose} disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors">Cancel</button>
+            className="px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
           <button onClick={() => onConfirm(tool.tool_id, tool.item_name)} disabled={saving}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50">
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Delete
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            {saving ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Trash2 size={13} aria-hidden="true" />} Delete
           </button>
         </div>
       </div>
@@ -792,26 +797,26 @@ function RequiredToolsPanel({ onBack }) {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-surface-500 hover:text-surface-800 transition-colors group">
-            <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" /> Back
+          <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-surface-500 hover:text-surface-800 transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" aria-hidden="true" /> Back
           </button>
           <span className="text-surface-300">/</span>
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 rounded-lg bg-amber-100 flex items-center justify-center">
-              <Wrench size={14} className="text-amber-600" />
+              <Wrench size={14} className="text-amber-600" aria-hidden="true" />
             </div>
             <h2 className="text-lg font-bold text-surface-900">Required Tools & Materials</h2>
           </div>
         </div>
         <button onClick={() => { setEditTool(null); setShowAdd(true) }}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors shadow-sm">
-          <Plus size={15} /> Add Item
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-amber-500 rounded-xl hover:bg-amber-600 transition-colors shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+          <Plus size={15} aria-hidden="true" /> Add Item
         </button>
       </div>
 
       {/* Context note */}
       <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 text-sm text-amber-800">
-        <Wrench size={15} className="text-amber-500 mt-0.5 flex-shrink-0" />
+        <Wrench size={15} className="text-amber-500 mt-0.5 flex-shrink-0" aria-hidden="true" />
         <p>Master catalog for the program. When building a syllabus, you'll pick items from this list for each course. New items added in the Syllabus Wizard are saved here automatically.</p>
       </div>
 
@@ -828,13 +833,13 @@ function RequiredToolsPanel({ onBack }) {
       {/* Search + filter */}
       <div className="flex gap-3 mb-4">
         <div className="relative flex-1 max-w-xs">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items…"
-            className="w-full pl-8 pr-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white" />
-          {search && <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-surface-400 hover:text-surface-600"><X size={13} /></button>}
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search items" placeholder="Search items…"
+            className="w-full pl-8 pr-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white focus-visible:ring-2 focus-visible:ring-brand-500" />
+          {search && <button type="button" onClick={() => setSearch('')} aria-label="Clear search" className="absolute right-2.5 top-1/2 -translate-y-1/2 min-h-[44px] min-w-[44px] inline-flex items-center justify-center text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"><X size={13} aria-hidden="true" /></button>}
         </div>
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
-          className="px-3 py-2 text-sm border border-surface-200 rounded-lg outline-none focus:border-brand-400 bg-white">
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by type"
+          className="px-3 py-2 min-h-[44px] text-sm border border-surface-200 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus:border-brand-400 bg-white">
           <option value="All">All Types</option><option>Tool</option><option>Material</option><option>Supply</option><option>Software</option><option>Textbook</option>
         </select>
       </div>
@@ -843,11 +848,11 @@ function RequiredToolsPanel({ onBack }) {
       <div className="bg-white border border-surface-200 rounded-2xl shadow-sm overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center py-16 gap-3 text-surface-400">
-            <Loader2 size={20} className="animate-spin" /><span className="text-sm">Loading…</span>
+            <Loader2 size={20} className="animate-spin" aria-hidden="true" /><span className="text-sm">Loading…</span>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center"><Wrench size={22} className="text-amber-300" /></div>
+            <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center"><Wrench size={22} className="text-amber-300" aria-hidden="true" /></div>
             <div className="text-center">
               <p className="text-sm font-medium text-surface-600">{tools.length === 0 ? 'No items yet' : 'No results found'}</p>
               <p className="text-xs text-surface-400 mt-1">{tools.length === 0 ? 'Click "Add Item" to build your catalog' : 'Try adjusting your search or filter'}</p>
@@ -859,7 +864,7 @@ function RequiredToolsPanel({ onBack }) {
               <thead>
                 <tr className="border-b border-surface-200 bg-surface-50">
                   {['#', 'Item Name', 'Type', 'ISBN Number', 'Cost', 'Used In', 'Actions'].map((h, i) => (
-                    <th key={h} className={`px-4 py-3 text-xs font-bold uppercase tracking-wide text-surface-500 ${i === 0 ? 'w-8' : ''} ${h === 'Cost' ? 'text-right' : h === 'Actions' ? 'text-center w-20' : 'text-left'}`}>{h}</th>
+                    <th scope="col" key={h} className={`px-4 py-3 text-xs font-bold uppercase tracking-wide text-surface-500 ${i === 0 ? 'w-8' : ''} ${h === 'Cost' ? 'text-right' : h === 'Actions' ? 'text-center w-20' : 'text-left'}`}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -913,12 +918,12 @@ function RequiredToolsPanel({ onBack }) {
                         })()}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => { setShowAdd(false); setEditTool(tool) }} className="w-7 h-7 rounded-lg hover:bg-amber-50 flex items-center justify-center transition-colors" title="Edit">
-                            <Pencil size={14} className="text-amber-600" />
+                        <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <button type="button" onClick={() => { setShowAdd(false); setEditTool(tool) }} aria-label={`Edit ${tool.item_name}`} className="w-11 h-11 rounded-lg hover:bg-amber-50 flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1" title="Edit">
+                            <Pencil size={14} className="text-amber-600" aria-hidden="true" />
                           </button>
-                          <button onClick={() => setDeletingTool(tool)} className="w-7 h-7 rounded-lg hover:bg-red-50 flex items-center justify-center transition-colors" title="Delete">
-                            <Trash2 size={14} className="text-red-500" />
+                          <button type="button" onClick={() => setDeletingTool(tool)} aria-label={`Delete ${tool.item_name}`} className="w-11 h-11 rounded-lg hover:bg-red-50 flex items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1" title="Delete">
+                            <Trash2 size={14} className="text-red-500" aria-hidden="true" />
                           </button>
                         </div>
                       </td>
@@ -986,7 +991,7 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
         {/* Icon + badge */}
         <div className="flex items-start justify-between mb-4">
           <div className={`w-11 h-11 rounded-xl ${tile.iconBg} flex items-center justify-center`}>
-            <Icon size={22} className={tile.iconColor} />
+            <Icon size={22} className={tile.iconColor} aria-hidden="true" />
           </div>
           <div className="flex items-center gap-1.5">
             <span className={`text-[11px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full ${tile.badgeColor}`}>
@@ -997,9 +1002,9 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
                 onClick={e => { e.stopPropagation(); onSettings() }}
                 aria-label="Edit college outcomes"
                 title="Edit college outcomes"
-                className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
+                className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               >
-                <Settings size={14} />
+                <Settings size={14} aria-hidden="true" />
               </button>
             )}
           </div>
@@ -1027,9 +1032,9 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
                 <button
                   key={prop.proposal_id}
                   onClick={() => onOpen(prop)}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-surface-50 hover:bg-violet-50 border border-transparent hover:border-violet-100 rounded-lg text-left transition-colors group"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-surface-50 hover:bg-violet-50 border border-transparent hover:border-violet-100 rounded-lg text-left transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 >
-                  <StatusIcon size={11} className={cfg.color} />
+                  <StatusIcon size={11} className={cfg.color} aria-hidden="true" />
                   <span className="text-xs font-medium text-surface-700 flex-1 truncate group-hover:text-violet-700">{label}</span>
                   <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${cfg.bg} ${cfg.color} shrink-0`}>{cfg.label}</span>
                 </button>
@@ -1039,12 +1044,12 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
               <button
                 onClick={() => setExpanded(prev => !prev)}
                 aria-expanded={expanded}
-                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-violet-600 hover:text-violet-800 transition-colors"
+                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-violet-600 hover:text-violet-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
                 {expanded ? (
-                  <><ChevronUp size={12} /> Show less</>
+                  <><ChevronUp size={12} aria-hidden="true" /> Show less</>
                 ) : (
-                  <><ChevronDown size={12} /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
+                  <><ChevronDown size={12} aria-hidden="true" /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
                 )}
               </button>
             )}
@@ -1058,9 +1063,9 @@ function CourseProposalTile({ tile, proposals, loading, onOpen, onNew, onSetting
         <div className="border-t border-surface-100 mt-auto pt-4">
           <button
             onClick={() => onNew()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-xl transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <FilePlus size={13} /> New Course Proposal
+            <FilePlus size={13} aria-hidden="true" /> New Course Proposal
           </button>
         </div>
       </div>
@@ -1125,14 +1130,14 @@ function CollegeOutcomesModal({ onClose }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-violet-50 rounded-lg flex items-center justify-center">
-              <Settings size={15} className="text-violet-600" />
+              <Settings size={15} className="text-violet-600" aria-hidden="true" />
             </div>
             <div>
               <h2 id="college-outcomes-modal-title" className="text-base font-bold text-surface-900">College Outcomes & Competencies</h2>
               <p className="text-xs text-surface-400">Used as dropdown options in the Course Proposal wizard</p>
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
             <X size={18} className="text-surface-400" aria-hidden="true" />
           </button>
         </div>
@@ -1141,7 +1146,7 @@ function CollegeOutcomesModal({ onClose }) {
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
           {loading ? (
             <div className="flex items-center justify-center py-12 text-surface-400 text-sm gap-2">
-              <Loader2 size={16} className="animate-spin" /> Loading…
+              <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading…
             </div>
           ) : groups.map((group, gi) => (
             <div key={gi} className="border border-surface-200 rounded-xl overflow-hidden">
@@ -1152,9 +1157,9 @@ function CollegeOutcomesModal({ onClose }) {
                   onChange={e => updOutcome(gi, e.target.value)}
                   placeholder="College Outcome name…"
                   aria-label={`College outcome name, group ${gi + 1}`}
-                  className="flex-1 bg-transparent text-sm font-semibold text-violet-800 placeholder-violet-300 outline-none"
+                  className="flex-1 bg-transparent text-sm font-semibold text-violet-800 placeholder-violet-300 outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                 />
-                <button onClick={() => removeGroup(gi)} aria-label={group.outcome ? `Remove outcome group: ${group.outcome}` : `Remove outcome group ${gi + 1}`} className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors flex-shrink-0">
+                <button onClick={() => removeGroup(gi)} aria-label={group.outcome ? `Remove outcome group: ${group.outcome}` : `Remove outcome group ${gi + 1}`} className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                   <Trash2 size={13} aria-hidden="true" />
                 </button>
               </div>
@@ -1170,36 +1175,36 @@ function CollegeOutcomesModal({ onClose }) {
                       aria-label={`Competency ${ci + 1}, group ${gi + 1}`}
                       className="flex-1 px-2 py-1 text-xs border border-surface-200 rounded-md focus:outline-none focus:ring-1 focus:ring-violet-400"
                     />
-                    <button onClick={() => removeComp(gi, ci)} aria-label={`Remove competency ${ci + 1}, group ${gi + 1}`} className="p-1 hover:bg-red-50 rounded text-surface-200 hover:text-red-400 transition-colors flex-shrink-0">
+                    <button onClick={() => removeComp(gi, ci)} aria-label={`Remove competency ${ci + 1}, group ${gi + 1}`} className="p-1 hover:bg-red-50 rounded text-surface-200 hover:text-red-400 transition-colors flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                       <X size={11} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
-                <button onClick={() => addComp(gi)} className="flex items-center gap-1 text-[11px] text-brand-500 hover:text-brand-700 font-medium mt-1">
-                  <Plus size={11} /> Add competency
+                <button onClick={() => addComp(gi)} className="flex items-center gap-1 text-[11px] text-brand-500 hover:text-brand-700 font-medium mt-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Plus size={11} aria-hidden="true" /> Add competency
                 </button>
               </div>
             </div>
           ))}
           {!loading && (
-            <button onClick={addGroup} className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-800 font-medium">
-              <Plus size={13} /> Add outcome group
+            <button onClick={addGroup} className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-800 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Plus size={13} aria-hidden="true" /> Add outcome group
             </button>
           )}
         </div>
 
         {/* Footer */}
         <div className="border-t border-surface-100 px-6 py-3.5 flex items-center justify-between shrink-0">
-          <button onClick={handleReset} className="text-xs text-surface-400 hover:text-surface-600 underline transition-colors">
+          <button onClick={handleReset} className="text-xs text-surface-400 hover:text-surface-600 underline transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Reset to SCTCC defaults
           </button>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               Cancel
             </button>
             <button onClick={handleSave} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors disabled:opacity-50">
-              <Save size={14} />{saving ? 'Saving…' : 'Save'}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Save size={14} aria-hidden="true" />{saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
@@ -1262,20 +1267,20 @@ function ProgramRevisionSettingsModal({ onClose }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-rose-50 rounded-lg flex items-center justify-center">
-              <Settings size={15} className="text-rose-600"/>
+              <Settings size={15} className="text-rose-600" aria-hidden="true" />
             </div>
             <div>
               <h2 id="revision-settings-modal-title" className="text-base font-bold text-surface-900">Revision Program Settings</h2>
               <p className="text-xs text-surface-400">Default values pre-filled in every new revision</p>
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors">
+          <button onClick={onClose} aria-label="Close dialog" className="p-1.5 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
             <X size={18} className="text-surface-400" aria-hidden="true"/>
           </button>
         </div>
         <div className="px-6 py-5 space-y-4">
           {loading
-            ? <div className="flex items-center justify-center py-8 text-surface-400 text-sm gap-2"><Loader2 size={16} className="animate-spin"/>Loading…</div>
+            ? <div className="flex items-center justify-center py-8 text-surface-400 text-sm gap-2"><Loader2 size={16} className="animate-spin" aria-hidden="true" />Loading…</div>
             : FIELDS.map(({key,label,placeholder})=>(
               <div key={key}>
                 <label htmlFor={`rev-setting-${key}`} className="block text-xs font-semibold text-surface-700 mb-1.5">{label}</label>
@@ -1288,16 +1293,16 @@ function ProgramRevisionSettingsModal({ onClose }) {
         </div>
         <div className="border-t border-surface-100 px-6 py-3.5 flex items-center justify-between">
           <button onClick={()=>setSettings({...DEFAULT_REVISION_SETTINGS})}
-            className="text-xs text-surface-400 hover:text-surface-600 underline transition-colors">
+            className="text-xs text-surface-400 hover:text-surface-600 underline transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Reset to defaults
           </button>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-surface-600 hover:bg-surface-50 border border-surface-200 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               Cancel
             </button>
             <button onClick={handleSave} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors disabled:opacity-50">
-              <Save size={14}/>{saving?'Saving…':'Save'}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Save size={14} aria-hidden="true" />{saving?'Saving…':'Save'}
             </button>
           </div>
         </div>
@@ -1324,7 +1329,7 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
         {/* Icon + badge */}
         <div className="flex items-start justify-between mb-4">
           <div className={`w-11 h-11 rounded-xl ${tile.iconBg} flex items-center justify-center`}>
-            <Icon size={22} className={tile.iconColor} />
+            <Icon size={22} className={tile.iconColor} aria-hidden="true" />
           </div>
           <span className={`text-[11px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full ${tile.badgeColor}`}>
             {tile.badge}
@@ -1353,9 +1358,9 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
                 <button
                   key={rec.record_id}
                   onClick={() => onOpen(rec)}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-surface-50 hover:bg-orange-50 border border-transparent hover:border-orange-100 rounded-lg text-left transition-colors group"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-surface-50 hover:bg-orange-50 border border-transparent hover:border-orange-100 rounded-lg text-left transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 >
-                  <Archive size={11} className={isDraft ? 'text-surface-400' : 'text-emerald-500'} />
+                  <Archive size={11} className={isDraft ? 'text-surface-400' : 'text-emerald-500'} aria-hidden="true" />
                   <span className="text-xs font-medium text-surface-700 flex-1 truncate group-hover:text-orange-700">
                     {label}
                   </span>
@@ -1371,12 +1376,12 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
               <button
                 onClick={() => setExpanded(prev => !prev)}
                 aria-expanded={expanded}
-                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-orange-600 hover:text-orange-800 transition-colors"
+                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-orange-600 hover:text-orange-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
                 {expanded ? (
-                  <><ChevronUp size={12} /> Show less</>
+                  <><ChevronUp size={12} aria-hidden="true" /> Show less</>
                 ) : (
-                  <><ChevronDown size={12} /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
+                  <><ChevronDown size={12} aria-hidden="true" /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
                 )}
               </button>
             )}
@@ -1394,9 +1399,9 @@ function CourseEndDateTile({ tile, endDates, loading, onOpen, onNew }) {
         <div className="border-t border-surface-100 mt-auto pt-4">
           <button
             onClick={() => onNew()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-xl transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <Archive size={13} /> New Course End Date
+            <Archive size={13} aria-hidden="true" /> New Course End Date
           </button>
         </div>
       </div>
@@ -1421,7 +1426,7 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
         {/* Icon + badge + gear */}
         <div className="flex items-start justify-between mb-4">
           <div className={`w-11 h-11 rounded-xl ${tile.iconBg} flex items-center justify-center`}>
-            <Icon size={22} className={tile.iconColor} />
+            <Icon size={22} className={tile.iconColor} aria-hidden="true" />
           </div>
           <div className="flex items-center gap-1.5">
             <span className={`text-[11px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full ${tile.badgeColor}`}>
@@ -1432,9 +1437,9 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
                 onClick={e => { e.stopPropagation(); onSettings() }}
                 aria-label="Program revision settings"
                 title="Program revision settings"
-                className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
+                className="p-1.5 rounded-lg text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               >
-                <Settings size={14} />
+                <Settings size={14} aria-hidden="true" />
               </button>
             )}
           </div>
@@ -1459,9 +1464,9 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
                 <button
                   key={rev.revision_id}
                   onClick={() => onOpen(rev)}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-surface-50 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-lg text-left transition-colors group"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 bg-surface-50 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-lg text-left transition-colors group focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 >
-                  <FileEdit size={11} className={isDraft ? 'text-surface-400' : 'text-emerald-500'} />
+                  <FileEdit size={11} className={isDraft ? 'text-surface-400' : 'text-emerald-500'} aria-hidden="true" />
                   <span className="text-xs font-medium text-surface-700 flex-1 truncate group-hover:text-rose-700">
                     {rev.course_id || 'Untitled'}{rev.current_program_name ? ` — ${rev.current_program_name}` : ''}
                   </span>
@@ -1483,12 +1488,12 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
               <button
                 onClick={() => setExpanded(prev => !prev)}
                 aria-expanded={expanded}
-                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-rose-600 hover:text-rose-800 transition-colors"
+                className="w-full flex items-center justify-center gap-1 pt-1 text-[11px] font-medium text-rose-600 hover:text-rose-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
                 {expanded ? (
-                  <><ChevronUp size={12} /> Show less</>
+                  <><ChevronUp size={12} aria-hidden="true" /> Show less</>
                 ) : (
-                  <><ChevronDown size={12} /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
+                  <><ChevronDown size={12} aria-hidden="true" /> +{allNonApproved.length - COLLAPSED_LIMIT} more draft{allNonApproved.length - COLLAPSED_LIMIT !== 1 ? 's' : ''}</>
                 )}
               </button>
             )}
@@ -1506,15 +1511,15 @@ function CourseRevisionTile({ tile, revisions, loading, onOpen, onNew, onNewCour
         <div className="border-t border-surface-100 mt-auto pt-4 space-y-2">
           <button
             onClick={() => onNewCourseOutline()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <FileEdit size={13} /> New Course Revision
+            <FileEdit size={13} aria-hidden="true" /> New Course Revision
           </button>
           <button
             onClick={() => onNew()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-semibold rounded-xl transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-semibold rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <FileEdit size={13} /> New Program Revision
+            <FileEdit size={13} aria-hidden="true" /> New Program Revision
           </button>
         </div>
       </div>
@@ -1605,7 +1610,7 @@ export default function InstructorToolsPage() {
       <div className="mb-8">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-100 flex items-center justify-center">
-            <GraduationCap size={22} className="text-brand-600" />
+            <GraduationCap size={22} className="text-brand-600" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-surface-900">Instructor Tools</h1>
