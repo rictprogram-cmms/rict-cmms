@@ -26,6 +26,22 @@
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-surface-400;
   }
+
+  /* Keyboard focus is always visible (WCAG 2.4.7). This is the safety net for
+     inline-styled controls (scan pages, kiosks) that carry no Tailwind focus
+     classes. Elements that opt out with `focus:outline-none` draw their own
+     ring instead, so nothing double-renders. */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible,
+  [role="tab"]:focus-visible,
+  [role="option"]:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #228be6;
+    outline-offset: 2px;
+  }
 }
 
 @layer components {

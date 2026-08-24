@@ -38,6 +38,7 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
 Do one page per session. Start with student-facing pages.
 
 ### App-wide
+- [x] Global `:focus-visible` outline for buttons/links/inputs without Tailwind focus classes (`src/index.css`, 2026-08-24) — covers inline-styled pages and kiosks
 - [ ] Add skip-to-content link in `AppLayout.jsx` (target `<main id="main-content">`) — WCAG 2.4.1
 - [ ] Build `LabeledField` / `LabeledSelect` helper using `useId()` so new forms are correct by default
 - [ ] Replace `window.confirm` / `alert` (72 uses) with `ConfirmDialog` — also fixes kiosk behaviour
@@ -53,7 +54,7 @@ Student-facing first:
 - [x] `VolunteerHoursPage.jsx` — delivered 2026-08-24: 4 remaining modals (Log Volunteer, Log Club, Edit Request, Report) wired to `useDialogA11y` with `role="dialog"`; aria-labels on refresh/close/correction buttons; keyboard toggle for student rows; `aria-pressed` on filters and report-type toggles; `alert()` → toast; focus rings + 44px; `scope="col"`; icons hidden. (Fields were already labelled — `Field` wraps in `<label>`.)
 - [x] `DashboardPage.jsx` — audited 2026-08-24: already compliant (3 dialogs on `useDialogA11y`, card headers are keyboard buttons with `aria-expanded`, focus styles in `dashboard.css`, 6 live regions, headers scoped). Fixed 44px targets via `dashboard.css` (`.dash-btn-sm`, `.dash-btn-reject`, `.dash-btn-primary`, `.dash-btn-cancel`, `.dash-modal-close` at all viewports)
 - [x] `BugTrackerPage.jsx` — delivered 2026-08-24: `Field` auto-links labels via `useId()`; Changelog Detail, Add Changelog and Confirm dialogs wired to `useDialogA11y` (Confirm is `alertdialog`); `ActionBtn` icon buttons named from their tooltip; search/filter controls labelled with focus ring; changelog version rows and item titles are keyboard buttons with `aria-expanded`; focus rings + 44px; `scope="col"`; icons hidden
-- [ ] `AssetScanPage.jsx` (dialog without `useDialogA11y`)
+- [x] `AssetScanPage.jsx` — delivered 2026-08-24: all 4 dialogs (lightbox, edit asset, check-out, check-in) on `useDialogA11y`; both `window.confirm` deletes → `ConfirmDialog`; edit-form labels linked; asset photo is a keyboard button; back/scan/close/doc icon buttons named; WO/Docs toggles `aria-expanded`/`aria-pressed`; 44px on doc buttons and close ×; material icons hidden
 - [ ] `TimeClockPage.jsx` (kiosk)
 - [ ] `LabStatusPage.jsx` (dialog without `useDialogA11y`)
 

@@ -28,6 +28,8 @@ import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useCheckoutActions, fakeUtcToDisplay, daysOverdue } from '@/hooks/useAssetCheckouts'
 import { excludeSuperAdmin } from '@/lib/superAdmin'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 export default function AssetScanPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -37,6 +39,10 @@ export default function AssetScanPage() {
   const assetId = searchParams.get('assetId') || ''
 
   const [asset, setAsset] = useState(null)
+  // a11y: dialog refs (focus trap / Escape / focus restore) — declared before
+  // the states they watch are read, so they're referenced via function scope.
+  const [confirmDoc, setConfirmDoc] = useState(null)     // document_id pending delete
+  const [confirmAsset, setConfirmAsset] = useState(false) // asset delete pending
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [workOrders, setWorkOrders] = useState([])
@@ -50,6 +56,8 @@ export default function AssetScanPage() {
   const [uploading, setUploading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
+  const lightboxRef = useDialogA11y(!!lightbox, () => setLightbox(null))
+  const editDialogRef = useDialogA11y(showEditModal, () => setShowEditModal(false))
   const [editForm, setEditForm] = useState({})
   const [categories, setCategories] = useState([])
   const [locations, setLocations] = useState([])
@@ -233,8 +241,11 @@ export default function AssetScanPage() {
   }
 
   /* ── Delete Document ─────────────────────────────────────────────── */
-  async function handleDeleteDoc(docId) {
-    if (!confirm('Delete this document?')) return
+  function handleDeleteDoc(docId) { setConfirmDoc(docId) }
+  async function deleteDocConfirmed() {
+    const docId = confirmDoc
+    setConfirmDoc(null)
+    if (!docId) return
     const { data: rows, error } = await supabase.from('asset_documents').delete().eq('document_id', docId).select()
     if (error || !rows?.length) {
       showToastMsg('Delete failed — check permissions.', 'error')
@@ -287,9 +298,10 @@ export default function AssetScanPage() {
   }
 
   /* ── Delete Asset ────────────────────────────────────────────────── */
-  async function handleDeleteAsset() {
+  function handleDeleteAsset() { if (asset) setConfirmAsset(true) }
+  async function deleteAssetConfirmed() {
+    setConfirmAsset(false)
     if (!asset) return
-    if (!confirm(`Delete "${asset.name}"? This cannot be undone.`)) return
     const { data: rows, error } = await supabase.from('assets').delete().eq('asset_id', asset.asset_id).select()
     if (error || !rows?.length) {
       showToastMsg('Delete failed — check permissions.', 'error')
@@ -393,27 +405,27 @@ export default function AssetScanPage() {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         boxShadow: '0 2px 12px rgba(0,0,0,0.15)'
       }}>
-        <button onClick={() => navigate('/assets')} style={{
+        <button type="button" aria-label="Back to Assets" onClick={() => navigate('/assets')} style={{
           background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white',
           width: 44, height: 44, borderRadius: 12, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           WebkitTapHighlightColor: 'transparent'
         }}>
-          <span className="material-icons" style={{ fontSize: '1.4rem' }}>arrow_back</span>
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.4rem' }}>arrow_back</span>
         </button>
 
         <h1 style={{ fontSize: '1.15rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
-          <span className="material-icons" style={{ fontSize: '1.4rem' }}>qr_code_scanner</span>
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.4rem' }}>qr_code_scanner</span>
           Asset Lookup
         </h1>
 
-        <button onClick={openScanner} title="Scan QR Code" style={{
+        <button type="button" aria-label="Scan QR code" onClick={openScanner} title="Scan QR Code" style={{
           background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white',
           width: 44, height: 44, borderRadius: 12, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           WebkitTapHighlightColor: 'transparent'
         }}>
-          <span className="material-icons" style={{ fontSize: '1.4rem' }}>photo_camera</span>
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.4rem' }}>photo_camera</span>
         </button>
       </div>
 
@@ -426,12 +438,12 @@ export default function AssetScanPage() {
             position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10
           }}>
             <h2 style={{ color: 'white', fontSize: '1.1rem', fontWeight: 600, margin: 0 }}>Scan Asset QR Code</h2>
-            <button onClick={closeScanner} style={{
+            <button type="button" aria-label="Close scanner" onClick={closeScanner} style={{
               background: '#fa5252', border: 'none', color: 'white',
               width: 44, height: 44, borderRadius: '50%', cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center'
             }}>
-              <span className="material-icons" style={{ fontSize: '1.5rem' }}>close</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.5rem' }}>close</span>
             </button>
           </div>
           <div style={{ flex: 1, position: 'relative' }}>
@@ -447,18 +459,38 @@ export default function AssetScanPage() {
         </div>
       )}
 
+      {/* ── Delete confirmations (accessible; replace window.confirm) ── */}
+      <ConfirmDialog
+        open={!!confirmDoc}
+        title="Delete this document?"
+        message="The file will be removed from this asset. This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Keep"
+        onConfirm={deleteDocConfirmed}
+        onClose={() => setConfirmDoc(null)}
+      />
+      <ConfirmDialog
+        open={confirmAsset}
+        title={`Delete "${asset?.name || 'this asset'}"?`}
+        message="The asset and its records will be permanently removed. This cannot be undone."
+        confirmLabel="Delete asset"
+        cancelLabel="Cancel"
+        onConfirm={deleteAssetConfirmed}
+        onClose={() => setConfirmAsset(false)}
+      />
+
       {/* ── Lightbox ───────────────────────────────────────────────── */}
       {lightbox && (
-        <div onClick={() => setLightbox(null)} style={{
+        <div ref={lightboxRef} role="dialog" aria-modal="true" aria-label={`Photo of ${asset?.name || 'asset'}`} onClick={() => setLightbox(null)} style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 2000,
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
         }}>
-          <button onClick={() => setLightbox(null)} style={{
+          <button type="button" onClick={() => setLightbox(null)} aria-label="Close photo" style={{
             position: 'absolute', top: 16, right: 16, background: 'white', border: 'none',
             width: 44, height: 44, borderRadius: '50%', fontSize: '1.5rem', cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center'
           }}>×</button>
-          <img src={lightbox} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} referrerPolicy="no-referrer" />
+          <img src={lightbox} alt={asset?.name ? `Photo of ${asset.name}` : 'Asset photo'} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} referrerPolicy="no-referrer" />
         </div>
       )}
 
@@ -468,7 +500,7 @@ export default function AssetScanPage() {
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 2000,
           display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
         }} onClick={e => e.target === e.currentTarget && setShowEditModal(false)}>
-          <div style={{
+          <div ref={editDialogRef} role="dialog" aria-modal="true" aria-labelledby="scan-edit-title" style={{
             background: 'white', borderRadius: '20px 20px 0 0', width: '100%', maxWidth: 500,
             maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column',
             animation: 'slideUp 0.3s ease'
@@ -477,26 +509,27 @@ export default function AssetScanPage() {
               padding: '16px 20px', borderBottom: '1px solid #e9ecef',
               display: 'flex', justifyContent: 'space-between', alignItems: 'center'
             }}>
-              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span className="material-icons" style={{ color: '#228be6' }}>edit</span>
+              <h3 id="scan-edit-title" style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span className="material-icons" style={{ color: '#228be6' }} aria-hidden="true">edit</span>
                 Edit Asset
               </h3>
-              <button onClick={() => setShowEditModal(false)} style={{
-                background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96', padding: 4
+              <button type="button" onClick={() => setShowEditModal(false)} aria-label="Close" style={{
+                background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96', padding: 4,
+                minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center'
               }}>×</button>
             </div>
             <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Asset Name *</label>
-                <input type="text" placeholder="Enter asset name"
+                <label htmlFor="scan-edit-name" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Asset Name *</label>
+                <input id="scan-edit-name" type="text" placeholder="Enter asset name"
                   value={editForm.name || ''}
                   onChange={e => setEditForm({ ...editForm, name: e.target.value })}
                   style={{ width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box' }}
                 />
               </div>
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Description</label>
-                <textarea rows={3} placeholder="Enter description"
+                <label htmlFor="scan-edit-desc" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Description</label>
+                <textarea id="scan-edit-desc" rows={3} placeholder="Enter description"
                   value={editForm.description || ''}
                   onChange={e => setEditForm({ ...editForm, description: e.target.value })}
                   style={{ width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical' }}
@@ -504,8 +537,8 @@ export default function AssetScanPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Category</label>
-                  <select value={editForm.category || ''}
+                  <label htmlFor="scan-edit-category" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Category</label>
+                  <select id="scan-edit-category" value={editForm.category || ''}
                     onChange={e => setEditForm({ ...editForm, category: e.target.value })}
                     style={{ width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box', background: 'white' }}>
                     <option value="">Select</option>
@@ -513,8 +546,8 @@ export default function AssetScanPage() {
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Location</label>
-                  <select value={editForm.location || ''}
+                  <label htmlFor="scan-edit-location" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Location</label>
+                  <select id="scan-edit-location" value={editForm.location || ''}
                     onChange={e => setEditForm({ ...editForm, location: e.target.value })}
                     style={{ width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box', background: 'white' }}>
                     <option value="">Select</option>
@@ -523,8 +556,8 @@ export default function AssetScanPage() {
                 </div>
               </div>
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Status</label>
-                <select value={editForm.status || 'Active'}
+                <label htmlFor="scan-edit-status" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, color: '#495057', marginBottom: 6 }}>Status</label>
+                <select id="scan-edit-status" value={editForm.status || 'Active'}
                   onChange={e => setEditForm({ ...editForm, status: e.target.value })}
                   style={{ width: '100%', padding: '12px 14px', border: '1px solid #dee2e6', borderRadius: 10, fontSize: '1rem', fontFamily: 'inherit', boxSizing: 'border-box', background: 'white' }}>
                   <option value="Active">Active</option>
@@ -582,7 +615,7 @@ export default function AssetScanPage() {
         ) : error ? (
           <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 2px 16px rgba(0,0,0,0.08)', overflow: 'hidden', marginTop: 20 }}>
             <div style={{ textAlign: 'center', padding: '60px 24px' }}>
-              <span className="material-icons" style={{ fontSize: '4rem', color: '#fa5252', marginBottom: 16, display: 'block' }}>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '4rem', color: '#fa5252', marginBottom: 16, display: 'block' }}>
                 {error.title === 'Asset Not Found' ? 'search_off' : 'error_outline'}
               </span>
               <h2 style={{ color: '#1a1a2e', marginBottom: 12, fontSize: '1.4rem' }}>{error.title}</h2>
@@ -592,7 +625,7 @@ export default function AssetScanPage() {
                 cursor: 'pointer', border: 'none', background: '#228be6', color: 'white',
                 display: 'inline-flex', alignItems: 'center', gap: 8
               }}>
-                <span className="material-icons">qr_code_scanner</span>
+                <span className="material-icons" aria-hidden="true">qr_code_scanner</span>
                 Scan Again
               </button>
             </div>
@@ -601,7 +634,7 @@ export default function AssetScanPage() {
           /* ── No asset loaded — prompt to scan ── */
           <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 2px 16px rgba(0,0,0,0.08)', overflow: 'hidden', marginTop: 20 }}>
             <div style={{ textAlign: 'center', padding: '60px 24px' }}>
-              <span className="material-icons" style={{ fontSize: '4rem', color: '#228be6', marginBottom: 16, display: 'block' }}>qr_code_scanner</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '4rem', color: '#228be6', marginBottom: 16, display: 'block' }}>qr_code_scanner</span>
               <h2 style={{ color: '#1a1a2e', marginBottom: 12, fontSize: '1.4rem' }}>Scan an Asset</h2>
               <p style={{ color: '#868e96', fontSize: '1rem', marginBottom: 24 }}>Point your camera at an asset QR code to look it up.</p>
               <button onClick={openScanner} style={{
@@ -609,7 +642,7 @@ export default function AssetScanPage() {
                 cursor: 'pointer', border: 'none', background: '#228be6', color: 'white',
                 display: 'inline-flex', alignItems: 'center', gap: 8
               }}>
-                <span className="material-icons">photo_camera</span>
+                <span className="material-icons" aria-hidden="true">photo_camera</span>
                 Open Camera
               </button>
             </div>
@@ -620,7 +653,11 @@ export default function AssetScanPage() {
             <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 2px 16px rgba(0,0,0,0.08)', overflow: 'hidden', marginBottom: 16 }}>
               {/* Asset Image */}
               <div
+                role={imgUrl ? 'button' : undefined}
+                tabIndex={imgUrl ? 0 : undefined}
+                aria-label={imgUrl ? 'View larger photo' : undefined}
                 onClick={() => imgUrl && setLightbox(imgUrl)}
+                onKeyDown={e => { if (imgUrl && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setLightbox(imgUrl) } }}
                 style={{
                   width: '100%', height: 220, background: '#f1f3f5',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -630,7 +667,7 @@ export default function AssetScanPage() {
                 {imgUrl ? (
                   <img src={imgUrl} alt={asset.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} referrerPolicy="no-referrer" />
                 ) : (
-                  <span className="material-icons" style={{ fontSize: '4rem', color: '#adb5bd' }}>precision_manufacturing</span>
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '4rem', color: '#adb5bd' }}>precision_manufacturing</span>
                 )}
               </div>
 
@@ -650,7 +687,7 @@ export default function AssetScanPage() {
                     background: '#fff3bf', color: '#e67700', padding: '10px 16px',
                     borderRadius: 20, fontSize: '0.9rem', fontWeight: 600, marginBottom: 16
                   }}>
-                    <span className="material-icons" style={{ fontSize: '1.1rem' }}>location_on</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>location_on</span>
                     {asset.location}
                   </div>
                 )}
@@ -681,7 +718,7 @@ export default function AssetScanPage() {
                 {/* ── Action Buttons ────────────────────────────────── */}
 
                 {/* View Work Orders — always visible */}
-                <button onClick={() => { setShowWOs(!showWOs); setShowDocs(false) }} style={{
+                <button aria-expanded={showWOs} onClick={() => { setShowWOs(!showWOs); setShowDocs(false) }} style={{
                   width: '100%', padding: '16px 20px', borderRadius: 14, fontSize: '1rem', fontWeight: 600,
                   cursor: 'pointer', border: showWOs ? '2px solid #228be6' : '2px solid #e9ecef',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -690,7 +727,7 @@ export default function AssetScanPage() {
                   WebkitTapHighlightColor: 'transparent'
                 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span className="material-icons" style={{ fontSize: '1.3rem' }}>assignment</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem' }}>assignment</span>
                     Work Orders
                   </span>
                   <span style={{
@@ -700,7 +737,7 @@ export default function AssetScanPage() {
                 </button>
 
                 {/* View Documents — always visible */}
-                <button onClick={() => { setShowDocs(!showDocs); setShowWOs(false) }} style={{
+                <button aria-expanded={showDocs} onClick={() => { setShowDocs(!showDocs); setShowWOs(false) }} style={{
                   width: '100%', padding: '16px 20px', borderRadius: 14, fontSize: '1rem', fontWeight: 600,
                   cursor: 'pointer', border: showDocs ? '2px solid #228be6' : '2px solid #e9ecef',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -709,7 +746,7 @@ export default function AssetScanPage() {
                   WebkitTapHighlightColor: 'transparent'
                 }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span className="material-icons" style={{ fontSize: '1.3rem' }}>attach_file</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem' }}>attach_file</span>
                     Documents
                   </span>
                   <span style={{
@@ -818,7 +855,7 @@ export default function AssetScanPage() {
                         WebkitAppearance: 'none', touchAction: 'manipulation',
                         WebkitTapHighlightColor: 'transparent'
                       }}>
-                        <span className="material-icons" style={{ fontSize: '1.2rem' }}>edit</span>
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>edit</span>
                         Edit Asset
                       </button>
                     )}
@@ -830,7 +867,7 @@ export default function AssetScanPage() {
                         WebkitAppearance: 'none', touchAction: 'manipulation',
                         WebkitTapHighlightColor: 'transparent'
                       }}>
-                        <span className="material-icons" style={{ fontSize: '1.2rem' }}>delete</span>
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>delete</span>
                         Delete
                       </button>
                     )}
@@ -844,19 +881,19 @@ export default function AssetScanPage() {
               <div style={{ background: 'white', borderRadius: 20, boxShadow: '0 2px 16px rgba(0,0,0,0.08)', overflow: 'hidden', marginBottom: 16 }}>
                 <div style={{ padding: 20 }}>
                   <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#1a1a2e', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="material-icons" style={{ fontSize: '1.3rem', color: '#228be6' }}>assignment</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#228be6' }}>assignment</span>
                     Work Orders
                   </h3>
 
                   {/* Toggle Open/All */}
                   <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                    <button onClick={() => setShowClosedWOs(false)} style={{
+                    <button type="button" aria-pressed={!showClosedWOs} onClick={() => setShowClosedWOs(false)} style={{
                       flex: 1, padding: 10, borderRadius: 10, fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer',
                       border: `2px solid ${!showClosedWOs ? '#228be6' : '#dee2e6'}`,
                       background: !showClosedWOs ? '#e7f5ff' : 'white',
                       color: !showClosedWOs ? '#1971c2' : '#495057'
                     }}>Open ({openWOCount})</button>
-                    <button onClick={() => setShowClosedWOs(true)} style={{
+                    <button type="button" aria-pressed={showClosedWOs} onClick={() => setShowClosedWOs(true)} style={{
                       flex: 1, padding: 10, borderRadius: 10, fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer',
                       border: `2px solid ${showClosedWOs ? '#228be6' : '#dee2e6'}`,
                       background: showClosedWOs ? '#e7f5ff' : 'white',
@@ -866,7 +903,7 @@ export default function AssetScanPage() {
 
                   {filteredWOs.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '30px 16px', color: '#868e96' }}>
-                      <span className="material-icons" style={{ fontSize: '2.5rem', marginBottom: 8, display: 'block' }}>assignment_turned_in</span>
+                      <span className="material-icons" aria-hidden="true" style={{ fontSize: '2.5rem', marginBottom: 8, display: 'block' }}>assignment_turned_in</span>
                       <p style={{ margin: 0, fontSize: '0.95rem' }}>{showClosedWOs ? 'No work orders found' : 'No open work orders'}</p>
                     </div>
                   ) : (
@@ -905,7 +942,7 @@ export default function AssetScanPage() {
                 <div style={{ padding: 20 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#1a1a2e', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span className="material-icons" style={{ fontSize: '1.3rem', color: '#fa5252' }}>attach_file</span>
+                      <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#fa5252' }}>attach_file</span>
                       Documents
                     </h3>
                     {hasPerm('upload_docs') && (
@@ -915,7 +952,7 @@ export default function AssetScanPage() {
                         display: 'flex', alignItems: 'center', gap: 6, opacity: uploading ? 0.6 : 1,
                         WebkitTapHighlightColor: 'transparent'
                       }}>
-                        <span className="material-icons" style={{ fontSize: '1.1rem' }}>{uploading ? 'hourglass_empty' : 'upload_file'}</span>
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>{uploading ? 'hourglass_empty' : 'upload_file'}</span>
                         {uploading ? 'Uploading...' : 'Upload'}
                       </button>
                     )}
@@ -923,7 +960,7 @@ export default function AssetScanPage() {
 
                   {documents.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '30px 16px', color: '#868e96' }}>
-                      <span className="material-icons" style={{ fontSize: '2.5rem', marginBottom: 8, display: 'block' }}>folder_open</span>
+                      <span className="material-icons" aria-hidden="true" style={{ fontSize: '2.5rem', marginBottom: 8, display: 'block' }}>folder_open</span>
                       <p style={{ margin: 0, fontSize: '0.95rem' }}>No documents found</p>
                     </div>
                   ) : (
@@ -937,7 +974,7 @@ export default function AssetScanPage() {
                             width: 44, height: 44, background: '#e7f5ff', borderRadius: 10,
                             display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
                           }}>
-                            <span className="material-icons" style={{ fontSize: '1.3rem', color: '#228be6' }}>description</span>
+                            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem', color: '#228be6' }}>description</span>
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1a1a2e', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -946,18 +983,18 @@ export default function AssetScanPage() {
                             <div style={{ fontSize: '0.8rem', color: '#868e96' }}>{doc.document_type || 'Document'}</div>
                           </div>
                           <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                            <button onClick={() => window.open(getDocUrl(doc.file_path || doc.file_url), '_blank')} style={{
-                              width: 38, height: 38, borderRadius: 8, border: '1px solid #dee2e6',
+                            <button type="button" aria-label={`Open ${doc.document_name || doc.file_name || 'document'} in new tab`} onClick={() => window.open(getDocUrl(doc.file_path || doc.file_url), '_blank')} style={{
+                              width: 44, height: 44, borderRadius: 8, border: '1px solid #dee2e6',
                               background: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
                             }}>
-                              <span className="material-icons" style={{ fontSize: '1.1rem', color: '#228be6' }}>open_in_new</span>
+                              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem', color: '#228be6' }}>open_in_new</span>
                             </button>
                             {hasPerm('delete_assets') && (
-                              <button onClick={() => handleDeleteDoc(doc.document_id)} style={{
-                                width: 38, height: 38, borderRadius: 8, border: '1px solid #ffe3e3',
+                              <button type="button" aria-label={`Delete ${doc.document_name || doc.file_name || 'document'}`} onClick={() => handleDeleteDoc(doc.document_id)} style={{
+                                width: 44, height: 44, borderRadius: 8, border: '1px solid #ffe3e3',
                                 background: '#fff5f5', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
                               }}>
-                                <span className="material-icons" style={{ fontSize: '1.1rem', color: '#c92a2a' }}>delete</span>
+                                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem', color: '#c92a2a' }}>delete</span>
                               </button>
                             )}
                           </div>
@@ -977,7 +1014,7 @@ export default function AssetScanPage() {
               WebkitAppearance: 'none', touchAction: 'manipulation', marginBottom: 12,
               WebkitTapHighlightColor: 'transparent'
             }}>
-              <span className="material-icons" style={{ fontSize: '1.3rem' }}>qr_code_scanner</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.3rem' }}>qr_code_scanner</span>
               Scan Another Asset
             </button>
           </>
@@ -1010,6 +1047,7 @@ export default function AssetScanPage() {
 /* ════════════════════════════════════════════════════════════════════════ */
 
 function ScanCheckOutModal({ asset, profile, actions, hasCheckoutPerm, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const meEmail = profile?.email || ''
   const meName  = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : ''
   const meUserId = profile?.user_id || null
@@ -1117,6 +1155,7 @@ function ScanCheckOutModal({ asset, profile, actions, hasCheckoutPerm, onClose, 
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="scan-co-title"
@@ -1504,6 +1543,7 @@ function ScanCheckOutModal({ asset, profile, actions, hasCheckoutPerm, onClose, 
 }
 
 function ScanCheckInModal({ asset, openCheckout, profile, actions, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [condition, setCondition] = useState('Good')
   const [notes, setNotes] = useState('')
   const [needsRepair, setNeedsRepair] = useState(false)
@@ -1555,6 +1595,7 @@ function ScanCheckInModal({ asset, openCheckout, profile, actions, onClose, onDo
 
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="scan-ci-title"
