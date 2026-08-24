@@ -111,16 +111,7 @@ function minutesAgo(ts) {
   return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
 }
 
-function firstLastInit(name) {
-  if (!name) return '';
-  const parts = name.trim().split(' ');
-  let out = parts[0];
-  if (parts.length > 1) {
-    const last = parts[parts.length - 1];
-    if (last.length > 0) out += ' ' + last.charAt(0) + '.';
-  }
-  return out;
-}
+// Name shortening uses the shared shortName() helper from src/lib/utils.
 
 // ─── Audio ──────────────────────────────────────────────────────────────────
 
@@ -217,7 +208,7 @@ function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructo
     }}>
       <div style={{ width: 88, height: 88, borderRadius: '50%', background: 'linear-gradient(135deg, #1e3a5f, #1971c2)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'overlayBellPulse 2s ease-in-out infinite' }}>
-        <span className="material-icons" style={{ fontSize: '2.8rem', color: '#74c0fc' }}>notifications_active</span>
+        <span className="material-icons" aria-hidden="true" style={{ fontSize: '2.8rem', color: '#74c0fc' }}>notifications_active</span>
       </div>
       <div style={{ textAlign: 'center', padding: '0 60px' }}>
         <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e9ecef', marginBottom: 8 }}>{titleText}</div>
@@ -230,7 +221,7 @@ function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructo
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: 420, padding: '0 40px' }}>
         {loadingInstructors ? (
           <div style={{ textAlign: 'center', color: '#6c757d', fontSize: '0.9rem', padding: 20 }}>
-            <span className="material-icons" style={{ fontSize: '1.4rem', marginBottom: 6, display: 'block' }}>hourglass_empty</span>Loading instructors…
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.4rem', marginBottom: 6, display: 'block' }}>hourglass_empty</span>Loading instructors…
           </div>
         ) : instructors.length === 0 ? (
           <div style={{ textAlign: 'center', color: '#6c757d', fontSize: '0.9rem', padding: 20 }}>No instructors found.</div>
@@ -249,7 +240,7 @@ function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructo
               <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#e9ecef' }}>{inst.displayName}</div>
               <div style={{ fontSize: '0.72rem', color: '#6c757d', marginTop: 2 }}>Tap to sign in to this kiosk</div>
             </div>
-            <span className="material-icons" style={{ color: '#4a5568', fontSize: '1.4rem' }}>arrow_forward</span>
+            <span className="material-icons" aria-hidden="true" style={{ color: '#4a5568', fontSize: '1.4rem' }}>arrow_forward</span>
           </button>
         ))}
         {switching && (
@@ -277,7 +268,7 @@ function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructo
 function PersonRow({ person }) {
   const cfg = STATUS_CONFIG[person.status] || STATUS_CONFIG.good;
   const initials = (person.userName || '?').split(' ').map(p => p[0] || '').join('').toUpperCase().slice(0, 2);
-  const displayName = firstLastInit(person.userName);
+  const displayName = shortName(person.userName);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px',
@@ -296,7 +287,7 @@ function PersonRow({ person }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: cfg.bg,
         border: `1px solid ${cfg.border}`, borderRadius: 6, padding: '2px 8px', flexShrink: 0 }}>
-        <span className="material-icons" style={{ fontSize: '0.75rem', color: cfg.color }}>{cfg.icon}</span>
+        <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.75rem', color: cfg.color }}>{cfg.icon}</span>
         <span style={{ fontSize: '0.65rem', fontWeight: 700, color: cfg.color }}>{cfg.label}</span>
       </div>
       <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
@@ -329,13 +320,13 @@ function HelpRequestCard({ req, onAcknowledge, onResolve }) {
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{shortName(req.user_name) || 'Unknown'}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
             {req.location && (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: '0.75rem', color: '#94a3b8' }}>
-              <span className="material-icons" style={{ fontSize: '0.8rem', color: '#6c757d' }}>place</span>{req.location}</span>)}
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem', color: '#6c757d' }}>place</span>{req.location}</span>)}
             <span style={{ fontSize: '0.7rem', color: '#4a5568' }}>{minutesAgo(req.requested_at)}</span>
           </div>
           {isAcknowledged && req.acknowledged_by && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 4,
               background: '#0d2d1a', border: '1px solid #1a4d2e', borderRadius: 5, padding: '2px 8px' }}>
-              <span className="material-icons" style={{ fontSize: '0.8rem', color: '#4ade80' }}>directions_walk</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem', color: '#4ade80' }}>directions_walk</span>
               <span style={{ fontSize: '0.7rem', color: '#86efac', fontWeight: 600 }}>{req.acknowledged_by} is on the way</span>
             </div>
           )}
@@ -345,23 +336,24 @@ function HelpRequestCard({ req, onAcknowledge, onResolve }) {
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#7f1d1d', color: '#fca5a5',
               padding: '4px 9px', borderRadius: 7, fontSize: '0.68rem', fontWeight: 700,
               textTransform: 'uppercase', letterSpacing: '0.5px', animation: 'pulseAlert 1.4s ease-in-out infinite' }}>
-              <span className="material-icons" style={{ fontSize: '0.8rem' }}>pending</span>Waiting</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem' }}>pending</span>Waiting</span>
           ) : (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#0d2d1a', color: '#4ade80',
               padding: '4px 9px', borderRadius: 7, fontSize: '0.68rem', fontWeight: 700,
               textTransform: 'uppercase', letterSpacing: '0.5px', border: '1px solid #1a4d2e' }}>
-              <span className="material-icons" style={{ fontSize: '0.8rem' }}>check</span>On Way</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem' }}>check</span>On Way</span>
           )}
         </div>
       </div>
-      <button onPointerDown={() => setPressing(true)} onPointerUp={() => setPressing(false)}
+      <button type="button" onPointerDown={() => setPressing(true)} onPointerUp={() => setPressing(false)}
         onPointerLeave={() => setPressing(false)} onClick={handlePress}
+        aria-label={`${isPending ? "I'm on my way" : 'Mark resolved'}: help request from ${shortName(req.user_name) || 'student'}${req.location ? ` at ${req.location}` : ''}`}
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
           width: '100%', padding: '13px 16px', border: 'none',
           borderTop: `1px solid ${isPending ? '#7f1d1d' : '#1a4d2e'}`, borderRadius: '0 0 10px 10px',
           background: pressing ? (isPending ? 'rgba(239,68,68,0.45)' : 'rgba(74,222,128,0.25)') : (isPending ? 'rgba(239,68,68,0.18)' : 'rgba(74,222,128,0.10)'),
           cursor: 'pointer', transition: 'background 0.1s', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', userSelect: 'none' }}>
-        <span className="material-icons" style={{ fontSize: '1.2rem', color: isPending ? '#f87171' : '#4ade80' }}>{isPending ? 'directions_walk' : 'task_alt'}</span>
+        <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem', color: isPending ? '#f87171' : '#4ade80' }}>{isPending ? 'directions_walk' : 'task_alt'}</span>
         <span style={{ fontSize: '0.85rem', fontWeight: 700, color: isPending ? '#fca5a5' : '#86efac', textTransform: 'uppercase', letterSpacing: '1px' }}>
           {isPending ? "I'm On My Way" : 'Mark Resolved'}</span>
       </button>
@@ -373,7 +365,7 @@ function HelpRequestCard({ req, onAcknowledge, onResolve }) {
 
 function CenterMsg({ icon, text, color = '#4a5568' }) {
   return (<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 10 }}>
-    <span className="material-icons" style={{ fontSize: '2.2rem', color }}>{icon}</span>
+    <span className="material-icons" aria-hidden="true" style={{ fontSize: '2.2rem', color }}>{icon}</span>
     <p style={{ margin: 0, fontSize: '0.85rem', color, textAlign: 'center' }}>{text}</p>
   </div>);
 }
@@ -733,7 +725,7 @@ export default function LabStatusPage() {
       <header style={{ display: 'flex', alignItems: 'center', padding: '0 20px', borderBottom: '1px solid #1e2433', background: '#141824', flexShrink: 0, height: 58, gap: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
           <div style={{ width: 34, height: 34, borderRadius: 8, background: 'linear-gradient(135deg, #228be6, #1971c2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <span className="material-icons" style={{ color: 'white', fontSize: '1.1rem' }}>precision_manufacturing</span>
+            <span className="material-icons" aria-hidden="true" style={{ color: 'white', fontSize: '1.1rem' }}>precision_manufacturing</span>
           </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#e9ecef', letterSpacing: '0.3px', lineHeight: 1.2 }}>RICT Lab Status</div>
@@ -751,23 +743,23 @@ export default function LabStatusPage() {
         <div style={{ flex: 1 }} />
         {hasPending ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: '#3b0a0a', border: '1px solid #7f1d1d', borderRadius: 8, padding: '6px 14px', flexShrink: 0, marginRight: 20, animation: 'pulseAlert 1.4s ease-in-out infinite' }}>
-            <span className="material-icons" style={{ color: '#f87171', fontSize: '1.1rem' }}>notification_important</span>
+            <span className="material-icons" aria-hidden="true" style={{ color: '#f87171', fontSize: '1.1rem' }}>notification_important</span>
             <span style={{ color: '#fca5a5', fontWeight: 700, fontSize: '0.8rem', letterSpacing: '0.5px', textTransform: 'uppercase' }}>Help Requested</span>
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, opacity: 0.4, marginRight: 20, flexShrink: 0 }}>
-            <span className="material-icons" style={{ fontSize: '0.95rem', color: audioUnlocked ? '#4ade80' : '#6c757d' }}>{audioUnlocked ? 'volume_up' : 'volume_off'}</span>
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.95rem', color: audioUnlocked ? '#4ade80' : '#6c757d' }}>{audioUnlocked ? 'volume_up' : 'volume_off'}</span>
             <span style={{ fontSize: '0.68rem', color: '#6c757d' }}>{audioUnlocked ? 'Audio on' : 'Audio off'}</span>
           </div>
         )}
         {instructorAway && (
           <button onClick={toggleAwayOff} disabled={awayToggling} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#dc2626', border: '2px solid #ef4444', borderRadius: 10, padding: '8px 18px', flexShrink: 0, marginRight: 12, cursor: awayToggling ? 'wait' : 'pointer', animation: 'awayPulse 1.6s ease-in-out infinite', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', userSelect: 'none' }}>
-            <span className="material-icons" style={{ color: 'white', fontSize: '1.2rem' }}>{awayToggling ? 'hourglass_empty' : 'meeting_room'}</span>
+            <span className="material-icons" aria-hidden="true" style={{ color: 'white', fontSize: '1.2rem' }}>{awayToggling ? 'hourglass_empty' : 'meeting_room'}</span>
             <div style={{ textAlign: 'left' }}>
               <div style={{ color: 'white', fontWeight: 800, fontSize: '0.82rem', letterSpacing: '0.5px', textTransform: 'uppercase', lineHeight: 1.1 }}>AWAY</div>
               <div style={{ color: '#fecaca', fontSize: '0.58rem', fontWeight: 600, lineHeight: 1.2 }}>{awayReturnTime ? `Back at ${awayReturnTime}` : 'Tap to return'}</div>
             </div>
-            <span className="material-icons" style={{ color: '#fecaca', fontSize: '0.9rem', marginLeft: 2 }}>close</span>
+            <span className="material-icons" aria-hidden="true" style={{ color: '#fecaca', fontSize: '0.9rem', marginLeft: 2 }}>close</span>
           </button>
         )}
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -835,7 +827,7 @@ export default function LabStatusPage() {
         <section style={{ borderRight: '1px solid #1e2433', display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', height: 44, borderBottom: '1px solid #1e2433', background: '#141824', flexShrink: 0 }}>
             <div style={{ width: 28, height: 28, borderRadius: 6, background: '#0d2d1a', border: '1px solid #1a4d2e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span className="material-icons" style={{ color: '#4ade80', fontSize: '0.95rem' }}>groups</span>
+              <span className="material-icons" aria-hidden="true" style={{ color: '#4ade80', fontSize: '0.95rem' }}>groups</span>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e9ecef', lineHeight: 1.2 }}>Lab Today</div>
@@ -867,7 +859,7 @@ export default function LabStatusPage() {
         <section style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, background: hasPending ? 'rgba(127,29,29,0.06)' : 'transparent' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', height: 44, borderBottom: '1px solid #1e2433', background: hasPending ? 'rgba(127,29,29,0.28)' : '#141824', flexShrink: 0 }}>
             <div style={{ width: 28, height: 28, borderRadius: 6, background: hasPending ? '#3b0a0a' : '#1e2433', border: `1px solid ${hasPending ? '#7f1d1d' : '#2d3748'}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span className="material-icons" style={{ color: hasPending ? '#f87171' : '#6c757d', fontSize: '0.95rem' }}>help_outline</span>
+              <span className="material-icons" aria-hidden="true" style={{ color: hasPending ? '#f87171' : '#6c757d', fontSize: '0.95rem' }}>help_outline</span>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#e9ecef', lineHeight: 1.2 }}>Help Requests</div>
@@ -886,7 +878,7 @@ export default function LabStatusPage() {
           </div>
           {hasPending && (
             <div style={{ padding: '6px 12px', background: 'rgba(127,29,29,0.18)', borderTop: '1px solid #3b0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, flexShrink: 0 }}>
-              <span className="material-icons" style={{ fontSize: '0.8rem', color: '#f87171' }}>touch_app</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem', color: '#f87171' }}>touch_app</span>
               <span style={{ fontSize: '0.62rem', color: '#fca5a5', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tap a card to respond</span>
             </div>
           )}

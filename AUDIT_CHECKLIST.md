@@ -21,7 +21,7 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
   - [x] TV Display — already abbreviated via local `firstLastInit()`
   - [x] Lab Status kiosk — fixed: help-request card now "First L." (people list was already abbreviated)
   - [ ] Review Access page: if any Work Study role holds `manage_others`, `view_all_students`, `manage_all_bookings`, or `Users → view_page`, they see full names on those screens
-  - [ ] Cleanup: replace the local `firstLastInit()` copies in `TVDisplayPage.jsx` and `LabStatusPage.jsx` with `shortName()` from utils
+  - [ ] Cleanup: replace the local `firstLastInit()` copy in `TVDisplayPage.jsx` with `shortName()` from utils (LabStatusPage done 2026-08-24)
   - [ ] Asset checkouts (`AssetCheckoutsPage.jsx`, `useAssetCheckouts.js`)
   - [ ] Absence requests (`AbsenceRequestPage.jsx`)
   - [ ] Audit any other list a student can see that renders another student's full name (Lab Signup, Time Cards, Dashboard widgets)
@@ -55,8 +55,8 @@ Student-facing first:
 - [x] `DashboardPage.jsx` — audited 2026-08-24: already compliant (3 dialogs on `useDialogA11y`, card headers are keyboard buttons with `aria-expanded`, focus styles in `dashboard.css`, 6 live regions, headers scoped). Fixed 44px targets via `dashboard.css` (`.dash-btn-sm`, `.dash-btn-reject`, `.dash-btn-primary`, `.dash-btn-cancel`, `.dash-modal-close` at all viewports)
 - [x] `BugTrackerPage.jsx` — delivered 2026-08-24: `Field` auto-links labels via `useId()`; Changelog Detail, Add Changelog and Confirm dialogs wired to `useDialogA11y` (Confirm is `alertdialog`); `ActionBtn` icon buttons named from their tooltip; search/filter controls labelled with focus ring; changelog version rows and item titles are keyboard buttons with `aria-expanded`; focus rings + 44px; `scope="col"`; icons hidden
 - [x] `AssetScanPage.jsx` — delivered 2026-08-24: all 4 dialogs (lightbox, edit asset, check-out, check-in) on `useDialogA11y`; both `window.confirm` deletes → `ConfirmDialog`; edit-form labels linked; asset photo is a keyboard button; back/scan/close/doc icon buttons named; WO/Docs toggles `aria-expanded`/`aria-pressed`; 44px on doc buttons and close ×; material icons hidden
-- [ ] `TimeClockPage.jsx` (kiosk)
-- [ ] `LabStatusPage.jsx` (dialog without `useDialogA11y`)
+- [x] `TimeClockPage.jsx` (kiosk) — delivered 2026-08-24: already largely compliant (badge inputs labelled, no dialogs); added `role="alert"` on errors, `role="status"` on lookup/verify spinners and the success screen, student search label, decorative SVGs hidden, focus rings + 44px on all 9 buttons
+- [x] `LabStatusPage.jsx` (kiosk) — delivered 2026-08-24: instructor-select overlay already had its own dialog semantics + keyboard handling (audit flag was a false positive); help-card action button now names the student; 18 decorative material icons hidden; local `firstLastInit()` replaced with shared `shortName()`
 
 Instructor / admin:
 - [ ] `WorkOrdersPage.jsx` (~24 unlabeled, 10 clickable divs)

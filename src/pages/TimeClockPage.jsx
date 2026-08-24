@@ -135,7 +135,7 @@ function AttendanceFlag({ type, minutes }) {
     late: {
       bg: 'bg-red-600',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10" />
           <path d="M12 6v6l4 2" />
         </svg>
@@ -146,7 +146,7 @@ function AttendanceFlag({ type, minutes }) {
     early: {
       bg: 'bg-amber-500',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
           <polyline points="16 17 21 12 16 7" />
           <line x1="21" y1="12" x2="9" y2="12" />
@@ -158,7 +158,7 @@ function AttendanceFlag({ type, minutes }) {
     walkin: {
       bg: 'bg-purple-600',
       icon: (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 22s-8-4.5-8-11.8A8 8 0 0112 2a8 8 0 018 8.2c0 7.3-8 11.8-8 11.8z" />
           <circle cx="12" cy="10" r="3" />
         </svg>
@@ -208,7 +208,7 @@ function SwipeScreen({ onLookup, error, loading }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4">
       <div className="w-14 h-14 rounded-xl bg-blue-100 flex items-center justify-center mb-3">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="3" width="20" height="18" rx="2" />
           <path d="M9 10h.01" />
           <path d="M15 10h.01" />
@@ -238,14 +238,14 @@ function SwipeScreen({ onLookup, error, loading }) {
       </div>
 
       {loading && (
-        <div className="flex items-center gap-2 text-blue-600 text-sm mt-1">
-          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        <div role="status" className="flex items-center gap-2 text-blue-600 text-sm mt-1">
+          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
           Looking up...
         </div>
       )}
 
       {error && (
-        <div className="mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm text-center max-w-sm">
+        <div role="alert" className="mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm text-center max-w-sm">
           {error}
         </div>
       )}
@@ -273,7 +273,7 @@ function StudentPickerScreen({ instructor, students, onSelectStudent, onCancel, 
     <div className="flex flex-col flex-1 px-4 py-3 min-h-0">
       <div className="flex items-center gap-3 mb-2 flex-shrink-0">
         <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197" />
           </svg>
         </div>
@@ -289,6 +289,7 @@ function StudentPickerScreen({ instructor, students, onSelectStudent, onCancel, 
         <input
           ref={searchRef}
           type="text"
+          aria-label="Search students by name"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="w-full text-sm py-2 px-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 outline-none bg-white"
@@ -313,7 +314,7 @@ function StudentPickerScreen({ instructor, students, onSelectStudent, onCancel, 
                 <button
                   key={s.id}
                   onClick={() => onSelectStudent(s)}
-                  className="flex items-center gap-2 p-2 bg-white border border-gray-200 rounded-lg hover:border-indigo-400 hover:bg-indigo-50 transition-all text-left group"
+                  className="flex items-center gap-2 p-2 bg-white border border-gray-200 rounded-lg hover:border-indigo-400 hover:bg-indigo-50 transition-all text-left group focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
                 >
                   <div className="w-8 h-8 rounded-full bg-indigo-100 group-hover:bg-indigo-200 flex items-center justify-center flex-shrink-0">
                     <span className="text-[10px] font-bold text-indigo-700">{initials}</span>
@@ -332,7 +333,7 @@ function StudentPickerScreen({ instructor, students, onSelectStudent, onCancel, 
       </div>
 
       <div className="pt-2 flex-shrink-0 text-center">
-        <button onClick={onCancel} className="px-6 py-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm">
+        <button onClick={onCancel} className="px-6 py-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]">
           Cancel
         </button>
       </div>
@@ -361,7 +362,7 @@ function ClassSelectScreen({ user, classes, onPunchIn, onCancel, loading, proxyI
             key={cls.classId}
             onClick={() => onPunchIn(cls)}
             disabled={loading}
-            className="w-full text-left p-3 bg-white border-2 border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all duration-150 group"
+            className="w-full text-left p-3 bg-white border-2 border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all duration-150 group focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
           >
             <div className="flex items-center justify-between">
               <div>
@@ -377,7 +378,7 @@ function ClassSelectScreen({ user, classes, onPunchIn, onCancel, loading, proxyI
                   <p className="text-sm text-gray-500 mt-0.5">{cls.courseName}</p>
                 )}
               </div>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-300 group-hover:text-blue-500 flex-shrink-0">
+              <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-gray-300 group-hover:text-blue-500 flex-shrink-0">
                 <path d="M9 18l6-6-6-6" />
               </svg>
             </div>
@@ -392,7 +393,7 @@ function ClassSelectScreen({ user, classes, onPunchIn, onCancel, loading, proxyI
         </div>
       )}
 
-      <button onClick={onCancel} className="px-6 py-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm">
+      <button onClick={onCancel} className="px-6 py-2 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]">
         Cancel
       </button>
     </div>
@@ -456,7 +457,7 @@ function PunchOutScreen({ user, punchRecord, onPunchOut, onCancel, loading, prox
       <button
         onClick={onPunchOut}
         disabled={loading}
-        className="w-full max-w-xs py-3 bg-red-600 hover:bg-red-700 text-white font-bold text-lg rounded-xl transition-colors disabled:opacity-50"
+        className="w-full max-w-xs py-3 bg-red-600 hover:bg-red-700 text-white font-bold text-lg rounded-xl transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
       >
         {loading ? (
           <span className="flex items-center justify-center gap-2">
@@ -466,7 +467,7 @@ function PunchOutScreen({ user, punchRecord, onPunchOut, onCancel, loading, prox
         ) : 'Punch Out'}
       </button>
 
-      <button onClick={onCancel} className="px-6 py-2 mt-3 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm">
+      <button onClick={onCancel} className="px-6 py-2 mt-3 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]">
         Cancel
       </button>
     </div>
@@ -481,12 +482,12 @@ function SuccessScreen({ message, detail, type, flags }) {
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4 gap-3">
       <div className={`w-14 h-14 rounded-full flex items-center justify-center ${isOut ? 'bg-red-100' : 'bg-green-100'}`}>
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={isOut ? '#dc2626' : '#16a34a'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={isOut ? '#dc2626' : '#16a34a'} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
           <path d="M20 6L9 17l-5-5" />
         </svg>
       </div>
 
-      <div className="text-center">
+      <div className="text-center" role="status" aria-live="polite">
         <h2 className="text-xl font-bold text-gray-900">{message}</h2>
         {detail && <p className="text-sm text-gray-500 mt-0.5">{detail}</p>}
       </div>
@@ -527,7 +528,7 @@ function EarlyWarningScreen({ earlyMinutes, onAccept, onGetPermission, loading }
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4 gap-3">
       <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           <line x1="12" y1="9" x2="12" y2="13" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
@@ -547,9 +548,9 @@ function EarlyWarningScreen({ earlyMinutes, onAccept, onGetPermission, loading }
         <button
           onClick={onGetPermission}
           disabled={loading}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="18" rx="2" />
             <path d="M9 10h.01" />
             <path d="M15 10h.01" />
@@ -561,7 +562,7 @@ function EarlyWarningScreen({ earlyMinutes, onAccept, onGetPermission, loading }
         <button
           onClick={onAccept}
           disabled={loading}
-          className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium text-sm rounded-xl transition-colors disabled:opacity-50"
+          className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium text-sm rounded-xl transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
         >
           OK — Leave Early
         </button>
@@ -633,7 +634,7 @@ function InstructorApproveScreen({ user, onApproved, onCancel, loading: parentLo
   return (
     <div className="flex flex-col items-center justify-center flex-1 px-4">
       <div className="w-14 h-14 rounded-xl bg-indigo-100 flex items-center justify-center mb-3">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
       </div>
@@ -663,19 +664,19 @@ function InstructorApproveScreen({ user, onApproved, onCancel, loading: parentLo
       </div>
 
       {(loading || parentLoading) && (
-        <div className="flex items-center gap-2 text-indigo-600 text-sm mt-1">
-          <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+        <div role="status" className="flex items-center gap-2 text-indigo-600 text-sm mt-1">
+          <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" aria-hidden="true" />
           Verifying...
         </div>
       )}
 
       {error && (
-        <div className="mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm text-center max-w-sm">
+        <div role="alert" className="mt-2 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm text-center max-w-sm">
           {error}
         </div>
       )}
 
-      <button onClick={onCancel} className="px-6 py-2 mt-3 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm">
+      <button onClick={onCancel} className="px-6 py-2 mt-3 bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm rounded-xl transition-colors shadow-sm focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]">
         Cancel — Leave Early Instead
       </button>
     </div>
@@ -732,7 +733,7 @@ function LabClosedScreen() {
             background: 'rgba(255,255,255,0.1)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.7)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
             </svg>
           </div>
@@ -754,7 +755,7 @@ function LabClosedScreen() {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginBottom: 22,
       }}>
-        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
           <path d="M20 3v4" />
           <path d="M22 5h-4" />
@@ -1609,7 +1610,7 @@ export default function TimeClockPage() {
       <div className="bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-2.5 flex items-center justify-between shadow-lg flex-shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10" />
               <path d="M12 6v6l4 2" />
             </svg>
