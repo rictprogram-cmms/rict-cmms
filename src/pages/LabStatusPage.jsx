@@ -30,6 +30,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mustData } from '@/lib/supabaseData';
+import { useVersionCheck } from '@/hooks/useVersionCheck';
 
 const SCROLL_THRESHOLD = 6;
 
@@ -386,6 +387,11 @@ function MaterialIconsLoader() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 export default function LabStatusPage() {
+  // Pick up new builds within ~10 min instead of waiting for the midnight
+  // reload (TV Display and Time Clock already do this). Touch kiosk, so wait
+  // for 60 s of no input before reloading.
+  useVersionCheck({ label: 'LabStatus', idleMs: 60_000 });
+
   const [peopleList, setPeopleList]     = useState([]);
   const [helpRequests, setHelpRequests] = useState([]);
   const [loading, setLoading]           = useState(true);
