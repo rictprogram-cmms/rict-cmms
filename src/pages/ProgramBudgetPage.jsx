@@ -17,6 +17,7 @@ import {
   Check, Ban, ChevronUp
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 const ENTRY_TYPES = ['Manual Expense', 'Income/Grant', 'Adjustment']
 const CATEGORIES = ['Supplies', 'Equipment', 'Materials', 'Software', 'Services', 'Travel', 'Training', 'Maintenance', 'Other']
@@ -46,7 +47,7 @@ export default function ProgramBudgetPage() {
   if (permsLoading) {
     return (
       <div className="p-6 text-center py-20">
-        <Loader2 size={24} className="mx-auto mb-3 text-surface-400 animate-spin" />
+        <Loader2 size={24} className="mx-auto mb-3 text-surface-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-500">Loading...</p>
       </div>
     )
@@ -56,7 +57,7 @@ export default function ProgramBudgetPage() {
   if (!hasFullAccess && !hasPerm('view_page')) {
     return (
       <div className="p-6 text-center py-20">
-        <DollarSign size={40} className="mx-auto mb-3 text-surface-300" />
+        <DollarSign size={40} className="mx-auto mb-3 text-surface-300" aria-hidden="true" />
         <p className="text-sm text-surface-500">You do not have permission to access Program Budget.</p>
       </div>
     )
@@ -77,17 +78,17 @@ export default function ProgramBudgetPage() {
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto space-y-4">
       <h1 className="text-lg font-bold text-surface-900 flex items-center gap-2">
-        <DollarSign size={20} className="text-brand-600" /> Program Budget
+        <DollarSign size={20} className="text-brand-600" aria-hidden="true" /> Program Budget
       </h1>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-surface-100 rounded-xl p-1">
         {tabs.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+          <button key={t.id} type="button" aria-pressed={tab === t.id} onClick={() => setTab(t.id)}
+            className={`flex-1 py-2 min-h-[44px] rounded-lg text-xs font-medium transition-colors flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
               tab === t.id ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'
             }`}>
-            <t.icon size={14} /> {t.label}
+            <t.icon size={14} aria-hidden="true" /> {t.label}
           </button>
         ))}
       </div>
@@ -123,7 +124,7 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
   if (loading) {
     return (
       <div className="text-center py-16">
-        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" />
+        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-400">Loading budget overview…</p>
       </div>
     )
@@ -148,8 +149,8 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
       <div className="bg-white rounded-2xl border border-surface-200 p-5 shadow-sm">
         {/* Year selector */}
         <div className="flex items-center gap-3 mb-4">
-          <label className="text-xs text-surface-500 font-medium">School Year</label>
-          <select value={schoolYear} onChange={e => setSchoolYear(e.target.value)}
+          <label htmlFor="pb-fld-school-year-1" className="text-xs text-surface-500 font-medium">School Year</label>
+          <select id="pb-fld-school-year-1" value={schoolYear} onChange={e => setSchoolYear(e.target.value)}
             className="bg-surface-50 text-surface-900 border border-surface-200 rounded-lg px-3 py-1.5 text-sm font-medium">
             {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
@@ -188,7 +189,7 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
       {(o.paidTotal > 0 || o.encumberedTotal > 0 || o.partialTotal > 0) && (
         <div className="bg-white rounded-xl border border-surface-200 p-4">
           <h3 className="text-sm font-semibold text-surface-900 mb-3 flex items-center gap-1.5">
-            <CreditCard size={14} className="text-brand-500" /> Payment Status Breakdown
+            <CreditCard size={14} className="text-brand-500" aria-hidden="true" /> Payment Status Breakdown
           </h3>
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-emerald-50 rounded-lg p-3 text-center">
@@ -212,7 +213,7 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
         {/* Category breakdown */}
         <div className="bg-white rounded-xl border border-surface-200 p-4">
           <h3 className="text-sm font-semibold text-surface-900 mb-3 flex items-center gap-1.5">
-            <PieChart size={14} className="text-brand-500" /> Category Breakdown
+            <PieChart size={14} className="text-brand-500" aria-hidden="true" /> Category Breakdown
           </h3>
           {catEntries.length === 0 ? (
             <p className="text-xs text-surface-400 py-4 text-center">No spending data yet</p>
@@ -240,7 +241,7 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
         {/* Monthly trend */}
         <div className="bg-white rounded-xl border border-surface-200 p-4">
           <h3 className="text-sm font-semibold text-surface-900 mb-3 flex items-center gap-1.5">
-            <BarChart3 size={14} className="text-brand-500" /> Monthly Spending
+            <BarChart3 size={14} className="text-brand-500" aria-hidden="true" /> Monthly Spending
           </h3>
           {(o.monthlyTrend || []).length === 0 ? (
             <p className="text-xs text-surface-400 py-4 text-center">No monthly data yet</p>
@@ -282,6 +283,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState({})
   const [expandedId, setExpandedId] = useState(null)
+  const [confirmAction, setConfirmAction] = useState(null) // { kind: 'void' | 'delete', txn }
 
   // Debounce search input by 200ms
   useEffect(() => {
@@ -387,37 +389,50 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
     if (ok) { setEditingId(null); refresh(); onRefresh() }
   }
 
-  const handleVoid = async (txn) => {
-    if (!confirm(`Void entry "${txn.description}"? It will appear with a strikethrough.`)) return
-    const ok = await actions.voidEntry(txn.id)
-    if (ok) { refresh(); onRefresh() }
-  }
-
-  const handlePermanentDelete = async (txn) => {
-    if (!confirm(`Permanently delete "${txn.description}" (${fmt(txn.amount)})?\n\nThis will remove it completely from the database and cannot be undone.`)) return
-    const ok = await actions.deleteEntry(txn.id)
+  const handleVoid = (txn) => setConfirmAction({ kind: 'void', txn })
+  const handlePermanentDelete = (txn) => setConfirmAction({ kind: 'delete', txn })
+  const runConfirmedAction = async () => {
+    const act = confirmAction
+    setConfirmAction(null)
+    if (!act) return
+    const ok = act.kind === 'void' ? await actions.voidEntry(act.txn.id) : await actions.deleteEntry(act.txn.id)
     if (ok) { refresh(); onRefresh() }
   }
 
   if (loading) {
     return (
-      <div className="text-center py-16">
-        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" />
+      <div className="text-center py-16" role="status">
+        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-400">Loading transactions…</p>
       </div>
     )
   }
 
+  const confirmDialog = (
+    <ConfirmDialog
+      open={!!confirmAction}
+      title={confirmAction?.kind === 'void' ? 'Void this entry?' : 'Permanently delete this entry?'}
+      message={confirmAction?.kind === 'void'
+        ? `"${confirmAction?.txn?.description}" will remain in the list with a strikethrough.`
+        : `"${confirmAction?.txn?.description}" (${fmt(confirmAction?.txn?.amount)}) will be removed completely from the database. This cannot be undone.`}
+      confirmLabel={confirmAction?.kind === 'void' ? 'Void entry' : 'Delete permanently'}
+      cancelLabel="Cancel"
+      onConfirm={runConfirmedAction}
+      onClose={() => setConfirmAction(null)}
+    />
+  )
+
   return (
     <div className="space-y-3">
+      {confirmDialog}
       {/* Toolbar */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[180px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search transactions"
             placeholder="Search all fields… PO#, amount, code, date…" className="input pl-9 text-sm" />
         </div>
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by type"
           className="input text-sm w-auto">
           <option value="all">All Types</option>
           <option value="manual">Manual Only</option>
@@ -427,13 +442,13 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
           <option value="Income/Grant">Income/Grants</option>
           <option value="Adjustment">Adjustments</option>
         </select>
-        <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)}
+        <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)} aria-label="Filter by payment status"
           className="input text-sm w-auto">
           <option value="all">All Statuses</option>
           {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        <button onClick={refresh} className="p-2.5 rounded-lg bg-surface-100 hover:bg-surface-200 text-surface-500">
-          <RefreshCw size={14} />
+        <button type="button" onClick={refresh} aria-label="Refresh transactions" className="p-2.5 rounded-lg bg-surface-100 hover:bg-surface-200 text-surface-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+          <RefreshCw size={14} aria-hidden="true" />
         </button>
       </div>
 
@@ -442,7 +457,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
       {/* Transaction list */}
       {filtered.length === 0 ? (
         <div className="text-center py-12">
-          <Receipt size={32} className="mx-auto mb-2 text-surface-300" />
+          <Receipt size={32} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
           <p className="text-sm text-surface-500">No transactions found</p>
         </div>
       ) : (
@@ -460,24 +475,24 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                 {isEditing ? (
                   /* Inline edit form */
                   <div className="space-y-2">
-                    <input type="text" value={editForm.description}
+                    <input aria-label="Description (editing)" type="text" value={editForm.description}
                       onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
                       className="input text-sm" placeholder="Description" />
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      <input type="number" step="0.01" value={editForm.amount}
+                      <input aria-label="Amount (editing)" type="number" step="0.01" value={editForm.amount}
                         onChange={e => setEditForm(f => ({ ...f, amount: e.target.value }))}
                         className="input text-sm" placeholder="Amount" />
-                      <select value={editForm.category}
+                      <select aria-label="Category (editing)" value={editForm.category}
                         onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))}
                         className="input text-sm">
                         {CATEGORIES.map(c => <option key={c}>{c}</option>)}
                         <option>Purchase Orders</option>
                         <option>Budget</option>
                       </select>
-                      <input type="text" value={editForm.reference || ''}
+                      <input aria-label="PO number or reference (editing)" type="text" value={editForm.reference || ''}
                         onChange={e => setEditForm(f => ({ ...f, reference: e.target.value }))}
                         className="input text-sm" placeholder="PO # / Reference" />
-                      <select value={editForm.paymentStatus || ''}
+                      <select aria-label="Payment status (editing)" value={editForm.paymentStatus || ''}
                         onChange={e => setEditForm(f => ({ ...f, paymentStatus: e.target.value }))}
                         className="input text-sm">
                         <option value="">No Status</option>
@@ -485,7 +500,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                       </select>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <select value={editForm.objectCode || ''}
+                      <select aria-label="Object code (editing)" value={editForm.objectCode || ''}
                         onChange={e => setEditForm(f => ({ ...f, objectCode: e.target.value }))}
                         className="input text-sm">
                         <option value="">No Object Code</option>
@@ -493,17 +508,17 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                           <option key={code} value={code}>{code} - {label}</option>
                         ))}
                       </select>
-                      <input type="text" value={editForm.notes || ''}
+                      <input aria-label="Notes (editing)" type="text" value={editForm.notes || ''}
                         onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
                         className="input text-sm" placeholder="Notes" />
                     </div>
                     <div className="flex gap-2">
                       <button onClick={saveEdit}
-                        className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium">
-                        <Save size={11} className="inline mr-1" /> Save
+                        className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                        <Save size={11} className="inline mr-1" aria-hidden="true" /> Save
                       </button>
                       <button onClick={() => setEditingId(null)}
-                        className="px-3 py-1 rounded-lg bg-surface-100 text-xs text-surface-600">
+                        className="px-3 py-1 rounded-lg bg-surface-100 text-xs text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                         Cancel
                       </button>
                     </div>
@@ -518,16 +533,16 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                         let iconBg, iconEl
                         if (txn.isCredit) {
                           iconBg = 'bg-emerald-100'
-                          iconEl = <ArrowUpCircle size={14} className="text-emerald-600" />
+                          iconEl = <ArrowUpCircle size={14} className="text-emerald-600" aria-hidden="true" />
                         } else if (txn.source === 'po') {
                           iconBg = 'bg-amber-100'
-                          iconEl = <ShoppingCart size={14} className="text-amber-600" />
+                          iconEl = <ShoppingCart size={14} className="text-amber-600" aria-hidden="true" />
                         } else if (isImported) {
                           iconBg = 'bg-blue-100'
-                          iconEl = <FileSpreadsheet size={14} className="text-blue-600" />
+                          iconEl = <FileSpreadsheet size={14} className="text-blue-600" aria-hidden="true" />
                         } else {
                           iconBg = 'bg-red-100'
-                          iconEl = <ArrowDownCircle size={14} className="text-red-600" />
+                          iconEl = <ArrowDownCircle size={14} className="text-red-600" aria-hidden="true" />
                         }
                         return (
                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${iconBg}`}>
@@ -582,28 +597,28 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                       {/* Expand / Actions */}
                       <div className="flex gap-0.5 flex-shrink-0">
                         {(txn.notes || txn.objectCode) && (
-                          <button onClick={() => setExpandedId(isExpanded ? null : txn.id)} title="Details"
-                            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600">
-                            {isExpanded ? <EyeOff size={12} /> : <Eye size={12} />}
+                          <button type="button" onClick={() => setExpandedId(isExpanded ? null : txn.id)} title="Details" aria-expanded={isExpanded} aria-label={`${isExpanded ? 'Hide' : 'Show'} details for ${txn.description}`}
+                            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                            {isExpanded ? <EyeOff size={12} aria-hidden="true" /> : <Eye size={12} aria-hidden="true" />}
                           </button>
                         )}
                         {txn.source === 'manual' && !isVoided && canEdit && (
-                          <button onClick={() => startEdit(txn)} title="Edit"
-                            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600">
-                            <Edit3 size={12} />
+                          <button type="button" onClick={() => startEdit(txn)} title="Edit" aria-label={`Edit ${txn.description}`}
+                            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                            <Edit3 size={12} aria-hidden="true" />
                           </button>
                         )}
                         {txn.source === 'manual' && !isVoided && canDelete && !isSuperAdmin && (
-                          <button onClick={() => handleVoid(txn)} title="Void"
-                            className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600">
-                            <Trash2 size={12} />
+                          <button type="button" onClick={() => handleVoid(txn)} title="Void" aria-label={`Void ${txn.description}`}
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                            <Trash2 size={12} aria-hidden="true" />
                           </button>
                         )}
                         {txn.source === 'manual' && canDelete && isSuperAdmin && (
-                          <button onClick={() => handlePermanentDelete(txn)}
-                            title={isVoided ? 'Permanently delete' : 'Delete'}
-                            className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600">
-                            <Trash2 size={12} />
+                          <button type="button" onClick={() => handlePermanentDelete(txn)}
+                            title={isVoided ? 'Permanently delete' : 'Delete'} aria-label={`${isVoided ? 'Permanently delete' : 'Delete'} ${txn.description}`}
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                            <Trash2 size={12} aria-hidden="true" />
                           </button>
                         )}
                       </div>
@@ -684,14 +699,14 @@ function AddEntryTab({ schoolYear, onAdded }) {
     <div className="max-w-lg mx-auto">
       <div className="bg-white rounded-xl border border-surface-200 p-5 space-y-4">
         <h2 className="text-sm font-bold text-surface-900 flex items-center gap-2">
-          <Plus size={16} className="text-brand-600" /> New Budget Entry
+          <Plus size={16} className="text-brand-600" aria-hidden="true" /> New Budget Entry
           <span className="ml-auto text-[10px] font-normal text-surface-400 bg-surface-100 px-2 py-0.5 rounded-full">{schoolYear}</span>
         </h2>
 
         {/* Type */}
         <div>
-          <label className="text-xs font-semibold text-surface-500 mb-1 block">Type *</label>
-          <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
+          <label htmlFor="pb-fld-type-2" className="text-xs font-semibold text-surface-500 mb-1 block">Type *</label>
+          <select id="pb-fld-type-2" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
             className="input text-sm">
             {ENTRY_TYPES.map(t => <option key={t}>{t}</option>)}
           </select>
@@ -699,8 +714,8 @@ function AddEntryTab({ schoolYear, onAdded }) {
 
         {/* Description */}
         <div>
-          <label className="text-xs font-semibold text-surface-500 mb-1 block">Description *</label>
-          <input type="text" value={form.description}
+          <label htmlFor="pb-fld-description-3" className="text-xs font-semibold text-surface-500 mb-1 block">Description *</label>
+          <input id="pb-fld-description-3" type="text" value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
             placeholder="e.g. Viking Electric" className="input text-sm" />
         </div>
@@ -708,14 +723,14 @@ function AddEntryTab({ schoolYear, onAdded }) {
         {/* Amount + Date */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">Amount ($) *</label>
-            <input type="number" step="0.01" value={form.amount}
+            <label htmlFor="pb-fld-amount-4" className="text-xs font-semibold text-surface-500 mb-1 block">Amount ($) *</label>
+            <input id="pb-fld-amount-4" type="number" step="0.01" value={form.amount}
               onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
               placeholder="0.00" className="input text-sm" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">Date</label>
-            <input type="date" value={form.date}
+            <label htmlFor="pb-fld-date-5" className="text-xs font-semibold text-surface-500 mb-1 block">Date</label>
+            <input id="pb-fld-date-5" type="date" value={form.date}
               onChange={e => setForm(f => ({ ...f, date: e.target.value }))}
               className="input text-sm" />
           </div>
@@ -724,14 +739,14 @@ function AddEntryTab({ schoolYear, onAdded }) {
         {/* Reference + Payment Status */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">PO # / Reference</label>
-            <input type="text" value={form.reference}
+            <label htmlFor="pb-fld-po-reference-6" className="text-xs font-semibold text-surface-500 mb-1 block">PO # / Reference</label>
+            <input id="pb-fld-po-reference-6" type="text" value={form.reference}
               onChange={e => setForm(f => ({ ...f, reference: e.target.value }))}
               placeholder="PO#, CC, Direct Pay…" className="input text-sm" />
           </div>
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">Payment Status</label>
-            <select value={form.paymentStatus} onChange={e => setForm(f => ({ ...f, paymentStatus: e.target.value }))}
+            <label htmlFor="pb-fld-payment-status-7" className="text-xs font-semibold text-surface-500 mb-1 block">Payment Status</label>
+            <select id="pb-fld-payment-status-7" value={form.paymentStatus} onChange={e => setForm(f => ({ ...f, paymentStatus: e.target.value }))}
               className="input text-sm">
               <option value="">Not Set</option>
               {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
@@ -742,8 +757,8 @@ function AddEntryTab({ schoolYear, onAdded }) {
         {/* Object Code + Category */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">Object Code</label>
-            <select value={form.objectCode} onChange={e => handleCodeChange(e.target.value)}
+            <label htmlFor="pb-fld-object-code-8" className="text-xs font-semibold text-surface-500 mb-1 block">Object Code</label>
+            <select id="pb-fld-object-code-8" value={form.objectCode} onChange={e => handleCodeChange(e.target.value)}
               className="input text-sm">
               <option value="">None</option>
               {Object.entries(OBJECT_CODES).map(([code, label]) => (
@@ -752,8 +767,8 @@ function AddEntryTab({ schoolYear, onAdded }) {
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">Category</label>
-            <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+            <label htmlFor="pb-fld-category-9" className="text-xs font-semibold text-surface-500 mb-1 block">Category</label>
+            <select id="pb-fld-category-9" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
               className="input text-sm">
               {CATEGORIES.map(c => <option key={c}>{c}</option>)}
             </select>
@@ -762,15 +777,15 @@ function AddEntryTab({ schoolYear, onAdded }) {
 
         {/* Notes */}
         <div>
-          <label className="text-xs font-semibold text-surface-500 mb-1 block">Notes</label>
-          <textarea value={form.notes}
+          <label htmlFor="pb-fld-notes-10" className="text-xs font-semibold text-surface-500 mb-1 block">Notes</label>
+          <textarea id="pb-fld-notes-10" value={form.notes}
             onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
             placeholder="Optional notes…" rows={2} className="input text-sm resize-y" />
         </div>
 
         <button onClick={handleSubmit} disabled={actions.saving}
-          className="w-full py-2.5 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2">
-          {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+          className="w-full py-2.5 rounded-xl bg-brand-600 text-white text-sm font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+          {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />}
           Add Entry
         </button>
       </div>
@@ -909,7 +924,7 @@ function ImportTab({ schoolYear, onImported }) {
       {/* Header */}
       <div className="bg-white rounded-xl border border-surface-200 p-5">
         <h2 className="text-sm font-bold text-surface-900 flex items-center gap-2 mb-1">
-          <FileSpreadsheet size={16} className="text-brand-600" /> Import Budget from Spreadsheet
+          <FileSpreadsheet size={16} className="text-brand-600" aria-hidden="true" /> Import Budget from Spreadsheet
           <span className="ml-auto text-[10px] font-normal text-surface-400 bg-surface-100 px-2 py-0.5 rounded-full">{schoolYear}</span>
         </h2>
         <p className="text-xs text-surface-500">
@@ -928,13 +943,13 @@ function ImportTab({ schoolYear, onImported }) {
             isDragging ? 'border-brand-400 bg-brand-50/50' : 'border-surface-300'
           }`}
         >
-          <Upload size={32} className={`mx-auto mb-3 transition-colors ${isDragging ? 'text-brand-500' : 'text-surface-400'}`} />
+          <Upload size={32} className={`mx-auto mb-3 transition-colors ${isDragging ? 'text-brand-500' : 'text-surface-400'}`} aria-hidden="true" />
           <p className="text-sm font-medium text-surface-700 mb-1">
             {isDragging ? 'Drop your file here…' : 'Drag & drop a spreadsheet here, or click to browse'}
           </p>
           <p className="text-xs text-surface-400 mb-4">Supports .xls, .xlsx, .csv files</p>
           <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 text-white text-sm font-semibold cursor-pointer hover:bg-brand-700 transition-colors">
-            <FileSpreadsheet size={16} />
+            <FileSpreadsheet size={16} aria-hidden="true" />
             Choose File
             <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFile} className="hidden" />
           </label>
@@ -944,7 +959,7 @@ function ImportTab({ schoolYear, onImported }) {
       {/* Parsing indicator */}
       {importer.parsing && (
         <div className="text-center py-12">
-          <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" />
+          <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
           <p className="text-sm text-surface-400">Parsing spreadsheet and checking for duplicates…</p>
         </div>
       )}
@@ -952,11 +967,11 @@ function ImportTab({ schoolYear, onImported }) {
       {/* Error */}
       {importer.error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
-          <AlertCircle size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
+          <AlertCircle size={18} className="text-red-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <div>
             <p className="text-sm font-medium text-red-800">Failed to parse file</p>
             <p className="text-xs text-red-600 mt-1">{importer.error}</p>
-            <button onClick={handleReset} className="mt-2 text-xs font-medium text-red-700 underline">Try again</button>
+            <button onClick={handleReset} className="mt-2 text-xs font-medium text-red-700 underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Try again</button>
           </div>
         </div>
       )}
@@ -968,7 +983,7 @@ function ImportTab({ schoolYear, onImported }) {
           {meta.program && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
               <h3 className="text-xs font-bold text-blue-800 mb-2 flex items-center gap-1.5">
-                <FileText size={13} /> Detected RICT Budget Format
+                <FileText size={13} aria-hidden="true" /> Detected RICT Budget Format
               </h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                 {meta.program && (
@@ -1013,7 +1028,7 @@ function ImportTab({ schoolYear, onImported }) {
               <div className="p-3 border-b border-orange-100 bg-orange-50/50">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-orange-800 flex items-center gap-1.5">
-                    <HelpCircle size={13} className="text-orange-500" />
+                    <HelpCircle size={13} className="text-orange-500" aria-hidden="true" />
                     {potentialMatches.length} Potential Match{potentialMatches.length !== 1 ? 'es' : ''} — Please Review
                     {pendingReviews > 0 && (
                       <span className="text-[9px] bg-orange-200 text-orange-800 px-1.5 py-0.5 rounded-full ml-1">
@@ -1023,11 +1038,11 @@ function ImportTab({ schoolYear, onImported }) {
                   </h3>
                   <div className="flex gap-2">
                     <button onClick={declineAllMatches}
-                      className="text-[10px] font-medium text-surface-500 hover:text-red-600 hover:underline">
+                      className="text-[10px] font-medium text-surface-500 hover:text-red-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       Skip All
                     </button>
                     <button onClick={acceptAllMatches}
-                      className="text-[10px] font-medium text-emerald-600 hover:underline">
+                      className="text-[10px] font-medium text-emerald-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       Import All
                     </button>
                   </div>
@@ -1055,9 +1070,9 @@ function ImportTab({ schoolYear, onImported }) {
                           decision === 'declined' ? 'bg-surface-200' :
                           'bg-orange-100'
                         }`}>
-                          {decision === 'accepted' ? <Check size={12} className="text-emerald-600" /> :
-                           decision === 'declined' ? <Ban size={12} className="text-surface-400" /> :
-                           <HelpCircle size={12} className="text-orange-500" />}
+                          {decision === 'accepted' ? <Check size={12} className="text-emerald-600" aria-hidden="true" /> :
+                           decision === 'declined' ? <Ban size={12} className="text-surface-400" aria-hidden="true" /> :
+                           <HelpCircle size={12} className="text-orange-500" aria-hidden="true" />}
                         </div>
 
                         {/* Entry info */}
@@ -1080,29 +1095,29 @@ function ImportTab({ schoolYear, onImported }) {
                         {/* Expand toggle */}
                         <button
                           onClick={() => setExpandedReview(isExpanded ? null : idx)}
-                          className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600 flex-shrink-0"
+                          className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600 flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                           title="Compare side-by-side"
                         >
-                          {isExpanded ? <ChevronUp size={14} /> : <Eye size={14} />}
+                          {isExpanded ? <ChevronUp size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
                         </button>
 
                         {/* Action buttons */}
                         {!decision ? (
                           <div className="flex gap-1.5 flex-shrink-0">
                             <button onClick={() => declineMatch(idx)}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-surface-100 text-surface-600 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-surface-100 text-surface-600 hover:bg-red-50 hover:text-red-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                               title="Skip — it's a duplicate">
                               Skip
                             </button>
                             <button onClick={() => acceptMatch(idx)}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors"
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                               title="Import — it's a new entry">
                               Import
                             </button>
                           </div>
                         ) : (
                           <button onClick={() => resetMatch(idx)}
-                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-medium text-surface-400 hover:text-surface-600 hover:bg-surface-100">
+                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-medium text-surface-400 hover:text-surface-600 hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                             Undo
                           </button>
                         )}
@@ -1115,7 +1130,7 @@ function ImportTab({ schoolYear, onImported }) {
                             {/* From Spreadsheet */}
                             <div className="bg-blue-50 rounded-lg border border-blue-200 p-3">
                               <div className="text-[9px] font-bold text-blue-600 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                <FileSpreadsheet size={10} /> From Spreadsheet
+                                <FileSpreadsheet size={10} aria-hidden="true" /> From Spreadsheet
                               </div>
                               <CompareField label="Vendor" value={pm.entry.description} otherValue={pm.match.description} />
                               <CompareField label="Amount" value={fmt(pm.entry.amount)} otherValue={fmt(pm.match.amount)} />
@@ -1137,7 +1152,7 @@ function ImportTab({ schoolYear, onImported }) {
                             {/* Existing in Database */}
                             <div className="bg-surface-50 rounded-lg border border-surface-200 p-3">
                               <div className="text-[9px] font-bold text-surface-500 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                <Receipt size={10} /> Existing in Database
+                                <Receipt size={10} aria-hidden="true" /> Existing in Database
                                 <span className="text-[8px] font-normal ml-auto bg-surface-200 px-1.5 py-0.5 rounded-full">
                                   {pm.match.source === 'po' ? 'Purchase Order' : 'Budget Entry'}
                                 </span>
@@ -1159,12 +1174,12 @@ function ImportTab({ schoolYear, onImported }) {
                           {!decision && (
                             <div className="flex justify-center gap-3 mt-3">
                               <button onClick={() => declineMatch(idx)}
-                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-surface-100 text-surface-600 hover:bg-red-50 hover:text-red-600 flex items-center gap-1.5">
-                                <Ban size={12} /> Same entry — Skip
+                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-surface-100 text-surface-600 hover:bg-red-50 hover:text-red-600 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                                <Ban size={12} aria-hidden="true" /> Same entry — Skip
                               </button>
                               <button onClick={() => acceptMatch(idx)}
-                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 flex items-center gap-1.5">
-                                <Check size={12} /> Different entry — Import
+                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                                <Check size={12} aria-hidden="true" /> Different entry — Import
                               </button>
                             </div>
                           )}
@@ -1181,7 +1196,7 @@ function ImportTab({ schoolYear, onImported }) {
           {exactDuplicates.length > 0 && (
             <div className="bg-surface-50 border border-surface-200 rounded-xl p-4">
               <h3 className="text-xs font-bold text-surface-500 mb-2 flex items-center gap-1.5">
-                <CheckCircle2 size={13} className="text-surface-400" />
+                <CheckCircle2 size={13} className="text-surface-400" aria-hidden="true" />
                 {exactDuplicates.length} Exact Duplicate{exactDuplicates.length !== 1 ? 's' : ''} (auto-skipped)
               </h3>
               <div className="space-y-1 max-h-32 overflow-y-auto">
@@ -1209,8 +1224,8 @@ function ImportTab({ schoolYear, onImported }) {
                 </h3>
                 {newEntries.length > 0 && (
                   <div className="flex gap-2">
-                    <button onClick={selectAll} className="text-[10px] font-medium text-brand-600 hover:underline">Select All</button>
-                    <button onClick={selectNone} className="text-[10px] font-medium text-surface-500 hover:underline">Deselect All</button>
+                    <button onClick={selectAll} className="text-[10px] font-medium text-brand-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Select All</button>
+                    <button onClick={selectNone} className="text-[10px] font-medium text-surface-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Deselect All</button>
                   </div>
                 )}
               </div>
@@ -1219,13 +1234,13 @@ function ImportTab({ schoolYear, onImported }) {
                 <table className="w-full text-xs">
                   <thead className="bg-surface-50 sticky top-0">
                     <tr>
-                      <th className="w-8 p-2"></th>
-                      <th className="text-left p-2 font-semibold text-surface-500">Date</th>
-                      <th className="text-left p-2 font-semibold text-surface-500">Description</th>
-                      <th className="text-left p-2 font-semibold text-surface-500">Reference</th>
-                      <th className="text-left p-2 font-semibold text-surface-500">Code</th>
-                      <th className="text-left p-2 font-semibold text-surface-500">Status</th>
-                      <th className="text-right p-2 font-semibold text-surface-500">Amount</th>
+                      <th scope="col" className="w-8 p-2"></th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Date</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Description</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Reference</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Code</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Status</th>
+                      <th scope="col" className="text-right p-2 font-semibold text-surface-500">Amount</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1237,8 +1252,8 @@ function ImportTab({ schoolYear, onImported }) {
                           selectedRows.has(idx) ? 'bg-brand-50/50' : 'hover:bg-surface-50'
                         }`}>
                         <td className="p-2 text-center">
-                          <input type="checkbox" checked={selectedRows.has(idx)}
-                            onChange={() => toggleRow(idx)}
+                          <input type="checkbox" checked={selectedRows.has(idx)} aria-label={`Select ${entry.description || 'entry'} for import`}
+                            onChange={() => toggleRow(idx)} onClick={e => e.stopPropagation()}
                             className="w-3.5 h-3.5 rounded border-surface-300 text-brand-600" />
                         </td>
                         <td className="p-2 text-surface-600 whitespace-nowrap">{fmtDate(entry.date)}</td>
@@ -1261,7 +1276,7 @@ function ImportTab({ schoolYear, onImported }) {
                       <tr key={`review-${idx}`}
                         className="border-t border-surface-50 bg-emerald-50/30">
                         <td className="p-2 text-center">
-                          <Check size={12} className="text-emerald-500 mx-auto" />
+                          <Check size={12} className="text-emerald-500 mx-auto" aria-hidden="true" />
                         </td>
                         <td className="p-2 text-surface-600 whitespace-nowrap">{fmtDate(entry.date)}</td>
                         <td className="p-2 font-medium text-surface-900">
@@ -1300,19 +1315,19 @@ function ImportTab({ schoolYear, onImported }) {
               {/* Action bar */}
               <div className="p-3 border-t border-surface-200 bg-surface-50 flex items-center justify-between">
                 <button onClick={handleReset}
-                  className="px-4 py-2 rounded-lg bg-surface-200 text-surface-600 text-xs font-medium hover:bg-surface-300">
-                  <X size={12} className="inline mr-1" /> Cancel
+                  className="px-4 py-2 rounded-lg bg-surface-200 text-surface-600 text-xs font-medium hover:bg-surface-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <X size={12} className="inline mr-1" aria-hidden="true" /> Cancel
                 </button>
                 <div className="flex items-center gap-3">
                   {pendingReviews > 0 && (
                     <span className="text-[10px] text-orange-600 flex items-center gap-1">
-                      <AlertTriangle size={10} /> {pendingReviews} match{pendingReviews !== 1 ? 'es' : ''} still need review
+                      <AlertTriangle size={10} aria-hidden="true" /> {pendingReviews} match{pendingReviews !== 1 ? 'es' : ''} still need review
                     </span>
                   )}
                   <button onClick={handleImport}
                     disabled={actions.saving || (selectedRows.size === 0 && acceptedFromReview.length === 0)}
-                    className="px-5 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2">
-                    {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                    className="px-5 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                    {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Upload size={14} aria-hidden="true" />}
                     Import {selectedRows.size + acceptedFromReview.length} Entr{(selectedRows.size + acceptedFromReview.length) === 1 ? 'y' : 'ies'}
                   </button>
                 </div>
@@ -1320,14 +1335,14 @@ function ImportTab({ schoolYear, onImported }) {
             </div>
           ) : (
             <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
-              <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-400" />
+              <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-400" aria-hidden="true" />
               <p className="text-sm font-medium text-surface-700">
                 {potentialMatches.length > 0
                   ? 'Review the potential matches above, then import any accepted entries.'
                   : 'All entries already exist in the database'}
               </p>
               <p className="text-xs text-surface-400 mt-1">Nothing new to import</p>
-              <button onClick={handleReset} className="mt-3 text-xs font-medium text-brand-600 hover:underline">Upload a different file</button>
+              <button onClick={handleReset} className="mt-3 text-xs font-medium text-brand-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Upload a different file</button>
             </div>
           )}
         </>
@@ -1336,18 +1351,18 @@ function ImportTab({ schoolYear, onImported }) {
       {/* Step: Done */}
       {step === 'done' && (
         <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
-          <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-500" />
+          <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-500" aria-hidden="true" />
           <h3 className="text-sm font-bold text-surface-900 mb-1">Import Complete</h3>
           <p className="text-xs text-surface-500 mb-4">
             Successfully imported entries into the {schoolYear} budget.
           </p>
           <div className="flex gap-3 justify-center">
             <button onClick={handleReset}
-              className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200">
+              className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               Import More
             </button>
             <button onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700">
+              className="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               View Budget
             </button>
           </div>
@@ -1418,7 +1433,7 @@ function YearManagementTab({ onRefresh, refreshKey }) {
   if (loading) {
     return (
       <div className="text-center py-16">
-        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" />
+        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-400">Loading year data…</p>
       </div>
     )
@@ -1429,34 +1444,34 @@ function YearManagementTab({ onRefresh, refreshKey }) {
       {/* Set Starting Balance */}
       <div className="bg-white rounded-xl border border-surface-200 p-4 max-w-lg">
         <h3 className="text-sm font-bold text-surface-900 mb-3 flex items-center gap-1.5">
-          <Calendar size={14} className="text-brand-500" /> Set Starting Balance
+          <Calendar size={14} className="text-brand-500" aria-hidden="true" /> Set Starting Balance
         </h3>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs font-semibold text-surface-500 mb-1 block">School Year</label>
-              <select value={setupYear} onChange={e => setSetupYear(e.target.value)}
+              <label htmlFor="pb-fld-school-year-11" className="text-xs font-semibold text-surface-500 mb-1 block">School Year</label>
+              <select id="pb-fld-school-year-11" value={setupYear} onChange={e => setSetupYear(e.target.value)}
                 className="input text-sm">
                 <option value="">Select…</option>
                 {yearOptions.map(y => <option key={y}>{y}</option>)}
               </select>
             </div>
             <div>
-              <label className="text-xs font-semibold text-surface-500 mb-1 block">Amount ($)</label>
-              <input type="number" step="0.01" value={setupAmount}
+              <label htmlFor="pb-fld-amount-12" className="text-xs font-semibold text-surface-500 mb-1 block">Amount ($)</label>
+              <input id="pb-fld-amount-12" type="number" step="0.01" value={setupAmount}
                 onChange={e => setSetupAmount(e.target.value)}
                 placeholder="e.g. 25000" className="input text-sm" />
             </div>
           </div>
           <div>
-            <label className="text-xs font-semibold text-surface-500 mb-1 block">Notes</label>
-            <input type="text" value={setupNotes}
+            <label htmlFor="pb-fld-notes-13" className="text-xs font-semibold text-surface-500 mb-1 block">Notes</label>
+            <input id="pb-fld-notes-13" type="text" value={setupNotes}
               onChange={e => setSetupNotes(e.target.value)}
               placeholder="Optional notes…" className="input text-sm" />
           </div>
           <button onClick={handleSetBalance} disabled={actions.saving}
-            className="px-4 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50">
-            {actions.saving ? <Loader2 size={12} className="inline animate-spin mr-1" /> : null}
+            className="px-4 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            {actions.saving ? <Loader2 size={12} className="inline animate-spin mr-1" aria-hidden="true" /> : null}
             Set Balance
           </button>
         </div>
@@ -1465,7 +1480,7 @@ function YearManagementTab({ onRefresh, refreshKey }) {
       {/* Year cards */}
       {summaries.length === 0 ? (
         <div className="text-center py-8">
-          <Calendar size={32} className="mx-auto mb-2 text-surface-300" />
+          <Calendar size={32} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
           <p className="text-sm text-surface-500">No budget years set up yet</p>
           <p className="text-xs text-surface-400 mt-1">Use the form above to set a starting balance</p>
         </div>
@@ -1550,7 +1565,7 @@ function MetricCard({ icon: Icon, label, value, color }) {
   return (
     <div className="bg-white rounded-xl border border-surface-200 p-3">
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-2 ${color}`}>
-        <Icon size={14} />
+        <Icon size={14} aria-hidden="true" />
       </div>
       <div className="text-[10px] text-surface-500 uppercase tracking-wide">{label}</div>
       <div className="text-sm font-bold text-surface-900 mt-0.5">{value}</div>
