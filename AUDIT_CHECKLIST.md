@@ -46,7 +46,7 @@ Do one page per session. Start with student-facing pages.
 ### Per-page sweep — for each: labels (`htmlFor`/`id` or `aria-label`), keyboard-operable clickables (`role`, `tabIndex`, `onKeyDown`), `useDialogA11y` on every modal, `focus-visible` rings, icon-button `aria-label`, `alt` text, 44px targets, live regions
 
 Student-facing first:
-- [ ] `TimeCardsPage.jsx` (~25 unlabeled controls, 8 clickable divs, hand-rolled overlay)
+- [x] `TimeCardsPage.jsx` — delivered 2026-08-24: `ModalOverlay` now uses `useDialogA11y` + `role="dialog"`; `Field` links labels via `useId()`; aria-labels on 11 icon buttons; keyboard toggle for week rows; `aria-pressed` on tabs; focus rings + 44px on all buttons; `scope="col"` on all headers; decorative icons hidden; loading spinners announced
 - [ ] `LabSignupPage.jsx` (4 icon-only buttons, 6 clickable divs)
 - [ ] `AbsenceRequestPage.jsx`
 - [ ] `AssetCheckoutsPage.jsx`

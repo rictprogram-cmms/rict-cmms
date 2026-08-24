@@ -23,9 +23,10 @@
  * - Print-friendly layout with page breaks per student in batch mode
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useId } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import {
   useUsersForReports, useClassesList, useTimeCardData,
@@ -546,13 +547,13 @@ export default function TimeCardsPage() {
       {/* Tabs */}
       {isInstructor && (
         <div className="flex gap-2 print:hidden flex-wrap">
-          <TabBtn active={tab === 'timecard'} icon={<User size={16} />}
+          <TabBtn active={tab === 'timecard'} icon={<User size={16} aria-hidden="true" />}
             label="Individual Time Card" onClick={() => setTab('timecard')} />
-          <TabBtn active={tab === 'classweekly'} icon={<Users size={16} />}
+          <TabBtn active={tab === 'classweekly'} icon={<Users size={16} aria-hidden="true" />}
             label="Class Weekly Report" onClick={() => setTab('classweekly')} />
-          <TabBtn active={tab === 'gbitems'} icon={<GraduationCap size={16} />}
+          <TabBtn active={tab === 'gbitems'} icon={<GraduationCap size={16} aria-hidden="true" />}
             label="GB Items" onClick={() => setTab('gbitems')} />
-          <TabBtn active={tab === 'pending'} icon={<Clock size={16} />}
+          <TabBtn active={tab === 'pending'} icon={<Clock size={16} aria-hidden="true" />}
             label="Pending Requests" onClick={() => setTab('pending')} />
         </div>
       )}
@@ -561,47 +562,47 @@ export default function TimeCardsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden">
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1">
-            <button onClick={() => nav(-7)} title="Previous Week"
-              className="w-8 h-8 flex items-center justify-center rounded-lg border border-surface-200 bg-white hover:bg-surface-50 text-surface-600">
-              <ChevronLeft size={16} />
+            <button type="button" onClick={() => nav(-7)} title="Previous Week" aria-label="Previous week"
+              className="flex items-center justify-center rounded-lg border border-surface-200 bg-white hover:bg-surface-50 text-surface-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center">
+              <ChevronLeft size={16} aria-hidden="true" />
             </button>
             <button onClick={goThisWeek}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-surface-200 bg-white hover:bg-surface-50 text-surface-600">
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-surface-200 bg-white hover:bg-surface-50 text-surface-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
               This Week
             </button>
-            <button onClick={() => nav(7)} title="Next Week"
-              className="w-8 h-8 flex items-center justify-center rounded-lg border border-surface-200 bg-white hover:bg-surface-50 text-surface-600">
-              <ChevronRight size={16} />
+            <button type="button" onClick={() => nav(7)} title="Next Week" aria-label="Next week"
+              className="flex items-center justify-center rounded-lg border border-surface-200 bg-white hover:bg-surface-50 text-surface-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center">
+              <ChevronRight size={16} aria-hidden="true" />
             </button>
           </div>
           <div className="flex items-center gap-2 text-sm text-surface-600">
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-              className="px-2 py-1.5 border border-surface-200 rounded-lg text-xs bg-white" />
-            <span className="text-surface-400">to</span>
-            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-              className="px-2 py-1.5 border border-surface-200 rounded-lg text-xs bg-white" />
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} aria-label="Start date"
+              className="px-2 py-1.5 min-h-[44px] border border-surface-200 rounded-lg text-xs bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+            <span className="text-surface-400" aria-hidden="true">to</span>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} aria-label="End date"
+              className="px-2 py-1.5 min-h-[44px] border border-surface-200 rounded-lg text-xs bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
           </div>
         </div>
         <div className="flex items-center gap-2">
           {canAddEntry && (
             <button onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium rounded-lg">
-              <Plus size={14} /> Add Entry
+              className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-medium rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              <Plus size={14} aria-hidden="true" /> Add Entry
             </button>
           )}
           {canRequestEntry && (
             <button onClick={() => setShowRequestModal(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg">
-              <Send size={14} /> Request Entry
+              className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              <Send size={14} aria-hidden="true" /> Request Entry
             </button>
           )}
           <button onClick={() => setShowReportModal(true)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium rounded-lg">
-            <FileText size={14} /> Report
+            className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <FileText size={14} aria-hidden="true" /> Report
           </button>
           <button onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-2 border border-surface-200 bg-white text-surface-600 text-xs font-medium rounded-lg hover:bg-surface-50">
-            <Printer size={14} /> Print
+            className="flex items-center gap-1.5 px-3 py-2 border border-surface-200 bg-white text-surface-600 text-xs font-medium rounded-lg hover:bg-surface-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <Printer size={14} aria-hidden="true" /> Print
           </button>
         </div>
       </div>
@@ -611,8 +612,8 @@ export default function TimeCardsPage() {
         <>
           {isInstructor && (
             <div className="bg-white rounded-xl border border-surface-200 shadow-sm p-4 print:hidden">
-              <label className="block text-xs font-medium text-surface-600 mb-1">Select Student:</label>
-              <select value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)}
+              <label htmlFor="tc-select-student" className="block text-xs font-medium text-surface-600 mb-1">Select Student:</label>
+              <select id="tc-select-student" value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)}
                 className="input text-sm max-w-md">
                 <option value="">Select a student…</option>
                 {users.filter(u => u.role !== 'Instructor').map((u, idx) => (
@@ -632,8 +633,8 @@ export default function TimeCardsPage() {
                 </div>
               ) : timeCard.loading ? (
                 <div className="flex items-center justify-center py-16 text-surface-400 gap-2 text-sm">
-                  <Loader2 size={16} className="animate-spin" /> Loading time card…
-                </div>
+                  <Loader2 size={16} className="animate-spin" aria-hidden="true" /> <span role="status">Loading time card…
+                </span></div>
               ) : (
                 <TimeCardContent
                   entries={timeCard.entries}
@@ -663,9 +664,9 @@ export default function TimeCardsPage() {
       {tab === 'classweekly' && (
         <>
           <div className="bg-white rounded-xl border border-surface-200 shadow-sm p-4 print:hidden">
-            <label className="block text-xs font-medium text-surface-600 mb-1">Select Class:</label>
+            <label htmlFor="tc-select-class" className="block text-xs font-medium text-surface-600 mb-1">Select Class:</label>
             <div className="flex items-center gap-3">
-              <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
+              <select id="tc-select-class" value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
                 className="input text-sm flex-1 max-w-md">
                 <option value="">Select a class…</option>
                 {classes
@@ -695,8 +696,8 @@ export default function TimeCardsPage() {
                 <div className="text-center py-12 text-surface-400 text-sm">Select a class to generate the report.</div>
               ) : classReport.loading ? (
                 <div className="flex items-center justify-center py-16 text-surface-400 gap-2 text-sm">
-                  <Loader2 size={16} className="animate-spin" /> Loading class report…
-                </div>
+                  <Loader2 size={16} className="animate-spin" aria-hidden="true" /> <span role="status">Loading class report…
+                </span></div>
               ) : (
                 <ClassWeeklyContent
                   students={classReport.students}
@@ -1002,19 +1003,19 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
     : (reportClassId && reportStart && reportEnd)
 
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={onClose} labelledBy="tc-report-title">
       <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-teal-100 flex items-center justify-center">
-              <FileText size={16} className="text-teal-600" />
+              <FileText size={16} className="text-teal-600" aria-hidden="true" />
             </div>
             <div>
-              <h3 className="font-semibold text-surface-900">Generate Attendance Report</h3>
+              <h3 id="tc-report-title" className="font-semibold text-surface-900">Generate Attendance Report</h3>
               <p className="text-xs text-surface-400">Week-by-week breakdown with lab completion</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-5 space-y-4">
 
@@ -1023,21 +1024,21 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
             <div>
               <label className="block text-xs font-medium text-surface-600 mb-1.5">Report Type</label>
               <div className="flex gap-2">
-                <button onClick={() => setReportMode('individual')}
-                  className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                <button type="button" aria-pressed={reportMode === 'individual'} onClick={() => setReportMode('individual')}
+                  className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] rounded-lg text-sm font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                     reportMode === 'individual'
                       ? 'bg-teal-50 border-teal-300 text-teal-700'
                       : 'bg-white border-surface-200 text-surface-500 hover:bg-surface-50'
                   }`}>
-                  <User size={15} /> Individual Student
+                  <User size={15} aria-hidden="true" /> Individual Student
                 </button>
-                <button onClick={() => setReportMode('class')}
-                  className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                <button type="button" aria-pressed={reportMode === 'class'} onClick={() => setReportMode('class')}
+                  className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 min-h-[44px] rounded-lg text-sm font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                     reportMode === 'class'
                       ? 'bg-teal-50 border-teal-300 text-teal-700'
                       : 'bg-white border-surface-200 text-surface-500 hover:bg-surface-50'
                   }`}>
-                  <Users size={15} /> Entire Class
+                  <Users size={15} aria-hidden="true" /> Entire Class
                 </button>
               </div>
             </div>
@@ -1060,9 +1061,9 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
 
           {/* Batch: Class selector */}
           {reportMode === 'class' && (
-            <Field label="Class">
+            <Field label="Class" htmlFor="tc-report-class">
               <div className="flex items-center gap-3">
-                <select value={reportClassId} onChange={e => setReportClassId(e.target.value)}
+                <select id="tc-report-class" value={reportClassId} onChange={e => setReportClassId(e.target.value)}
                   className="input text-sm flex-1">
                   <option value="">Select a class…</option>
                   {classes
@@ -1099,7 +1100,7 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
 
           {/* Info box */}
           <div className="bg-surface-50 rounded-lg px-3 py-2.5 text-xs text-surface-500 flex items-start gap-2">
-            <Calendar size={14} className="text-surface-400 mt-0.5 shrink-0" />
+            <Calendar size={14} className="text-surface-400 mt-0.5 shrink-0" aria-hidden="true" />
             <span>
               {reportMode === 'individual'
                 ? 'The report will show a week-by-week breakdown of hours, attendance accountability, and lab completion status for each class.'
@@ -1124,13 +1125,13 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
           <button onClick={onClose}
-            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
             Cancel
           </button>
           <button onClick={handleGenerate}
             disabled={loading || !isValid}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-40 flex items-center gap-1.5">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            {loading ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <FileText size={14} aria-hidden="true" />}
             {loading && progress.total > 0
               ? `Generating ${progress.current}/${progress.total}…`
               : reportMode === 'class' ? 'Generate Class Report' : 'Generate Report'
@@ -1162,12 +1163,12 @@ function SingleReportView({ reportData, onClose }) {
     <div className="p-4 lg:p-6 max-w-5xl mx-auto print:p-0 print:max-w-none">
       <div className="flex items-center justify-between mb-5 print:hidden">
         <button onClick={onClose}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-100 rounded-lg border border-surface-200">
-          <ArrowLeft size={14} /> Back to Time Cards
+          className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-100 rounded-lg border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+          <ArrowLeft size={14} aria-hidden="true" /> Back to Time Cards
         </button>
         <button onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-lg">
-          <Printer size={14} /> Print Report
+          className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+          <Printer size={14} aria-hidden="true" /> Print Report
         </button>
       </div>
 
@@ -1226,12 +1227,12 @@ function BatchReportView({ reportData, onClose }) {
     <div className="p-4 lg:p-6 max-w-5xl mx-auto print:p-0 print:max-w-none">
       <div className="flex items-center justify-between mb-5 print:hidden">
         <button onClick={onClose}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-100 rounded-lg border border-surface-200">
-          <ArrowLeft size={14} /> Back to Time Cards
+          className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-600 hover:bg-surface-100 rounded-lg border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+          <ArrowLeft size={14} aria-hidden="true" /> Back to Time Cards
         </button>
         <button onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-lg">
-          <Printer size={14} /> Print Report
+          className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+          <Printer size={14} aria-hidden="true" /> Print Report
         </button>
       </div>
 
@@ -1340,14 +1341,14 @@ function BatchReportView({ reportData, onClose }) {
                                 <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-orange-100 text-orange-700 text-[9px] font-bold" title="Wrong class (neutral)">{att.wrongClass}X</span>
                               )}
                               {att.lateArrivals === 0 && att.earlyDepartures === 0 && att.walkIns === 0 && (att.wrongClass || 0) === 0 && att.totalEntries > 0 && (
-                                <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-green-600"><CheckCircle2 size={10} /></span>
+                                <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-green-600"><CheckCircle2 size={10} aria-hidden="true" /></span>
                               )}
                             </div>
                           )
                         })()}
                       </div>
                       <div className="print:hidden text-surface-400">
-                        {isCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                        {isCollapsed ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronUp size={18} aria-hidden="true" />}
                       </div>
                     </div>
                   </div>
@@ -1459,11 +1460,11 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                   <div className="mt-1">
                     {cr.totalHours >= cr.totalRequiredHours ? (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full print:border print:border-green-300">
-                        <CheckCircle2 size={11} /> On Track
+                        <CheckCircle2 size={11} aria-hidden="true" /> On Track
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full print:border print:border-amber-300">
-                        <AlertTriangle size={11} /> {formatHours(cr.totalRequiredHours - cr.totalHours)} hrs behind
+                        <AlertTriangle size={11} aria-hidden="true" /> {formatHours(cr.totalRequiredHours - cr.totalHours)} hrs behind
                       </span>
                     )}
                   </div>
@@ -1489,7 +1490,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
             {cr.attendance.totalEntries > 0 && (
               <div className="mb-4">
                 <h4 className="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Shield size={12} /> Attendance Accountability
+                  <Shield size={12} aria-hidden="true" /> Attendance Accountability
                 </h4>
                 <div className={`grid grid-cols-3 ${cr.attendance.wrongClass > 0 ? 'sm:grid-cols-7' : 'sm:grid-cols-6'} gap-2`}>
                   <ReportStatBox
@@ -1514,25 +1515,25 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
             {cr.weeklyBreakdown.length > 0 && (
               <div className="mb-4">
                 <h4 className="text-xs font-semibold text-surface-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <BookOpen size={12} /> Weekly Breakdown
+                  <BookOpen size={12} aria-hidden="true" /> Weekly Breakdown
                 </h4>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-surface-50 text-left print:bg-gray-100">
-                        <th className="px-2 py-2 font-semibold text-surface-500">Week</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500">Dates</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-right">Hours</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500">Week</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500">Dates</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-right">Hours</th>
                         {cr.requiredHoursPerWeek > 0 && (
-                          <th className="px-2 py-2 font-semibold text-surface-500 text-center">Req Met</th>
+                          <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">Req Met</th>
                         )}
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center">Lab</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center">Done</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center">On Time</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center">Late</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center">Early</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center">Walk-in</th>
-                        <th className="px-2 py-2 font-semibold text-surface-500 text-center"
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">Lab</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">Done</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">On Time</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">Late</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">Early</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center">Walk-in</th>
+                        <th scope="col" className="px-2 py-2 font-semibold text-surface-500 text-center"
                           title="Per-week on-time score: starts at 100% if hours met or All Done given, otherwise scales by hours achieved; deducts 10% per Late/Early and 20% per No Show.">
                           Score
                         </th>
@@ -1555,9 +1556,16 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                               onClick={() => toggleExpand(expandKey)}
                             >
                               <td className="px-2 py-2 font-semibold text-surface-700">
-                                <span className={wk.isFinals ? 'text-red-600' : ''}>
+                                <button
+                                  type="button"
+                                  aria-expanded={!!isExpanded}
+                                  aria-label={`${wk.isFinals ? 'Finals' : `Week ${wk.weekNumber}`}, ${isExpanded ? 'collapse' : 'expand'} details`}
+                                  onClick={ev => { ev.stopPropagation(); toggleExpand(expandKey) }}
+                                  className={`inline-flex items-center gap-1 min-h-[44px] px-1 -mx-1 rounded print:min-h-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${wk.isFinals ? 'text-red-600' : ''}`}
+                                >
+                                  {isExpanded ? <ChevronUp size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
                                   {wk.isFinals ? 'Finals' : `W${wk.weekNumber}`}
-                                </span>
+                                </button>
                               </td>
                               <td className="px-2 py-2 text-surface-500 whitespace-nowrap">
                                 {formatDateShort(wk.startDate)} – {formatDateShort(wk.endDate)}
@@ -1577,23 +1585,23 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                               {cr.requiredHoursPerWeek > 0 && (
                                 <td className="px-2 py-2 text-center">
                                   {wk.metHours || wk.requiredHoursMet ? (
-                                    <CheckCircle2 size={14} className="text-green-500 mx-auto" />
+                                    <CheckCircle2 size={14} className="text-green-500 mx-auto" aria-hidden="true" />
                                   ) : hasEntries ? (
-                                    <AlertTriangle size={14} className="text-amber-500 mx-auto" />
+                                    <AlertTriangle size={14} className="text-amber-500 mx-auto" aria-hidden="true" />
                                   ) : <span className="text-surface-300">—</span>}
                                 </td>
                               )}
                               <td className="px-2 py-2 text-center">
                                 {wk.labComplete ? (
                                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">
-                                    <CheckCircle2 size={10} /> Yes
+                                    <CheckCircle2 size={10} aria-hidden="true" /> Yes
                                   </span>
                                 ) : <span className="text-surface-300 text-[10px]">—</span>}
                               </td>
                               <td className="px-2 py-2 text-center">
                                 {wk.allDone ? (
                                   <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700">
-                                    <BadgeCheck size={10} /> Yes
+                                    <BadgeCheck size={10} aria-hidden="true" /> Yes
                                   </span>
                                 ) : <span className="text-surface-300 text-[10px]">—</span>}
                               </td>
@@ -1642,12 +1650,12 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                     <table className="w-full text-[11px]">
                                       <thead>
                                         <tr className="text-surface-400">
-                                          <th className="px-2 py-1 text-left font-medium">Date</th>
-                                          <th className="px-2 py-1 text-left font-medium">Scheduled</th>
-                                          <th className="px-2 py-1 text-left font-medium">Punch In</th>
-                                          <th className="px-2 py-1 text-left font-medium">Punch Out</th>
-                                          <th className="px-2 py-1 text-right font-medium">Hours</th>
-                                          <th className="px-2 py-1 text-left font-medium">Attendance</th>
+                                          <th scope="col" className="px-2 py-1 text-left font-medium">Date</th>
+                                          <th scope="col" className="px-2 py-1 text-left font-medium">Scheduled</th>
+                                          <th scope="col" className="px-2 py-1 text-left font-medium">Punch In</th>
+                                          <th scope="col" className="px-2 py-1 text-left font-medium">Punch Out</th>
+                                          <th scope="col" className="px-2 py-1 text-right font-medium">Hours</th>
+                                          <th scope="col" className="px-2 py-1 text-left font-medium">Attendance</th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-surface-100">
@@ -1684,21 +1692,21 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                               <td className="px-2 py-1">
                                                 <div className="flex flex-wrap gap-0.5">
                                                   {isAllDone ? (
-                                                    <AttBadge color="emerald" icon={<CheckCircle2 size={9} />} label="All Done" />
+                                                    <AttBadge color="emerald" icon={<CheckCircle2 size={9} aria-hidden="true" />} label="All Done" />
                                                   ) : (
                                                     <>
-                                                      {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={9} />} label="On Time" />}
-                                                      {f.isLate && <AttBadge color="red" icon={<LogIn size={9} />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
-                                                      {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={9} />} label={`Early ${formatMinutes(f.earlyMinutes)}`} />}
+                                                      {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={9} aria-hidden="true" />} label="On Time" />}
+                                                      {f.isLate && <AttBadge color="red" icon={<LogIn size={9} aria-hidden="true" />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
+                                                      {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={9} aria-hidden="true" />} label={`Early ${formatMinutes(f.earlyMinutes)}`} />}
                                                       {f.isWrongClass && (
                                                         <span title={f.wrongClassExpected ? `Should have been ${f.wrongClassExpected}` : 'Wrong class punch'}
                                                           aria-label={f.wrongClassExpected ? `Wrong class — should have been ${f.wrongClassExpected}` : 'Wrong class punch'}>
-                                                          <AttBadge color="orange" icon={<AlertTriangle size={9} />}
+                                                          <AttBadge color="orange" icon={<AlertTriangle size={9} aria-hidden="true" />}
                                                             label={f.wrongClassExpected ? `Wrong Class (→ ${f.wrongClassExpected})` : 'Wrong Class'} />
                                                         </span>
                                                       )}
-                                                      {f.isWalkIn && <AttBadge color="purple" icon={<Footprints size={9} />} label="Walk-in" />}
-                                                      {f.isNoShow && <AttBadge color="red" icon={<X size={9} />} label="No Show" />}
+                                                      {f.isWalkIn && <AttBadge color="purple" icon={<Footprints size={9} aria-hidden="true" />} label="Walk-in" />}
+                                                      {f.isNoShow && <AttBadge color="red" icon={<X size={9} aria-hidden="true" />} label="No Show" />}
                                                     </>
                                                   )}
                                                 </div>
@@ -1824,7 +1832,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
       {as.totalEntries > 0 && (
         <div className="mb-6">
           <h4 className="text-sm font-semibold text-surface-700 mb-3 flex items-center gap-2">
-            <Shield size={15} className="text-brand-600" /> Attendance Accountability
+            <Shield size={15} className="text-brand-600" aria-hidden="true" /> Attendance Accountability
             {as.gracePeriod > 0 && (
               <span className="text-[10px] font-normal text-surface-400 bg-surface-100 px-2 py-0.5 rounded-full">
                 {as.gracePeriod}min grace period
@@ -1916,12 +1924,12 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   )}
                   {weekClosed && !isComplete && (
                     <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium" title="Instructor swiped All Done — week closed regardless of hours">
-                      <BadgeCheck size={12} /> Week Closed by Instructor
+                      <BadgeCheck size={12} aria-hidden="true" /> Week Closed by Instructor
                     </div>
                   )}
-                  {isComplete && !weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} /> Complete</div>}
-                  {isComplete && weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} /> Complete</div>}
-                  {isBehind && <div className="flex items-center gap-1 mt-2 text-amber-600 text-xs font-medium"><AlertTriangle size={12} /> {formatHours(data.requiredHours - data.hours)} hrs behind</div>}
+                  {isComplete && !weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} aria-hidden="true" /> Complete</div>}
+                  {isComplete && weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} aria-hidden="true" /> Complete</div>}
+                  {isBehind && <div className="flex items-center gap-1 mt-2 text-amber-600 text-xs font-medium"><AlertTriangle size={12} aria-hidden="true" /> {formatHours(data.requiredHours - data.hours)} hrs behind</div>}
                 </div>
               )
             })}
@@ -1938,7 +1946,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
       {/* Entries Table */}
       <div>
         <h4 className="text-sm font-semibold text-surface-700 mb-3 flex items-center gap-2">
-          <Timer size={15} /> Time Entries ({entries.length})
+          <Timer size={15} aria-hidden="true" /> Time Entries ({entries.length})
         </h4>
         {entries.length === 0 ? (
           <div className="text-center py-8 text-surface-400 text-sm">No time entries found for this period.</div>
@@ -1947,15 +1955,15 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Date</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Class</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Scheduled</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Punch In</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Punch Out</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Hours</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Status</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Attendance</th>
-                  <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 w-20 print:hidden">Actions</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Date</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Class</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Scheduled</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Punch In</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Punch Out</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Hours</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Status</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Attendance</th>
+                  <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 w-20 print:hidden">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
@@ -2007,21 +2015,21 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                           {isWorkStudy ? (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">Work Hours</span>
                           ) : isAllDone ? (
-                            <AttBadge color="emerald" icon={<CheckCircle2 size={10} />} label="All Done" />
+                            <AttBadge color="emerald" icon={<CheckCircle2 size={10} aria-hidden="true" />} label="All Done" />
                           ) : (
                             <>
-                              {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={10} />} label="On Time" />}
-                              {f.isLate && <AttBadge color="red" icon={<LogIn size={10} />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
-                              {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={10} />} label={`Left Early ${formatMinutes(f.earlyMinutes)}`} />}
+                              {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={10} aria-hidden="true" />} label="On Time" />}
+                              {f.isLate && <AttBadge color="red" icon={<LogIn size={10} aria-hidden="true" />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
+                              {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={10} aria-hidden="true" />} label={`Left Early ${formatMinutes(f.earlyMinutes)}`} />}
                               {f.isWrongClass && (
                                 <span title={f.wrongClassExpected ? `Signed up for ${f.wrongClassExpected} at this time — not penalized` : 'Punched into a different class than the signup — not penalized'}
                                   aria-label={f.wrongClassExpected ? `Wrong class — should have been ${f.wrongClassExpected}` : 'Wrong class punch'}>
-                                  <AttBadge color="orange" icon={<AlertTriangle size={10} />}
+                                  <AttBadge color="orange" icon={<AlertTriangle size={10} aria-hidden="true" />}
                                     label={f.wrongClassExpected ? `Wrong Class (→ ${f.wrongClassExpected})` : 'Wrong Class'} />
                                 </span>
                               )}
-                              {f.isWalkIn && <AttBadge color="purple" icon={<Footprints size={10} />} label="Walk-in" />}
-                              {f.isNoShow && <AttBadge color="red" icon={<X size={10} />} label="No Show" />}
+                              {f.isWalkIn && <AttBadge color="purple" icon={<Footprints size={10} aria-hidden="true" />} label="Walk-in" />}
+                              {f.isNoShow && <AttBadge color="red" icon={<X size={10} aria-hidden="true" />} label="No Show" />}
                             </>
                           )}
                         </div>
@@ -2030,25 +2038,25 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                         <td className="px-3 py-2.5 print:hidden">
                           <div className="flex gap-0.5">
                             {e.status === 'Punched In' && (
-                              <button onClick={() => onPunchOut(e)} title="Punch Out Now" disabled={saving}
-                                className="p-1.5 rounded-lg text-orange-500 hover:bg-orange-50 hover:text-orange-600 disabled:opacity-40"><LogOut size={13} /></button>
+                              <button type="button" onClick={() => onPunchOut(e)} title="Punch Out Now" aria-label={`Punch out now, ${e.course_id || e.class_id || ''} ${formatDate(e.punch_in)}`} disabled={saving}
+                                className="p-1.5 rounded-lg text-orange-500 hover:bg-orange-50 hover:text-orange-600 disabled:opacity-40 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><LogOut size={13} aria-hidden="true" /></button>
                             )}
-                            <button onClick={() => onEdit(e)} title="Edit"
-                              className="p-1.5 rounded-lg text-surface-400 hover:bg-surface-100 hover:text-brand-600"><Edit3 size={13} /></button>
-                            <button onClick={() => onDelete(e)} title="Delete"
-                              className="p-1.5 rounded-lg text-surface-400 hover:bg-red-50 hover:text-red-500"><Trash2 size={13} /></button>
+                            <button type="button" onClick={() => onEdit(e)} title="Edit" aria-label={`Edit entry, ${e.course_id || e.class_id || ''} ${formatDate(e.punch_in)}`}
+                              className="p-1.5 rounded-lg text-surface-400 hover:bg-surface-100 hover:text-brand-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><Edit3 size={13} aria-hidden="true" /></button>
+                            <button type="button" onClick={() => onDelete(e)} title="Delete" aria-label={`Delete entry, ${e.course_id || e.class_id || ''} ${formatDate(e.punch_in)}`}
+                              className="p-1.5 rounded-lg text-surface-400 hover:bg-red-50 hover:text-red-500 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><Trash2 size={13} aria-hidden="true" /></button>
                           </div>
                         </td>
                       ) : (
                         <td className="px-3 py-2.5 print:hidden">
                           {pendingEdits && pendingEdits[e.record_id] ? (
                             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700" title={`Pending edit request: ${pendingEdits[e.record_id].reason || ''}`}>
-                              <MessageCircle size={10} /> Pending
+                              <MessageCircle size={10} aria-hidden="true" /> Pending
                             </span>
                           ) : (
-                            <button onClick={() => onRequestEdit(e)} title="Request Edit"
-                              className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-50 hover:text-purple-600">
-                              <FilePenLine size={13} />
+                            <button type="button" onClick={() => onRequestEdit(e)} title="Request Edit" aria-label={`Request edit, ${e.course_id || e.class_id || ''} ${formatDate(e.punch_in)}`}
+                              className="p-1.5 rounded-lg text-purple-400 hover:bg-purple-50 hover:text-purple-600 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center">
+                              <FilePenLine size={13} aria-hidden="true" />
                             </button>
                           )}
                         </td>
@@ -2100,14 +2108,14 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-50 text-left">
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Student</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Role</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Hours</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Required</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500">Hours</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Late</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Early</th>
-                <th className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Walk-in</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Student</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Role</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Hours</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Required</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Hours</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Late</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Early</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Walk-in</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-100">
@@ -2122,9 +2130,9 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                   </td>
                   <td className="px-3 py-2.5">
                     {s.metRequirement ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} /> Complete</span>
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} aria-hidden="true" /> Complete</span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={11} /> Behind</span>
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={11} aria-hidden="true" /> Behind</span>
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-center">
@@ -2156,11 +2164,11 @@ function AddEntryModal({ userId, classes, actions, onClose, onSaved }) {
   // Construct timestamps with Z suffix so they're stored as UTC (local-as-UTC convention)
   const handleSave = async () => { if (!form.courseName) return; const res = await actions.addEntry(userId, form.classId, form.courseName, `${form.date}T${form.punchIn}:00Z`, `${form.date}T${form.punchOut}:00Z`); if (res?.success) onSaved() }
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={onClose} labelledBy="tc-add-title">
       <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-          <h3 className="font-semibold text-surface-900">Add Time Entry</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <h3 id="tc-add-title" className="font-semibold text-surface-900">Add Time Entry</h3>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <Field label="Class *"><select value={form.courseName} onChange={handleClassChange} className="input text-sm"><option value="">Select class…</option>{classes.map(c => <option key={c.class_id} value={c.course_id}>{c.course_id}{c.course_name ? ` — ${c.course_name}` : ''}</option>)}</select></Field>
@@ -2171,8 +2179,8 @@ function AddEntryModal({ userId, classes, actions, onClose, onSaved }) {
           </div>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">Cancel</button>
-          <button onClick={handleSave} disabled={actions.saving || !form.courseName} className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5">{actions.saving && <Loader2 size={14} className="animate-spin" />} Add Entry</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">Cancel</button>
+          <button onClick={handleSave} disabled={actions.saving || !form.courseName} className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">{actions.saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Add Entry</button>
         </div>
       </div>
     </ModalOverlay>
@@ -2186,11 +2194,11 @@ function RequestEntryModal({ classes, actions, profile, onClose, onSubmitted }) 
   const previewHours = useMemo(() => { if (!form.startTime || !form.endTime) return 0; const pi = new Date(`2000-01-01T${form.startTime}:00`); const po = new Date(`2000-01-01T${form.endTime}:00`); const hrs = (po - pi) / 3600000; return hrs > 0 ? Math.round(hrs * 60) / 60 : 0 }, [form.startTime, form.endTime])
   const handleSubmit = async () => { if (!form.courseName || !form.reason.trim()) return; const res = await actions.submitTimeRequest(form.classId, form.courseName, form.date, form.startTime, form.endTime, form.reason); if (res?.success) onSubmitted() }
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={onClose} labelledBy="tc-request-title">
       <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-          <div><h3 className="font-semibold text-surface-900">Request Time Entry</h3><p className="text-xs text-surface-400 mt-0.5">Requires instructor approval</p></div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <div><h3 id="tc-request-title" className="font-semibold text-surface-900">Request Time Entry</h3><p className="text-xs text-surface-400 mt-0.5">Requires instructor approval</p></div>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <Field label="Class *"><select value={form.courseName} onChange={handleClassChange} className="input text-sm"><option value="">Select class…</option>{enrolledClasses.map(c => <option key={c.class_id} value={c.course_id}>{c.course_id}{c.course_name ? ` — ${c.course_name}` : ''}</option>)}</select></Field>
@@ -2199,12 +2207,12 @@ function RequestEntryModal({ classes, actions, profile, onClose, onSubmitted }) 
             <Field label="Start Time *"><input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))} className="input text-sm" /></Field>
             <Field label="End Time *"><input type="time" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))} className="input text-sm" /></Field>
           </div>
-          {previewHours > 0 && <div className="flex items-center gap-2 text-sm text-surface-600 bg-surface-50 rounded-lg px-3 py-2"><Clock size={14} className="text-brand-500" /> <span className="font-medium">{previewHours} hours</span></div>}
+          {previewHours > 0 && <div className="flex items-center gap-2 text-sm text-surface-600 bg-surface-50 rounded-lg px-3 py-2"><Clock size={14} className="text-brand-500" aria-hidden="true" /> <span className="font-medium">{previewHours} hours</span></div>}
           <Field label="Reason *"><textarea value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="Why are you requesting this manual entry?" rows={3} className="input text-sm resize-none" /></Field>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">Cancel</button>
-          <button onClick={handleSubmit} disabled={actions.saving || !form.courseName || !form.reason.trim()} className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5">{actions.saving && <Loader2 size={14} className="animate-spin" />} <Send size={14} /> Submit Request</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">Cancel</button>
+          <button onClick={handleSubmit} disabled={actions.saving || !form.courseName || !form.reason.trim()} className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">{actions.saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} <Send size={14} aria-hidden="true" /> Submit Request</button>
         </div>
       </div>
     </ModalOverlay>
@@ -2251,16 +2259,16 @@ function RequestEditModal({ entry, actions, profile, classes, onClose, onSubmitt
   }
 
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={onClose} labelledBy="tc-request-edit-title">
       <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-surface-900 flex items-center gap-2">
-              <FilePenLine size={16} className="text-purple-500" /> Request Time Edit
+            <h3 id="tc-request-edit-title" className="font-semibold text-surface-900 flex items-center gap-2">
+              <FilePenLine size={16} className="text-purple-500" aria-hidden="true" /> Request Time Edit
             </h3>
             <p className="text-xs text-surface-400 mt-0.5">An instructor will review your changes</p>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-4 space-y-4">
           {/* Current Entry Info */}
@@ -2281,7 +2289,7 @@ function RequestEditModal({ entry, actions, profile, classes, onClose, onSubmitt
           {/* Still-punched-in notice */}
           {isStillIn && (
             <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-              <LogIn size={13} className="mt-0.5 shrink-0 text-blue-500" />
+              <LogIn size={13} className="mt-0.5 shrink-0 text-blue-500" aria-hidden="true" />
               <span>You're currently punched in. Only your punch-in time can be corrected right now — punch-out will be recorded when you leave.</span>
             </div>
           )}
@@ -2311,7 +2319,7 @@ function RequestEditModal({ entry, actions, profile, classes, onClose, onSubmitt
             )}
             {previewHours > 0 && hasChanges && !isStillIn && (
               <div className="mt-2 flex items-center gap-2 text-sm">
-                <Clock size={14} className="text-purple-500" />
+                <Clock size={14} className="text-purple-500" aria-hidden="true" />
                 <span className="text-surface-500">{currentHoursDisplay}</span>
                 <span className="text-purple-500 font-medium">→</span>
                 <span className="font-medium text-purple-700">{formatHours(previewHours)}</span>
@@ -2339,17 +2347,17 @@ function RequestEditModal({ entry, actions, profile, classes, onClose, onSubmitt
 
           {!hasChanges && (
             <div className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg flex items-center gap-1.5">
-              <AlertTriangle size={12} /> Change at least one time to submit a request
+              <AlertTriangle size={12} aria-hidden="true" /> Change at least one time to submit a request
             </div>
           )}
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">Cancel</button>
           <button onClick={handleSubmit}
             disabled={actions.saving || !form.reason.trim() || !hasChanges}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5">
-            {actions.saving && <Loader2 size={14} className="animate-spin" />}
-            <Send size={14} /> Submit Request
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            {actions.saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />}
+            <Send size={14} aria-hidden="true" /> Submit Request
           </button>
         </div>
       </div>
@@ -2368,11 +2376,11 @@ function EditEntryModal({ entry, classes, actions, onClose, onSaved }) {
   // Construct timestamps with Z suffix so they're stored as UTC (matching local-as-UTC convention)
   const handleSave = async () => { const piStr = `${form.date}T${form.punchIn}:00Z`; const poStr = form.punchOut ? `${form.date}T${form.punchOut}:00Z` : null; const res = await actions.updateEntry(entry.record_id, { punch_in: piStr, punch_out: poStr, class_id: form.classId, course_id: form.courseName }); if (res?.success) onSaved() }
   return (
-    <ModalOverlay onClose={onClose}>
+    <ModalOverlay onClose={onClose} labelledBy="tc-edit-title">
       <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-          <h3 className="font-semibold text-surface-900">Edit Time Entry</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-surface-100 text-surface-400"><X size={18} /></button>
+          <h3 id="tc-edit-title" className="font-semibold text-surface-900">Edit Time Entry</h3>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1 rounded-lg hover:bg-surface-100 text-surface-400 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-w-[44px] inline-flex items-center justify-center"><X size={18} aria-hidden="true" /></button>
         </div>
         <div className="px-5 py-4 space-y-4">
           <Field label="Class"><select value={form.courseName} onChange={e => { const cn = e.target.value; const cls = classes.find(c => c.course_id === cn); setForm(f => ({ ...f, courseName: cn, classId: cls?.class_id || cn })) }} className="input text-sm"><option value="">Select class…</option>{classes.map(c => <option key={c.class_id} value={c.course_id}>{c.course_id}{c.course_name ? ` — ${c.course_name}` : ''}{c.status !== 'Active' ? ' (Inactive)' : ''}</option>)}</select></Field>
@@ -2384,8 +2392,8 @@ function EditEntryModal({ entry, classes, actions, onClose, onSaved }) {
           <p className="text-xs text-surface-400">Record ID: {entry.record_id}</p>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">Cancel</button>
-          <button onClick={handleSave} disabled={actions.saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5">{actions.saving && <Loader2 size={14} className="animate-spin" />} Save Changes</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">Cancel</button>
+          <button onClick={handleSave} disabled={actions.saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">{actions.saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Save Changes</button>
         </div>
       </div>
     </ModalOverlay>
@@ -2397,16 +2405,16 @@ function ConfirmDeleteModal({ entry, saving, classes, onConfirm, onCancel }) {
   const classConfig = (classes || []).find(c => c.course_id === classId || c.class_id === classId)
   const className = classConfig?.course_name || ''
   return (
-    <ModalOverlay onClose={onCancel} zIndex="z-[60]">
+    <ModalOverlay onClose={onCancel} zIndex="z-[60]" labelledBy="tc-delete-title">
       <div className="bg-white rounded-xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-surface-100"><h3 className="font-semibold text-surface-900">Delete Time Entry</h3></div>
+        <div className="px-5 py-4 border-b border-surface-100"><h3 id="tc-delete-title" className="font-semibold text-surface-900">Delete Time Entry</h3></div>
         <div className="px-5 py-4 text-center">
           <p className="text-sm text-surface-600">Delete entry for <strong>{classId}</strong>{className && <span className="text-xs text-surface-400"> ({className})</span>} on {formatDate(entry.punch_in)}?</p>
           <p className="text-xs text-surface-400 mt-1">This cannot be undone.</p>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-center gap-3">
-          <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200">Cancel</button>
-          <button onClick={onConfirm} disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 flex items-center gap-1.5">{saving && <Loader2 size={14} className="animate-spin" />} Delete</button>
+          <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">Cancel</button>
+          <button onClick={onConfirm} disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">{saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Delete</button>
         </div>
       </div>
     </ModalOverlay>
@@ -2417,12 +2425,49 @@ function ConfirmDeleteModal({ entry, saving, classes, onConfirm, onCancel }) {
 // SHARED UI COMPONENTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ModalOverlay({ children, onClose, zIndex = 'z-50' }) {
-  return <div className={`fixed inset-0 bg-black/40 ${zIndex} flex items-center justify-center p-4`} onClick={onClose}>{children}</div>
+/**
+ * ModalOverlay — shared modal shell (WCAG 2.1 AA).
+ *   • role="dialog" + aria-modal + aria-labelledby (pass the heading id as labelledBy)
+ *   • useDialogA11y: focus moves in on open, Tab is trapped, Escape closes,
+ *     focus returns to the opener on close (stacked dialogs handled by the hook)
+ *   • Click on the backdrop closes; clicks inside the card do not
+ */
+function ModalOverlay({ children, onClose, zIndex = 'z-50', labelledBy }) {
+  const dialogRef = useDialogA11y(true, onClose)
+  return (
+    <div className={`fixed inset-0 bg-black/40 ${zIndex} flex items-center justify-center p-4`} onClick={onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        className="w-full flex items-center justify-center"
+        onClick={e => { if (e.target === e.currentTarget) onClose?.() }}
+      >
+        {children}
+      </div>
+    </div>
+  )
 }
 
-function Field({ label, children }) {
-  return <div><label className="block text-xs font-medium text-surface-600 mb-1">{label}</label>{children}</div>
+/**
+ * Field — label + control. Generates an id with useId() and links the label
+ * to the control (WCAG 1.3.1 / 4.1.2). If the child is a bare
+ * input/select/textarea the id is injected automatically; otherwise pass
+ * `htmlFor` and put that id on the control yourself.
+ */
+const FORM_TAGS = new Set(['input', 'select', 'textarea'])
+function Field({ label, children, htmlFor }) {
+  const autoId = useId()
+  const child = React.Children.only(children)
+  const injectable = !htmlFor && React.isValidElement(child) && FORM_TAGS.has(child.type)
+  const id = htmlFor || (injectable ? (child.props.id || autoId) : undefined)
+  return (
+    <div>
+      <label htmlFor={id} className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
+      {injectable ? React.cloneElement(child, { id }) : children}
+    </div>
+  )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2629,7 +2674,7 @@ function exportGBToCsv(reportData) {
 
 function TabBtn({ active, icon, label, onClick }) {
   return (
-    <button onClick={onClick} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+    <button type="button" onClick={onClick} aria-pressed={active} className={`flex items-center gap-2 px-4 py-2.5 min-h-[44px] rounded-lg text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
       active ? 'bg-brand-600 text-white shadow-sm' : 'bg-white text-surface-600 border border-surface-200 hover:bg-surface-50'
     }`}>{icon} {label}</button>
   )
