@@ -27,6 +27,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import toast from 'react-hot-toast'
+import { shortName } from '@/lib/utils'
 
 function fmtDate(iso) {
   if (!iso) return '—'
@@ -84,6 +87,9 @@ function useLinkCounts(sops) {
 
 export default function SOPsPage() {
   const { profile } = useAuth()
+  // Privacy rule: students / work study see other people as "First L."; instructors keep full names.
+  const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin'
+  const showName = (n) => (isInstructor ? n : shortName(n))
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -148,6 +154,16 @@ export default function SOPsPage() {
   const [templateUploading, setTemplateUploading] = useState(false)
   const [showManageTemplate, setShowManageTemplate] = useState(false)
   const [showRemoveTemplateConfirm, setShowRemoveTemplateConfirm] = useState(false)
+  // a11y: focus trap / Escape / focus restore for each modal
+  const viewDialogRef = useDialogA11y(!!(showViewModal && selectedSOP), () => { setShowViewModal(false); setSelectedSOP(null) })
+  const createDialogRef = useDialogA11y(showCreateModal, () => setShowCreateModal(false))
+  const editDialogRef = useDialogA11y(!!(showEditModal && selectedSOP), () => setShowEditModal(false))
+  const replaceDialogRef = useDialogA11y(!!(showReplaceModal && selectedSOP), () => setShowReplaceModal(false))
+  const linkDialogRef = useDialogA11y(!!(showLinkModal && selectedSOP), () => setShowLinkModal(null))
+  const deleteDialogRef = useDialogA11y(!!(showDeleteConfirm && selectedSOP), () => setShowDeleteConfirm(false))
+  const deleteDocDialogRef = useDialogA11y(!!(showDeleteDocConfirm && selectedSOP), () => setShowDeleteDocConfirm(false))
+  const templateDialogRef = useDialogA11y(showManageTemplate, () => setShowManageTemplate(false))
+  const removeTemplateDialogRef = useDialogA11y(showRemoveTemplateConfirm, () => setShowRemoveTemplateConfirm(false))
   const [templateDragging, setTemplateDragging] = useState(false)
   const [templateError, setTemplateError] = useState('')
 
@@ -406,8 +422,8 @@ export default function SOPsPage() {
     setTemplateUploading(false)
   }
   const handleCreate = async () => {
-    if (!formData.name.trim()) return alert('Please enter a name.')
-    if (selectedFile && selectedFile.type !== 'application/pdf') return alert('Only PDF files are allowed.')
+    if (!formData.name.trim()) return void toast.error('Please enter a name.')
+    if (selectedFile && selectedFile.type !== 'application/pdf') return void toast.error('Only PDF files are allowed.')
     setSaving(true)
     try {
       const sopId = await genId()
@@ -423,12 +439,12 @@ export default function SOPsPage() {
       await auditLog('Create', sopId, `Created SOP: ${formData.name}${selectedFile ? ` with doc: ${selectedFile.name}` : ''}`)
       setShowCreateModal(false); setFormData({ name: '', description: '' }); setSelectedFile(null)
       fetchSOPs()
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to create SOP')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to create SOP')) }
     setSaving(false)
   }
 
   const handleEdit = async () => {
-    if (!formData.name.trim()) return alert('Please enter a name.')
+    if (!formData.name.trim()) return void toast.error('Please enter a name.')
     setSaving(true)
     try {
       const { error } = await supabase.from('sops').update({ name: formData.name.trim(), description: (formData.description || '').trim(), updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id)
@@ -436,7 +452,7 @@ export default function SOPsPage() {
       await auditLog('Update', selectedSOP.sop_id, `Updated SOP: ${formData.name}`)
       setSelectedSOP(prev => ({ ...prev, name: formData.name.trim(), description: (formData.description || '').trim(), updated_at: new Date().toISOString(), updated_by: userName }))
       setShowEditModal(false); fetchSOPs()
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to update SOP')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to update SOP')) }
     setSaving(false)
   }
 
@@ -451,12 +467,12 @@ export default function SOPsPage() {
       if (error) throw error
       await auditLog('Delete', selectedSOP.sop_id, `Deleted SOP: ${selectedSOP.name}`)
       setShowDeleteConfirm(false); setShowViewModal(false); setSelectedSOP(null); fetchSOPs()
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to delete SOP')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to delete SOP')) }
     setSaving(false)
   }
 
   const handleReplaceDoc = async () => {
-    if (!selectedFile || selectedFile.type !== 'application/pdf') return alert('Please select a PDF file.')
+    if (!selectedFile || selectedFile.type !== 'application/pdf') return void toast.error('Please select a PDF file.')
     setSaving(true)
     try {
       if (selectedSOP.document_path) { try { await supabase.storage.from('sop-documents').remove([selectedSOP.document_path]) } catch {} }
@@ -466,12 +482,12 @@ export default function SOPsPage() {
       await auditLog('Replace Document', selectedSOP.sop_id, `Replaced document with: ${selectedFile.name}`)
       setSelectedSOP(prev => ({ ...prev, document_url: u.url, document_name: u.name, document_path: u.path, updated_at: new Date().toISOString(), updated_by: userName }))
       setShowReplaceModal(false); setSelectedFile(null); fetchSOPs()
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to replace document')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to replace document')) }
     setSaving(false)
   }
 
   const handleUploadDoc = async () => {
-    if (!selectedFile || selectedFile.type !== 'application/pdf') return alert('Please select a PDF file.')
+    if (!selectedFile || selectedFile.type !== 'application/pdf') return void toast.error('Please select a PDF file.')
     setSaving(true)
     try {
       const u = await uploadDoc(selectedSOP.sop_id, selectedFile)
@@ -480,7 +496,7 @@ export default function SOPsPage() {
       await auditLog('Upload Document', selectedSOP.sop_id, `Uploaded document: ${selectedFile.name}`)
       setSelectedSOP(prev => ({ ...prev, document_url: u.url, document_name: u.name, document_path: u.path }))
       setSelectedFile(null); fetchSOPs()
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to upload document')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to upload document')) }
     setSaving(false)
   }
 
@@ -493,7 +509,7 @@ export default function SOPsPage() {
       await auditLog('Delete Document', selectedSOP.sop_id, 'Deleted SOP document')
       setSelectedSOP(prev => ({ ...prev, document_url: '', document_name: '', document_path: '' }))
       setShowDeleteDocConfirm(false); fetchSOPs()
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to delete document')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to delete document')) }
     setSaving(false)
   }
 
@@ -525,7 +541,7 @@ export default function SOPsPage() {
       }
       setShowLinkModal(null)
       fetchLinks(sopId)
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to link items')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to link items')) }
     setSaving(false)
   }
 
@@ -536,7 +552,7 @@ export default function SOPsPage() {
       else if (type === 'pm') { await supabase.from('sop_pm_schedules').delete().eq('sop_id', sopId).eq('pm_id', itemId) }
       else if (type === 'wo') { await supabase.from('sop_work_orders').delete().eq('sop_id', sopId).eq('wo_id', itemId) }
       fetchLinks(sopId)
-    } catch (err) { alert('Error: ' + (err.message || 'Failed to unlink')) }
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to unlink')) }
   }
 
   // ── Print Handler ──
@@ -578,7 +594,7 @@ export default function SOPsPage() {
   if (!permsLoading && !loading && !hasPerm('view_page')) {
     return (
       <div style={{ padding: 40, textAlign: 'center', color: '#868e96' }}>
-        <span className="material-icons" style={{ fontSize: 48, marginBottom: 12, display: 'block' }}>lock</span>
+        <span className="material-icons" aria-hidden="true" style={{ fontSize: 48, marginBottom: 12, display: 'block' }}>lock</span>
         <h3 style={{ margin: 0 }}>Access Denied</h3>
         <p>You don't have permission to view this page.</p>
       </div>
@@ -591,7 +607,7 @@ export default function SOPsPage() {
       {/* ── Header ── */}
       <div className="sops-header">
         <div className="sops-header-left">
-          <span className="material-icons sops-header-icon">description</span>
+          <span className="material-icons sops-header-icon" aria-hidden="true">description</span>
           <div>
             <h2 className="sops-title">Standard Operating Procedures</h2>
             <p className="sops-subtitle">{loading ? 'Loading...' : `${filtered.length} SOP${filtered.length !== 1 ? 's' : ''}${search ? ' found' : ''}`}</p>
@@ -606,7 +622,7 @@ export default function SOPsPage() {
               style={{ textDecoration: 'none' }}
               title="Download the blank SOP template"
             >
-              <span className="material-icons" style={{ fontSize: 17 }}>download</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: 17 }}>download</span>
               SOP Template
             </a>
           )}
@@ -617,13 +633,13 @@ export default function SOPsPage() {
               title="Upload or replace the SOP template"
               style={{ display: 'flex', alignItems: 'center', gap: 4 }}
             >
-              <span className="material-icons" style={{ fontSize: 15 }}>settings</span>
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: 15 }}>settings</span>
               Template
             </button>
           )}
           {hasPerm('create_sop') && (
             <button className="sops-btn-primary" onClick={() => { setFormData({ name: '', description: '' }); setSelectedFile(null); setShowCreateModal(true) }}>
-              <span className="material-icons" style={{ fontSize: 18 }}>add</span> New SOP
+              <span className="material-icons" aria-hidden="true" style={{ fontSize: 18 }}>add</span> New SOP
             </button>
           )}
         </div>
@@ -631,15 +647,15 @@ export default function SOPsPage() {
 
       {/* ── Search ── */}
       <div className="sops-search-wrap">
-        <span className="material-icons sops-search-icon">search</span>
-        <input className="sops-search-input" type="text" placeholder="Search SOPs by name, description, document, or ID..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        {search && <button className="sops-search-clear" onClick={() => setSearch('')}><span className="material-icons" style={{ fontSize: 18 }}>close</span></button>}
+        <span className="material-icons sops-search-icon" aria-hidden="true">search</span>
+        <input className="sops-search-input" type="text" aria-label="Search SOPs" placeholder="Search SOPs by name, description, document, or ID..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        {search && <button type="button" className="sops-search-clear" aria-label="Clear search" onClick={() => setSearch('')}><span className="material-icons" aria-hidden="true" style={{ fontSize: 18 }}>close</span></button>}
       </div>
 
       {/* ── Asset filter banner ── */}
       {assetFilter && (
         <div className="sops-asset-filter-banner">
-          <span className="material-icons" style={{ fontSize: 18, color: '#1971c2' }}>precision_manufacturing</span>
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: 18, color: '#1971c2' }}>precision_manufacturing</span>
           <span>
             Showing SOPs linked to <strong>{assetFilter.name}</strong>
             <span style={{ color: '#868e96', fontSize: '0.85rem', marginLeft: 6 }}>({assetFilter.asset_id})</span>
@@ -653,19 +669,19 @@ export default function SOPsPage() {
             }}
             title="Clear filter"
           >
-            <span className="material-icons" style={{ fontSize: 16 }}>close</span>
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>close</span>
             Clear filter
           </button>
         </div>
       )}
 
       {/* ── Loading ── */}
-      {(loading || permsLoading) && <div style={{ textAlign: 'center', padding: 60, color: '#868e96' }}><span className="material-icons" style={{ fontSize: 36, animation: 'spin 1s linear infinite' }}>sync</span><p style={{ marginTop: 12 }}>Loading SOPs...</p></div>}
+      {(loading || permsLoading) && <div style={{ textAlign: 'center', padding: 60, color: '#868e96' }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 36, animation: 'spin 1s linear infinite' }}>sync</span><p style={{ marginTop: 12 }}>Loading SOPs...</p></div>}
 
       {/* ── Empty ── */}
       {!loading && !permsLoading && filtered.length === 0 && (
         <div className="sops-empty">
-          <span className="material-icons" style={{ fontSize: 48, color: '#dee2e6', marginBottom: 12 }}>
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: 48, color: '#dee2e6', marginBottom: 12 }}>
             {assetFilter ? 'link_off' : search ? 'search_off' : 'description'}
           </span>
           <h3 style={{ margin: '0 0 4px', color: '#495057' }}>
@@ -690,16 +706,18 @@ export default function SOPsPage() {
             const lc = linkCounts[sop.sop_id] || { assets: 0, pms: 0, wos: 0 }
             const totalLinks = lc.assets + lc.pms + lc.wos
             return (
-              <div key={sop.sop_id} className="sops-card" onClick={() => { setSelectedSOP(sop); setShowViewModal(true); fetchLinks(sop.sop_id) }}>
+              <div key={sop.sop_id} className="sops-card" role="button" tabIndex={0} aria-label={`Open SOP ${sop.name}`}
+                onClick={() => { setSelectedSOP(sop); setShowViewModal(true); fetchLinks(sop.sop_id) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedSOP(sop); setShowViewModal(true); fetchLinks(sop.sop_id) } }}>
                 <div className="sops-card-top">
                   <div className={`sops-card-doc-badge ${hasDoc ? 'has-doc' : 'no-doc'}`}>
-                    <span className="material-icons" style={{ fontSize: 16 }}>{hasDoc ? 'picture_as_pdf' : 'note_add'}</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>{hasDoc ? 'picture_as_pdf' : 'note_add'}</span>
                     {hasDoc ? 'PDF' : 'No Doc'}
                   </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     {totalLinks > 0 && (
                       <span className="sops-card-links-badge">
-                        <span className="material-icons" style={{ fontSize: 12 }}>link</span> {totalLinks}
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: 12 }}>link</span> {totalLinks}
                       </span>
                     )}
                     <span className="sops-card-id">{sop.sop_id}</span>
@@ -708,10 +726,10 @@ export default function SOPsPage() {
                 <h3 className="sops-card-name"><HL text={sop.name} q={search} /></h3>
                 {sop.description && <p className="sops-card-desc"><HL text={sop.description.length > 120 ? sop.description.slice(0, 120) + '...' : sop.description} q={search} /></p>}
                 {search && hasDoc && (sop.document_name || '').toLowerCase().includes(search.toLowerCase()) && (
-                  <p className="sops-card-doc-name"><span className="material-icons" style={{ fontSize: 14, verticalAlign: -2 }}>attach_file</span> <HL text={sop.document_name} q={search} /></p>
+                  <p className="sops-card-doc-name"><span className="material-icons" aria-hidden="true" style={{ fontSize: 14, verticalAlign: -2 }}>attach_file</span> <HL text={sop.document_name} q={search} /></p>
                 )}
                 <div className="sops-card-footer">
-                  <span className="sops-card-meta"><span className="material-icons" style={{ fontSize: 14, verticalAlign: -2 }}>person</span> <HL text={sop.created_by || '—'} q={search} /></span>
+                  <span className="sops-card-meta"><span className="material-icons" aria-hidden="true" style={{ fontSize: 14, verticalAlign: -2 }}>person</span> <HL text={sop.created_by ? showName(sop.created_by) : '—'} q={search} /></span>
                   <span className="sops-card-meta">{fmtDate(sop.updated_at || sop.created_at)}</span>
                 </div>
               </div>
@@ -723,10 +741,10 @@ export default function SOPsPage() {
       {/* ═══════════════════════════ VIEW MODAL ═══════════════════════════════ */}
       {showViewModal && selectedSOP && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && (setShowViewModal(false), setSelectedSOP(null))}>
-          <div className="sops-modal sops-modal-lg">
+          <div ref={viewDialogRef} role="dialog" aria-modal="true" aria-label="SOP details" className="sops-modal sops-modal-lg">
             <div className="sops-modal-header">
               <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}>
-                <span className="material-icons" style={{ color: '#228be6' }}>description</span>
+                <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>description</span>
                 {selectedSOP.name}
               </h4>
               <button className="sops-modal-close" onClick={() => { setShowViewModal(false); setSelectedSOP(null) }}>&times;</button>
@@ -738,23 +756,23 @@ export default function SOPsPage() {
                   <div className="sops-detail-row"><span className="sops-detail-label">SOP ID</span><span className="sops-detail-value">{selectedSOP.sop_id}</span></div>
                   <div className="sops-detail-row"><span className="sops-detail-label">Name</span><span className="sops-detail-value">{selectedSOP.name}</span></div>
                   {selectedSOP.description && <div className="sops-detail-row" style={{ gridColumn: '1 / -1' }}><span className="sops-detail-label">Description</span><span className="sops-detail-value" style={{ whiteSpace: 'pre-wrap' }}>{selectedSOP.description}</span></div>}
-                  <div className="sops-detail-row"><span className="sops-detail-label">Created By</span><span className="sops-detail-value">{selectedSOP.created_by || '—'}</span></div>
+                  <div className="sops-detail-row"><span className="sops-detail-label">Created By</span><span className="sops-detail-value">{selectedSOP.created_by ? showName(selectedSOP.created_by) : '—'}</span></div>
                   <div className="sops-detail-row"><span className="sops-detail-label">Created</span><span className="sops-detail-value">{fmtDate(selectedSOP.created_at)}</span></div>
                   <div className="sops-detail-row"><span className="sops-detail-label">Last Updated</span><span className="sops-detail-value">{fmtDate(selectedSOP.updated_at)}</span></div>
                   <div className="sops-detail-row"><span className="sops-detail-label">Updated By</span><span className="sops-detail-value">{selectedSOP.updated_by || '—'}</span></div>
                 </div>
                 <div className="sops-view-actions">
-                  {hasPerm('edit_sop') && <button className="sops-btn-outline" onClick={() => { setFormData({ name: selectedSOP.name, description: selectedSOP.description || '' }); setShowEditModal(true) }}><span className="material-icons" style={{ fontSize: 16 }}>edit</span> Edit</button>}
-                  {selectedSOP.document_url && <button className="sops-btn-outline" onClick={handlePrint}><span className="material-icons" style={{ fontSize: 16 }}>print</span> Print</button>}
-                  {hasPerm('delete_sop') && <button className="sops-btn-danger-outline" onClick={() => setShowDeleteConfirm(true)}><span className="material-icons" style={{ fontSize: 16 }}>delete</span> Delete SOP</button>}
+                  {hasPerm('edit_sop') && <button className="sops-btn-outline" onClick={() => { setFormData({ name: selectedSOP.name, description: selectedSOP.description || '' }); setShowEditModal(true) }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>edit</span> Edit</button>}
+                  {selectedSOP.document_url && <button className="sops-btn-outline" onClick={handlePrint}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>print</span> Print</button>}
+                  {hasPerm('delete_sop') && <button className="sops-btn-danger-outline" onClick={() => setShowDeleteConfirm(true)}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>delete</span> Delete SOP</button>}
                 </div>
               </div>
 
               {/* ── Linked Assets ── */}
               <div className="sops-link-section">
                 <div className="sops-link-section-header">
-                  <h5 className="sops-link-section-title"><span className="material-icons" style={{ fontSize: 18, color: '#228be6' }}>precision_manufacturing</span> Linked Assets ({linkedAssets.length})</h5>
-                  {hasPerm('link_items') && <button className="sops-btn-sm" onClick={() => openLinkModal('assets')}><span className="material-icons" style={{ fontSize: 14 }}>add_link</span> Link Assets</button>}
+                  <h5 className="sops-link-section-title"><span className="material-icons" aria-hidden="true" style={{ fontSize: 18, color: '#228be6' }}>precision_manufacturing</span> Linked Assets ({linkedAssets.length})</h5>
+                  {hasPerm('link_items') && <button className="sops-btn-sm" onClick={() => openLinkModal('assets')}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>add_link</span> Link Assets</button>}
                 </div>
                 {linksLoading ? <p className="sops-link-empty">Loading...</p> : linkedAssets.length === 0 ? <p className="sops-link-empty">No assets linked to this SOP.</p> : (
                   <div className="sops-link-list">
@@ -764,7 +782,7 @@ export default function SOPsPage() {
                           <div className="sops-link-item-name">{a.name}</div>
                           <div className="sops-link-item-sub">{a.asset_id}{a.category ? ` · ${a.category}` : ''}{a.location ? ` · ${a.location}` : ''}</div>
                         </div>
-                        {hasPerm('link_items') && <button className="sops-btn-icon" onClick={() => handleUnlink('asset', a.asset_id)} title="Unlink"><span className="material-icons" style={{ fontSize: 16, color: '#fa5252' }}>link_off</span></button>}
+                        {hasPerm('link_items') && <button type="button" className="sops-btn-icon" onClick={() => handleUnlink('asset', a.asset_id)} title="Unlink" aria-label={`Unlink asset ${a.name || a.asset_id}`}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16, color: '#fa5252' }}>link_off</span></button>}
                       </div>
                     ))}
                   </div>
@@ -774,8 +792,8 @@ export default function SOPsPage() {
               {/* ── Linked PMs ── */}
               <div className="sops-link-section">
                 <div className="sops-link-section-header">
-                  <h5 className="sops-link-section-title"><span className="material-icons" style={{ fontSize: 18, color: '#40c057' }}>event_repeat</span> Linked PM Schedules ({linkedPMs.length})</h5>
-                  {hasPerm('link_items') && <button className="sops-btn-sm" onClick={() => openLinkModal('pms')}><span className="material-icons" style={{ fontSize: 14 }}>add_link</span> Link PMs</button>}
+                  <h5 className="sops-link-section-title"><span className="material-icons" aria-hidden="true" style={{ fontSize: 18, color: '#40c057' }}>event_repeat</span> Linked PM Schedules ({linkedPMs.length})</h5>
+                  {hasPerm('link_items') && <button className="sops-btn-sm" onClick={() => openLinkModal('pms')}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>add_link</span> Link PMs</button>}
                 </div>
                 {linksLoading ? <p className="sops-link-empty">Loading...</p> : linkedPMs.length === 0 ? <p className="sops-link-empty">No PM schedules linked to this SOP.</p> : (
                   <div className="sops-link-list">
@@ -786,7 +804,7 @@ export default function SOPsPage() {
                           <div className="sops-link-item-sub">{p.pm_id} · {p.asset_name || 'No asset'} · {p.frequency}{p.next_due_date ? ` · Due: ${fmtDate(p.next_due_date)}` : ''}</div>
                         </div>
                         <span className={`sops-status-dot ${p.status === 'Active' ? 'active' : 'paused'}`}>{p.status}</span>
-                        {hasPerm('link_items') && <button className="sops-btn-icon" onClick={() => handleUnlink('pm', p.pm_id)} title="Unlink"><span className="material-icons" style={{ fontSize: 16, color: '#fa5252' }}>link_off</span></button>}
+                        {hasPerm('link_items') && <button type="button" className="sops-btn-icon" onClick={() => handleUnlink('pm', p.pm_id)} title="Unlink" aria-label={`Unlink PM ${p.title || p.pm_id}`}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16, color: '#fa5252' }}>link_off</span></button>}
                       </div>
                     ))}
                   </div>
@@ -879,25 +897,25 @@ export default function SOPsPage() {
               {/* ── Document Section ── */}
               <div className="sops-link-section">
                 <div className="sops-link-section-header">
-                  <h5 className="sops-link-section-title"><span className="material-icons" style={{ fontSize: 18, color: '#e03131' }}>attach_file</span> Document</h5>
+                  <h5 className="sops-link-section-title"><span className="material-icons" aria-hidden="true" style={{ fontSize: 18, color: '#e03131' }}>attach_file</span> Document</h5>
                   <div style={{ display: 'flex', gap: 8 }}>
                     {selectedSOP.document_url ? (
                       <>
-                        <button className="sops-btn-sm" onClick={handlePrint}><span className="material-icons" style={{ fontSize: 14 }}>print</span> Print</button>
-                        <a href={selectedSOP.document_url} target="_blank" rel="noopener noreferrer" className="sops-btn-sm" style={{ textDecoration: 'none' }}><span className="material-icons" style={{ fontSize: 14 }}>open_in_new</span> Open</a>
-                        {hasPerm('replace_document') && <button className="sops-btn-sm" onClick={() => { setSelectedFile(null); setShowReplaceModal(true) }}><span className="material-icons" style={{ fontSize: 14 }}>swap_horiz</span> Replace</button>}
-                        {hasPerm('delete_document') && <button className="sops-btn-sm sops-btn-sm-danger" onClick={() => setShowDeleteDocConfirm(true)}><span className="material-icons" style={{ fontSize: 14 }}>delete</span> Remove</button>}
+                        <button className="sops-btn-sm" onClick={handlePrint}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>print</span> Print</button>
+                        <a href={selectedSOP.document_url} target="_blank" rel="noopener noreferrer" className="sops-btn-sm" style={{ textDecoration: 'none' }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>open_in_new</span> Open</a>
+                        {hasPerm('replace_document') && <button className="sops-btn-sm" onClick={() => { setSelectedFile(null); setShowReplaceModal(true) }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>swap_horiz</span> Replace</button>}
+                        {hasPerm('delete_document') && <button className="sops-btn-sm sops-btn-sm-danger" onClick={() => setShowDeleteDocConfirm(true)}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>delete</span> Remove</button>}
                       </>
                     ) : hasPerm('upload_document') && (
                       <div>
-                        <input ref={uploadFileRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files[0]; if (f && f.type !== 'application/pdf') { alert('Only PDF files.'); e.target.value = ''; return }; setSelectedFile(f || null) }} />
+                        <input ref={uploadFileRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files[0]; if (f && f.type !== 'application/pdf') { toast.error('Only PDF files.'); e.target.value = ''; return }; setSelectedFile(f || null) }} />
                         {selectedFile ? (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontSize: '0.8rem', color: '#495057' }}>{selectedFile.name}</span>
                             <button className="sops-btn-sm" onClick={handleUploadDoc} disabled={saving}>{saving ? 'Uploading...' : 'Upload'}</button>
-                            <button className="sops-btn-icon" onClick={() => { setSelectedFile(null); if (uploadFileRef.current) uploadFileRef.current.value = '' }}><span className="material-icons" style={{ fontSize: 16 }}>close</span></button>
+                            <button type="button" className="sops-btn-icon" aria-label="Remove selected file" onClick={() => { setSelectedFile(null); if (uploadFileRef.current) uploadFileRef.current.value = '' }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>close</span></button>
                           </div>
-                        ) : <button className="sops-btn-sm" onClick={() => uploadFileRef.current?.click()}><span className="material-icons" style={{ fontSize: 14 }}>upload_file</span> Upload PDF</button>}
+                        ) : <button className="sops-btn-sm" onClick={() => uploadFileRef.current?.click()}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>upload_file</span> Upload PDF</button>}
                       </div>
                     )}
                   </div>
@@ -905,7 +923,7 @@ export default function SOPsPage() {
                 {selectedSOP.document_url ? (
                   <div>
                     <div className="sops-doc-info">
-                      <span className="material-icons" style={{ color: '#e03131', fontSize: 22 }}>picture_as_pdf</span>
+                      <span className="material-icons" aria-hidden="true" style={{ color: '#e03131', fontSize: 22 }}>picture_as_pdf</span>
                       <span style={{ flex: 1, fontWeight: 500, fontSize: '0.88rem', color: '#495057' }}>{selectedSOP.document_name || 'SOP Document'}</span>
                     </div>
                     <div className="sops-pdf-viewer">
@@ -914,7 +932,7 @@ export default function SOPsPage() {
                   </div>
                 ) : (
                   <div className="sops-no-doc">
-                    <span className="material-icons" style={{ fontSize: 36, color: '#dee2e6' }}>note_add</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: 36, color: '#dee2e6' }}>note_add</span>
                     <p style={{ margin: '8px 0 0', color: '#868e96', fontSize: '0.88rem' }}>No document attached to this SOP.</p>
                   </div>
                 )}
@@ -927,27 +945,27 @@ export default function SOPsPage() {
       {/* ═══════════════════════════ CREATE MODAL ═════════════════════════════ */}
       {showCreateModal && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowCreateModal(false)}>
-          <div className="sops-modal">
-            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}><span className="material-icons" style={{ color: '#228be6' }}>add_circle</span> New SOP</h4><button className="sops-modal-close" onClick={() => setShowCreateModal(false)}>&times;</button></div>
+          <div ref={createDialogRef} role="dialog" aria-modal="true" aria-label="Create SOP" className="sops-modal">
+            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}><span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>add_circle</span> New SOP</h4><button className="sops-modal-close" onClick={() => setShowCreateModal(false)}>&times;</button></div>
             <div className="sops-modal-body">
-              <label className="sops-label">Name <span style={{ color: '#fa5252' }}>*</span></label>
-              <input className="sops-input" placeholder="Enter SOP name..." value={formData.name} onChange={(e) => setFormData(f => ({ ...f, name: e.target.value }))} autoFocus />
-              <label className="sops-label">Description</label>
-              <textarea className="sops-input" placeholder="Describe this SOP..." value={formData.description} onChange={(e) => setFormData(f => ({ ...f, description: e.target.value }))} rows={4} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+              <label htmlFor="sop-fld-name-1" className="sops-label">Name <span style={{ color: '#fa5252' }}>*</span></label>
+              <input id="sop-fld-name-1" className="sops-input" placeholder="Enter SOP name..." value={formData.name} onChange={(e) => setFormData(f => ({ ...f, name: e.target.value }))} autoFocus />
+              <label htmlFor="sop-fld-description-2" className="sops-label">Description</label>
+              <textarea id="sop-fld-description-2" className="sops-input" placeholder="Describe this SOP..." value={formData.description} onChange={(e) => setFormData(f => ({ ...f, description: e.target.value }))} rows={4} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
               {hasPerm('upload_document') && (
                 <>
                   <label className="sops-label">Document (PDF only)</label>
                   <div className="sops-file-drop">
-                    <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files[0]; if (f && f.type !== 'application/pdf') { alert('Only PDF files.'); e.target.value = ''; return }; setSelectedFile(f || null) }} />
+                    <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files[0]; if (f && f.type !== 'application/pdf') { toast.error('Only PDF files.'); e.target.value = ''; return }; setSelectedFile(f || null) }} />
                     {selectedFile ? (
                       <div className="sops-file-selected">
-                        <span className="material-icons" style={{ color: '#e03131', fontSize: 20 }}>picture_as_pdf</span>
+                        <span className="material-icons" aria-hidden="true" style={{ color: '#e03131', fontSize: 20 }}>picture_as_pdf</span>
                         <span style={{ flex: 1, fontSize: '0.88rem', color: '#495057' }}>{selectedFile.name}</span>
-                        <button className="sops-btn-icon" onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}><span className="material-icons" style={{ fontSize: 18 }}>close</span></button>
+                        <button type="button" className="sops-btn-icon" aria-label="Remove selected file" onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 18 }}>close</span></button>
                       </div>
                     ) : (
                       <button className="sops-file-browse" onClick={() => fileInputRef.current?.click()}>
-                        <span className="material-icons" style={{ fontSize: 24, color: '#228be6' }}>cloud_upload</span>
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: 24, color: '#228be6' }}>cloud_upload</span>
                         <span style={{ fontSize: '0.88rem', color: '#495057' }}>Click to browse for a PDF</span>
                         <span style={{ fontSize: '0.75rem', color: '#adb5bd' }}>Optional — you can add a document later</span>
                       </button>
@@ -965,13 +983,13 @@ export default function SOPsPage() {
       {/* ═══════════════════════════ EDIT MODAL ═══════════════════════════════ */}
       {showEditModal && selectedSOP && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowEditModal(false)}>
-          <div className="sops-modal">
-            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}><span className="material-icons" style={{ color: '#fab005' }}>edit</span> Edit SOP</h4><button className="sops-modal-close" onClick={() => setShowEditModal(false)}>&times;</button></div>
+          <div ref={editDialogRef} role="dialog" aria-modal="true" aria-label="Edit SOP" className="sops-modal">
+            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}><span className="material-icons" aria-hidden="true" style={{ color: '#fab005' }}>edit</span> Edit SOP</h4><button className="sops-modal-close" onClick={() => setShowEditModal(false)}>&times;</button></div>
             <div className="sops-modal-body">
-              <label className="sops-label">Name <span style={{ color: '#fa5252' }}>*</span></label>
-              <input className="sops-input" value={formData.name} onChange={(e) => setFormData(f => ({ ...f, name: e.target.value }))} autoFocus />
-              <label className="sops-label">Description</label>
-              <textarea className="sops-input" value={formData.description} onChange={(e) => setFormData(f => ({ ...f, description: e.target.value }))} rows={4} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
+              <label htmlFor="sop-fld-name-3" className="sops-label">Name <span style={{ color: '#fa5252' }}>*</span></label>
+              <input id="sop-fld-name-3" className="sops-input" value={formData.name} onChange={(e) => setFormData(f => ({ ...f, name: e.target.value }))} autoFocus />
+              <label htmlFor="sop-fld-description-4" className="sops-label">Description</label>
+              <textarea id="sop-fld-description-4" className="sops-input" value={formData.description} onChange={(e) => setFormData(f => ({ ...f, description: e.target.value }))} rows={4} style={{ resize: 'vertical', fontFamily: 'inherit' }} />
             </div>
             <div className="sops-modal-footer"><button className="sops-btn-cancel" onClick={() => setShowEditModal(false)}>Cancel</button><button className="sops-btn-primary" onClick={handleEdit} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button></div>
           </div>
@@ -981,17 +999,17 @@ export default function SOPsPage() {
       {/* ═══════════════════════════ REPLACE DOC MODAL ═════════════════════════ */}
       {showReplaceModal && selectedSOP && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowReplaceModal(false)}>
-          <div className="sops-modal">
-            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}><span className="material-icons" style={{ color: '#fab005' }}>swap_horiz</span> Replace Document</h4><button className="sops-modal-close" onClick={() => setShowReplaceModal(false)}>&times;</button></div>
+          <div ref={replaceDialogRef} role="dialog" aria-modal="true" aria-label="Replace document" className="sops-modal">
+            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}><span className="material-icons" aria-hidden="true" style={{ color: '#fab005' }}>swap_horiz</span> Replace Document</h4><button className="sops-modal-close" onClick={() => setShowReplaceModal(false)}>&times;</button></div>
             <div className="sops-modal-body">
               <p style={{ margin: '0 0 12px', fontSize: '0.88rem', color: '#495057' }}>Current: <strong>{selectedSOP.document_name || 'Unknown'}</strong></p>
               <p style={{ margin: '0 0 16px', fontSize: '0.85rem', color: '#868e96' }}>This will permanently delete the current document and replace it.</p>
               <div className="sops-file-drop">
-                <input ref={replaceFileRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files[0]; if (f && f.type !== 'application/pdf') { alert('Only PDF files.'); e.target.value = ''; return }; setSelectedFile(f || null) }} />
+                <input ref={replaceFileRef} type="file" accept="application/pdf" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files[0]; if (f && f.type !== 'application/pdf') { toast.error('Only PDF files.'); e.target.value = ''; return }; setSelectedFile(f || null) }} />
                 {selectedFile ? (
-                  <div className="sops-file-selected"><span className="material-icons" style={{ color: '#e03131', fontSize: 20 }}>picture_as_pdf</span><span style={{ flex: 1, fontSize: '0.88rem', color: '#495057' }}>{selectedFile.name}</span><button className="sops-btn-icon" onClick={() => { setSelectedFile(null); if (replaceFileRef.current) replaceFileRef.current.value = '' }}><span className="material-icons" style={{ fontSize: 18 }}>close</span></button></div>
+                  <div className="sops-file-selected"><span className="material-icons" aria-hidden="true" style={{ color: '#e03131', fontSize: 20 }}>picture_as_pdf</span><span style={{ flex: 1, fontSize: '0.88rem', color: '#495057' }}>{selectedFile.name}</span><button type="button" className="sops-btn-icon" aria-label="Remove selected file" onClick={() => { setSelectedFile(null); if (replaceFileRef.current) replaceFileRef.current.value = '' }}><span className="material-icons" aria-hidden="true" style={{ fontSize: 18 }}>close</span></button></div>
                 ) : (
-                  <button className="sops-file-browse" onClick={() => replaceFileRef.current?.click()}><span className="material-icons" style={{ fontSize: 24, color: '#228be6' }}>cloud_upload</span><span style={{ fontSize: '0.88rem', color: '#495057' }}>Click to browse for a PDF</span></button>
+                  <button className="sops-file-browse" onClick={() => replaceFileRef.current?.click()}><span className="material-icons" aria-hidden="true" style={{ fontSize: 24, color: '#228be6' }}>cloud_upload</span><span style={{ fontSize: '0.88rem', color: '#495057' }}>Click to browse for a PDF</span></button>
                 )}
               </div>
             </div>
@@ -1003,19 +1021,19 @@ export default function SOPsPage() {
       {/* ═══════════════════════════ LINK PICKER MODAL ═════════════════════════ */}
       {showLinkModal && selectedSOP && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowLinkModal(null)}>
-          <div className="sops-modal sops-modal-lg">
+          <div ref={linkDialogRef} role="dialog" aria-modal="true" aria-label="Link items to SOP" className="sops-modal sops-modal-lg">
             <div className="sops-modal-header">
               <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}>
-                <span className="material-icons" style={{ color: '#228be6' }}>add_link</span>
+                <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>add_link</span>
                 Link {showLinkModal === 'assets' ? 'Assets' : showLinkModal === 'pms' ? 'PM Schedules' : 'Work Orders'}
               </h4>
               <button className="sops-modal-close" onClick={() => setShowLinkModal(null)}>&times;</button>
             </div>
             <div className="sops-modal-body">
               <div className="sops-search-wrap" style={{ marginBottom: 12 }}>
-                <span className="material-icons sops-search-icon">search</span>
-                <input className="sops-search-input" type="text" placeholder={`Search ${showLinkModal === 'assets' ? 'assets' : showLinkModal === 'pms' ? 'PM schedules' : 'work orders'}...`} value={linkSearch} onChange={(e) => setLinkSearch(e.target.value)} autoFocus />
-                {linkSearch && <button className="sops-search-clear" onClick={() => setLinkSearch('')}><span className="material-icons" style={{ fontSize: 18 }}>close</span></button>}
+                <span className="material-icons sops-search-icon" aria-hidden="true">search</span>
+                 <input className="sops-search-input" type="text" aria-label="Search items to link" placeholder={`Search ${showLinkModal === 'assets' ? 'assets' : showLinkModal === 'pms' ? 'PM schedules' : 'work orders'}...`} value={linkSearch} onChange={(e) => setLinkSearch(e.target.value)} autoFocus />
+                {linkSearch && <button type="button" className="sops-search-clear" aria-label="Clear search" onClick={() => setLinkSearch('')}><span className="material-icons" aria-hidden="true" style={{ fontSize: 18 }}>close</span></button>}
               </div>
               <p style={{ margin: '0 0 8px', fontSize: '0.78rem', color: '#868e96' }}>{Object.values(linkSelected).filter(Boolean).length} selected · {linkPickerItems.length} available</p>
               <div className="sops-link-picker-list">
@@ -1054,8 +1072,8 @@ export default function SOPsPage() {
       {/* ═══════════════════════════ DELETE CONFIRMS ═══════════════════════════ */}
       {showDeleteConfirm && selectedSOP && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowDeleteConfirm(false)}>
-          <div className="sops-modal" style={{ maxWidth: 400 }}>
-            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', color: '#e03131' }}><span className="material-icons">warning</span> Delete SOP</h4><button className="sops-modal-close" onClick={() => setShowDeleteConfirm(false)}>&times;</button></div>
+          <div ref={deleteDialogRef} role="alertdialog" aria-modal="true" aria-label="Delete SOP" className="sops-modal" style={{ maxWidth: 400 }}>
+            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', color: '#e03131' }}><span className="material-icons" aria-hidden="true">warning</span> Delete SOP</h4><button className="sops-modal-close" onClick={() => setShowDeleteConfirm(false)}>&times;</button></div>
             <div className="sops-modal-body">
               <p style={{ margin: 0, fontSize: '0.9rem', color: '#495057' }}>Are you sure you want to delete <strong>{selectedSOP.name}</strong>?</p>
               {selectedSOP.document_url && <p style={{ margin: '8px 0 0', fontSize: '0.85rem', color: '#868e96' }}>The attached document will also be permanently deleted.</p>}
@@ -1069,8 +1087,8 @@ export default function SOPsPage() {
 
       {showDeleteDocConfirm && selectedSOP && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowDeleteDocConfirm(false)}>
-          <div className="sops-modal" style={{ maxWidth: 400 }}>
-            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', color: '#e03131' }}><span className="material-icons">warning</span> Remove Document</h4><button className="sops-modal-close" onClick={() => setShowDeleteDocConfirm(false)}>&times;</button></div>
+          <div ref={deleteDocDialogRef} role="alertdialog" aria-modal="true" aria-label="Delete document" className="sops-modal" style={{ maxWidth: 400 }}>
+            <div className="sops-modal-header"><h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', color: '#e03131' }}><span className="material-icons" aria-hidden="true">warning</span> Remove Document</h4><button className="sops-modal-close" onClick={() => setShowDeleteDocConfirm(false)}>&times;</button></div>
             <div className="sops-modal-body">
               <p style={{ margin: 0, fontSize: '0.9rem', color: '#495057' }}>Remove <strong>{selectedSOP.document_name}</strong>?</p>
               <p style={{ margin: '12px 0 0', fontSize: '0.85rem', color: '#fa5252', fontWeight: 500 }}>The document will be permanently deleted from storage.</p>
@@ -1083,10 +1101,10 @@ export default function SOPsPage() {
       {/* ═══════════════════════ MANAGE TEMPLATE MODAL ════════════════════════ */}
       {showManageTemplate && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowManageTemplate(false)}>
-          <div className="sops-modal" style={{ maxWidth: 460 }}>
+          <div ref={templateDialogRef} role="dialog" aria-modal="true" aria-label="Manage SOP template" className="sops-modal" style={{ maxWidth: 460 }}>
             <div className="sops-modal-header">
               <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem' }}>
-                <span className="material-icons" style={{ color: '#228be6' }}>description</span>
+                <span className="material-icons" aria-hidden="true" style={{ color: '#228be6' }}>description</span>
                 Manage SOP Template
               </h4>
               <button className="sops-modal-close" onClick={() => { setShowManageTemplate(false); setTemplateError('') }}>&times;</button>
@@ -1095,13 +1113,13 @@ export default function SOPsPage() {
               {/* ── Error banner ── */}
               {templateError && (
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: '#fff5f5', border: '1px solid #ffc9c9', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
-                  <span className="material-icons" style={{ color: '#e03131', fontSize: 20, flexShrink: 0, marginTop: 1 }}>error</span>
+                  <span className="material-icons" aria-hidden="true" style={{ color: '#e03131', fontSize: 20, flexShrink: 0, marginTop: 1 }}>error</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#c92a2a', marginBottom: 2 }}>Upload Failed</div>
                     <div style={{ fontSize: '0.82rem', color: '#c92a2a' }}>{templateError}</div>
                   </div>
-                  <button className="sops-btn-icon" onClick={() => setTemplateError('')} style={{ flexShrink: 0 }}>
-                    <span className="material-icons" style={{ fontSize: 16, color: '#e03131' }}>close</span>
+                  <button type="button" className="sops-btn-icon" aria-label="Dismiss error" onClick={() => setTemplateError('')} style={{ flexShrink: 0 }}>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: 16, color: '#e03131' }}>close</span>
                   </button>
                 </div>
               )}
@@ -1112,18 +1130,18 @@ export default function SOPsPage() {
               {/* Current Template Status */}
               {templateUrl ? (
                 <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '12px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span className="material-icons" style={{ color: '#16a34a', fontSize: 22 }}>check_circle</span>
+                  <span className="material-icons" aria-hidden="true" style={{ color: '#16a34a', fontSize: 22 }}>check_circle</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#15803d' }}>Template Active</div>
                     <div style={{ fontSize: '0.78rem', color: '#166534', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{templateName || 'SOP_Template.docx'}</div>
                   </div>
                   <a href={templateUrl} download={templateName || 'SOP_Template.docx'} className="sops-btn-sm" style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                    <span className="material-icons" style={{ fontSize: 14 }}>download</span> Download
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>download</span> Download
                   </a>
                 </div>
               ) : (
                 <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '12px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span className="material-icons" style={{ color: '#d97706', fontSize: 22 }}>warning</span>
+                  <span className="material-icons" aria-hidden="true" style={{ color: '#d97706', fontSize: 22 }}>warning</span>
                   <div style={{ fontSize: '0.85rem', color: '#92400e' }}>No template uploaded yet. Upload one below to make it available for download.</div>
                 </div>
               )}
@@ -1140,10 +1158,10 @@ export default function SOPsPage() {
               />
               {templateFile ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef' }}>
-                  <span className="material-icons" style={{ color: '#228be6', fontSize: 20 }}>description</span>
+                  <span className="material-icons" aria-hidden="true" style={{ color: '#228be6', fontSize: 20 }}>description</span>
                   <span style={{ flex: 1, fontSize: '0.85rem', color: '#495057', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{templateFile.name}</span>
-                  <button className="sops-btn-icon" onClick={() => { setTemplateFile(null); if (templateFileRef.current) templateFileRef.current.value = '' }}>
-                    <span className="material-icons" style={{ fontSize: 16 }}>close</span>
+                  <button type="button" className="sops-btn-icon" aria-label="Remove selected template file" onClick={() => { setTemplateFile(null); if (templateFileRef.current) templateFileRef.current.value = '' }}>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>close</span>
                   </button>
                 </div>
               ) : (
@@ -1159,12 +1177,12 @@ export default function SOPsPage() {
                     if (!f) return
                     const allowed = ['.docx', '.doc', '.pdf']
                     const ext = '.' + f.name.split('.').pop().toLowerCase()
-                    if (!allowed.includes(ext)) { alert('Please drop a .docx, .doc, or .pdf file.'); return }
+                    if (!allowed.includes(ext)) { toast.error('Please drop a .docx, .doc, or .pdf file.'); return }
                     setTemplateFile(f)
                   }}
                 >
                   <button className="sops-file-browse" onClick={() => templateFileRef.current?.click()}>
-                    <span className="material-icons" style={{ fontSize: 32, color: templateDragging ? '#228be6' : '#adb5bd' }}>upload_file</span>
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: 32, color: templateDragging ? '#228be6' : '#adb5bd' }}>upload_file</span>
                     <span style={{ fontSize: '0.85rem', color: templateDragging ? '#228be6' : '#495057', fontWeight: 500 }}>
                       {templateDragging ? 'Drop to upload' : 'Click or drag file here'}
                     </span>
@@ -1176,7 +1194,7 @@ export default function SOPsPage() {
             <div className="sops-modal-footer" style={{ justifyContent: templateUrl ? 'space-between' : 'flex-end' }}>
               {templateUrl && (
                 <button className="sops-btn-danger-outline" onClick={() => setShowRemoveTemplateConfirm(true)} style={{ fontSize: '0.82rem' }}>
-                  <span className="material-icons" style={{ fontSize: 15 }}>delete</span> Remove Template
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: 15 }}>delete</span> Remove Template
                 </button>
               )}
               <div style={{ display: 'flex', gap: 10 }}>
@@ -1193,10 +1211,10 @@ export default function SOPsPage() {
       {/* ═══════════════════ REMOVE TEMPLATE CONFIRM ═══════════════════════════ */}
       {showRemoveTemplateConfirm && (
         <div className="sops-overlay" onClick={(e) => e.target === e.currentTarget && setShowRemoveTemplateConfirm(false)}>
-          <div className="sops-modal" style={{ maxWidth: 400 }}>
+          <div ref={removeTemplateDialogRef} role="alertdialog" aria-modal="true" aria-label="Remove template" className="sops-modal" style={{ maxWidth: 400 }}>
             <div className="sops-modal-header">
               <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', color: '#e03131' }}>
-                <span className="material-icons">warning</span> Remove Template
+                <span className="material-icons" aria-hidden="true">warning</span> Remove Template
               </h4>
               <button className="sops-modal-close" onClick={() => setShowRemoveTemplateConfirm(false)}>&times;</button>
             </div>
@@ -1226,7 +1244,7 @@ export default function SOPsPage() {
         .sops-search-input { width: 100%; padding: 12px 40px 12px 44px; border: 1px solid #dee2e6; border-radius: 10px; font-size: 0.9rem; background: white; box-sizing: border-box; transition: border-color 0.2s; }
         .sops-search-input:focus { border-color: #228be6; outline: none; box-shadow: 0 0 0 3px rgba(34,139,230,0.1); }
         .sops-search-input::placeholder { color: #adb5bd; }
-        .sops-search-clear { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #868e96; padding: 4px; display: flex; align-items: center; }
+        .sops-search-clear { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: #868e96; padding: 4px; display: flex; align-items: center;  min-height: 44px; min-width: 44px; justify-content: center; }
         .sops-empty { text-align: center; padding: 60px 20px; }
         .sops-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
         .sops-card { background: white; border: 1px solid #e9ecef; border-radius: 12px; padding: 20px; cursor: pointer; transition: all 0.2s; }
@@ -1258,24 +1276,24 @@ export default function SOPsPage() {
         .sops-file-browse { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px; width: 100%; background: none; border: none; cursor: pointer; transition: background 0.15s; }
         .sops-file-browse:hover { background: #f8f9fa; }
         .sops-file-selected { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #f8f9fa; }
-        .sops-btn-primary { background: #228be6; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; font-weight: 500; cursor: pointer; transition: background 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+        .sops-btn-primary { background: #228be6; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; font-weight: 500; cursor: pointer; transition: background 0.2s; display: inline-flex; align-items: center; gap: 6px;  min-height: 44px; }
         .sops-btn-primary:hover { background: #1c7ed6; }
         .sops-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-        .sops-btn-cancel { background: #f1f3f5; color: #495057; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; cursor: pointer; }
+        .sops-btn-cancel { background: #f1f3f5; color: #495057; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; cursor: pointer;  min-height: 44px; }
         .sops-btn-cancel:hover { background: #e9ecef; }
-        .sops-btn-danger { background: #fa5252; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; font-weight: 500; cursor: pointer; }
+        .sops-btn-danger { background: #fa5252; color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 0.88rem; font-weight: 500; cursor: pointer;  min-height: 44px; }
         .sops-btn-danger:hover { background: #e03131; }
         .sops-btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-        .sops-btn-outline { background: white; color: #228be6; border: 1.5px solid #228be6; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s; }
+        .sops-btn-outline { background: white; color: #228be6; border: 1.5px solid #228be6; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s;  min-height: 44px; }
         .sops-btn-outline:hover { background: #e7f5ff; }
-        .sops-btn-danger-outline { background: white; color: #fa5252; border: 1.5px solid #fa5252; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s; }
+        .sops-btn-danger-outline { background: white; color: #fa5252; border: 1.5px solid #fa5252; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s;  min-height: 44px; }
         .sops-btn-danger-outline:hover { background: #fff5f5; }
-        .sops-btn-sm { background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px; padding: 5px 12px; font-size: 0.78rem; cursor: pointer; color: #495057; display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s; }
+        .sops-btn-sm { background: #f1f3f5; border: 1px solid #dee2e6; border-radius: 6px; padding: 5px 12px; font-size: 0.78rem; cursor: pointer; color: #495057; display: inline-flex; align-items: center; gap: 4px; transition: all 0.15s;  min-height: 44px; }
         .sops-btn-sm:hover { background: #e9ecef; }
         .sops-btn-sm:disabled { opacity: 0.5; cursor: not-allowed; }
         .sops-btn-sm-danger { color: #e03131; border-color: #ffc9c9; }
         .sops-btn-sm-danger:hover { background: #fff5f5; }
-        .sops-btn-icon { background: none; border: none; cursor: pointer; color: #868e96; padding: 4px; display: inline-flex; align-items: center; }
+        .sops-btn-icon { background: none; border: none; cursor: pointer; color: #868e96; padding: 4px; display: inline-flex; align-items: center;  min-height: 44px; min-width: 44px; justify-content: center; }
         .sops-btn-icon:hover { color: #495057; }
         .sops-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
         .sops-detail-row { display: flex; flex-direction: column; gap: 2px; }
