@@ -27,6 +27,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
@@ -128,8 +129,7 @@ export function usePermissions(pageName) {
   useEffect(() => {
     if (!profile?.email || isSuperAdmin) return
 
-    const channel = supabase
-      .channel(`perm-temp-${pageName}`)
+    const channel = subscribeWithReconnect(`perm-temp-${pageName}`, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'temp_access_requests' },
@@ -163,9 +163,9 @@ export function usePermissions(pageName) {
           }
         }
       )
-      .subscribe()
+    )
 
-    return () => { supabase.removeChannel(channel) }
+    return () => { channel() }
   }, [profile?.email, pageName, isSuperAdmin])
 
   /**
@@ -276,8 +276,7 @@ export function useMultiPagePermissions(pageNames = []) {
   useEffect(() => {
     if (!profile?.email || isSuperAdmin || pageNames.length === 0) return
 
-    const channel = supabase
-      .channel(`multi-perm-temp-${pageNames.join('-')}`)
+    const channel = subscribeWithReconnect(`multi-perm-temp-${pageNames.join('-')}`, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'temp_access_requests' },
@@ -310,9 +309,9 @@ export function useMultiPagePermissions(pageNames = []) {
           }
         }
       )
-      .subscribe()
+    )
 
-    return () => { supabase.removeChannel(channel) }
+    return () => { channel() }
   }, [profile?.email, pageNames.join(','), isSuperAdmin])
 
   const hasPerm = useCallback((page, feature) => {

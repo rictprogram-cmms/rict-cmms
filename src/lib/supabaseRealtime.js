@@ -47,6 +47,8 @@ import { supabase as defaultClient } from '@/lib/supabase'
 // reconnect loop where every rebuild spawned two channels.
 const RETRY_STATUSES = new Set(['CHANNEL_ERROR', 'TIMED_OUT'])
 
+let channelSeq = 0
+
 export function subscribeWithReconnect(name, bind, options = {}) {
   const client = options.client || defaultClient
   const tag = options.tag || name
@@ -65,7 +67,11 @@ export function subscribeWithReconnect(name, bind, options = {}) {
 
   const connect = () => {
     if (stopped) return
-    const ch = bind(client.channel(`${name}-${Date.now()}`))
+    // Unique per-connection name: Supabase returns the SAME channel object for a
+    // repeated name, and adding callbacks to an already-subscribed channel throws
+    // ("cannot add postgres_changes callbacks … after subscribe()"). A counter
+    // covers two hooks mounting in the same millisecond.
+    const ch = bind(client.channel(`${name}-${Date.now()}-${++channelSeq}`))
     channel = ch
     ch.subscribe((status) => {
       // Ignore anything from a channel we have already replaced or torn down.
