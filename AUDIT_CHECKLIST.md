@@ -112,8 +112,8 @@ Instructor / admin:
 - [x] **Deferred pooled-scanner follow-ups** — both delivered 2026-08-24:
   - [x] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx` (delivered 2026-08-24)
   - [x] Hide pooled asset's checkout indicator in `AssetsPage.jsx` (delivered 2026-08-24)
-- [ ] `.gitattributes` — delivered 2026-08-25 but **not on main** (dot-file likely lost on download/rename). Re-add at repo root: `*.bat text eol=crlf` / `*.cmd text eol=crlf`
-- [ ] Dependency bumps (minor, safe): `@supabase/supabase-js`, `react-router-dom`, `react`, `date-fns`, `docx`, `fflate`
+- [x] `.gitattributes` on main (2026-08-25)
+- [x] Dependency bumps (minor, 2026-08-25): `@supabase/supabase-js` 2.49→2.112, `react-router-dom` 7.1→7.18, `react`/`react-dom` 19.0→19.2, `date-fns` 4.1→4.4, `docx` 9.6→9.7, `fflate` 0.8.2→0.8.3. Clears the `react-router`, `nanoid` (via docx) and `ws` (via supabase) advisories. Build verified; `npm audit --omit=dev` should be 0 once `npm install` is run with the SheetJS tarball.
 - [ ] Dependency bumps (major, plan separately): `vite` 6→8, `@vitejs/plugin-react` 4→6, `tailwindcss` 3→4, `lucide-react` 0.468→1.x
 - [ ] Main chunk still ~1 MB: `docx`/`fflate` are pulled in statically somewhere eager (likely `AppLayout` → `SyllabusLibraryModal` or `syllabusDocx.js`). Make those imports dynamic to shrink it further.
 - [ ] `fflate` mixed static/dynamic import warning (`syllabusDocx.js` static vs `CourseProposalWizard.jsx` / `courseOutlineDocx.js` dynamic) — make consistent
