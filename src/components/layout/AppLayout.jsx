@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import toast from 'react-hot-toast'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -1132,7 +1133,8 @@ function HelpButton({ profile }) {
     setShowLocationPicker(false)
     try {
       const requestId = `HR${Date.now()}`
-      const { error } = await supabase.from('help_requests').insert({
+      const { error } = assertWrite(
+      await supabase.from('help_requests').insert({
         request_id: requestId,
         user_id: profile?.user_id || profile?.id || null,
         user_name: userName,
@@ -1140,7 +1142,9 @@ function HelpButton({ profile }) {
         location: location,
         status: 'pending',
         requested_at: new Date().toISOString(),
-      })
+      }).select(),
+      'help_requests.insert'
+    )
       if (error) throw error
       setHelpStatus('pending')
       setHelpRequest({ request_id: requestId, status: 'pending', location })

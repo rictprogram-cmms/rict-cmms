@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
@@ -404,9 +405,12 @@ async function insertWithRetry(record, maxRetries = 3) {
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const id = attempt === 0 ? record.record_id : generateRecordId()
-    const { error } = await supabase
+    const { error } = assertWrite(
+      await supabase
       .from('weekly_lab_tracker')
-      .insert({ ...record, record_id: id })
+      .insert({ ...record, record_id: id }).select(),
+      'weekly_lab_tracker.insert'
+    )
 
     if (!error) return id
 
@@ -450,10 +454,13 @@ export function useLabTrackerActions() {
         }
         update.created_by = profile?.email
 
-        const { error } = await supabase
+        const { error } = assertWrite(
+      await supabase
           .from('weekly_lab_tracker')
           .update(update)
-          .eq('record_id', existing.record_id)
+          .eq('record_id', existing.record_id).select(),
+      'weekly_lab_tracker.update'
+    )
         if (error) throw error
       } else {
         const recordId = generateRecordId()
@@ -511,13 +518,16 @@ export function useLabTrackerActions() {
 
       if (existing) {
         // Record exists — just update it
-        const { error } = await supabase
+        const { error } = assertWrite(
+      await supabase
           .from('weekly_lab_tracker')
           .update({
             lab_complete: 'Yes',
             created_by: instructor.email,
           })
-          .eq('record_id', existing.record_id)
+          .eq('record_id', existing.record_id).select(),
+      'weekly_lab_tracker.update'
+    )
         if (error) throw error
       } else {
         // No record — insert new one with retry on duplicate key
@@ -604,7 +614,8 @@ export function useLabTrackerActions() {
           const existing = await findExistingRecord(userId, userEmail, cls.className, cls.weekNumber)
 
           if (existing) {
-            const { error } = await supabase
+            const { error } = assertWrite(
+      await supabase
               .from('weekly_lab_tracker')
               .update({
                 lab_complete: 'Yes',
@@ -612,7 +623,9 @@ export function useLabTrackerActions() {
                 required_hours_met: 'Yes',
                 created_by: instructor.email,
               })
-              .eq('record_id', existing.record_id)
+              .eq('record_id', existing.record_id).select(),
+      'weekly_lab_tracker.update'
+    )
             if (error) throw error
           } else {
             // Generate unique ID per class — no more racy MAX query
@@ -662,13 +675,16 @@ export function useLabTrackerActions() {
       // Cancel remaining signups for today and the rest of the week
       // (student is done — no reason to keep any Confirmed signups)
       {
-        const { error: signupError } = await supabase
+        const { error: signupError } = assertWrite(
+      await supabase
           .from('lab_signup')
           .update({ status: 'Cancelled' })
           .eq('user_email', userEmail)
           .eq('status', 'Confirmed')
           .gte('date', todayStr)
-          .lte('date', latestWeekEnd)
+          .lte('date', latestWeekEnd).select(),
+      'lab_signup.update'
+    )
 
         if (signupError) {
           console.error('Error cancelling future signups:', signupError)
@@ -719,7 +735,8 @@ export function useLabTrackerActions() {
 
           const nowIso = localToUtcIso(new Date())
 
-          const { error: tcError } = await supabase
+          const { error: tcError } = assertWrite(
+      await supabase
             .from('time_clock')
             .insert({
               record_id: markerRecordId,
@@ -739,7 +756,9 @@ export function useLabTrackerActions() {
               entry_type: 'All Done',
               description: `All Done — released by ${instructor.first_name} ${instructor.last_name}`,
               approval_status: 'Approved',
-            })
+            }).select(),
+      'time_clock.insert'
+    )
 
           if (tcError) {
             console.error('Error inserting All Done marker:', tcError)

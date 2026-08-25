@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { useNavigate } from 'react-router-dom'
 import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive, Library } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -784,7 +785,10 @@ function RequiredToolsPanel({ onBack }) {
 
   async function handleDelete(tool_id, item_name) {
     setSaving(true)
-    const { error } = await supabase.from('program_tools').delete().eq('tool_id', tool_id)
+    const { error } = assertWrite(
+      await supabase.from('program_tools').delete().eq('tool_id', tool_id).select(),
+      'program_tools.delete'
+    )
     setSaving(false)
     if (error) { toast.error('Failed to delete'); return }
     toast.success(`"${item_name}" deleted`)
@@ -1106,14 +1110,17 @@ function CollegeOutcomesModal({ onClose }) {
 
   const handleSave = async () => {
     setSaving(true)
-    const { error } = await supabase.from('settings').upsert({
+    const { error } = assertWrite(
+      await supabase.from('settings').upsert({
       setting_key:   'college_outcomes_list',
       setting_value: JSON.stringify(groups),
       description:   'SCTCC College Outcomes and Competencies for Course Proposal wizard',
       category:      'course_proposals',
       updated_at:    new Date().toISOString(),
       updated_by:    user?.email || '',
-    }, { onConflict: 'setting_key' })
+    }, { onConflict: 'setting_key' }).select(),
+      'settings.upsert'
+    )
     setSaving(false)
     if (error) { toast.error('Save failed: ' + error.message); return }
     toast.success('College outcomes saved!')
@@ -1240,14 +1247,17 @@ function ProgramRevisionSettingsModal({ onClose }) {
 
   const handleSave = async ()=>{
     setSaving(true)
-    const { error } = await supabase.from('settings').upsert({
+    const { error } = assertWrite(
+      await supabase.from('settings').upsert({
       setting_key:   'revision_program_settings',
       setting_value: JSON.stringify(settings),
       description:   'Default program-level settings for Course Revision wizard',
       category:      'course_revisions',
       updated_at:    new Date().toISOString(),
       updated_by:    user?.email||'',
-    },{ onConflict:'setting_key' })
+    },{ onConflict:'setting_key' }).select(),
+      'settings.upsert'
+    )
     setSaving(false)
     if(error){ toast.error('Save failed: '+error.message); return }
     toast.success('Settings saved!')

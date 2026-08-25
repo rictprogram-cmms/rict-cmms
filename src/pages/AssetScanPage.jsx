@@ -21,6 +21,7 @@
  *  - "Back to Assets" navigation
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -1566,7 +1567,8 @@ function ScanCheckInModal({ asset, openCheckout, profile, actions, onClose, onDo
           } catch {}
           if (!woId) woId = 'WO' + String(Date.now()).slice(-6)
           const fullName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : 'Unknown'
-          const { error: woErr } = await supabase.from('work_orders').insert({
+          const { error: woErr } = assertWrite(
+      await supabase.from('work_orders').insert({
             wo_id: woId,
             description: `Asset returned damaged — needs repair: ${asset.name}`,
             priority: 'Medium',
@@ -1577,7 +1579,9 @@ function ScanCheckInModal({ asset, openCheckout, profile, actions, onClose, onDo
             created_at: new Date().toISOString(),
             created_by: fullName,
             is_pm: false,
-          })
+          }).select(),
+      'work_orders.insert'
+    )
           if (!woErr) relatedWoId = woId
         } catch (e) { console.warn('Auto-WO failed:', e.message) }
       }

@@ -23,6 +23,7 @@
  * File: src/hooks/usePushNotifications.js
  */
 
+import { assertWrite } from '@/lib/supabaseData';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
@@ -260,9 +261,12 @@ async function saveSubscriptionToSupabase(subscription, profile) {
   };
 
   // Upsert on (user_email, endpoint) — handles re-subscriptions
-  const { error } = await supabase
+  const { error } = assertWrite(
+      await supabase
     .from('push_subscriptions')
-    .upsert(record, { onConflict: 'user_email,endpoint' });
+    .upsert(record, { onConflict: 'user_email,endpoint' }).select(),
+      'push_subscriptions.upsert'
+    );
 
   if (error) {
     console.error('[Push] Failed to save subscription to Supabase:', error);

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useId } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -1941,16 +1942,20 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
     try {
       if (editingPrice.tool_id) {
         // Existing catalog entry — update it
-        const { error } = await supabase
+        const { error } = assertWrite(
+      await supabase
           .from('program_tools')
           .update({ cost: newCost, updated_by: profile?.email || user?.email })
-          .eq('tool_id', editingPrice.tool_id)
+          .eq('tool_id', editingPrice.tool_id).select(),
+      'program_tools.update'
+    )
         if (error) throw error
         toast.success('Price updated in master catalog')
       } else {
         // Item not in catalog yet — create it
         const newId = 'PT' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase()
-        const { error } = await supabase.from('program_tools').insert({
+        const { error } = assertWrite(
+      await supabase.from('program_tools').insert({
           tool_id:     newId,
           item_name:   editingPrice.item_name,
           item_type:   'Tool',
@@ -1959,7 +1964,9 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
           status:      'Active',
           created_by:  profile?.email || user?.email,
           updated_by:  profile?.email || user?.email,
-        })
+        }).select(),
+      'program_tools.insert'
+    )
         if (error) throw error
         toast.success(`"${editingPrice.item_name}" added to catalog with price`)
       }

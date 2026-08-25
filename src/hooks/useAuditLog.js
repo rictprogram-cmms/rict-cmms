@@ -27,6 +27,7 @@
  * File: src/hooks/useAuditLog.js
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -351,14 +352,17 @@ export function useAuditLog() {
 
   const resetFailedCount = useCallback(async () => {
     try {
-      const { error: err } = await supabase
+      const { error: err } = assertWrite(
+      await supabase
         .from('settings')
         .update({
           setting_value: '0',
           updated_at:    new Date().toISOString(),
           updated_by:    profile?.email || 'system',
         })
-        .eq('setting_key', 'audit_failed_count')
+        .eq('setting_key', 'audit_failed_count').select(),
+      'settings.update'
+    )
       if (err) throw err
       setFailedCount(0)
 

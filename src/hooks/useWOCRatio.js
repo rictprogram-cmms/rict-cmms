@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { parseLabVisibleDays, DEFAULT_LAB_DAYS } from '@/hooks/useLabDays'
@@ -1269,13 +1270,19 @@ export function useClosedDaysActions() {
       const newValue = dates.join(',')
 
       if (existing) {
-        const { error } = await supabase.from('settings')
+        const { error } = assertWrite(
+      await supabase.from('settings')
           .update({ setting_value: newValue, updated_at: new Date().toISOString(), updated_by: userName })
-          .eq('setting_key', 'custom_closed_days')
+          .eq('setting_key', 'custom_closed_days').select(),
+      'settings.update'
+    )
         if (error) throw error
       } else {
-        const { error } = await supabase.from('settings')
-          .insert({ setting_key: 'custom_closed_days', setting_value: newValue, category: 'Evaluation', updated_at: new Date().toISOString(), updated_by: userName })
+        const { error } = assertWrite(
+      await supabase.from('settings')
+          .insert({ setting_key: 'custom_closed_days', setting_value: newValue, category: 'Evaluation', updated_at: new Date().toISOString(), updated_by: userName }).select(),
+      'settings.insert'
+    )
         if (error) throw error
       }
 
@@ -1304,9 +1311,12 @@ export function useClosedDaysActions() {
         .split(',').map(s => s.trim()).filter(Boolean)
         .filter(d => d !== dateStr)
 
-      const { error } = await supabase.from('settings')
+      const { error } = assertWrite(
+      await supabase.from('settings')
         .update({ setting_value: dates.join(','), updated_at: new Date().toISOString(), updated_by: userName })
-        .eq('setting_key', 'custom_closed_days')
+        .eq('setting_key', 'custom_closed_days').select(),
+      'settings.update'
+    )
 
       if (error) throw error
       toast.success('Closed day removed')

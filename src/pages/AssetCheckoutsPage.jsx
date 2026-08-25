@@ -19,6 +19,7 @@
  *    ARIA tabs, descriptive labels, status announcements via aria-live.
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -782,7 +783,10 @@ async function createRepairWorkOrder({ asset, notes, createdByEmail, createdByNa
       created_by:  createdByName || createdByEmail,
       is_pm:       false,
     }
-    const { error } = await supabase.from('work_orders').insert(row)
+    const { error } = assertWrite(
+      await supabase.from('work_orders').insert(row).select(),
+      'work_orders.insert'
+    )
     if (error) {
       console.warn('Auto-WO creation failed:', error.message)
       return null

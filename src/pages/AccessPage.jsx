@@ -27,6 +27,7 @@
  *     ADD CONSTRAINT permissions_page_feature_unique UNIQUE (page, feature);
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
@@ -529,7 +530,10 @@ export default function AccessPage() {
       // Plain insert — initialize is only called when DB is empty (needsSetup=true).
       // Using insert (not upsert) so any unexpected pre-existing row surfaces as an
       // error instead of being silently overwritten.
-      const { error } = await supabase.from('permissions').insert(rows)
+      const { error } = assertWrite(
+      await supabase.from('permissions').insert(rows).select(),
+      'permissions.insert'
+    )
       if (error) throw error
 
       showToast(`Created ${rows.length} permissions!`, 'success')
@@ -609,7 +613,10 @@ export default function AccessPage() {
           if (missing.length === 0) {
             showToast('All permissions already exist!', 'success')
           } else {
-            const { error } = await supabase.from('permissions').insert(missing)
+            const { error } = assertWrite(
+      await supabase.from('permissions').insert(missing).select(),
+      'permissions.insert'
+    )
             if (error) throw error
 
             if (renamed.length > 0) {

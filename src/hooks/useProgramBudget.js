@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -414,7 +415,10 @@ export function useBudgetActions() {
       if (data.paymentStatus) row.payment_status = data.paymentStatus
       if (data.objectCode) row.object_code = data.objectCode
 
-      const { error } = await supabase.from('program_budget').insert(row)
+      const { error } = assertWrite(
+      await supabase.from('program_budget').insert(row).select(),
+      'program_budget.insert'
+    )
       if (error) throw error
       toast.success('Budget entry added')
       return true
@@ -439,7 +443,10 @@ export function useBudgetActions() {
       if (updates.paymentStatus !== undefined) clean.payment_status = updates.paymentStatus
       if (updates.objectCode !== undefined) clean.object_code = updates.objectCode
 
-      const { error } = await supabase.from('program_budget').update(clean).eq('id', id)
+      const { error } = assertWrite(
+      await supabase.from('program_budget').update(clean).eq('id', id).select(),
+      'program_budget.update'
+    )
       if (error) throw error
       toast.success('Entry updated')
       return true
@@ -454,9 +461,12 @@ export function useBudgetActions() {
   const voidEntry = async (id) => {
     setSaving(true)
     try {
-      const { error } = await supabase.from('program_budget')
+      const { error } = assertWrite(
+      await supabase.from('program_budget')
         .update({ status: 'Voided' })
-        .eq('id', id)
+        .eq('id', id).select(),
+      'program_budget.update'
+    )
       if (error) throw error
       toast.success('Entry voided')
       return true
@@ -471,9 +481,12 @@ export function useBudgetActions() {
   const deleteEntry = async (id) => {
     setSaving(true)
     try {
-      const { error } = await supabase.from('program_budget')
+      const { error } = assertWrite(
+      await supabase.from('program_budget')
         .delete()
-        .eq('id', id)
+        .eq('id', id).select(),
+      'program_budget.delete'
+    )
       if (error) throw error
       toast.success('Entry permanently deleted')
       return true
@@ -503,13 +516,17 @@ export function useBudgetActions() {
         // Update
         const upd = { amount: parseFloat(amount) }
         if (notes !== undefined) upd.notes = notes
-        const { error } = await supabase.from('program_budget').update(upd).eq('id', existing.id)
+        const { error } = assertWrite(
+      await supabase.from('program_budget').update(upd).eq('id', existing.id).select(),
+      'program_budget.update'
+    )
         if (error) throw error
         toast.success(`Starting balance updated for ${schoolYear}`)
       } else {
         // Insert
         const dates = parseSchoolYearDates(schoolYear)
-        const { error } = await supabase.from('program_budget').insert({
+        const { error } = assertWrite(
+      await supabase.from('program_budget').insert({
           school_year: schoolYear,
           type: 'Starting Balance',
           description: `Starting Budget for ${schoolYear}`,
@@ -519,7 +536,9 @@ export function useBudgetActions() {
           category: 'Budget',
           status: 'Active',
           notes: notes || '',
-        })
+        }).select(),
+      'program_budget.insert'
+    )
         if (error) throw error
         toast.success(`Starting balance set for ${schoolYear}`)
       }
@@ -560,7 +579,10 @@ export function useBudgetActions() {
       let imported = 0
       for (let i = 0; i < inserts.length; i += 50) {
         const batch = inserts.slice(i, i + 50)
-        const { error } = await supabase.from('program_budget').insert(batch)
+        const { error } = assertWrite(
+      await supabase.from('program_budget').insert(batch).select(),
+      'program_budget.insert'
+    )
         if (error) throw error
         imported += batch.length
       }

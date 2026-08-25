@@ -15,6 +15,7 @@
  *  - Permission-gated (add_assets, edit_assets, delete_assets, upload_docs, print_labels)
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import toast from 'react-hot-toast'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
@@ -458,7 +459,8 @@ export default function AssetsPage() {
 
       if (!pms || pms.length === 0) return
 
-      const { error: updateError } = await supabase
+      const { error: updateError } = assertWrite(
+      await supabase
         .from('pm_schedules')
         .update({
           status: 'Archived',
@@ -466,7 +468,9 @@ export default function AssetsPage() {
           updated_by: userShort,
         })
         .eq('asset_id', assetId)
-        .neq('status', 'Archived')
+        .neq('status', 'Archived').select(),
+      'pm_schedules.update'
+    )
 
       if (updateError) {
         console.warn('Failed to cascade archive PMs:', updateError.message)
@@ -516,7 +520,8 @@ export default function AssetsPage() {
 
       if (!proceed) return
 
-      const { error: updateError } = await supabase
+      const { error: updateError } = assertWrite(
+      await supabase
         .from('pm_schedules')
         .update({
           status: 'Active',
@@ -524,7 +529,9 @@ export default function AssetsPage() {
           updated_by: userShort,
         })
         .eq('asset_id', assetId)
-        .eq('status', 'Archived')
+        .eq('status', 'Archived').select(),
+      'pm_schedules.update'
+    )
 
       if (updateError) {
         console.warn('Failed to restore PMs:', updateError.message)
@@ -2922,7 +2929,8 @@ function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onD
           if (!woId) woId = 'WO' + String(Date.now()).slice(-6)
 
           const fullName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : 'Unknown'
-          const { error: woErr } = await supabase.from('work_orders').insert({
+          const { error: woErr } = assertWrite(
+      await supabase.from('work_orders').insert({
             wo_id: woId,
             description: `Asset returned damaged — needs repair: ${asset.name}`,
             priority: 'Medium',
@@ -2933,7 +2941,9 @@ function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onD
             created_at: new Date().toISOString(),
             created_by: fullName,
             is_pm: false,
-          })
+          }).select(),
+      'work_orders.insert'
+    )
           if (!woErr) relatedWoId = woId
         } catch (e) {
           console.warn('Auto-WO failed:', e.message)

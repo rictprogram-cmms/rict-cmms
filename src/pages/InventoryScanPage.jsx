@@ -19,6 +19,7 @@
  *  - "Back to Inventory" navigation
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -152,14 +153,17 @@ export default function InventoryScanPage() {
     if (!item) return
     setSaving(true)
     try {
-      const { error: err } = await supabase
+      const { error: err } = assertWrite(
+      await supabase
         .from('inventory')
         .update({
           qty_in_stock: newQty,
           updated_at: new Date().toISOString(),
           updated_by: userShort
         })
-        .eq('part_id', item.part_id)
+        .eq('part_id', item.part_id).select(),
+      'inventory.update'
+    )
 
       if (err) throw err
 

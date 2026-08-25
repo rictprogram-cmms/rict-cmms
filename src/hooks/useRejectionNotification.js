@@ -22,6 +22,7 @@
  * File: src/hooks/useRejectionNotification.js
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -83,7 +84,8 @@ export function useRejectionNotification() {
 
     try {
       // ── 1. Insert in-app notification (announcements table) ─────────────
-      const { error: notifError } = await supabase.from('announcements').insert({
+      const { error: notifError } = assertWrite(
+      await supabase.from('announcements').insert({
         recipient_email: recipientEmail.toLowerCase(),
         sender_email: profile.email,
         sender_name: senderName,
@@ -92,7 +94,9 @@ export function useRejectionNotification() {
         read: false,
         notification_type: notificationType,
         created_at: new Date().toISOString(),
-      })
+      }).select(),
+      'announcements.insert'
+    )
 
       if (notifError) {
         console.error('[RejectionNotification] Failed to insert notification:', notifError)

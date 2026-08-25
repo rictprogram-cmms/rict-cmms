@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
-import { mustData } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { fetchMakeupOverlay, getMakeupInfo, mondayKeyOf, firstTwoLabDays } from '@/hooks/useMakeupHours'
@@ -190,7 +190,10 @@ async function writeAudit(profile, entryOrEntries) {
       user_name:  auditNameOf(profile),
       ...e,
     }))
-    const { error } = await supabase.from('audit_log').insert(rows)
+    const { error } = assertWrite(
+      await supabase.from('audit_log').insert(rows).select(),
+      'audit_log.insert'
+    )
     if (error) console.warn('Audit log write failed (non-critical):', error.message)
   } catch (e) {
     console.warn('Audit log write threw (non-critical):', e?.message || e)
@@ -1272,7 +1275,8 @@ export function useLabSignupActions() {
 
       // NOTE: intentionally no .select() here — students may not have a
       // SELECT policy on lab_signup_requests, and RETURNING would fail.
-      const { error } = await supabase.from('lab_signup_requests').insert({
+      const { error } = assertWrite(
+      await supabase.from('lab_signup_requests').insert({
         request_id: requestId,
         user_id: null,
         user_name: userName,
@@ -1285,7 +1289,9 @@ export function useLabSignupActions() {
         status: 'Pending',
         reason: reason || '',
         submitted_date: new Date().toISOString(),
-      })
+      }).select(),
+      'lab_signup_requests.insert'
+    )
 
       if (error) throw error
 

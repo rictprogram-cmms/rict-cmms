@@ -22,6 +22,7 @@
  * Permission page key: 'SOPs'
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -429,12 +430,15 @@ export default function SOPsPage() {
       const sopId = await genId()
       let d = { url: '', name: '', path: '' }
       if (selectedFile) d = await uploadDoc(sopId, selectedFile)
-      const { error } = await supabase.from('sops').insert({
+      const { error } = assertWrite(
+      await supabase.from('sops').insert({
         sop_id: sopId, name: formData.name.trim(), description: (formData.description || '').trim(),
         document_url: d.url, document_name: d.name, document_path: d.path,
         created_at: new Date().toISOString(), created_by: userName,
         updated_at: new Date().toISOString(), updated_by: userName, status: 'Active',
-      })
+      }).select(),
+      'sops.insert'
+    )
       if (error) throw error
       await auditLog('Create', sopId, `Created SOP: ${formData.name}${selectedFile ? ` with doc: ${selectedFile.name}` : ''}`)
       setShowCreateModal(false); setFormData({ name: '', description: '' }); setSelectedFile(null)
@@ -447,7 +451,10 @@ export default function SOPsPage() {
     if (!formData.name.trim()) return void toast.error('Please enter a name.')
     setSaving(true)
     try {
-      const { error } = await supabase.from('sops').update({ name: formData.name.trim(), description: (formData.description || '').trim(), updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id)
+      const { error } = assertWrite(
+      await supabase.from('sops').update({ name: formData.name.trim(), description: (formData.description || '').trim(), updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id).select(),
+      'sops.update'
+    )
       if (error) throw error
       await auditLog('Update', selectedSOP.sop_id, `Updated SOP: ${formData.name}`)
       setSelectedSOP(prev => ({ ...prev, name: formData.name.trim(), description: (formData.description || '').trim(), updated_at: new Date().toISOString(), updated_by: userName }))
@@ -463,7 +470,10 @@ export default function SOPsPage() {
       await supabase.from('sop_assets').delete().eq('sop_id', selectedSOP.sop_id)
       await supabase.from('sop_pm_schedules').delete().eq('sop_id', selectedSOP.sop_id)
       await supabase.from('sop_work_orders').delete().eq('sop_id', selectedSOP.sop_id)
-      const { error } = await supabase.from('sops').delete().eq('sop_id', selectedSOP.sop_id)
+      const { error } = assertWrite(
+      await supabase.from('sops').delete().eq('sop_id', selectedSOP.sop_id).select(),
+      'sops.delete'
+    )
       if (error) throw error
       await auditLog('Delete', selectedSOP.sop_id, `Deleted SOP: ${selectedSOP.name}`)
       setShowDeleteConfirm(false); setShowViewModal(false); setSelectedSOP(null); fetchSOPs()
@@ -477,7 +487,10 @@ export default function SOPsPage() {
     try {
       if (selectedSOP.document_path) { try { await supabase.storage.from('sop-documents').remove([selectedSOP.document_path]) } catch {} }
       const u = await uploadDoc(selectedSOP.sop_id, selectedFile)
-      const { error } = await supabase.from('sops').update({ document_url: u.url, document_name: u.name, document_path: u.path, updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id)
+      const { error } = assertWrite(
+      await supabase.from('sops').update({ document_url: u.url, document_name: u.name, document_path: u.path, updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id).select(),
+      'sops.update'
+    )
       if (error) throw error
       await auditLog('Replace Document', selectedSOP.sop_id, `Replaced document with: ${selectedFile.name}`)
       setSelectedSOP(prev => ({ ...prev, document_url: u.url, document_name: u.name, document_path: u.path, updated_at: new Date().toISOString(), updated_by: userName }))
@@ -491,7 +504,10 @@ export default function SOPsPage() {
     setSaving(true)
     try {
       const u = await uploadDoc(selectedSOP.sop_id, selectedFile)
-      const { error } = await supabase.from('sops').update({ document_url: u.url, document_name: u.name, document_path: u.path, updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id)
+      const { error } = assertWrite(
+      await supabase.from('sops').update({ document_url: u.url, document_name: u.name, document_path: u.path, updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id).select(),
+      'sops.update'
+    )
       if (error) throw error
       await auditLog('Upload Document', selectedSOP.sop_id, `Uploaded document: ${selectedFile.name}`)
       setSelectedSOP(prev => ({ ...prev, document_url: u.url, document_name: u.name, document_path: u.path }))
@@ -504,7 +520,10 @@ export default function SOPsPage() {
     setSaving(true)
     try {
       if (selectedSOP.document_path) { try { await supabase.storage.from('sop-documents').remove([selectedSOP.document_path]) } catch {} }
-      const { error } = await supabase.from('sops').update({ document_url: '', document_name: '', document_path: '', updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id)
+      const { error } = assertWrite(
+      await supabase.from('sops').update({ document_url: '', document_name: '', document_path: '', updated_at: new Date().toISOString(), updated_by: userName }).eq('sop_id', selectedSOP.sop_id).select(),
+      'sops.update'
+    )
       if (error) throw error
       await auditLog('Delete Document', selectedSOP.sop_id, 'Deleted SOP document')
       setSelectedSOP(prev => ({ ...prev, document_url: '', document_name: '', document_path: '' }))
@@ -527,15 +546,24 @@ export default function SOPsPage() {
     try {
       const sopId = selectedSOP.sop_id
       if (showLinkModal === 'assets') {
-        const { error } = await supabase.from('sop_assets').insert(ids.map(id => ({ sop_id: sopId, asset_id: id })))
+        const { error } = assertWrite(
+      await supabase.from('sop_assets').insert(ids.map(id => ({ sop_id: sopId, asset_id: id }))).select(),
+      'sop_assets.insert'
+    )
         if (error) throw error
         await auditLog('Link Assets', sopId, `Linked ${ids.length} asset(s)`)
       } else if (showLinkModal === 'pms') {
-        const { error } = await supabase.from('sop_pm_schedules').insert(ids.map(id => ({ sop_id: sopId, pm_id: id })))
+        const { error } = assertWrite(
+      await supabase.from('sop_pm_schedules').insert(ids.map(id => ({ sop_id: sopId, pm_id: id }))).select(),
+      'sop_pm_schedules.insert'
+    )
         if (error) throw error
         await auditLog('Link PMs', sopId, `Linked ${ids.length} PM(s)`)
       } else if (showLinkModal === 'wos') {
-        const { error } = await supabase.from('sop_work_orders').insert(ids.map(id => ({ sop_id: sopId, wo_id: id })))
+        const { error } = assertWrite(
+      await supabase.from('sop_work_orders').insert(ids.map(id => ({ sop_id: sopId, wo_id: id }))).select(),
+      'sop_work_orders.insert'
+    )
         if (error) throw error
         await auditLog('Link WOs', sopId, `Linked ${ids.length} WO(s)`)
       }

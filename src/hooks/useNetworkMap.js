@@ -12,6 +12,7 @@
  * File: src/hooks/useNetworkMap.js
  */
 
+import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -454,10 +455,13 @@ export function useNetworkMap() {
    */
   const deleteDevice = useCallback(async (deviceId) => {
     const existing = devices.find(d => d.device_id === deviceId)
-    const { error } = await supabase
+    const { error } = assertWrite(
+      await supabase
       .from('network_devices')
       .delete()
-      .eq('device_id', deviceId)
+      .eq('device_id', deviceId).select(),
+      'network_devices.delete'
+    )
     if (error) throw new Error(error.message)
     await writeAudit(profile, 'Delete', 'Network Device', deviceId,
       `Deleted ${existing?.ip_address || deviceId} — ${existing?.device_name || ''}`.trim())
@@ -543,14 +547,17 @@ export function useNetworkMap() {
     }
     if (existing.status !== 'Pending') throw new Error('Only pending requests can be cancelled.')
 
-    const { error } = await supabase
+    const { error } = assertWrite(
+      await supabase
       .from('network_change_requests')
       .update({
         status: 'Cancelled',
         reviewed_date: new Date().toISOString(),
         reviewed_by: senderDisplayName(profile),
       })
-      .eq('request_id', requestId)
+      .eq('request_id', requestId).select(),
+      'network_change_requests.update'
+    )
     if (error) throw new Error(error.message)
 
     await writeAudit(profile, 'Cancel', 'Network Change Request', requestId,
@@ -584,7 +591,8 @@ export function useNetworkMap() {
     }
 
     // Mark the request as approved
-    const { error } = await supabase
+    const { error } = assertWrite(
+      await supabase
       .from('network_change_requests')
       .update({
         status: 'Approved',
@@ -592,7 +600,9 @@ export function useNetworkMap() {
         reviewed_date: now,
         review_notes: reviewNotes || null,
       })
-      .eq('request_id', requestId)
+      .eq('request_id', requestId).select(),
+      'network_change_requests.update'
+    )
     if (error) throw new Error(error.message)
 
     await writeAudit(profile, 'Approve', 'Network Change Request', requestId,
@@ -612,7 +622,8 @@ export function useNetworkMap() {
     if (!req) throw new Error('Request not found.')
     if (req.status !== 'Pending') throw new Error('Only pending requests can be rejected.')
 
-    const { error } = await supabase
+    const { error } = assertWrite(
+      await supabase
       .from('network_change_requests')
       .update({
         status: 'Rejected',
@@ -620,7 +631,9 @@ export function useNetworkMap() {
         reviewed_date: new Date().toISOString(),
         rejection_reason: rejectionReason.trim(),
       })
-      .eq('request_id', requestId)
+      .eq('request_id', requestId).select(),
+      'network_change_requests.update'
+    )
     if (error) throw new Error(error.message)
 
     await writeAudit(profile, 'Reject', 'Network Change Request', requestId,

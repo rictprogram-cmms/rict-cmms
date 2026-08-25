@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -205,10 +206,13 @@ export function useUserActions() {
         try { await supabase.from('announcements').delete().eq('recipient_email', email) } catch {}
         try { await supabase.from('access_requests').delete().eq('email', email) } catch {}
         
-        const { error: delError } = await supabase
+        const { error: delError } = assertWrite(
+      await supabase
           .from('profiles')
           .delete()
-          .eq('id', userId)
+          .eq('id', userId).select(),
+      'profiles.delete'
+    )
         if (delError) throw delError
       } else if (data && !data.success) {
         throw new Error(data.error || 'Delete failed')

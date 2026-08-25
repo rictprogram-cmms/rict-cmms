@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
@@ -1225,7 +1226,10 @@ function SentHistoryTab({ refreshKey, viewMode = 'all' }) {
         read: false,
       }))
 
-      const { error } = await supabase.from('announcements').insert(rows)
+      const { error } = assertWrite(
+      await supabase.from('announcements').insert(rows).select(),
+      'announcements.insert'
+    )
       if (error) throw error
       toast.success(`Resent to ${emails.length} recipient(s)`)
       loadHistory()

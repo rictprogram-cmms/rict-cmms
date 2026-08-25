@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -234,14 +235,17 @@ export function useEquipmentManagement() {
     try {
       const id = await generateSafeEquipmentId()
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
-      const { error } = await supabase.from('lab_equipment').insert({
+      const { error } = assertWrite(
+      await supabase.from('lab_equipment').insert({
         equipment_id: id,
         asset_id: assetId,
         status,
         notes: (notes || '').trim() || null,
         created_at: new Date().toISOString(),
         created_by: userName,
-      })
+      }).select(),
+      'lab_equipment.insert'
+    )
       if (error) {
         if (/duplicate|unique/i.test(error.message)) {
           toast.error('That asset is already added as equipment.')
@@ -265,7 +269,8 @@ export function useEquipmentManagement() {
     setSaving(true)
     try {
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('lab_equipment')
         .update({
           status,
@@ -273,7 +278,9 @@ export function useEquipmentManagement() {
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
-        .eq('equipment_id', equipmentId)
+        .eq('equipment_id', equipmentId).select(),
+      'lab_equipment.update'
+    )
       if (error) throw error
       toast.success('Equipment updated')
       return { success: true }
@@ -290,14 +297,17 @@ export function useEquipmentManagement() {
     setSaving(true)
     try {
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('lab_equipment')
         .update({
           status: 'Retired',
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
-        .eq('equipment_id', equipmentId)
+        .eq('equipment_id', equipmentId).select(),
+      'lab_equipment.update'
+    )
       if (error) throw error
       toast.success('Equipment retired')
       return { success: true }
@@ -663,7 +673,10 @@ export function useEquipmentBookingActions() {
         })
       }
 
-      const { error } = await supabase.from('equipment_bookings').insert(rows)
+      const { error } = assertWrite(
+      await supabase.from('equipment_bookings').insert(rows).select(),
+      'equipment_bookings.insert'
+    )
       if (error) throw error
 
       toast.success(`Booked ${rows.length} slot${rows.length > 1 ? 's' : ''}`)
@@ -684,14 +697,17 @@ export function useEquipmentBookingActions() {
     setSaving(true)
     try {
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('equipment_bookings')
         .update({
           status: 'Cancelled',
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
-        .eq('booking_id', bookingId)
+        .eq('booking_id', bookingId).select(),
+      'equipment_bookings.update'
+    )
       if (error) throw error
       toast.success('Booking cancelled')
       return { success: true }
@@ -708,14 +724,17 @@ export function useEquipmentBookingActions() {
     setSaving(true)
     try {
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('equipment_bookings')
         .update({
           purpose: (purpose || '').trim() || null,
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
-        .eq('booking_id', bookingId)
+        .eq('booking_id', bookingId).select(),
+      'equipment_bookings.update'
+    )
       if (error) throw error
       toast.success('Updated')
       return { success: true }
@@ -737,7 +756,8 @@ export function useEquipmentBookingActions() {
     try {
       const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
       const newName = `${newUser.firstName} ${(newUser.lastName || '').charAt(0)}.`.trim()
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('equipment_bookings')
         .update({
           user_email: newUser.email,
@@ -745,7 +765,9 @@ export function useEquipmentBookingActions() {
           updated_at: new Date().toISOString(),
           updated_by: userName,
         })
-        .eq('booking_id', bookingId)
+        .eq('booking_id', bookingId).select(),
+      'equipment_bookings.update'
+    )
       if (error) throw error
       toast.success(`Reassigned to ${newName}`)
       return { success: true }

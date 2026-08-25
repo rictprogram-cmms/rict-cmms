@@ -8,6 +8,7 @@
  *        volunteer punch approvals
  */
 
+import { assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
@@ -882,18 +883,24 @@ export default function NotificationBell() {
       const req = item.raw;
 
       // 1. Mark the access request as approved
-      const { error: updateError } = await supabase.from('access_requests').update({
+      const { error: updateError } = assertWrite(
+      await supabase.from('access_requests').update({
         status: 'Approved',
         processed_by: fullName(),
         processed_date: new Date().toISOString()
-      }).eq('request_id', req.request_id);
+      }).eq('request_id', req.request_id).select(),
+      'access_requests.update'
+    );
 
       if (updateError) {
         console.error('Access request update error:', updateError);
         // Try with just status if other columns don't exist
-        const { error: statusOnly } = await supabase.from('access_requests')
+        const { error: statusOnly } = assertWrite(
+      await supabase.from('access_requests')
           .update({ status: 'Approved' })
-          .eq('request_id', req.request_id);
+          .eq('request_id', req.request_id).select(),
+      'access_requests.update'
+    );
         if (statusOnly) {
           console.error('Status-only update also failed:', statusOnly);
           throw statusOnly;
@@ -932,7 +939,8 @@ export default function NotificationBell() {
 
       // Insert new profile — try with UUID first, then without
       const uuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-      const { error: insertError } = await supabase.from('profiles').insert({
+      const { error: insertError } = assertWrite(
+      await supabase.from('profiles').insert({
         id: uuid,
         email: req.email,
         first_name: req.first_name,
@@ -940,19 +948,24 @@ export default function NotificationBell() {
         role: selectedRole,
         status: 'Active',
         user_id: generatedUserId
-      });
+      }).select(),
+      'profiles.insert'
+    );
 
       if (insertError) {
         console.warn('Profile insert with UUID failed:', insertError.message);
         // Try without id
-        const { error: noIdError } = await supabase.from('profiles').insert({
+        const { error: noIdError } = assertWrite(
+      await supabase.from('profiles').insert({
           email: req.email,
           first_name: req.first_name,
           last_name: req.last_name,
           role: selectedRole,
           status: 'Active',
           user_id: generatedUserId
-        });
+        }).select(),
+      'profiles.insert'
+    );
         if (noIdError) throw noIdError;
       }
 
@@ -1097,7 +1110,8 @@ export default function NotificationBell() {
       weekStart.setHours(0, 0, 0, 0);
 
       // 4. Insert time_clock record
-      const { error: insertError } = await supabase.from('time_clock').insert({
+      const { error: insertError } = assertWrite(
+      await supabase.from('time_clock').insert({
         record_id: recordId,
         user_id: userId,
         user_name: userDisplayName,
@@ -1114,7 +1128,9 @@ export default function NotificationBell() {
         approval_status: 'Approved',
         approved_by: fullName(),
         approved_date: new Date().toISOString()
-      });
+      }).select(),
+      'time_clock.insert'
+    );
       if (insertError) throw insertError;
 
       // 5. Mark the request as approved and link the time clock record
@@ -1151,7 +1167,8 @@ export default function NotificationBell() {
       const totalHours = punchOut ? Math.round(((punchOut - punchIn) / 3600000) * 100) / 100 : (parseFloat(req.total_hours) || 0);
 
       // Update the existing time_clock record with new times
-      const { error: updateError } = await supabase.from('time_clock').update({
+      const { error: updateError } = assertWrite(
+      await supabase.from('time_clock').update({
         punch_in: punchIn.toISOString(),
         punch_out: punchOut ? punchOut.toISOString() : null,
         total_hours: totalHours,
@@ -1160,7 +1177,9 @@ export default function NotificationBell() {
         approval_status: 'Approved',
         approved_by: fullName(),
         approved_date: new Date().toISOString()
-      }).eq('record_id', tcRecordId);
+      }).eq('record_id', tcRecordId).select(),
+      'time_clock.update'
+    );
       if (updateError) throw updateError;
 
       // Mark the edit request as approved
@@ -1270,7 +1289,10 @@ export default function NotificationBell() {
           });
         }
         if (rows.length > 0) {
-          const { error: insertErr } = await supabase.from('lab_signup').insert(rows);
+          const { error: insertErr } = assertWrite(
+      await supabase.from('lab_signup').insert(rows).select(),
+      'lab_signup.insert'
+    );
           if (insertErr) throw insertErr;
         }
       }

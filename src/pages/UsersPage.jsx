@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
@@ -761,14 +762,17 @@ function AddUserModal({ onClose, onAdded }) {
 
       // Create profile — always defaults to Student / Active
       const uuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
-      const { error } = await supabase.from('profiles').insert({
+      const { error } = assertWrite(
+      await supabase.from('profiles').insert({
         id: uuid,
         email: trimmedEmail,
         first_name: trimmedFirst,
         last_name: trimmedLast,
         role: 'Student',
         status: 'Active'
-      })
+      }).select(),
+      'profiles.insert'
+    )
 
       if (error) throw error
 
@@ -1328,33 +1332,42 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
     try {
       // Create user profile
       const uuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
-      const { error: profileErr } = await supabase.from('profiles').insert({
+      const { error: profileErr } = assertWrite(
+      await supabase.from('profiles').insert({
         id: uuid,
         email: req.email,
         first_name: req.first_name,
         last_name: req.last_name,
         role: req.requested_role || 'Student',
         status: 'Active',
-      })
+      }).select(),
+      'profiles.insert'
+    )
 
       if (profileErr) {
         // Try without id
-        const { error: noIdErr } = await supabase.from('profiles').insert({
+        const { error: noIdErr } = assertWrite(
+      await supabase.from('profiles').insert({
           email: req.email,
           first_name: req.first_name,
           last_name: req.last_name,
           role: req.requested_role || 'Student',
           status: 'Active',
-        })
+        }).select(),
+      'profiles.insert'
+    )
         if (noIdErr) throw noIdErr
       }
 
       // Update request status
-      const { error: updateErr } = await supabase.from('access_requests').update({
+      const { error: updateErr } = assertWrite(
+      await supabase.from('access_requests').update({
         status: 'Approved',
         processed_by: userName,
         processed_date: new Date().toISOString()
-      }).eq('request_id', req.request_id)
+      }).eq('request_id', req.request_id).select(),
+      'access_requests.update'
+    )
 
       // If the full update fails, try status only
       if (updateErr) {
@@ -1379,12 +1392,15 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
     if (!rejectTarget) return
     setProcessing(rejectTarget.request_id)
     try {
-      const { error } = await supabase.from('access_requests').update({
+      const { error } = assertWrite(
+      await supabase.from('access_requests').update({
         status: 'Rejected',
         processed_by: userName,
         processed_date: new Date().toISOString(),
         notes: reason,
-      }).eq('request_id', rejectTarget.request_id)
+      }).eq('request_id', rejectTarget.request_id).select(),
+      'access_requests.update'
+    )
 
       if (error) {
         await supabase.from('access_requests')
@@ -1433,14 +1449,17 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
 
       // Create profile directly
       const uuid = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
-      const { error } = await supabase.from('profiles').insert({
+      const { error } = assertWrite(
+      await supabase.from('profiles').insert({
         id: uuid,
         email: manualEmail.toLowerCase().trim(),
         first_name: manualFirst.trim(),
         last_name: manualLast.trim(),
         role: manualRole,
         status: 'Active'
-      })
+      }).select(),
+      'profiles.insert'
+    )
 
       if (error) throw error
 

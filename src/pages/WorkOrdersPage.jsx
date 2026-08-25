@@ -19,6 +19,7 @@
  * - Full permission gating via hasPerm()
  */
 
+import { assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -1194,14 +1195,17 @@ export default function WorkOrdersPage() {
 
           const unitPrice = parseFloat(li.unitPrice) || 0;
           const qty = parseInt(li.quantity) || 0;
-          const { error: lineErr } = await supabase.from('order_line_items').insert({
+          const { error: lineErr } = assertWrite(
+      await supabase.from('order_line_items').insert({
             line_id: lineId, order_id: orderId, part_number: li.partNumber || '',
             description: li.description || '', link: li.link || '',
             unit_price: unitPrice.toFixed(2), quantity: qty,
             subtotal: (unitPrice * qty).toFixed(2), received_qty: 0,
             status: 'Pending', inventory_part_id: li.inventoryPartId || '',
             wo_id: currentWO.wo_id
-          });
+          }).select(),
+      'order_line_items.insert'
+    );
           if (lineErr) {
             console.error(`Failed to insert line item for PO ${orderId}:`, lineErr);
             throw new Error(`Failed to save line item: ${lineErr.message}`);
@@ -1232,13 +1236,16 @@ export default function WorkOrdersPage() {
           orderId = `ORD${String(next).padStart(4, '0')}`;
         }
 
-        const { error } = await supabase.from('orders').insert({
+        const { error } = assertWrite(
+      await supabase.from('orders').insert({
           order_id: orderId, vendor_id: poForm.vendorId || null, vendor_name: poForm.vendorName || '',
           other_vendor: poForm.otherVendor || '', work_order_id: currentWO.wo_id,
           order_date: now, ordered_by: userName, status: 'Pending',
           total: newLineTotal.toFixed(2), notes: poForm.notes || '',
           approved_by: '', approved_date: null,
-        });
+        }).select(),
+      'orders.insert'
+    );
         if (error) throw error;
 
         // Add line items with wo_id
@@ -1252,14 +1259,17 @@ export default function WorkOrdersPage() {
 
           const unitPrice = parseFloat(li.unitPrice) || 0;
           const qty = parseInt(li.quantity) || 0;
-          const { error: lineErr2 } = await supabase.from('order_line_items').insert({
+          const { error: lineErr2 } = assertWrite(
+      await supabase.from('order_line_items').insert({
             line_id: lineId, order_id: orderId, part_number: li.partNumber || '',
             description: li.description || '', link: li.link || '',
             unit_price: unitPrice.toFixed(2), quantity: qty,
             subtotal: (unitPrice * qty).toFixed(2), received_qty: 0,
             status: 'Pending', inventory_part_id: li.inventoryPartId || '',
             wo_id: currentWO.wo_id
-          });
+          }).select(),
+      'order_line_items.insert'
+    );
           if (lineErr2) {
             console.error(`Failed to insert line item for PO ${orderId}:`, lineErr2);
             throw new Error(`Failed to save line item: ${lineErr2.message}`);
@@ -1268,9 +1278,12 @@ export default function WorkOrdersPage() {
       }
 
       // Update WO status to Awaiting Parts
-      const { error: woErr } = await supabase.from('work_orders').update({
+      const { error: woErr } = assertWrite(
+      await supabase.from('work_orders').update({
         status: 'Awaiting Parts', updated_at: now, updated_by: userName
-      }).eq('wo_id', currentWO.wo_id);
+      }).eq('wo_id', currentWO.wo_id).select(),
+      'work_orders.update'
+    );
       if (woErr) console.error('Failed to update WO status:', woErr);
 
       // Auto-generate work log entry
