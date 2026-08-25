@@ -1118,7 +1118,7 @@ export default function TimeClockPage() {
       // Skip any manually-entered Work Study class entry — it's auto-injected below
       .filter(c => !/work.?study/i.test(c))
 
-    console.log('[TimeClock] Building class list for', profile.first_name,
+    if (import.meta.env.DEV) console.log('[TimeClock] Building class list for', profile.first_name,
       '| role:', profile.role,
       '| profile.classes raw:', JSON.stringify(profile.classes),
       '| parsed (filtered):', classNames)
@@ -1279,7 +1279,7 @@ export default function TimeClockPage() {
         return
       }
 
-      console.log('[TimeClock] Found user:', foundUser.first_name, foundUser.last_name,
+      if (import.meta.env.DEV) console.log('[TimeClock] Found user:', foundUser.first_name, foundUser.last_name,
         '| Role:', foundUser.role, '| Classes:', foundUser.classes)
 
       if (isInstructorRole(foundUser.role)) {
@@ -1314,7 +1314,7 @@ export default function TimeClockPage() {
     setLoading(true)
     setError('')
     try {
-      console.log('[TimeClock] Instructor selected student:', studentProfile.first_name,
+      if (import.meta.env.DEV) console.log('[TimeClock] Instructor selected student:', studentProfile.first_name,
         studentProfile.last_name, '| Classes:', studentProfile.classes)
       await loadStudentPunchState(studentProfile)
     } catch (err) {
@@ -1376,7 +1376,7 @@ export default function TimeClockPage() {
         return
       }
 
-      console.log('[TimeClock] Punched in:', recordId, '| for:', userName,
+      if (import.meta.env.DEV) console.log('[TimeClock] Punched in:', recordId, '| for:', userName,
         '| courseId:', cls.courseId, '| courseName:', cls.courseName)
 
       // Check if this is the first punch today — only flag late/walk-in on first punch

@@ -1683,7 +1683,7 @@ export default function AppLayout() {
             await supabase.from('profiles')
               .update({ role: originalRole })
               .eq('email', grant.user_email)
-            console.log(`[Auto-Expiry] Reverted ${grant.user_name} from ${grant.approved_role} → ${originalRole}`)
+            if (import.meta.env.DEV) console.log(`[Auto-Expiry] Reverted ${grant.user_name} from ${grant.approved_role} → ${originalRole}`)
           }
         } else {
           console.log(`[Auto-Expiry] Expired ${(grant.approved_permissions || []).length} permission(s) for ${grant.user_name}`)

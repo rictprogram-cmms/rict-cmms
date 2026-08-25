@@ -22,6 +22,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { shortName } from '@/lib/utils'
 import { createClient } from '@supabase/supabase-js'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
@@ -62,16 +63,7 @@ function formatTimeTv(dateObj) {
   return `${disp}${ampm}`
 }
 
-function firstLastInit(fullName) {
-  if (!fullName) return ''
-  const parts = fullName.trim().split(' ')
-  let out = parts[0]
-  if (parts.length > 1) {
-    const last = parts[parts.length - 1]
-    if (last.length > 0) out += ' ' + last.charAt(0) + '.'
-  }
-  return out
-}
+// Name shortening uses the shared shortName() helper from src/lib/utils.
 
 // Fallback polling interval (5 minutes) — realtime handles instant updates,
 // this is a safety net in case a subscription message is missed
@@ -652,7 +644,7 @@ export default function TVDisplayPage() {
         if (!status) continue
 
         pplList.push({
-          displayName: firstLastInit(p.userName),
+          displayName: shortName(p.userName),
           status,
           timeRange,
           initials: (p.userName || '').split(' ').map(n => n.charAt(0)).join('').toUpperCase(),
@@ -682,7 +674,7 @@ export default function TVDisplayPage() {
         })
         .map(h => ({
           requestId: h.request_id,
-          displayName: firstLastInit(h.user_name),
+          displayName: shortName(h.user_name),
           initials: (h.user_name || '').split(' ').map(n => n.charAt(0)).join('').toUpperCase(),
           status: h.status, // 'pending' or 'acknowledged'
           location: h.location || '',
@@ -947,7 +939,7 @@ export default function TVDisplayPage() {
                       <div style={S.woInfo}>
                         <div style={S.woDesc}>{wo.description}</div>
                         <div style={S.woMeta}>
-                          <span>{firstLastInit(wo.assigned_to)}</span>
+                          <span>{shortName(wo.assigned_to)}</span>
                           <span style={{ color: '#475569' }}>•</span>
                           <span>{wo.asset_name || ''}</span>
                         </div>

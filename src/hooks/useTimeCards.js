@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry } from '@/lib/supabaseRetry'
 import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
+import { fetchLabVisibleDays, weekEndOffsetFromDays } from '@/hooks/useLabDays'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
 import toast from 'react-hot-toast'
@@ -131,6 +132,9 @@ function makeupHoursInRange(overlay, email, courseId, classId, rangeStart, range
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function generateUserReport(userData, reportStart, reportEnd, gracePeriod, classesData) {
+  // Week boundaries depend on the lab-days setting; fetch it explicitly rather
+  // than relying on the module cache (which is defaults until something loads it).
+  const weekEndOffset = weekEndOffsetFromDays(await fetchLabVisibleDays())
   const userEmail = userData.email || ''
   const userName = `${userData.first_name} ${userData.last_name}`
   const profileId = userData.id || ''
@@ -361,7 +365,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         startDate: cfg.start_date, endDate: cfg.end_date,
         springBreakStart: cfg.spring_break_start, springBreakEnd: cfg.spring_break_end,
         finalsStart: cfg.finals_start, finalsEnd: cfg.finals_end,
-      })
+      }, weekEndOffset)
     }
 
     const classLabTracker = labTrackerData.filter(lt => lt.course_id === courseId)
@@ -620,6 +624,9 @@ export function useTimeCardData() {
     // Store params for real-time refetch
     lastFetchParamsRef.current = { userId, startDate, endDate }
     setLoading(true)
+    // Lab-days setting drives week boundaries; refresh it so buildClassWeeks
+    // below gets the real offset instead of the module default.
+    const weekEndOffset = weekEndOffsetFromDays(await fetchLabVisibleDays())
     try {
       // 1. Get user email for lab_signup matching
       const { data: userData } = await supabase
@@ -966,7 +973,7 @@ export function useTimeCardData() {
           startDate: c.start_date, endDate: c.end_date,
           springBreakStart: c.spring_break_start, springBreakEnd: c.spring_break_end,
           finalsStart: c.finals_start, finalsEnd: c.finals_end,
-        })
+        }, weekEndOffset)
         const overlapNums = weeks.filter(wk => {
           const wkStart = (wk.startDate || '').substring(0, 10)
           const wkEnd = (wk.endDate || '').substring(0, 10)
@@ -1132,7 +1139,7 @@ export function useTimeCardData() {
           startDate: c.start_date, endDate: c.end_date,
           springBreakStart: c.spring_break_start, springBreakEnd: c.spring_break_end,
           finalsStart: c.finals_start, finalsEnd: c.finals_end,
-        })
+        }, weekEndOffset)
         weeks.forEach(wk => {
           const wkStart = (wk.startDate || '').substring(0, 10)
           const wkEnd = (wk.endDate || '').substring(0, 10)
@@ -1174,7 +1181,7 @@ export function useTimeCardData() {
           startDate: cls.start_date, endDate: cls.end_date,
           springBreakStart: cls.spring_break_start, springBreakEnd: cls.spring_break_end,
           finalsStart: cls.finals_start, finalsEnd: cls.finals_end,
-        })
+        }, weekEndOffset)
         const match = cwks.find(w => w.weekNumber === wkNum)
         if (match) {
           const m = mondayOf((match.startDate || '').substring(0, 10))

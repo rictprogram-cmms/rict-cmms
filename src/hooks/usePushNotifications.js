@@ -273,7 +273,7 @@ async function saveSubscriptionToSupabase(subscription, profile) {
     throw error;
   }
 
-  console.log('[Push] Subscription saved to Supabase for:', emailLower);
+  if (import.meta.env.DEV) console.log('[Push] Subscription saved to Supabase for:', emailLower);
 }
 
 /**

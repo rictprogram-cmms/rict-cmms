@@ -192,7 +192,7 @@ export function AuthProvider({ children }) {
         return null
       }
 
-      console.log(`🔄 Emulating user: ${data.first_name} ${data.last_name} (${data.email}) — Role: ${data.role}`)
+      if (import.meta.env.DEV) console.log(`🔄 Emulating user: ${data.first_name} ${data.last_name} (${data.email}) — Role: ${data.role}`)
       setEmulatedProfile(data)
       setCachedEmulation(data)
       return data
@@ -247,7 +247,7 @@ export function AuthProvider({ children }) {
             setAccountIssue('deactivated')
             return null
           }
-          console.log('Profile loaded by email:', profileByEmail.email, profileByEmail.role)
+          if (import.meta.env.DEV) console.log('Profile loaded by email:', profileByEmail.email, profileByEmail.role)
           setRealProfile(profileByEmail)
           setCachedProfile(profileByEmail)
           setAccountIssue(null)
@@ -270,7 +270,7 @@ export function AuthProvider({ children }) {
               setAccountIssue('deactivated')
               return null
             }
-            console.log('Profile loaded by ID:', profileById.email, profileById.role)
+            if (import.meta.env.DEV) console.log('Profile loaded by ID:', profileById.email, profileById.role)
             setRealProfile(profileById)
             setCachedProfile(profileById)
             setAccountIssue(null)
@@ -309,7 +309,7 @@ export function AuthProvider({ children }) {
           setAccountIssue('deactivated')
           return null
         }
-        console.log('Profile loaded by ID:', data.email, data.role)
+        if (import.meta.env.DEV) console.log('Profile loaded by ID:', data.email, data.role)
         setRealProfile(data)
         setCachedProfile(data)
         setAccountIssue(null)
@@ -362,7 +362,7 @@ export function AuthProvider({ children }) {
         if (!mounted) return
 
         if (user && !error) {
-          console.log('User authenticated:', user.email)
+          if (import.meta.env.DEV) console.log('User authenticated:', user.email)
           currentUserIdRef.current = user.id
           setSession({ user })
 
@@ -556,7 +556,7 @@ export function AuthProvider({ children }) {
         }
 
         if (data?.session?.user) {
-          console.log('[TabReturn] Session refreshed successfully for:', data.session.user.email)
+          if (import.meta.env.DEV) console.log('[TabReturn] Session refreshed successfully for:', data.session.user.email)
           currentUserIdRef.current = data.session.user.id
         }
 

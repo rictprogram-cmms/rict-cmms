@@ -21,19 +21,17 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
   - [x] TV Display — already abbreviated via local `firstLastInit()`
   - [x] Lab Status kiosk — fixed: help-request card now "First L." (people list was already abbreviated)
   - [x] Work Orders detail modal (`components/WorkOrderDetailModal.jsx`) — assignee chips, primary assignee, created-by and work-log authors now "First L." for non-instructors (2026-08-24). List page already shortened.
-  - [ ] Sweep remaining instructor-tier pages for other students' full names as each gets its accessibility pass (Inventory, Assets, SOPs, PM, Purchase Orders, Equipment/Network, Announcements)
+  - [x] Instructor-tier pages swept during the accessibility pass: Work Orders detail + SOPs fixed; Inventory/Assets/PM/PO/Network render no student names
   - [ ] Review Access page: if any Work Study role holds `manage_others`, `view_all_students`, `manage_all_bookings`, or `Users → view_page`, they see full names on those screens
-  - [ ] Cleanup: replace the local `firstLastInit()` copy in `TVDisplayPage.jsx` with `shortName()` from utils (LabStatusPage done 2026-08-24)
-  - [ ] Asset checkouts (`AssetCheckoutsPage.jsx`, `useAssetCheckouts.js`)
-  - [ ] Absence requests (`AbsenceRequestPage.jsx`)
-  - [ ] Audit any other list a student can see that renders another student's full name (Lab Signup, Time Cards, Dashboard widgets)
+  - [x] Cleanup: `TVDisplayPage.jsx` now uses shared `shortName()` (2026-08-25)
+  - [x] Asset checkouts / Absence requests — students only see their own rows (confirmed 2026-08-24); Lab Signup, Time Cards, Dashboard audited clean
 - [x] **Centralize super-admin exclusion.** Delivered 2026-08-24.
   - [x] Add `SUPER_ADMIN_EMAIL` constant + `isSuperAdmin()` / `isSuperAdminEmail()` / `excludeSuperAdmin()` helpers in `src/lib/superAdmin.js`
   - [x] Replace all 16 hardcoded sites across 15 files (EmulationBar, AppLayout, useBugTracker, useSettings, useAbsenceRequests, usePermissions, AuthContext, ProgramPlannerPage, AbsenceRequestPage, AccessPage, SettingsPage, LabStatusPage, AssetScanPage, AssetsPage, AnnouncementsPage)
   - [ ] Server-side: `profiles_public` view so the client can't forget. Risk: 30+ files query `profiles` and a few (login, AuthContext, EmulationBar, AccessPage) must still see the super admin — needs its own session with testing.
   - [ ] Audit the 24 files that query `profiles` with no filter; confirm none feed a student-visible picker
 - [ ] **`xlsx` 0.18.5 — 5 high-severity advisories, no npm fix.** Options: install SheetJS from `cdn.sheetjs.com` tarball (0.20.x) or migrate exports to `exceljs`. Decide and implement.
-- [ ] Strip `console.log` calls that print user emails/names (126 total `console.log`; audit for PII first, then remove or gate behind `import.meta.env.DEV`).
+- [x] PII `console.log`s gated behind `import.meta.env.DEV` (2026-08-25): 12 calls in `AuthContext`, `TimeClockPage`, `AppLayout`, `usePushNotifications` that printed emails/names. Remaining ~110 logs are non-PII diagnostics — optional cleanup.
 
 ## P2 — Accessibility (Section 508 / WCAG 2.1 AA)
 
@@ -97,7 +95,7 @@ Instructor / admin:
 - [ ] **`mustData()`** on reads that gate a write or feed a user-visible number (currently 6 files use it)
 - [x] **`subscribeWithReconnect()`** — 2026-08-24: 17 raw `supabase.channel()` subscriptions converted across `NotificationBell`, `usePurchaseOrders` (3), `useStudentHolds` (2), `AuthContext` (4), `InstructorToolsPage`, `WorkOrdersPage`, `ProgramCostPage`, `SettingsPage` (4), `SOPsPage`. The one remaining raw channel is the presence channel in `AuthContext` (`online-users-presence`) — it needs the channel object for `presenceState()`/`track()`, which the helper doesn't expose; leave as-is or extend the helper later.
 - [x] `useTimeCards.js` — time entry requests and edit requests now write an `audit_log` entry like the volunteer paths do (2026-08-25; TER001066 had none)
-- [ ] `useTimeCards.js` — four `buildClassWeeks` call sites should pass the offset explicitly
+- [x] `useTimeCards.js` — lab-days setting is now fetched in `generateUserReport` and `fetchTimeCard`, and all four `buildClassWeeks` calls pass the offset explicitly (2026-08-25)
 
 ## P4 — Code health
 
@@ -111,10 +109,10 @@ Instructor / admin:
   - [x] `src/hooks/useViewTracker.js`
   - [x] `src/pages/CourseRevisionWizard.jsx`
   - [x] `src/pages/AuthContext.jsx` (deleted 2026-08-24)
-- [ ] **Deferred pooled-scanner follow-ups** (not on main):
+- [x] **Deferred pooled-scanner follow-ups** — both delivered 2026-08-24:
   - [x] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx` (delivered 2026-08-24)
   - [x] Hide pooled asset's checkout indicator in `AssetsPage.jsx` (delivered 2026-08-24)
-- [ ] Add `.gitattributes` with `*.bat text eol=crlf` so batch files keep CRLF on commit
+- [x] `.gitattributes` added (2026-08-25): `*.bat` / `*.cmd` forced CRLF
 - [ ] Dependency bumps (minor, safe): `@supabase/supabase-js`, `react-router-dom`, `react`, `date-fns`, `docx`, `fflate`
 - [ ] Dependency bumps (major, plan separately): `vite` 6→8, `@vitejs/plugin-react` 4→6, `tailwindcss` 3→4, `lucide-react` 0.468→1.x
 - [ ] Main chunk still ~1 MB: `docx`/`fflate` are pulled in statically somewhere eager (likely `AppLayout` → `SyllabusLibraryModal` or `syllabusDocx.js`). Make those imports dynamic to shrink it further.
