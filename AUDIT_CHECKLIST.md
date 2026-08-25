@@ -41,9 +41,9 @@ Do one page per session. Start with student-facing pages.
 
 ### App-wide
 - [x] Global `:focus-visible` outline for buttons/links/inputs without Tailwind focus classes (`src/index.css`, 2026-08-24) — covers inline-styled pages and kiosks
-- [ ] Add skip-to-content link in `AppLayout.jsx` (target `<main id="main-content">`) — WCAG 2.4.1
-- [ ] Build `LabeledField` / `LabeledSelect` helper using `useId()` so new forms are correct by default
-- [ ] Replace `window.confirm` / `alert` (72 uses) with `ConfirmDialog` — also fixes kiosk behaviour
+- [x] Add skip-to-content link in `AppLayout.jsx` (target `<main id="main-content">`) — WCAG 2.4.1 (2026-08-24)
+- [ ] Build `LabeledField` / `LabeledSelect` helper using `useId()` so new forms are correct by default (several pages now have a local `Field` doing this — consolidate into `src/components/ui`)
+- [x] Replace `window.confirm` / `alert` with `ConfirmDialog`/toasts — done page-by-page during the sweep (2026-08-24); re-grep before closing: `grep -rnE "\b(confirm|alert)\(" src`
 - [x] Wrap non-`AppLayout` routes in `PageErrorBoundary` — on main `8e51988`: `/tv-display`, `/time-clock`, `/lab-status`, `/login`, `/orders/receive`, `/reset-password`, `/change-password`
 
 ### Per-page sweep — for each: labels (`htmlFor`/`id` or `aria-label`), keyboard-operable clickables (`role`, `tabIndex`, `onKeyDown`), `useDialogA11y` on every modal, `focus-visible` rings, icon-button `aria-label`, `alt` text, 44px targets, live regions
@@ -78,10 +78,11 @@ Instructor / admin:
 - [x] `ProgramCostPage.jsx` — 2026-08-24: Tuition & Fees dialog on `useDialogA11y`; 12 rate/fee inputs + materials cost labelled; `scope="col"`; 18 icons hidden; focus rings + 44px on all 14 buttons
 - [x] `WeeklyLabsTrackerPage.jsx` — 2026-08-24: Sign Off + All Done modals on `useDialogA11y` with roles; "Mark as Done" `window.confirm` → `ConfirmDialog`; close/sign-off icon buttons named; Select Class linked; `scope="col"`; 54 icons hidden; focus rings + 44px on all buttons
 - [x] `PMPage.jsx` — 2026-08-24: PM form modal on `useDialogA11y` with role; 3 `window.confirm`s → `askConfirm`/`ConfirmDialog` (open-WO warning now offers to open Work Orders); 2 `alert()`s → toasts; search/filter labelled; close button named; 36 icons hidden; focus rings + 44px
-- [ ] `components/NotificationBell.jsx` (7 clickable divs)
+- [x] `components/NotificationBell.jsx` — 2026-08-24: 4 dialogs already on the hook; permission/lab-change approval rows now have real labelled checkboxes; 3 labels linked; 44px + focus via `notification-bell.css`
 - [x] `components/RejectionModal.jsx` — verified: has its own focus trap/Escape; audit flag was a false positive
-- [ ] `components/holds/StudentHoldsTab.jsx`, `components/EmulationBar.jsx` (dialog/overlay without hook)
-- [ ] `AppLayout.jsx` (5 clickable divs, overlay)
+- [x] `components/holds/StudentHoldsTab.jsx` — 2026-08-24: Delete Hold `alertdialog` on `useDialogA11y`; date/search inputs labelled; 14 icons hidden; 44px + focus on 16 buttons
+- [x] `components/EmulationBar.jsx` — 2026-08-24: picker is `role="dialog"` (already had trap/Escape); draggable trigger keyboard-operable; close/search labelled
+- [x] `AppLayout.jsx` — 2026-08-24: skip link + `main#main-content`; Change Password and Temp Access dialogs on `useDialogA11y`; 4 `alert()`s → toasts; permission page headers keyboard-operable with `aria-expanded`, permission checkboxes real and labelled; 8 fields linked; menu/sign-out/password/planner icon buttons named; 25 icons hidden; 44px + focus on all buttons
 
 ### Documents
 - [ ] Re-verify Syllabus and Course Outline `.docx` exports still score 100% in Ally after any `docx` package bump

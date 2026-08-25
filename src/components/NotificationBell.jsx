@@ -1519,22 +1519,22 @@ export default function NotificationBell() {
   const renderActions = (item) => {
     const disabled = actionLoading === item.id;
     switch (item.type) {
-      case 'access': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'wo': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveWO(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectWO(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'parts': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveOrder(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectOrder(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'time': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveTime(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'time_edit': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => approveTimeEdit(item)}><span className="material-icons" aria-hidden="true">check</span>Approve Edit</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'lab': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openLabApproveModal(item)}><span className="material-icons" aria-hidden="true">rule</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => openRejectLab(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'temp': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'temp_perm': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Review</button><button className="nbtn nbtn-reject" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'access': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'wo': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveWO(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectWO(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'parts': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveOrder(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectOrder(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'time': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveTime(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'time_edit': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveTimeEdit(item)}><span className="material-icons" aria-hidden="true">check</span>Approve Edit</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'lab': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openLabApproveModal(item)}><span className="material-icons" aria-hidden="true">rule</span>Review</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openRejectLab(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'temp': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'temp_perm': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openApproveTempAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Review</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectTempAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
       // volunteer_punch removed — time clock punches are auto-approved at punch time
-      case 'announcement': return (<button className="nbtn nbtn-view" onClick={() => viewAnnouncement(item)}><span className="material-icons" aria-hidden="true">visibility</span>View</button>);
-      case 'student_message': return (<button className="nbtn nbtn-view" style={{ background: '#10b981' }} onClick={() => viewAnnouncement(item)} aria-label={`View student message: ${item.title}`}><span className="material-icons" aria-hidden="true">forum</span>View &amp; Reply</button>);
-      case 'wo_assignment': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
-      case 'help': return (<><button className="nbtn nbtn-approve" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
-      case 'netchg': return (<button className="nbtn nbtn-view" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
-      case 'absence': return (<button className="nbtn nbtn-view" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review absence request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
-      case 'pending_ack': return (<button className="nbtn nbtn-approve" disabled={disabled} onClick={() => setAckModalTarget(item.raw)} aria-label={`Sign for asset ${item.raw?.asset_name || item.raw?.asset_id}`}><span className="material-icons" aria-hidden="true">verified_user</span>Sign Now</button>);
+      case 'announcement': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => viewAnnouncement(item)}><span className="material-icons" aria-hidden="true">visibility</span>View</button>);
+      case 'student_message': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#10b981' }} onClick={() => viewAnnouncement(item)} aria-label={`View student message: ${item.title}`}><span className="material-icons" aria-hidden="true">forum</span>View &amp; Reply</button>);
+      case 'wo_assignment': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
+      case 'help': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary min-h-[44px]" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
+      case 'netchg': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
+      case 'absence': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review absence request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
+      case 'pending_ack': return (<button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => setAckModalTarget(item.raw)} aria-label={`Sign for asset ${item.raw?.asset_name || item.raw?.asset_id}`}><span className="material-icons" aria-hidden="true">verified_user</span>Sign Now</button>);
       default: return null;
     }
   };
@@ -1546,7 +1546,7 @@ export default function NotificationBell() {
 
       {/* Bell Button */}
       <button
-        className={`nbell-btn ${hasNew ? 'has-new' : ''}`}
+        className={`nbell-btn min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${hasNew ? 'has-new' : ''}`}
         onClick={() => { setOpen(!open); setHasNew(false); fetchNotifications(); }}
         aria-label={`Notifications${count > 0 ? `, ${count} pending` : ''}`}
         aria-haspopup="dialog"
@@ -1584,7 +1584,7 @@ export default function NotificationBell() {
                     : pushStatus === 'loading' ? 'Subscribing...'
                     : 'Enable push notifications to your phone'
                   }
-                  style={{
+                  style={{ minHeight: 44,
                     background: 'none', border: 'none', cursor: pushStatus === 'blocked' ? 'not-allowed' : 'pointer',
                     padding: '4px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     transition: 'background 0.2s',
@@ -1859,8 +1859,8 @@ export default function NotificationBell() {
               </select>
             </div>
             <div className="nbell-modal-footer">
-              <button className="nbtn nbtn-secondary" onClick={() => setRoleModal(null)}>Cancel</button>
-              <button className="nbtn nbtn-approve" onClick={confirmApproveAccess}><span className="material-icons" aria-hidden="true">check</span>Approve as {selectedRole}</button>
+              <button className="nbtn nbtn-secondary min-h-[44px]" onClick={() => setRoleModal(null)}>Cancel</button>
+              <button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={confirmApproveAccess}><span className="material-icons" aria-hidden="true">check</span>Approve as {selectedRole}</button>
             </div>
           </div>
         </div>
@@ -1884,8 +1884,8 @@ export default function NotificationBell() {
                 <>
                   <p><strong>{tempModal.raw?.user_name}</strong> requests {(tempModal.raw?.requested_permissions || []).length} specific permission(s) for {tempModal.raw?.days_requested} days.</p>
                   {tempModal.raw?.reason && <p style={{ fontSize: '0.85rem', color: '#868e96', fontStyle: 'italic' }}>Reason: {tempModal.raw.reason}</p>}
-                  <label className="nbell-label">Duration (days)</label>
-                  <select className="nbell-select" value={tempDays} onChange={e => setTempDays(parseInt(e.target.value))}>
+                  <label htmlFor="nb-fld-duration-days-1" className="nbell-label">Duration (days)</label>
+                  <select id="nb-fld-duration-days-1" className="nbell-select" value={tempDays} onChange={e => setTempDays(parseInt(e.target.value))}>
                     <option value={1}>1 day</option><option value={2}>2 days</option><option value={3}>3 days</option><option value={5}>5 days</option><option value={7}>1 week</option>
                   </select>
                   <label className="nbell-label">Permissions to Grant</label>
@@ -1904,7 +1904,7 @@ export default function NotificationBell() {
                           cursor: 'pointer', background: checked ? '#f3e8ff' : 'white',
                           transition: 'background 0.15s',
                         }}>
-                          <input type="checkbox" checked={checked} onChange={() => {}} style={{ width: 14, height: 14, accentColor: '#7c3aed', cursor: 'pointer' }} />
+                          <input type="checkbox" checked={checked} aria-label={`Approve ${p.page} ${p.feature.replace(/_/g, ' ')}`} onChange={() => setTempApprovePerms(prev => { const next = { ...prev }; if (next[p.permission_id]) delete next[p.permission_id]; else next[p.permission_id] = true; return next })} onClick={e => e.stopPropagation()} style={{ width: 20, height: 20, accentColor: '#7c3aed', cursor: 'pointer' }} />
                           <div style={{ flex: 1 }}>
                             <div style={{ fontSize: '0.82rem', fontWeight: 500, color: '#1a1a2e' }}>
                               <span style={{ color: '#7c3aed', fontSize: '0.72rem', fontWeight: 600 }}>{p.page}</span>
@@ -1925,21 +1925,21 @@ export default function NotificationBell() {
                 <>
                   <p><strong>{tempModal.raw?.user_name}</strong> requests {tempModal.raw?.requested_role} access for {tempModal.raw?.days_requested} days.</p>
                   {tempModal.raw?.reason && <p style={{ fontSize: '0.85rem', color: '#868e96', fontStyle: 'italic' }}>Reason: {tempModal.raw.reason}</p>}
-                  <label className="nbell-label">Approved Role</label>
-                  <select className="nbell-select" value={tempRole} onChange={e => setTempRole(e.target.value)}>
+                  <label htmlFor="nb-fld-approved-role-2" className="nbell-label">Approved Role</label>
+                  <select id="nb-fld-approved-role-2" className="nbell-select" value={tempRole} onChange={e => setTempRole(e.target.value)}>
                     <option value="Work Study">Work Study</option><option value="Instructor">Instructor</option>
                   </select>
-                  <label className="nbell-label">Duration (days)</label>
-                  <select className="nbell-select" value={tempDays} onChange={e => setTempDays(parseInt(e.target.value))}>
+                  <label htmlFor="nb-fld-duration-days-3" className="nbell-label">Duration (days)</label>
+                  <select id="nb-fld-duration-days-3" className="nbell-select" value={tempDays} onChange={e => setTempDays(parseInt(e.target.value))}>
                     <option value={1}>1 day</option><option value={2}>2 days</option><option value={3}>3 days</option><option value={5}>5 days</option><option value={7}>1 week</option>
                   </select>
                 </>
               )}
             </div>
             <div className="nbell-modal-footer">
-              <button className="nbtn nbtn-secondary" onClick={() => setTempModal(null)}>Cancel</button>
+              <button className="nbtn nbtn-secondary min-h-[44px]" onClick={() => setTempModal(null)}>Cancel</button>
               <button
-                className="nbtn nbtn-approve"
+                className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 onClick={confirmApproveTempAccess}
                 disabled={tempModal.raw?.request_type === 'permissions' && Object.keys(tempApprovePerms).length === 0}
               >
@@ -2003,7 +2003,7 @@ export default function NotificationBell() {
                           <div key={i} onClick={() => setLabApproveCancels(prev => ({ ...prev, [key]: !prev[key] }))}
                             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer',
                               background: checked ? '#fff5f5' : '#fff', borderBottom: i < (detail.cancelledKeys.length - 1) ? '1px solid #ffe3e3' : 'none', transition: 'background 0.15s' }}>
-                            <input type="checkbox" checked={checked} onChange={() => {}} style={{ width: 14, height: 14, accentColor: '#fa5252', cursor: 'pointer' }} />
+                            <input type="checkbox" checked={checked} aria-label={`Approve cancellation ${key}`} onChange={() => setLabApproveCancels(prev => ({ ...prev, [key]: !prev[key] }))} onClick={e => e.stopPropagation()} style={{ width: 14, height: 14, accentColor: '#fa5252', cursor: 'pointer' }} />
                             <span style={{ fontSize: '0.82rem', color: checked ? '#c92a2a' : '#868e96', textDecoration: checked ? 'line-through' : 'none', flex: 1 }}>
                               {detail.cancelledSlots?.[i] || key}
                             </span>
@@ -2030,7 +2030,7 @@ export default function NotificationBell() {
                             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', cursor: 'pointer',
                               background: checked ? (isConflict ? '#fff9db' : '#f4fce3') : '#fff',
                               borderBottom: i < (detail.addedKeys.length - 1) ? '1px solid #d3f9d8' : 'none', transition: 'background 0.15s' }}>
-                            <input type="checkbox" checked={checked} onChange={() => {}} style={{ width: 14, height: 14, accentColor: '#40c057', cursor: 'pointer' }} />
+                            <input type="checkbox" checked={checked} aria-label={`Approve addition ${key}`} onChange={() => setLabApproveAdds(prev => ({ ...prev, [key]: !prev[key] }))} onClick={e => e.stopPropagation()} style={{ width: 14, height: 14, accentColor: '#40c057', cursor: 'pointer' }} />
                             <span style={{ fontSize: '0.82rem', color: checked ? (isConflict ? '#e67700' : '#2f9e44') : '#868e96', flex: 1 }}>
                               {detail.addedSlots?.[i] || key}
                             </span>
@@ -2059,11 +2059,11 @@ export default function NotificationBell() {
               </div>
 
               <div className="nbell-modal-footer" style={{ flexWrap: 'wrap', gap: 8 }}>
-                <button className="nbtn nbtn-secondary" onClick={() => setLabModal(null)}>Cancel</button>
-                <button className="nbtn nbtn-reject" onClick={() => { setLabModal(null); openRejectLab(labModal); }}>
+                <button className="nbtn nbtn-secondary min-h-[44px]" onClick={() => setLabModal(null)}>Cancel</button>
+                <button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => { setLabModal(null); openRejectLab(labModal); }}>
                   <span className="material-icons" aria-hidden="true">close</span>Reject All
                 </button>
-                <button className="nbtn nbtn-approve" disabled={totalApproved === 0 || actionLoading === labModal.id}
+                <button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={totalApproved === 0 || actionLoading === labModal.id}
                   onClick={confirmApproveLab}>
                   <span className="material-icons" aria-hidden="true">check</span>
                   Approve {totalApproved > 0 ? `(${approvedCancelCount > 0 ? `−${approvedCancelCount}` : ''}${approvedCancelCount > 0 && approvedAddCount > 0 ? ' ' : ''}${approvedAddCount > 0 ? `+${approvedAddCount}` : ''})` : ''}
@@ -2089,8 +2089,8 @@ export default function NotificationBell() {
               <textarea id="reject-modal-reason" className="nbell-select" rows={3} required aria-required="true" style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder={rejectModal.rejectType === 'lab' ? 'e.g., Slots are fully booked, please choose different times...' : 'Enter reason...'} value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
             </div>
             <div className="nbell-modal-footer">
-              <button className="nbtn nbtn-secondary" onClick={() => setRejectModal(null)}>Cancel</button>
-              <button className="nbtn nbtn-reject" onClick={confirmRejectWithReason}><span className="material-icons" aria-hidden="true">close</span>Reject {rejectModal.rejectType === 'lab' ? '& Notify Student' : ''}</button>
+              <button className="nbtn nbtn-secondary min-h-[44px]" onClick={() => setRejectModal(null)}>Cancel</button>
+              <button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={confirmRejectWithReason}><span className="material-icons" aria-hidden="true">close</span>Reject {rejectModal.rejectType === 'lab' ? '& Notify Student' : ''}</button>
             </div>
           </div>
         </div>

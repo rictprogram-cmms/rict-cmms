@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -37,9 +38,9 @@ export default function StudentHoldsTab() {
       {!showForm && (
         <button
           onClick={() => setShowForm(true)}
-          className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 flex items-center gap-1.5 shadow-sm"
+          className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 flex items-center gap-1.5 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
-          <Plus size={14} /> New Hold
+          <Plus size={14} aria-hidden="true" /> New Hold
         </button>
       )}
 
@@ -187,15 +188,15 @@ function CreateHoldForm({ onCancel, onSuccess }) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-surface-900 flex items-center gap-2">
-          <ShieldAlert size={16} className="text-brand-600" /> New Student Hold
+          <ShieldAlert size={16} className="text-brand-600" aria-hidden="true" /> New Student Hold
         </h3>
         {onCancel && (
           <button
             onClick={onCancel}
-            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400"
+            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close form"
           >
-            <X size={16} />
+            <X size={16} aria-hidden="true" />
           </button>
         )}
       </div>
@@ -214,7 +215,7 @@ function CreateHoldForm({ onCancel, onSuccess }) {
               key={t.id}
               type="button"
               onClick={() => applyTemplate(t.id)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 templateId === t.id
                   ? 'bg-brand-600 text-white'
                   : 'bg-surface-100 text-surface-600 hover:bg-surface-200'
@@ -228,10 +229,10 @@ function CreateHoldForm({ onCancel, onSuccess }) {
 
       {/* Title */}
       <div>
-        <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
+        <label htmlFor="sh-fld-title-1" className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
           Title *
         </label>
-        <input
+        <input id="sh-fld-title-1"
           type="text"
           value={title}
           onChange={e => setTitle(e.target.value)}
@@ -243,10 +244,10 @@ function CreateHoldForm({ onCancel, onSuccess }) {
 
       {/* Message */}
       <div>
-        <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
+        <label htmlFor="sh-fld-message-2" className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block">
           Message *
         </label>
-        <textarea
+        <textarea id="sh-fld-message-2"
           value={message}
           onChange={e => setMessage(e.target.value)}
           placeholder="Full body text the student will read"
@@ -258,11 +259,12 @@ function CreateHoldForm({ onCancel, onSuccess }) {
       {/* Expiry */}
       <div>
         <label className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-1 block flex items-center gap-1">
-          <Calendar size={11} /> Auto-Expire (Optional)
+          <Calendar size={11} aria-hidden="true" /> Auto-Expire (Optional)
         </label>
         <div className="flex items-center gap-2">
           <input
             type="date"
+            aria-label="Expiration date"
             value={expiresDate}
             onChange={e => setExpiresDate(e.target.value)}
             min={new Date().toISOString().slice(0, 10)}
@@ -272,7 +274,7 @@ function CreateHoldForm({ onCancel, onSuccess }) {
             <button
               type="button"
               onClick={() => setExpiresDate('')}
-              className="text-xs text-surface-500 hover:text-surface-700"
+              className="text-xs text-surface-500 hover:text-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
               Clear
             </button>
@@ -297,14 +299,14 @@ function CreateHoldForm({ onCancel, onSuccess }) {
           <button
             type="button"
             onClick={() => selectByRole('Student')}
-            className="px-2 py-0.5 rounded bg-blue-50 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+            className="px-2 py-0.5 rounded bg-blue-50 text-[10px] font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
             + All Students
           </button>
           <button
             type="button"
             onClick={() => selectByRole('Work Study')}
-            className="px-2 py-0.5 rounded bg-emerald-50 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100"
+            className="px-2 py-0.5 rounded bg-emerald-50 text-[10px] font-medium text-emerald-700 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
             + All Work Study
           </button>
@@ -312,7 +314,7 @@ function CreateHoldForm({ onCancel, onSuccess }) {
             <button
               type="button"
               onClick={clearSelection}
-              className="px-2 py-0.5 rounded bg-red-50 text-[10px] font-medium text-red-600 hover:bg-red-100"
+              className="px-2 py-0.5 rounded bg-red-50 text-[10px] font-medium text-red-600 hover:bg-red-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
               Clear All
             </button>
@@ -321,9 +323,10 @@ function CreateHoldForm({ onCancel, onSuccess }) {
 
         {/* Search */}
         <div className="relative mb-2">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
           <input
             type="text"
+            aria-label="Search students"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search students..."
@@ -335,7 +338,7 @@ function CreateHoldForm({ onCancel, onSuccess }) {
         <div className="border border-surface-200 rounded-xl max-h-64 overflow-y-auto divide-y divide-surface-100">
           {loadingUsers ? (
             <div className="text-center py-6">
-              <Loader2 size={16} className="mx-auto mb-1 text-brand-400 animate-spin" />
+              <Loader2 size={16} className="mx-auto mb-1 text-brand-400 animate-spin" aria-hidden="true" />
               <p className="text-xs text-surface-400">Loading students…</p>
             </div>
           ) : filteredUsers.length === 0 ? (
@@ -386,7 +389,7 @@ function CreateHoldForm({ onCancel, onSuccess }) {
             type="button"
             onClick={onCancel}
             disabled={saving}
-            className="px-4 py-2 rounded-lg bg-surface-100 text-xs font-medium text-surface-600 hover:bg-surface-200 disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-surface-100 text-xs font-medium text-surface-600 hover:bg-surface-200 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
             Cancel
           </button>
@@ -395,11 +398,11 @@ function CreateHoldForm({ onCancel, onSuccess }) {
           type="button"
           onClick={handleSubmit}
           disabled={!canSubmit}
-          className="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-1.5"
+          className="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
           {saving ? (
             <>
-              <Loader2 size={12} className="animate-spin" /> Creating…
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Creating…
             </>
           ) : (
             <>
@@ -446,7 +449,7 @@ function SeverityPicker({ value, onChange }) {
               onClick={() => onChange(t.id)}
               role="radio"
               aria-checked={selected}
-              className="p-3 rounded-lg border-2 text-xs font-semibold transition-all flex flex-col items-center gap-1"
+              className="p-3 rounded-lg border-2 text-xs font-semibold transition-all flex flex-col items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               style={{
                 background: selected ? t.bgColor : 'white',
                 borderColor: selected ? t.color : '#e2e8f0',
@@ -508,7 +511,7 @@ function ActiveHoldsPanel() {
   if (loading) {
     return (
       <div className="text-center py-16">
-        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" />
+        <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-400">Loading holds…</p>
       </div>
     )
@@ -528,9 +531,10 @@ function ActiveHoldsPanel() {
       {/* Search */}
       {holds.length > 0 && (
         <div className="relative mt-3">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
           <input
             type="text"
+            aria-label="Search students"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search by title, student, or creator…"
@@ -542,7 +546,7 @@ function ActiveHoldsPanel() {
       {/* Empty state */}
       {holds.length === 0 ? (
         <div className="text-center py-12 mt-3">
-          <ShieldCheck size={36} className="mx-auto mb-2 text-emerald-300" />
+          <ShieldCheck size={36} className="mx-auto mb-2 text-emerald-300" aria-hidden="true" />
           <p className="text-sm text-surface-500">No active holds</p>
           <p className="text-xs text-surface-400 mt-1">
             When you create one, it will appear here with per-student status.
@@ -550,7 +554,7 @@ function ActiveHoldsPanel() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-10 mt-3">
-          <Search size={24} className="mx-auto mb-2 text-surface-300" />
+          <Search size={24} className="mx-auto mb-2 text-surface-300" aria-hidden="true" />
           <p className="text-sm text-surface-500">No matching holds</p>
         </div>
       ) : (
@@ -614,7 +618,7 @@ function HoldCard({
       <button
         type="button"
         onClick={onToggleExpand}
-        className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-50 transition-colors"
+        className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         aria-expanded={expanded}
       >
         <SeverityBadge severity={hold.severity} />
@@ -697,9 +701,9 @@ function HoldCard({
               type="button"
               onClick={onRequestDelete}
               disabled={saving}
-              className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 disabled:opacity-50 flex items-center gap-1"
+              className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              <Trash2 size={11} /> Delete Hold
+              <Trash2 size={11} aria-hidden="true" /> Delete Hold
             </button>
           </div>
         </div>
@@ -780,7 +784,7 @@ function TargetRow({ target, onClear, onForceClear, saving }) {
             type="button"
             onClick={onClear}
             disabled={saving}
-            className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-medium hover:bg-emerald-100 disabled:opacity-50"
+            className="px-2 py-1 rounded bg-emerald-50 text-emerald-700 text-[10px] font-medium hover:bg-emerald-100 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             title="Clear this student's hold remotely"
           >
             Clear
@@ -790,7 +794,7 @@ function TargetRow({ target, onClear, onForceClear, saving }) {
               type="button"
               onClick={onForceClear}
               disabled={saving}
-              className="px-2 py-1 rounded bg-purple-50 text-purple-700 text-[10px] font-medium hover:bg-purple-100 disabled:opacity-50 flex items-center gap-0.5"
+              className="px-2 py-1 rounded bg-purple-50 text-purple-700 text-[10px] font-medium hover:bg-purple-100 disabled:opacity-50 flex items-center gap-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               title="Super Admin force clear"
             >
               <Zap size={9} aria-hidden="true" /> Force
@@ -845,6 +849,7 @@ function StatCard({ label, value, color }) {
 // ────────────────────────────────────────────────────────────────────────────
 
 function ConfirmDeleteModal({ hold, onConfirm, onCancel, saving }) {
+  const dialogRef = useDialogA11y(true, onCancel)
   const targetCount = hold.targets?.length || 0
 
   return (
@@ -852,11 +857,11 @@ function ConfirmDeleteModal({ hold, onConfirm, onCancel, saving }) {
       className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
       onClick={e => e.target === e.currentTarget && onCancel()}
     >
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95">
+      <div ref={dialogRef} role="alertdialog" aria-modal="true" aria-label="Delete hold" className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95">
         <div className="px-6 pt-6 pb-4">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
-              <Trash2 size={18} className="text-red-600" />
+              <Trash2 size={18} className="text-red-600" aria-hidden="true" />
             </div>
             <h3 className="text-base font-semibold text-surface-900">
               Delete this hold?
@@ -877,7 +882,7 @@ function ConfirmDeleteModal({ hold, onConfirm, onCancel, saving }) {
             type="button"
             onClick={onCancel}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-surface-600 bg-surface-100 hover:bg-surface-200 rounded-lg transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm font-medium text-surface-600 bg-surface-100 hover:bg-surface-200 rounded-lg transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
             Cancel
           </button>
@@ -885,11 +890,11 @@ function ConfirmDeleteModal({ hold, onConfirm, onCancel, saving }) {
             type="button"
             onClick={onConfirm}
             disabled={saving}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
             {saving ? (
               <>
-                <Loader2 size={12} className="animate-spin" /> Deleting…
+                <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Deleting…
               </>
             ) : (
               <>Delete Hold</>

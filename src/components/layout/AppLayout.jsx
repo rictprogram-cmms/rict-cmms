@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import toast from 'react-hot-toast'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
@@ -145,6 +147,7 @@ function NavItem({ item, onClick, hasTempPerms }) {
 
 // ── Change Password Modal Component ──
 function ChangePasswordModal({ open, onClose }) {
+  const dialogRef = useDialogA11y(!!open, onClose)
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -232,7 +235,7 @@ function ChangePasswordModal({ open, onClose }) {
       }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div style={{
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Change password" style={{
         background: 'white', borderRadius: 12, width: '100%', maxWidth: 420, overflow: 'hidden',
       }}>
         {/* Header */}
@@ -241,12 +244,12 @@ function ChangePasswordModal({ open, onClose }) {
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <h4 style={{ margin: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Lock size={18} style={{ color: '#228be6' }} />
+            <Lock size={18} style={{ color: '#228be6' }} aria-hidden="true" />
             Change Password
           </h4>
           <button
             onClick={onClose}
-            style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96' }}
+            style={{ minHeight: 44, background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96' }}
           >
             &times;
           </button>
@@ -260,7 +263,7 @@ function ChangePasswordModal({ open, onClose }) {
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 width: 56, height: 56, borderRadius: '50%', background: '#d3f9d8', marginBottom: 12,
               }}>
-                <CheckCircle size={28} style={{ color: '#2f9e44' }} />
+                <CheckCircle size={28} style={{ color: '#2f9e44' }} aria-hidden="true" />
               </div>
               <p style={{ fontWeight: 600, fontSize: '1rem', color: '#212529', margin: '0 0 4px' }}>
                 Password Updated!
@@ -276,11 +279,11 @@ function ChangePasswordModal({ open, onClose }) {
               </p>
 
               {/* Current Password */}
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, margin: '0 0 6px', color: '#495057' }}>
+              <label htmlFor="al-fld-1" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, margin: '0 0 6px', color: '#495057' }}>
                 Current Password <span style={{ color: '#fa5252' }}>*</span>
               </label>
               <div style={{ position: 'relative', marginBottom: 14 }}>
-                <input
+                <input id="al-fld-1"
                   type={showCurrent ? 'text' : 'password'}
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
@@ -294,21 +297,21 @@ function ChangePasswordModal({ open, onClose }) {
                 <button
                   type="button"
                   onClick={() => setShowCurrent(!showCurrent)}
-                  style={{
+                  style={{ minHeight: 44,
                     position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
                     background: 'none', border: 'none', cursor: 'pointer', color: '#868e96', padding: 4,
                   }}
                 >
-                  {showCurrent ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showCurrent ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                 </button>
               </div>
 
               {/* New Password */}
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, margin: '0 0 6px', color: '#495057' }}>
+              <label htmlFor="al-fld-2" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, margin: '0 0 6px', color: '#495057' }}>
                 New Password <span style={{ color: '#fa5252' }}>*</span>
               </label>
               <div style={{ position: 'relative', marginBottom: 14 }}>
-                <input
+                <input id="al-fld-2"
                   type={showNew ? 'text' : 'password'}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
@@ -321,20 +324,20 @@ function ChangePasswordModal({ open, onClose }) {
                 <button
                   type="button"
                   onClick={() => setShowNew(!showNew)}
-                  style={{
+                  style={{ minHeight: 44,
                     position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
                     background: 'none', border: 'none', cursor: 'pointer', color: '#868e96', padding: 4,
                   }}
                 >
-                  {showNew ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showNew ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                 </button>
               </div>
 
               {/* Confirm New Password */}
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, margin: '0 0 6px', color: '#495057' }}>
+              <label htmlFor="al-fld-3" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 500, margin: '0 0 6px', color: '#495057' }}>
                 Confirm New Password <span style={{ color: '#fa5252' }}>*</span>
               </label>
-              <input
+              <input id="al-fld-3"
                 type={showNew ? 'text' : 'password'}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -379,7 +382,7 @@ function ChangePasswordModal({ open, onClose }) {
           }}>
             <button
               onClick={onClose}
-              style={{
+              style={{ minHeight: 44,
                 background: '#f1f3f5', color: '#495057', border: 'none',
                 borderRadius: 8, padding: '10px 20px', fontSize: '0.88rem', cursor: 'pointer',
               }}
@@ -389,7 +392,7 @@ function ChangePasswordModal({ open, onClose }) {
             <button
               onClick={handleSubmit}
               disabled={loading}
-              style={{
+              style={{ minHeight: 44,
                 background: '#228be6', color: 'white', border: 'none',
                 borderRadius: 8, padding: '10px 20px', fontSize: '0.88rem', fontWeight: 500,
                 cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1,
@@ -399,7 +402,7 @@ function ChangePasswordModal({ open, onClose }) {
             >
               {loading ? (
                 <>
-                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                  <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} aria-hidden="true" />
                   Updating...
                 </>
               ) : (
@@ -418,6 +421,7 @@ function ChangePasswordModal({ open, onClose }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [mode, setMode] = useState('permissions') // 'role' or 'permissions'
   const [submitting, setSubmitting] = useState(false)
 
@@ -555,10 +559,10 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
   // Submit handler
   const handleSubmit = async () => {
     if (mode === 'role') {
-      if (!roleForm.reason.trim()) { alert('Please provide a reason.'); return }
+      if (!roleForm.reason.trim()) { toast.error('Please provide a reason.'); return }
     } else {
-      if (selectedCount === 0) { alert('Please select at least one permission.'); return }
-      if (!permForm.reason.trim()) { alert('Please provide a reason.'); return }
+      if (selectedCount === 0) { toast.error('Please select at least one permission.'); return }
+      if (!permForm.reason.trim()) { toast.error('Please provide a reason.'); return }
     }
 
     setSubmitting(true)
@@ -613,7 +617,7 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
 
       onSubmitted()
     } catch (e) {
-      alert('Error: ' + e.message)
+      toast.error('Error: ' + e.message)
     }
     setSubmitting(false)
   }
@@ -682,14 +686,14 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
 
   return (
     <div style={s.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={s.modal}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Request temporary access" style={s.modal}>
         {/* Header */}
         <div style={s.header}>
           <h4 style={{ margin: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <KeyRound size={18} style={{ color: '#fab005' }} />
+            <KeyRound size={18} style={{ color: '#fab005' }} aria-hidden="true" />
             Request Temporary Access
           </h4>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96' }}>
+          <button onClick={onClose} style={{ minHeight: 44, background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#868e96' }}>
             &times;
           </button>
         </div>
@@ -728,14 +732,14 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
           {/* ── Role Mode ── */}
           {mode === 'role' && (
             <>
-              <label style={s.label}>Requested Role</label>
-              <select value={roleForm.requested_role} onChange={e => setRoleForm(f => ({ ...f, requested_role: e.target.value }))} style={s.input}>
+              <label htmlFor="al-fld-4" style={s.label}>Requested Role</label>
+              <select id="al-fld-4" value={roleForm.requested_role} onChange={e => setRoleForm(f => ({ ...f, requested_role: e.target.value }))} style={s.input}>
                 <option value="Work Study">Work Study</option>
                 <option value="Instructor">Instructor</option>
               </select>
 
-              <label style={s.label}>Duration</label>
-              <select value={roleForm.days_requested} onChange={e => setRoleForm(f => ({ ...f, days_requested: parseInt(e.target.value) }))} style={s.input}>
+              <label htmlFor="al-fld-5" style={s.label}>Duration</label>
+              <select id="al-fld-5" value={roleForm.days_requested} onChange={e => setRoleForm(f => ({ ...f, days_requested: parseInt(e.target.value) }))} style={s.input}>
                 <option value={1}>1 day</option>
                 <option value={2}>2 days</option>
                 <option value={3}>3 days</option>
@@ -748,8 +752,8 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                 )}
               </select>
 
-              <label style={s.label}>Reason <span style={{ color: '#fa5252' }}>*</span></label>
-              <textarea
+              <label htmlFor="al-fld-6" style={s.label}>Reason <span style={{ color: '#fa5252' }}>*</span></label>
+              <textarea id="al-fld-6"
                 rows={3} placeholder="Why do you need temporary access?"
                 value={roleForm.reason} onChange={e => setRoleForm(f => ({ ...f, reason: e.target.value }))}
                 style={{ ...s.input, resize: 'vertical', fontFamily: 'inherit' }}
@@ -764,8 +768,8 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
           {/* ── Permissions Mode ── */}
           {mode === 'permissions' && (
             <>
-              <label style={s.label}>Duration</label>
-              <select value={permForm.days_requested} onChange={e => setPermForm(f => ({ ...f, days_requested: parseInt(e.target.value) }))} style={s.input}>
+              <label htmlFor="al-fld-7" style={s.label}>Duration</label>
+              <select id="al-fld-7" value={permForm.days_requested} onChange={e => setPermForm(f => ({ ...f, days_requested: parseInt(e.target.value) }))} style={s.input}>
                 <option value={1}>1 day</option>
                 <option value={2}>2 days</option>
                 <option value={3}>3 days</option>
@@ -789,8 +793,8 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
 
               {/* Search */}
               <div style={{ position: 'relative', marginBottom: 10 }}>
-                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#adb5bd' }} />
-                <input
+                <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#adb5bd' }} aria-hidden="true" />
+                <input aria-label="Search permissions"
                   type="text" placeholder="Search permissions..."
                   value={permSearch} onChange={e => setPermSearch(e.target.value)}
                   style={{ ...s.input, paddingLeft: 32, fontSize: '0.82rem' }}
@@ -800,7 +804,7 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
               {/* Permission groups */}
               {permissionsLoading ? (
                 <div style={{ textAlign: 'center', padding: 20, color: '#868e96' }}>
-                  <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', display: 'inline-block', marginRight: 8 }} />
+                  <Loader2 size={20} style={{ animation: 'spin 1s linear infinite', display: 'inline-block', marginRight: 8 }} aria-hidden="true" />
                   Loading permissions...
                 </div>
               ) : filteredPages.length === 0 ? (
@@ -821,9 +825,9 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
 
                     return (
                       <div key={page}>
-                        <div style={s.pageHeader(expanded)} onClick={() => togglePage(page)}>
+                        <div style={s.pageHeader(expanded)} role="button" tabIndex={0} aria-expanded={expanded} aria-label={`${page} permissions`} onClick={() => togglePage(page)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePage(page) } }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            {expanded ? <ChevronUp size={14} style={{ color: '#228be6' }} /> : <ChevronDown size={14} style={{ color: '#868e96' }} />}
+                            {expanded ? <ChevronUp size={14} style={{ color: '#228be6' }} aria-hidden="true" /> : <ChevronDown size={14} style={{ color: '#868e96' }} aria-hidden="true" />}
                             <span style={{ fontWeight: 600, fontSize: '0.85rem', color: '#1a1a2e' }}>{page}</span>
                             <span style={{ fontSize: '0.72rem', color: '#868e96' }}>({perms.length})</span>
                             {selectedInPage > 0 && (
@@ -838,7 +842,7 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                           </div>
                           <button
                             onClick={(e) => { e.stopPropagation(); selectAllInPage(page) }}
-                            style={{
+                            style={{ minHeight: 44,
                               background: 'none', border: 'none', fontSize: '0.7rem', color: '#228be6',
                               cursor: 'pointer', padding: '2px 6px', fontWeight: 500,
                             }}
@@ -852,7 +856,7 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                               const sel = !!selectedPerms[p.permission_id]
                               return (
                                 <div key={p.permission_id} style={s.permItem(sel)} onClick={() => togglePerm(p.permission_id)}>
-                                  <input type="checkbox" checked={sel} onChange={() => {}} style={s.checkbox} />
+                                  <input type="checkbox" checked={sel} aria-label={`Request ${p.feature.replace(/_/g, ' ')}`} onChange={() => togglePerm(p.permission_id)} onClick={e => e.stopPropagation()} style={s.checkbox} />
                                   <div style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ fontSize: '0.82rem', fontWeight: 500, color: '#1a1a2e' }}>
                                       {p.feature.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
@@ -872,8 +876,8 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                 </div>
               )}
 
-              <label style={{ ...s.label, marginTop: 16 }}>Reason <span style={{ color: '#fa5252' }}>*</span></label>
-              <textarea
+              <label htmlFor="al-fld-8" style={{ ...s.label, marginTop: 16 }}>Reason <span style={{ color: '#fa5252' }}>*</span></label>
+              <textarea id="al-fld-8"
                 rows={3} placeholder="Why do you need these permissions?"
                 value={permForm.reason} onChange={e => setPermForm(f => ({ ...f, reason: e.target.value }))}
                 style={{ ...s.input, resize: 'vertical', fontFamily: 'inherit' }}
@@ -1208,7 +1212,7 @@ function HelpButton({ profile }) {
       <button
         onClick={handleClick}
         disabled={helpLoading || isClockedIn === null}
-        className="p-2 rounded-lg transition-all duration-200"
+        className="p-2 rounded-lg transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
         style={{
           background: style.bg,
           border: `2px solid ${style.border}`,
@@ -1225,7 +1229,7 @@ function HelpButton({ profile }) {
       >
         {helpStatus === 'pending' || helpStatus === 'acknowledged' ? (
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <HelpCircle size={20} />
+            <HelpCircle size={20} aria-hidden="true" />
             {helpStatus === 'pending' && (
               <span style={{
                 position: 'absolute', top: -4, right: -4,
@@ -1242,7 +1246,7 @@ function HelpButton({ profile }) {
             )}
           </div>
         ) : (
-          <HelpCircle size={20} />
+          <HelpCircle size={20} aria-hidden="true" />
         )}
       </button>
 
@@ -1260,7 +1264,7 @@ function HelpButton({ profile }) {
             fontSize: '0.82rem', fontWeight: 600, color: '#374151',
             display: 'flex', alignItems: 'center', gap: 8,
           }}>
-            <HelpCircle size={16} style={{ color: '#ef4444' }} />
+            <HelpCircle size={16} style={{ color: '#ef4444' }} aria-hidden="true" />
             Where are you?
           </div>
 
@@ -1310,7 +1314,7 @@ function HelpButton({ profile }) {
             <button
               key={loc}
               onClick={() => requestHelp(loc)}
-              style={{
+              style={{ minHeight: 44,
                 display: 'block', width: '100%', padding: '12px 16px',
                 border: 'none', background: 'white', textAlign: 'left',
                 fontSize: '0.9rem', color: '#1f2937', cursor: 'pointer',
@@ -1381,7 +1385,7 @@ function LabLockedScreen({ profile, signOut }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginBottom: 28,
       }}>
-        <MoonStar size={40} style={{ color: '#93c5fd' }} />
+        <MoonStar size={40} style={{ color: '#93c5fd' }} aria-hidden="true" />
       </div>
 
       {/* Heading */}
@@ -1452,7 +1456,7 @@ function LabLockedScreen({ profile, signOut }) {
       {/* Sign out */}
       <button
         onClick={signOut}
-        style={{
+        style={{ minHeight: 44,
           background: 'rgba(255,255,255,0.1)',
           border: '1px solid rgba(255,255,255,0.2)',
           color: '#ffffff',
@@ -1468,7 +1472,7 @@ function LabLockedScreen({ profile, signOut }) {
         onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.17)'}
         onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
       >
-        <LogOut size={15} /> Sign Out
+        <LogOut size={15} aria-hidden="true" /> Sign Out
       </button>
     </div>
   )
@@ -1879,6 +1883,14 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen bg-surface-50">
+      {/* Skip link (WCAG 2.4.1): first focusable element on every page; visible only on keyboard focus */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[10001] focus:px-4 focus:py-2 focus:bg-brand-600 focus:text-white focus:rounded-lg focus:shadow-lg"
+        onClick={(e) => { e.preventDefault(); const m = document.getElementById('main-content'); if (m) { m.focus(); m.scrollIntoView() } }}
+      >
+        Skip to main content
+      </a>
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div
@@ -1898,7 +1910,7 @@ export default function AppLayout() {
         {/* Logo area */}
         <div className="flex items-center gap-3 px-5 h-16 border-b border-surface-100">
           <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
-            <Wrench size={16} className="text-white" />
+            <Wrench size={16} className="text-white" aria-hidden="true" />
           </div>
           <div>
             <div className="flex items-center gap-2">
@@ -1912,10 +1924,10 @@ export default function AppLayout() {
             <p className="text-[10px] text-surface-400 uppercase tracking-wider">Maintenance System</p>
           </div>
           <button
-            onClick={() => setSidebarOpen(false)}
-            className="ml-auto p-1.5 rounded-lg text-surface-400 hover:bg-surface-100 lg:hidden"
+            aria-label="Close menu" onClick={() => setSidebarOpen(false)}
+            className="ml-auto p-1.5 rounded-lg text-surface-400 hover:bg-surface-100 lg:hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
           >
-            <X size={18} />
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
@@ -1963,11 +1975,11 @@ export default function AppLayout() {
             </div>
             {/* Settings Gear - Change Password */}
             <button
-              onClick={() => setChangePasswordOpen(true)}
-              className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+              aria-label="Change password" onClick={() => setChangePasswordOpen(true)}
+              className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               title="Account settings"
             >
-              <Settings size={16} />
+              <Settings size={16} aria-hidden="true" />
             </button>
             {/* Temp Access Key Icon (non-instructors only) */}
             {!isInstructor && (
@@ -1981,11 +1993,11 @@ export default function AppLayout() {
                     setTempRequestOpen(true)
                   }
                 }}
-                className="relative p-1.5 rounded-lg transition-colors hover:bg-surface-100"
+                className="relative p-1.5 rounded-lg transition-colors hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                 title={keyStyle.title}
                 style={{ color: keyStyle.color }}
               >
-                <KeyRound size={16} />
+                <KeyRound size={16} aria-hidden="true" />
                 {/* Status dot indicator */}
                 {tempRequestStatus === 'pending' && (
                   <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />
@@ -1996,11 +2008,11 @@ export default function AppLayout() {
               </button>
             )}
             <button
-              onClick={signOut}
-              className="p-1.5 rounded-lg text-surface-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+              aria-label="Sign out" onClick={signOut}
+              className="p-1.5 rounded-lg text-surface-400 hover:text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               title="Sign out"
             >
-              <LogOut size={16} />
+              <LogOut size={16} aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -2011,10 +2023,10 @@ export default function AppLayout() {
         {/* Top bar */}
         <header className="h-16 bg-white border-b border-surface-200 flex items-center gap-4 px-4 lg:px-6">
           <button
-            onClick={() => setSidebarOpen(true)}
-            className="p-2 rounded-lg text-surface-500 hover:bg-surface-100 lg:hidden"
+            aria-label="Open menu" onClick={() => setSidebarOpen(true)}
+            className="p-2 rounded-lg text-surface-500 hover:bg-surface-100 lg:hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
           >
-            <Menu size={20} />
+            <Menu size={20} aria-hidden="true" />
           </button>
           <div className="flex items-center gap-2 text-sm">
             <span className="text-surface-400 hidden sm:inline" aria-hidden="true">RICT CMMS</span>
@@ -2025,7 +2037,7 @@ export default function AppLayout() {
             {/* Glossary — available to all users */}
             <button
               onClick={() => setGlossaryOpen(true)}
-              className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               title="Program glossary"
               aria-label="Open program glossary"
               aria-haspopup="dialog"
@@ -2036,11 +2048,11 @@ export default function AppLayout() {
             {/* Program Plan icon — students only */}
             {!isInstructor && (
               <button
-                onClick={() => navigate('/program-planner')}
-                className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                aria-label="Program planner" onClick={() => navigate('/program-planner')}
+                className="p-1.5 rounded-lg text-surface-400 hover:text-brand-600 hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                 title="View my program plan"
               >
-                <GraduationCap size={18} />
+                <GraduationCap size={18} aria-hidden="true" />
               </button>
             )}
             <NotificationBell />
@@ -2048,7 +2060,7 @@ export default function AppLayout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 lg:p-6 focus:outline-none">
           {/* Instructor Away Banner — visible to students/work study on every page */}
           {!isInstructor && instructorAway && (
             <div

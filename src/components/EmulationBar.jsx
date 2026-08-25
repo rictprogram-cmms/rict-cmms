@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -338,7 +339,7 @@ export default function EmulationBar() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowPicker(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/20 transition-all"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white/80 hover:text-white bg-white/10 hover:bg-white/20 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 title="Switch to another user"
               >
                 <Users className="w-3.5 h-3.5" />
@@ -347,7 +348,7 @@ export default function EmulationBar() {
 
               <button
                 onClick={stopEmulation}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-red-500/80 hover:bg-red-500 transition-all shadow-lg"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-red-500/80 hover:bg-red-500 transition-all shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 title="Stop emulation and return to super admin"
               >
                 <EyeOff className="w-3.5 h-3.5" />
@@ -363,6 +364,11 @@ export default function EmulationBar() {
         <div
           ref={btnRef}
           {...handlers}
+          role="button"
+          tabIndex={0}
+          aria-label="Emulate a user"
+          aria-haspopup="dialog"
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowPicker(true) } }}
           onClick={handleButtonClick}
           className="fixed z-[9998] flex items-center gap-2 px-4 py-3 rounded-2xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-semibold shadow-2xl shadow-amber-900/40 transition-colors group select-none"
           style={{
@@ -384,7 +390,7 @@ export default function EmulationBar() {
       {showPicker && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <div
-            ref={pickerRef}
+            ref={pickerRef} role="dialog" aria-modal="true" aria-label="Emulate user"
             className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden"
           >
             {/* Header */}
@@ -401,8 +407,10 @@ export default function EmulationBar() {
                 </div>
               </div>
               <button
+                type="button"
+                aria-label="Close"
                 onClick={() => { setShowPicker(false); setSearchQuery('') }}
-                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors"
+                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -415,6 +423,7 @@ export default function EmulationBar() {
                 <input
                   ref={searchRef}
                   type="text"
+                  aria-label="Search users to emulate"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search by name, email, role, class, or ID..."
@@ -462,7 +471,7 @@ export default function EmulationBar() {
                               key={user.id}
                               onClick={() => handleEmulate(user.email)}
                               disabled={emulationLoading || isCurrentlyEmulated}
-                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all ${
+                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                                 isCurrentlyEmulated
                                   ? 'bg-amber-500/10 border border-amber-500/30 cursor-default'
                                   : 'hover:bg-slate-800 active:bg-slate-700/50'
