@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
 
 export default function InventoryPage() {
   const { user, profile } = useAuth();
@@ -48,6 +49,12 @@ export default function InventoryPage() {
   const [showAdjustModal, setShowAdjustModal] = useState(false);
   const [showLabelsModal, setShowLabelsModal] = useState(false);
   const [confirmModal, setConfirmModal] = useState(null);
+  // a11y: dialog refs (focus trap / Escape / focus restore) for the five modals
+  const partDialogRef = useDialogA11y(showPartModal, () => setShowPartModal(false));
+  const viewDialogRef = useDialogA11y(showViewModal, () => setShowViewModal(false));
+  const adjustDialogRef = useDialogA11y(showAdjustModal, () => setShowAdjustModal(false));
+  const labelsDialogRef = useDialogA11y(showLabelsModal, () => setShowLabelsModal(false));
+  const confirmDialogRef = useDialogA11y(!!confirmModal, () => setConfirmModal(null));
 
   // Current editing
   const [currentItem, setCurrentItem] = useState(null);
@@ -193,7 +200,9 @@ export default function InventoryPage() {
 
       const mapped = (data || []).map(item => ({
         ...item,
-        isLowStock: (item.qty_in_stock || 0) <= (item.min_qty || 0),
+        // Low only when a minimum is set (matches the Purchase Orders Low Stock tab);
+        // a part with min 0 and qty 0 is not "low", it's simply untracked.
+        isLowStock: (item.min_qty || 0) > 0 && (item.qty_in_stock || 0) <= (item.min_qty || 0),
         qtyNeeded: Math.max(0, (item.max_qty || 0) - (item.qty_in_stock || 0))
       }));
       setItems(mapped);
@@ -223,9 +232,18 @@ export default function InventoryPage() {
     });
   }, [items, search, locationFilter, stockFilter, showInactive]);
 
+  // Items that are low AND not already on an active purchase order.
+  // "On order" is taken from real PO line items (onOrderMap), not the
+  // inventory.order_date flag, which is only set by some order flows and
+  // can be stale — that caused parts on order to still be counted as low.
   const lowStockCount = useMemo(() => {
-    return items.filter(i => i.isLowStock && i.status === 'Active' && !i.order_date).length;
-  }, [items]);
+    return items.filter(i =>
+      i.isLowStock &&
+      i.status === 'Active' &&
+      !i.order_date &&
+      !(onOrderMap[i.part_id] > 0)
+    ).length;
+  }, [items, onOrderMap]);
 
   const sortedItems = useMemo(() => {
     if (!sortColumn) return filteredItems;
@@ -537,7 +555,7 @@ export default function InventoryPage() {
       const scanUrl = `${origin}/inventory/scan?partId=${encodeURIComponent(part.part_id)}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(scanUrl)}`;
       labelsHtml += `<div class="label-preview">` +
-        `<div class="label-img">${imgUrl ? `<img src="${imgUrl}" referrerpolicy="no-referrer">` : '<span class="material-icons">inventory_2</span>'}</div>` +
+        `<div class="label-img">${imgUrl ? `<img src="${imgUrl}" alt="" referrerpolicy="no-referrer">` : '<span class="material-icons">inventory_2</span>'}</div>` +
         `<div class="label-info"><div class="name">${part.part_name}</div><div>${part.location || '-'}</div><div>${part.supplier_part_number || '-'}</div></div>` +
         `<div class="label-qr"><img src="${qrUrl}" alt="QR"></div></div>`;
     });
@@ -600,7 +618,7 @@ export default function InventoryPage() {
       <div class="meta">Printed ${new Date().toLocaleDateString()} · ${listData.length} item${listData.length !== 1 ? 's' : ''}</div>
       ${filterLine}
       <table>
-        <thead><tr><th>Part ID</th><th>Part Name</th><th>Supplier Part #</th><th>Qty</th><th>Min/Max</th><th>Location</th><th>Supplier</th><th>Status</th></tr></thead>
+        <thead><tr><th scope="col">Part ID</th><th scope="col">Part Name</th><th scope="col">Supplier Part #</th><th scope="col">Qty</th><th scope="col">Min/Max</th><th scope="col">Location</th><th scope="col">Supplier</th><th scope="col">Status</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </body></html>`);
@@ -618,14 +636,14 @@ export default function InventoryPage() {
       <div className="page-toolbar">
         <div className="toolbar-left">
           <div className="search-box">
-            <span className="material-icons">search</span>
-            <input type="text" placeholder="Search parts..." value={search} onChange={e => setSearch(e.target.value)} />
+            <span className="material-icons" aria-hidden="true">search</span>
+            <input type="text" placeholder="Search parts..." aria-label="Search parts" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <select className="filter-select" value={locationFilter} onChange={e => setLocationFilter(e.target.value)}>
+          <select className="filter-select" aria-label="Filter by location" value={locationFilter} onChange={e => setLocationFilter(e.target.value)}>
             <option value="">All Locations</option>
             {locations.map(l => <option key={l.location_id} value={l.location_name}>{l.location_name}</option>)}
           </select>
-          <select className="filter-select" value={stockFilter} onChange={e => setStockFilter(e.target.value)}>
+          <select className="filter-select" aria-label="Filter by stock level" value={stockFilter} onChange={e => setStockFilter(e.target.value)}>
             <option value="">All Stock Levels</option>
             {hasPerm('view_low_stock') && <option value="low">Low Stock</option>}
             <option value="ok">In Stock</option>
@@ -637,19 +655,19 @@ export default function InventoryPage() {
         </div>
         <div className="toolbar-right">
           <button className="btn btn-sm btn-secondary" onClick={printInventoryList} title="Print a clean one-line-per-item list">
-            <span className="material-icons">list_alt</span>Print List
+            <span className="material-icons" aria-hidden="true">list_alt</span>Print List
           </button>
           <button className="btn btn-sm btn-secondary" onClick={() => navigate('/inventory/scan')}>
-            <span className="material-icons">qr_code_scanner</span>Cycle Count
+            <span className="material-icons" aria-hidden="true">qr_code_scanner</span>Cycle Count
           </button>
           {hasPerm('view_low_stock') && (
             <button className="btn btn-sm btn-secondary" onClick={() => navigate('/purchase-orders', { state: { tab: 'lowstock' } })}>
-              <span className="material-icons">shopping_cart</span>Purchase Orders
+              <span className="material-icons" aria-hidden="true">shopping_cart</span>Purchase Orders
             </button>
           )}
           {hasPerm('add_items') && (
             <button className="btn btn-sm btn-primary" onClick={openAddModal}>
-              <span className="material-icons">add</span>Add Part
+              <span className="material-icons" aria-hidden="true">add</span>Add Part
             </button>
           )}
         </div>
@@ -658,10 +676,10 @@ export default function InventoryPage() {
       {/* Low Stock Banner — only visible to users with view_low_stock permission */}
       {lowStockCount > 0 && hasPerm('view_low_stock') && (
         <div className="alert-banner">
-          <span className="material-icons">warning</span>
-          <strong>{lowStockCount}</strong> items low on stock
+          <span className="material-icons" aria-hidden="true">warning</span>
+          <strong>{lowStockCount}</strong> {lowStockCount === 1 ? 'item' : 'items'} low on stock and not yet on order
           <button className="btn btn-sm btn-primary" onClick={() => navigate('/purchase-orders', { state: { tab: 'lowstock' } })}>
-            <span className="material-icons">shopping_cart</span>Purchase Orders
+            <span className="material-icons" aria-hidden="true">shopping_cart</span>Purchase Orders
           </button>
         </div>
       )}
@@ -681,7 +699,7 @@ export default function InventoryPage() {
             <span className="badge">{filteredItems.length}</span>
             {selectedIds.length > 0 && hasPerm('print_labels') && (
               <button className="btn btn-sm btn-secondary" onClick={openLabelsPreview}>
-                <span className="material-icons">print</span>Print Labels ({selectedIds.length})
+                <span className="material-icons" aria-hidden="true">print</span>Print Labels ({selectedIds.length})
               </button>
             )}
           </div>
@@ -690,15 +708,15 @@ export default function InventoryPage() {
           <table className="data-table">
             <thead>
               <tr>
-                {hasPerm('print_labels') && <th className="col-check"></th>}
-                <th className="col-img">Image</th>
-                <th className="sortable-th" onClick={() => handleSort('part_name')}>Part Name {sortColumn === 'part_name' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
-                <th className="sortable-th" onClick={() => handleSort('supplier_part_number')}>Supplier Part # {sortColumn === 'supplier_part_number' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
-                <th>Qty</th>
-                <th>Min/Max</th>
-                <th className="sortable-th" onClick={() => handleSort('location')}>Location {sortColumn === 'location' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
-                <th className="sortable-th" onClick={() => handleSort('primary_supplier')}>Supplier {sortColumn === 'primary_supplier' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
-                <th>Actions</th>
+                {hasPerm('print_labels') && <th scope="col" className="col-check"></th>}
+                <th scope="col" className="col-img">Image</th>
+                <th scope="col" className="sortable-th" onClick={() => handleSort('part_name')}>Part Name {sortColumn === 'part_name' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
+                <th scope="col" className="sortable-th" onClick={() => handleSort('supplier_part_number')}>Supplier Part # {sortColumn === 'supplier_part_number' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
+                <th scope="col">Qty</th>
+                <th scope="col">Min/Max</th>
+                <th scope="col" className="sortable-th" onClick={() => handleSort('location')}>Location {sortColumn === 'location' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
+                <th scope="col" className="sortable-th" onClick={() => handleSort('primary_supplier')}>Supplier {sortColumn === 'primary_supplier' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -719,18 +737,22 @@ export default function InventoryPage() {
                     )}
                     <td className="col-img">
                       <div className="part-thumb">
-                        {imgUrl ? <img src={imgUrl} alt="" referrerPolicy="no-referrer" /> : <span className="material-icons">inventory_2</span>}
+                        {imgUrl ? <img src={imgUrl} alt="" referrerPolicy="no-referrer" /> : <span className="material-icons" aria-hidden="true">inventory_2</span>}
                       </div>
                     </td>
                     <td onClick={() => openViewModal(item)} style={{ cursor: 'pointer' }}>
-                      <strong>{highlightMatch(item.part_name)}</strong><br /><small style={{ color: '#868e96' }}>{highlightMatch(item.part_id)}</small>
+                      <button type="button" onClick={ev => { ev.stopPropagation(); openViewModal(item) }}
+                        aria-label={`View details for ${item.part_name}`}
+                        style={{ background: 'none', border: 'none', padding: '4px 0', minHeight: 44, cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'inherit' }}>
+                        <strong>{highlightMatch(item.part_name)}</strong><br /><small style={{ color: '#868e96' }}>{highlightMatch(item.part_id)}</small>
+                      </button>
                     </td>
                     <td>{highlightMatch(item.supplier_part_number || '-')}</td>
                     <td>
                       <span className={`qty-badge ${qtyClass}`}>{item.qty_in_stock ?? 0}</span>
                       {onOrderMap[item.part_id] > 0 && (
                         <div className="on-order-badge" title={`${onOrderMap[item.part_id]} on order`}>
-                          <span className="material-icons" style={{ fontSize: '0.8rem' }}>local_shipping</span>
+                          <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem' }}>local_shipping</span>
                           {onOrderMap[item.part_id]} on order
                         </div>
                       )}
@@ -739,15 +761,15 @@ export default function InventoryPage() {
                     <td>{highlightMatch(item.location || '-')}</td>
                     <td>{highlightMatch(item.primary_supplier || '-')}</td>
                     <td>
-                      <button className="action-btn" onClick={() => openViewModal(item)} title="View"><span className="material-icons">visibility</span></button>
+                      <button type="button" className="action-btn" onClick={() => openViewModal(item)} title="View" aria-label={`View ${item.part_name}`}><span className="material-icons" aria-hidden="true">visibility</span></button>
                       {hasPerm('adjust_quantity') && (
-                        <button className="action-btn" onClick={() => openAdjustModal(item)} title="Adjust Qty"><span className="material-icons">tune</span></button>
+                        <button type="button" className="action-btn" onClick={() => openAdjustModal(item)} title="Adjust Qty" aria-label={`Adjust quantity for ${item.part_name}`}><span className="material-icons" aria-hidden="true">tune</span></button>
                       )}
                       {hasPerm('edit_items') && (
-                        <button className="action-btn" onClick={() => openEditModal(item)} title="Edit"><span className="material-icons">edit</span></button>
+                        <button type="button" className="action-btn" onClick={() => openEditModal(item)} title="Edit" aria-label={`Edit ${item.part_name}`}><span className="material-icons" aria-hidden="true">edit</span></button>
                       )}
                       {hasPerm('delete_items') && (
-                        <button className="action-btn danger" onClick={() => deletePart(item.part_id)} title="Delete"><span className="material-icons">delete</span></button>
+                        <button type="button" className="action-btn danger" onClick={() => deletePart(item.part_id)} title="Delete" aria-label={`Delete ${item.part_name}`}><span className="material-icons" aria-hidden="true">delete</span></button>
                       )}
                     </td>
                   </tr>
@@ -763,58 +785,58 @@ export default function InventoryPage() {
       {/* Add/Edit Part Modal */}
       {showPartModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowPartModal(false)}>
-          <div className="modal modal-lg">
+          <div ref={partDialogRef} role="dialog" aria-modal="true" aria-labelledby="inv-part-title" className="modal modal-lg">
             <div className="modal-header">
-              <h3>{formData.part_id ? 'Edit Part' : 'Add New Part'}</h3>
-              <button className="modal-close" onClick={() => setShowPartModal(false)}>&times;</button>
+              <h3 id="inv-part-title">{formData.part_id ? 'Edit Part' : 'Add New Part'}</h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setShowPartModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
               <div className="form-row two-col">
                 <div className="form-group">
-                  <label className="form-label">Part Name *</label>
-                  <input type="text" className="form-input" value={formData.part_name || ''} onChange={e => setFormData({ ...formData, part_name: e.target.value })} />
+                  <label htmlFor="inv-fld-part-name-1" className="form-label">Part Name *</label>
+                  <input id="inv-fld-part-name-1" type="text" className="form-input" value={formData.part_name || ''} onChange={e => setFormData({ ...formData, part_name: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Status</label>
-                  <select className="form-input" value={formData.status || 'Active'} onChange={e => setFormData({ ...formData, status: e.target.value })}>
+                  <label htmlFor="inv-fld-status-2" className="form-label">Status</label>
+                  <select id="inv-fld-status-2" className="form-input" value={formData.status || 'Active'} onChange={e => setFormData({ ...formData, status: e.target.value })}>
                     <option value="Active">Active</option><option value="Inactive">Inactive</option>
                   </select>
                 </div>
               </div>
               <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-input" rows="2" value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
+                <label htmlFor="inv-fld-description-3" className="form-label">Description</label>
+                <textarea id="inv-fld-description-3" className="form-input" rows="2" value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} />
               </div>
               <div className="form-row two-col">
                 <div className="form-group">
-                  <label className="form-label">Primary Supplier</label>
-                  <select className="form-input" value={formData.primary_supplier || ''} onChange={e => setFormData({ ...formData, primary_supplier: e.target.value })}>
+                  <label htmlFor="inv-fld-primary-supplier-4" className="form-label">Primary Supplier</label>
+                  <select id="inv-fld-primary-supplier-4" className="form-input" value={formData.primary_supplier || ''} onChange={e => setFormData({ ...formData, primary_supplier: e.target.value })}>
                     <option value="">Select supplier</option>
                     {vendors.map(v => <option key={v.vendor_id} value={v.vendor_name}>{v.vendor_name}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Supplier Part #</label>
-                  <input type="text" className="form-input" value={formData.supplier_part_number || ''} onChange={e => setFormData({ ...formData, supplier_part_number: e.target.value })} />
+                  <label htmlFor="inv-fld-supplier-part-5" className="form-label">Supplier Part #</label>
+                  <input id="inv-fld-supplier-part-5" type="text" className="form-input" value={formData.supplier_part_number || ''} onChange={e => setFormData({ ...formData, supplier_part_number: e.target.value })} />
                 </div>
               </div>
               <div className="form-row three-col">
                 <div className="form-group">
-                  <label className="form-label">Qty In Stock</label>
-                  <input type="number" className="form-input" min="0" value={formData.qty_in_stock ?? 0} onChange={e => setFormData({ ...formData, qty_in_stock: e.target.value })} />
+                  <label htmlFor="inv-fld-qty-in-stock-6" className="form-label">Qty In Stock</label>
+                  <input id="inv-fld-qty-in-stock-6" type="number" className="form-input" min="0" value={formData.qty_in_stock ?? 0} onChange={e => setFormData({ ...formData, qty_in_stock: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Min Qty</label>
-                  <input type="number" className="form-input" min="0" value={formData.min_qty ?? 0} onChange={e => setFormData({ ...formData, min_qty: e.target.value })} />
+                  <label htmlFor="inv-fld-min-qty-7" className="form-label">Min Qty</label>
+                  <input id="inv-fld-min-qty-7" type="number" className="form-input" min="0" value={formData.min_qty ?? 0} onChange={e => setFormData({ ...formData, min_qty: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Max Qty</label>
-                  <input type="number" className="form-input" min="0" value={formData.max_qty ?? 0} onChange={e => setFormData({ ...formData, max_qty: e.target.value })} />
+                  <label htmlFor="inv-fld-max-qty-8" className="form-label">Max Qty</label>
+                  <input id="inv-fld-max-qty-8" type="number" className="form-input" min="0" value={formData.max_qty ?? 0} onChange={e => setFormData({ ...formData, max_qty: e.target.value })} />
                 </div>
               </div>
               <div className="form-group">
-                <label className="form-label">Location</label>
-                <select className="form-input" value={formData.location || ''} onChange={e => setFormData({ ...formData, location: e.target.value })}>
+                <label htmlFor="inv-fld-location-9" className="form-label">Location</label>
+                <select id="inv-fld-location-9" className="form-input" value={formData.location || ''} onChange={e => setFormData({ ...formData, location: e.target.value })}>
                   <option value="">Select location</option>
                   {locations.map(l => <option key={l.location_id} value={l.location_name}>{l.location_name}</option>)}
                 </select>
@@ -871,10 +893,10 @@ export default function InventoryPage() {
       {/* View Part Detail Modal */}
       {showViewModal && currentItem && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowViewModal(false)}>
-          <div className="modal">
+          <div ref={viewDialogRef} role="dialog" aria-modal="true" aria-labelledby="inv-view-title" className="modal">
             <div className="modal-header">
-              <h3>Part Details</h3>
-              <button className="modal-close" onClick={() => setShowViewModal(false)}>&times;</button>
+              <h3 id="inv-view-title">Part Details</h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setShowViewModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
               <div className="part-detail-header">
@@ -882,7 +904,7 @@ export default function InventoryPage() {
                   {currentItem.image_url ? (
                     <img src={getImageUrl(currentItem.image_url)} alt={currentItem.part_name} referrerPolicy="no-referrer" />
                   ) : (
-                    <span className="material-icons">inventory_2</span>
+                    <span className="material-icons" aria-hidden="true">inventory_2</span>
                   )}
                 </div>
                 <div style={{ flex: 1 }}>
@@ -897,7 +919,7 @@ export default function InventoryPage() {
                   <span className={`qty-badge ${currentItem.isLowStock ? 'low' : 'ok'}`}>{currentItem.qty_in_stock ?? 0}</span>
                   {onOrderMap[currentItem.part_id] > 0 && (
                     <div className="on-order-badge" style={{ marginTop: 6 }}>
-                      <span className="material-icons" style={{ fontSize: '0.8rem' }}>local_shipping</span>
+                      <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem' }}>local_shipping</span>
                       {onOrderMap[currentItem.part_id]} on order
                     </div>
                   )}
@@ -940,10 +962,10 @@ export default function InventoryPage() {
       {/* Adjust Qty Modal */}
       {showAdjustModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowAdjustModal(false)}>
-          <div className="modal">
+          <div ref={adjustDialogRef} role="dialog" aria-modal="true" aria-labelledby="inv-adjust-title" className="modal">
             <div className="modal-header">
-              <h3>Adjust Quantity</h3>
-              <button className="modal-close" onClick={() => setShowAdjustModal(false)}>&times;</button>
+              <h3 id="inv-adjust-title">Adjust Quantity</h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setShowAdjustModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
               <p><strong>{adjustData.partName}</strong></p>
@@ -951,8 +973,8 @@ export default function InventoryPage() {
                 <label className="form-label">Current Qty: <strong>{adjustData.currentQty}</strong></label>
               </div>
               <div className="form-group">
-                <label className="form-label">New Qty</label>
-                <input type="number" className="form-input" min="0" value={adjustData.newQty} onChange={e => setAdjustData({ ...adjustData, newQty: e.target.value })} />
+                <label htmlFor="inv-fld-new-qty-10" className="form-label">New Qty</label>
+                <input id="inv-fld-new-qty-10" type="number" className="form-input" min="0" value={adjustData.newQty} onChange={e => setAdjustData({ ...adjustData, newQty: e.target.value })} />
               </div>
               <div className="form-group">
                 <label className="checkbox-filter">
@@ -972,10 +994,10 @@ export default function InventoryPage() {
       {/* Labels Preview Modal */}
       {showLabelsModal && (
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowLabelsModal(false)}>
-          <div className="modal modal-lg">
+          <div ref={labelsDialogRef} role="dialog" aria-modal="true" aria-labelledby="inv-labels-title" className="modal modal-lg">
             <div className="modal-header">
-              <h3>Print Labels</h3>
-              <button className="modal-close" onClick={() => setShowLabelsModal(false)}>&times;</button>
+              <h3 id="inv-labels-title">Print Labels</h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setShowLabelsModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
               <div className="labels-grid">
@@ -986,7 +1008,7 @@ export default function InventoryPage() {
                   return (
                     <div key={part.part_id} className="label-preview">
                       <div className="label-img">
-                        {imgUrl ? <img src={imgUrl} alt="" referrerPolicy="no-referrer" /> : <span className="material-icons">inventory_2</span>}
+                        {imgUrl ? <img src={imgUrl} alt="" referrerPolicy="no-referrer" /> : <span className="material-icons" aria-hidden="true">inventory_2</span>}
                       </div>
                       <div className="label-info">
                         <div className="name">{part.part_name}</div>
@@ -1003,7 +1025,7 @@ export default function InventoryPage() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowLabelsModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={doPrintLabels}><span className="material-icons">print</span>Print</button>
+              <button className="btn btn-primary" onClick={doPrintLabels}><span className="material-icons" aria-hidden="true">print</span>Print</button>
             </div>
           </div>
         </div>
@@ -1012,14 +1034,14 @@ export default function InventoryPage() {
       {/* Confirm Modal */}
       {confirmModal && (
         <div className="modal-overlay visible" style={{ zIndex: 3000 }} onClick={e => e.target === e.currentTarget && setConfirmModal(null)}>
-          <div className="modal" style={{ maxWidth: 400 }}>
+          <div ref={confirmDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="inv-confirm-title" className="modal">
             <div className="modal-header">
-              <h3>{confirmModal.title || 'Confirm'}</h3>
-              <button className="modal-close" onClick={() => setConfirmModal(null)}>&times;</button>
+              <h3 id="inv-confirm-title">{confirmModal.title || 'Confirm'}</h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setConfirmModal(null)}>&times;</button>
             </div>
             <div className="modal-body">
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <span className="material-icons" style={{ fontSize: 48, color: '#fab005' }}>help_outline</span>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: 48, color: '#fab005' }}>help_outline</span>
                 <p style={{ margin: 0, fontSize: '1rem', color: '#495057' }}>{confirmModal.message}</p>
               </div>
             </div>
@@ -1044,7 +1066,8 @@ export default function InventoryPage() {
         .toolbar-right { display: flex; gap: 8px; }
         .search-box { display: flex; align-items: center; gap: 8px; background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 8px 12px; }
         .search-box input { border: none; outline: none; font-size: 0.9rem; min-width: 200px; }
-        .filter-select { padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; background: white; }
+        .search-box:focus-within { box-shadow: 0 0 0 3px rgba(34,139,230,0.35); border-color: #228be6; } /* visible focus ring */
+        .filter-select { padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; background: white; min-height: 44px; }
         .checkbox-filter { display: flex; align-items: center; gap: 6px; font-size: 0.9rem; cursor: pointer; }
 
         .alert-banner { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #fff3cd; border-radius: 8px; margin-bottom: 20px; color: #856404; }
@@ -1078,7 +1101,7 @@ export default function InventoryPage() {
         .on-order-badge { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #dbe4ff; color: #364fc7; white-space: nowrap; }
         .min-max { font-size: 0.85rem; color: #868e96; }
 
-        .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; }
+        .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .action-btn:hover { background: #e9ecef; }
         .action-btn.danger:hover { background: #ffe3e3; color: #c92a2a; }
         .action-btn .material-icons { font-size: 1.1rem; }
@@ -1089,7 +1112,7 @@ export default function InventoryPage() {
         .modal-lg { max-width: 700px; }
         .modal-header { padding: 20px; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
         .modal-header h3 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
-        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; }
+        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
         .modal-footer { padding: 16px 20px; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 12px; }
 
@@ -1098,7 +1121,7 @@ export default function InventoryPage() {
         .form-group { margin-bottom: 16px; }
         .form-label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 6px; }
         .form-input { width: 100%; padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
-        .form-input:focus { outline: none; border-color: #228be6; }
+        .form-input:focus { outline: none; border-color: #228be6; box-shadow: 0 0 0 3px rgba(34,139,230,0.35); } /* visible focus ring (WCAG 2.4.7) */
 
         .image-upload-area { border: 2px dashed #dee2e6; border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; transition: border-color 0.2s, background-color 0.2s; }
         .image-upload-area:hover { border-color: #228be6; }
@@ -1133,11 +1156,11 @@ export default function InventoryPage() {
         .label-qr { width: 70px; height: 70px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .label-qr img { width: 100%; height: 100%; object-fit: contain; }
 
-        .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; }
+        .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
         .btn-primary { background: #228be6; color: white; }
         .btn-secondary { background: #f8f9fa; color: #495057; }
         .btn-danger { background: #fa5252; color: white; }
-        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; min-height: 44px; }
       `}</style>
     </div>
   );
