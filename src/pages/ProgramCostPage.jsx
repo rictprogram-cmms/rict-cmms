@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   DollarSign, Printer, ChevronDown, ChevronRight, ChevronLeft,
@@ -554,15 +555,15 @@ export default function ProgramCostPage() {
 
     // Keep tool prices live — if someone edits a price in Required Tools catalog
     // while this page is open, reloads just the tools without a full page refresh
-    const ch = supabase.channel('program_cost_tools_rt')
+    const ch = subscribeWithReconnect('program_cost_tools_rt', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' },
         async () => {
           const { data } = await supabase
             .from('program_tools').select('tool_id,item_name,part_number,cost,item_type').eq('status','Active')
           if (data) setToolCatalog(data)
         }
-      ).subscribe()
-    return () => ch.unsubscribe()
+      ))
+    return () => ch()
   }, [])
 
   const saveTuitionRates = useCallback(async (rates) => {

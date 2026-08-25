@@ -22,6 +22,7 @@
 import { assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
@@ -717,7 +718,7 @@ export default function WorkOrdersPage() {
   useEffect(() => {
     if (!user) return;
 
-    const channel = supabase.channel('wo-realtime')
+    const channel = subscribeWithReconnect('wo-realtime', ch => ch
       // Work orders list changes (INSERT, UPDATE, DELETE)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, () => {
         const view = currentViewRef.current;
@@ -803,9 +804,9 @@ export default function WorkOrdersPage() {
           fetchLinkedSops(wo.wo_id);
         }
       })
-      .subscribe();
+    );
 
-    return () => { supabase.removeChannel(channel); };
+    return () => { channel(); };
   }, [user?.id]);
 
   const loadDropdowns = async () => {

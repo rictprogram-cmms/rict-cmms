@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
 const AuthContext = createContext(null)
@@ -594,8 +595,7 @@ export function AuthProvider({ children }) {
   // ── Realtime: auto-refresh real profile when it changes ────────────
   useEffect(() => {
     if (!realProfile?.email) return
-    const channel = supabase
-      .channel('profile-realtime')
+    const channel = subscribeWithReconnect('profile-realtime', ch => ch
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `email=eq.${realProfile.email}` },
@@ -608,16 +608,14 @@ export function AuthProvider({ children }) {
           // changed while we were disconnected.
           fetchLabMode()
         }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      ))
+    return () => { channel() }
   }, [realProfile?.email, fetchLabMode])
 
   // ── Realtime: auto-refresh emulated profile when it changes ────────
   useEffect(() => {
     if (!emulatedProfile?.email) return
-    const channel = supabase
-      .channel('emulated-profile-realtime')
+    const channel = subscribeWithReconnect('emulated-profile-realtime', ch => ch
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `email=eq.${emulatedProfile.email}` },
@@ -626,9 +624,8 @@ export function AuthProvider({ children }) {
           setEmulatedProfile(payload.new)
           setCachedEmulation(payload.new)
         }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      ))
+    return () => { channel() }
   }, [emulatedProfile?.email])
 
   // ── Realtime: watch lab_access_mode setting changes ─────────────────
@@ -637,8 +634,7 @@ export function AuthProvider({ children }) {
   // locked out or unlocked — the `labLocked` memo re-evaluates when
   // labAccessMode changes.
   useEffect(() => {
-    const channel = supabase
-      .channel('lab-access-mode-watch')
+    const channel = subscribeWithReconnect('lab-access-mode-watch', ch => ch
       .on(
         'postgres_changes',
         {
@@ -652,9 +648,8 @@ export function AuthProvider({ children }) {
           console.log('[LabAccessMode] Setting changed to:', newMode)
           setLabAccessMode(newMode || null)
         }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      ))
+    return () => { channel() }
   }, [])
 
   // ── Realtime: Presence – track self & watch all online users ────────
@@ -730,8 +725,7 @@ export function AuthProvider({ children }) {
   // Picks up changes made on the Settings page instantly, so already-logged-in
   // users get the new timeout without a page refresh.
   useEffect(() => {
-    const channel = supabase
-      .channel('session-timeout-watch')
+    const channel = subscribeWithReconnect('session-timeout-watch', ch => ch
       .on(
         'postgres_changes',
         {
@@ -745,9 +739,8 @@ export function AuthProvider({ children }) {
           console.log('[SessionTimeout] Setting updated to:', hours, 'hours')
           sessionTimeoutHoursRef.current = hours
         }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      ))
+    return () => { channel() }
   }, [])
 
   // ── last_seen heartbeat – writes every 5 min while user is active ───

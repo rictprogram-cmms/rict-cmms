@@ -32,6 +32,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useLabVisibleDays, weekEndDayName } from '@/hooks/useLabDays'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import {
   useSettings, useSettingsActions, useCategories, useCategoryActions,
   useAssetLocations, useAssetLocationActions, useInventoryLocations, useInventoryLocationActions,
@@ -1043,16 +1044,14 @@ function LabAccessModeCard() {
   // ── Realtime sync ──
   useEffect(() => {
     const channelId = `lab-access-mode-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    const channel = supabase
-      .channel(channelId)
+    const channel = subscribeWithReconnect(channelId, ch => ch
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.lab_access_mode',
       }, (payload) => {
         setMode(payload.new?.setting_value || 'in_session')
-      })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      }))
+    return () => { channel() }
   }, [])
 
   const applyMode = async (newMode) => {
@@ -1313,8 +1312,7 @@ function InstructorAwayCard() {
   // ── Realtime sync ──
   useEffect(() => {
     const channelId = `instructor-away-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    const channel = supabase
-      .channel(channelId)
+    const channel = subscribeWithReconnect(channelId, ch => ch
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_away_mode',
@@ -1328,9 +1326,8 @@ function InstructorAwayCard() {
         const t = payload.new?.setting_value || ''
         setReturnTime(t)
         setSavedReturnTime(t)
-      })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      }))
+    return () => { channel() }
   }, [])
 
   // ── Upsert helper ──
@@ -1772,7 +1769,7 @@ function DashboardSettings() {
   // Realtime sync
   useEffect(() => {
     const channelId = `dash-settings-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    const ch = supabase.channel(channelId)
+    const ch = subscribeWithReconnect(channelId, ch => ch
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.dashboard_day_view_expanded',
@@ -1780,9 +1777,8 @@ function DashboardSettings() {
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.dashboard_temp_access_expanded',
-      }, (p) => { if (p.new?.setting_value !== undefined) setValues(v => ({ ...v, dashboard_temp_access_expanded: p.new.setting_value === 'true' })) })
-      .subscribe()
-    return () => supabase.removeChannel(ch)
+      }, (p) => { if (p.new?.setting_value !== undefined) setValues(v => ({ ...v, dashboard_temp_access_expanded: p.new.setting_value === 'true' })) }))
+    return () => ch()
   }, [])
 
   const applyToggle = async (key, newVal) => {
@@ -3848,15 +3844,13 @@ function ClassesSection() {
   // channels elsewhere in the app. Enrollment changes are infrequent, so we
   // simply re-pull the whole map on any profiles change (cheap and robust).
   useEffect(() => {
-    const channel = supabase
-      .channel(`classes-enrollment-${Math.random().toString(36).slice(2)}`)
+    const channel = subscribeWithReconnect(`classes-enrollment-${Math.random().toString(36).slice(2)}`, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'profiles' },
         () => { loadEnrollment() }
-      )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+      ))
+    return () => { channel() }
   }, [loadEnrollment])
 
   // Convert empty date strings to null for Supabase

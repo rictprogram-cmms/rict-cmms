@@ -95,7 +95,7 @@ Instructor / admin:
   - ⚠ Smoke-test after deploy: if a table's RLS allows UPDATE/DELETE but not SELECT on the same rows, `.select()` returns 0 rows and the action will now report "no rows were affected". Fix is to grant SELECT in the policy, not to remove the check.
   - Original note: Highest counts: `NotificationBell`, `usePurchaseOrders`, `useBugTracker`, `SOPsPage`, `usePMSchedules`, `useVolunteerHours`, `WorkOrdersPage`, `useTimeCards`, `UsersPage`, `AnnouncementsPage`, `AppLayout`, `useSettings`
 - [ ] **`mustData()`** on reads that gate a write or feed a user-visible number (currently 6 files use it)
-- [ ] **`subscribeWithReconnect()`** replaces raw `supabase.channel()` in: `NotificationBell`, `usePurchaseOrders`, `useStudentHolds`, `AuthContext` (5 channels), `InstructorToolsPage`, `WorkOrdersPage`, `ProgramCostPage`, `SettingsPage`, `SOPsPage`
+- [x] **`subscribeWithReconnect()`** — 2026-08-24: 17 raw `supabase.channel()` subscriptions converted across `NotificationBell`, `usePurchaseOrders` (3), `useStudentHolds` (2), `AuthContext` (4), `InstructorToolsPage`, `WorkOrdersPage`, `ProgramCostPage`, `SettingsPage` (4), `SOPsPage`. The one remaining raw channel is the presence channel in `AuthContext` (`online-users-presence`) — it needs the channel object for `presenceState()`/`track()`, which the helper doesn't expose; leave as-is or extend the helper later.
 - [ ] `useTimeCards.js` — four `buildClassWeeks` call sites should pass the offset explicitly
 
 ## P4 — Code health

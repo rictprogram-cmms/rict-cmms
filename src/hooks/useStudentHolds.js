@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useId } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 
@@ -131,8 +132,7 @@ export function useMyActiveHolds() {
     if (!profile?.email) return
     const email = profile.email.toLowerCase()
 
-    const channel = supabase
-      .channel(`my-active-holds-${email}-${instanceId}`)
+    const channel = subscribeWithReconnect(`my-active-holds-${email}-${instanceId}`, ch => ch
       .on(
         'postgres_changes',
         {
@@ -147,10 +147,9 @@ export function useMyActiveHolds() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'student_holds' },
         () => { load(true) }
-      )
-      .subscribe()
+      ))
 
-    return () => { supabase.removeChannel(channel) }
+    return () => { channel() }
   }, [profile?.email, load, instanceId])
 
   return { holds, loading, refresh: () => load(true) }
@@ -212,8 +211,7 @@ export function useAllHolds(options = {}) {
   // per-instance id so toggling includeClosed or mounting this hook multiple
   // times doesn't collide.
   useEffect(() => {
-    const channel = supabase
-      .channel(`all-holds-${includeClosed ? 'full' : 'active'}-${instanceId}`)
+    const channel = subscribeWithReconnect(`all-holds-${includeClosed ? 'full' : 'active'}-${instanceId}`, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'student_holds' },
@@ -223,10 +221,9 @@ export function useAllHolds(options = {}) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'student_hold_targets' },
         () => { load(true) }
-      )
-      .subscribe()
+      ))
 
-    return () => { supabase.removeChannel(channel) }
+    return () => { channel() }
   }, [load, includeClosed, instanceId])
 
   return { holds, loading, refresh: () => load(true) }

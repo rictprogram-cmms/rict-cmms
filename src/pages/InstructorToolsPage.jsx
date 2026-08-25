@@ -3,6 +3,7 @@ import { assertWrite } from '@/lib/supabaseData'
 import { useNavigate } from 'react-router-dom'
 import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive, Library } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import SyllabusWizard, { DEFAULT_COMMON_SECTIONS } from './SyllabusWizard'
@@ -689,12 +690,11 @@ function RequiredToolsPanel({ onBack }) {
   useEffect(() => {
     setLoading(true)
     Promise.all([loadTools(), loadUsage()]).finally(() => setLoading(false))
-    const ch = supabase.channel('program_tools_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, loadTools)
-      .subscribe()
+    const ch = subscribeWithReconnect('program_tools_rt', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, loadTools))
     const onReconnect = () => { loadTools(); loadUsage() }
     window.addEventListener('supabase-reconnected', onReconnect)
-    return () => { ch.unsubscribe(); window.removeEventListener('supabase-reconnected', onReconnect) }
+    return () => { ch(); window.removeEventListener('supabase-reconnected', onReconnect) }
   }, [loadTools, loadUsage])
 
   const filtered = useMemo(() => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import toast from 'react-hot-toast'
@@ -86,12 +87,11 @@ export function usePODashboard(viewAll = true) {
 
   // Realtime: refresh dashboard when orders change
   useEffect(() => {
-    const channel = supabase.channel('po-dashboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
-      .subscribe()
+    const channel = subscribeWithReconnect('po-dashboard', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch()))
     const onPOUpdate = () => fetch()
     window.addEventListener('po-updated', onPOUpdate)
-    return () => { supabase.removeChannel(channel); window.removeEventListener('po-updated', onPOUpdate) }
+    return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }
   }, [fetch])
 
   // Re-fetch when tab becomes visible
@@ -157,12 +157,11 @@ export function usePOList(statusFilter = 'all', viewAll = true) {
 
   // Realtime: refresh list when orders change
   useEffect(() => {
-    const channel = supabase.channel('po-list')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
-      .subscribe()
+    const channel = subscribeWithReconnect('po-list', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch()))
     const onPOUpdate = () => fetch()
     window.addEventListener('po-updated', onPOUpdate)
-    return () => { supabase.removeChannel(channel); window.removeEventListener('po-updated', onPOUpdate) }
+    return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }
   }, [fetch])
 
   // Re-fetch when tab becomes visible
@@ -211,17 +210,16 @@ export function usePODetail(orderId) {
   // Realtime: refresh detail when order or line items change
   useEffect(() => {
     if (!orderId) return
-    const channel = supabase.channel(`po-detail-${orderId}`)
+    const channel = subscribeWithReconnect(`po-detail-${orderId}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
         if (payload.new?.order_id === orderId || payload.old?.order_id === orderId) fetch()
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, (payload) => {
         if (payload.new?.order_id === orderId || payload.old?.order_id === orderId) fetch()
-      })
-      .subscribe()
+      }))
     const onPOUpdate = (e) => { if (!e.detail?.orderId || e.detail.orderId === orderId) fetch() }
     window.addEventListener('po-updated', onPOUpdate)
-    return () => { supabase.removeChannel(channel); window.removeEventListener('po-updated', onPOUpdate) }
+    return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }
   }, [orderId, fetch])
 
   return { order, lineItems, loading, refresh: fetch }

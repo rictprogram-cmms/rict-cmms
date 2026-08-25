@@ -12,6 +12,7 @@ import { assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
@@ -824,29 +825,25 @@ export default function NotificationBell() {
     const tables = Object.keys(tableToFetcher);
     console.log('[NotificationBell] Setting up per-table realtime subscriptions for:', tables);
 
-    const channel = supabase.channel('notif-realtime-' + Date.now());
-    tables.forEach(table => {
-      channel.on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table },
-        (payload) => {
-          console.log(`[NotificationBell] Realtime event on ${table}:`, payload.eventType);
-          tableToFetcher[table]();
-        }
-      );
-    });
-
-    channel.subscribe((status, err) => {
-      console.log('[NotificationBell] Realtime subscription status:', status);
-      if (err) console.error('[NotificationBell] Realtime subscription error:', err);
-      if (status === 'SUBSCRIBED') console.log('[NotificationBell] ✅ Realtime is ACTIVE - listening for changes');
-      if (status === 'CHANNEL_ERROR') console.error('[NotificationBell] ❌ Realtime channel error - will retry via polling');
-      if (status === 'TIMED_OUT') console.warn('[NotificationBell] ⚠️ Realtime timed out - falling back to polling');
-    });
+    // subscribeWithReconnect re-subscribes automatically on CHANNEL_ERROR /
+    // TIMED_OUT with backoff (the poll fallback below still covers gaps).
+    const stopRealtime = subscribeWithReconnect('notif-realtime', ch => {
+      tables.forEach(table => {
+        ch.on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table },
+          (payload) => {
+            console.log(`[NotificationBell] Realtime event on ${table}:`, payload.eventType);
+            tableToFetcher[table]();
+          }
+        );
+      });
+      return ch;
+    }, { tag: 'NotificationBell' });
 
     return () => {
       console.log('[NotificationBell] Cleaning up realtime channel');
-      supabase.removeChannel(channel);
+      stopRealtime();
     };
   }, [profile?.email, fetchAccessRequests, fetchPendingAcknowledgments, fetchWORequests, fetchOrders, fetchTimeRequests, fetchLabRequests, fetchTempRequests, fetchHelpRequests, fetchAnnouncements, fetchNetworkChanges, fetchAbsenceRequests]);
 

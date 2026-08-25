@@ -26,6 +26,7 @@ import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
@@ -201,8 +202,8 @@ export default function SOPsPage() {
   useEffect(() => { fetchTemplate() }, [fetchTemplate])
 
   useEffect(() => {
-    const ch = supabase.channel('sops-page').on('postgres_changes', { event: '*', schema: 'public', table: 'sops' }, () => fetchSOPs()).subscribe()
-    return () => { supabase.removeChannel(ch) }
+    const ch = subscribeWithReconnect('sops-page', ch => ch.on('postgres_changes', { event: '*', schema: 'public', table: 'sops' }, () => fetchSOPs()))
+    return () => { ch() }
   }, [fetchSOPs])
 
   useEffect(() => {
