@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 import { X, Loader2, Inbox } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useId } from 'react'
 
 // ─── Badge ──────────────────────────────────────────────────────────────────
 
@@ -186,5 +186,44 @@ export function LateBadge() {
     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide bg-red-600 text-white rounded">
       Late
     </span>
+  )
+}
+
+// ── Accessible form field (WCAG 1.3.1 / 3.3.2 / 4.1.2) ─────────────────────
+//
+// Use this for NEW forms so the label is always programmatically linked.
+// It injects a generated id into a bare <input>/<select>/<textarea> child (or
+// any component that forwards an `id` prop), marks required fields for
+// assistive tech, and ties hint text via aria-describedby.
+//
+//   <Field label="Vendor" required hint="Pick from the vendor list">
+//     <select className="input">…</select>
+//   </Field>
+//
+// If the child is a wrapper (e.g. a <div> with a control inside), pass
+// `htmlFor="some-id"` and put that id on the control yourself.
+//
+// Several pages still carry a local `Field` from before this existed; they
+// behave the same way and can be migrated to this one over time.
+const FIELD_LINKABLE = new Set(['input', 'select', 'textarea'])
+export function Field({ label, required, hint, htmlFor, labelClassName = 'block text-xs font-medium text-surface-600 mb-1', children }) {
+  const autoId = useId()
+  const hintId = `${autoId}-hint`
+  const child = React.Children.only(children)
+  const linkable = !htmlFor && React.isValidElement(child) &&
+    (FIELD_LINKABLE.has(child.type) || child.type?.__linkable === true)
+  const id = htmlFor || (linkable ? (child.props.id || autoId) : undefined)
+  return (
+    <div>
+      <label htmlFor={id} className={labelClassName}>
+        {label}
+        {required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
+        {required && <span className="sr-only"> (required)</span>}
+      </label>
+      {linkable
+        ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : child.props['aria-describedby'] })
+        : children}
+      {hint && <p id={hintId} className="text-xs text-surface-400 mt-1">{hint}</p>}
+    </div>
   )
 }

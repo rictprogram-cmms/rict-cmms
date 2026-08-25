@@ -40,7 +40,7 @@ Do one page per session. Start with student-facing pages.
 ### App-wide
 - [x] Global `:focus-visible` outline for buttons/links/inputs without Tailwind focus classes (`src/index.css`, 2026-08-24) — covers inline-styled pages and kiosks
 - [x] Add skip-to-content link in `AppLayout.jsx` (target `<main id="main-content">`) — WCAG 2.4.1 (2026-08-24)
-- [ ] Build `LabeledField` / `LabeledSelect` helper using `useId()` so new forms are correct by default (several pages now have a local `Field` doing this — consolidate into `src/components/ui`)
+- [x] Shared `Field` added to `src/components/ui` (2026-08-25): `import { Field } from '@/components/ui'` — auto-links label↔control via `useId()`, announces required, ties hints via `aria-describedby`. Use for new forms; the 7 pages with a local `Field` can migrate opportunistically.
 - [x] Replace `window.confirm` / `alert` with `ConfirmDialog`/toasts — done page-by-page during the sweep (2026-08-24); re-grep before closing: `grep -rnE "\b(confirm|alert)\(" src`
 - [x] Wrap non-`AppLayout` routes in `PageErrorBoundary` — on main `8e51988`: `/tv-display`, `/time-clock`, `/lab-status`, `/login`, `/orders/receive`, `/reset-password`, `/change-password`
 
@@ -122,11 +122,11 @@ Instructor / admin:
 
 ## Previously deferred features (from earlier sessions)
 
-- [ ] Student Notes feature — resume after Brad/Katie input on categories and edit rights
-- [ ] Program Budget page AY filtering
+- [x] ~~Student Notes feature~~ — not doing (decided 2026-08-25)
+- [x] Program Budget page AY filtering — confirmed present: school-year selector on Overview, defaults to current year, drives all tabs
 - [ ] ProgramPlannerPage polish (staggered PM roll-forward, per-semester credit validation)
-- [ ] AI integration pilots (changelog drafting, WO triage) — FERPA review first
-- [ ] Move working copy out of OneDrive if policy allows (`.git/HEAD` corruption)
+- [x] ~~AI integration pilots~~ — not doing (decided 2026-08-25)
+- [x] ~~Move working copy out of OneDrive~~ — not doing (decided 2026-08-25)
 
 ---
 
