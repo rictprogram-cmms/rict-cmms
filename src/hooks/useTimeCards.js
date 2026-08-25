@@ -1673,6 +1673,18 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         failureMessage: 'Connection problem — the request was not submitted. Please check your signal and try again.',
       })
 
+      // Audit trail (matches the volunteer-entry paths; fire-and-forget)
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Submit Time Entry Request',
+          entity_type: 'Time Entry Request',
+          entity_id: requestId,
+          details: `Time entry request: ${courseName || classId} on ${date}`,
+        })
+      } catch {}
+
       toast.success('Time entry request submitted for approval')
       return { success: true, requestId }
     } catch (err) {
@@ -1765,6 +1777,18 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       }, {
         failureMessage: 'Connection problem — the edit request was not submitted. Please check your signal and try again.',
       })
+
+      // Audit trail (matches the volunteer-entry paths; fire-and-forget)
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Submit Time Edit Request',
+          entity_type: 'Time Entry Request',
+          entity_id: requestId,
+          details: `Edit request for ${entry.course_id || entry.class_id || 'entry'} on ${entryDate}`,
+        })
+      } catch {}
 
       toast.success('Edit request submitted — an instructor will review it')
       return { success: true, requestId }
