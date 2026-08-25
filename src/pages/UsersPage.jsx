@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -255,7 +256,7 @@ export default function UsersPage() {
   if (permsLoading) {
     return (
       <div className="p-4 lg:p-6 max-w-7xl mx-auto text-center py-20">
-        <Loader2 size={24} className="mx-auto mb-3 text-surface-400 animate-spin" />
+        <Loader2 size={24} className="mx-auto mb-3 text-surface-400 animate-spin" aria-hidden="true" />
         <p className="text-surface-500 text-sm">Loading...</p>
       </div>
     )
@@ -264,7 +265,7 @@ export default function UsersPage() {
   if (!hasPerm('view_page')) {
     return (
       <div className="p-4 lg:p-6 max-w-7xl mx-auto text-center py-20">
-        <Users size={40} className="mx-auto mb-3 text-surface-300" />
+        <Users size={40} className="mx-auto mb-3 text-surface-300" aria-hidden="true" />
         <p className="text-surface-500 text-sm">You do not have permission to access User Management.</p>
       </div>
     )
@@ -275,22 +276,22 @@ export default function UsersPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-lg font-bold text-surface-900 flex items-center gap-2">
-          <Users size={20} className="text-brand-600" /> User Management
+          <Users size={20} className="text-brand-600" aria-hidden="true" /> User Management
         </h1>
         <div className="flex items-center gap-2">
           {/* Add User button — visible on Users tab for instructors with edit_users */}
           {hasPerm('edit_users') && tab === 'users' && (
             <button
               onClick={() => setShowAddUser(true)}
-              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 flex items-center gap-1.5 transition-colors"
+              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 flex items-center gap-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              <UserPlus size={14} /> Add User
+              <UserPlus size={14} aria-hidden="true" /> Add User
             </button>
           )}
           {requests.length > 0 && (
             <button onClick={() => setTab(tab === 'requests' ? 'users' : 'requests')}
-              className="px-3 py-1.5 rounded-lg bg-yellow-100 text-yellow-800 text-xs font-medium flex items-center gap-1.5">
-              <AlertCircle size={14} /> {requests.length} Pending Request{requests.length !== 1 ? 's' : ''}
+              className="px-3 py-1.5 rounded-lg bg-yellow-100 text-yellow-800 text-xs font-medium flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <AlertCircle size={14} aria-hidden="true" /> {requests.length} Pending Request{requests.length !== 1 ? 's' : ''}
             </button>
           )}
         </div>
@@ -299,12 +300,12 @@ export default function UsersPage() {
       {/* Tab Toggle */}
       <div className="flex gap-1 bg-surface-100 rounded-xl p-1" role="tablist" aria-label="User management sections">
         <button onClick={() => setTab('users')} role="tab" aria-selected={tab === 'users'} aria-controls="panel-users" id="tab-users"
-          className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${tab === 'users' ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500'}`}>
-          <Users size={14} className="inline mr-1" /> Users ({users.length})
+          className={`flex-1 py-2 min-h-[44px] rounded-lg text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 font-medium transition-colors ${tab === 'users' ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500'}`}>
+          <Users size={14} className="inline mr-1" aria-hidden="true" /> Users ({users.length})
         </button>
         <button onClick={() => setTab('requests')} role="tab" aria-selected={tab === 'requests'} aria-controls="panel-requests" id="tab-requests"
-          className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${tab === 'requests' ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500'}`}>
-          <UserPlus size={14} className="inline mr-1" /> Requests ({requests.length})
+          className={`flex-1 py-2 min-h-[44px] rounded-lg text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 font-medium transition-colors ${tab === 'requests' ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500'}`}>
+          <UserPlus size={14} className="inline mr-1" aria-hidden="true" /> Requests ({requests.length})
         </button>
       </div>
 
@@ -317,7 +318,7 @@ export default function UsersPage() {
           {/* Filters */}
           <div className="flex flex-wrap gap-2 mb-4">
             <div className="relative flex-1 min-w-[200px]">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
               <input type="text" value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search users..." className="input pl-9 text-sm" aria-label="Search users" />
             </div>
@@ -346,7 +347,7 @@ export default function UsersPage() {
               onClick={() => setOnlineFilter(f => !f)}
               title="Show only currently online users"
               aria-pressed={onlineFilter}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-lg text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 font-medium border transition-colors ${
                 onlineFilter
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-700'
                   : 'bg-white border-surface-200 text-surface-500 hover:border-emerald-300 hover:text-emerald-600'
@@ -377,23 +378,23 @@ export default function UsersPage() {
           {selectedCount > 0 && (
             <div className="bg-brand-50 border border-brand-200 rounded-xl px-4 py-2 flex flex-wrap items-center gap-3 text-sm mb-4">
               <span className="text-brand-700 font-medium">{selectedCount} selected</span>
-              <button onClick={() => setShowCompose(true)} className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1">
-                <Mail size={12} /> Send Message
+              <button onClick={() => setShowCompose(true)} className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <Mail size={12} aria-hidden="true" /> Send Message
               </button>
               {canManageScanners && (
                 <button
                   onClick={() => setBulkIssueConfirm(true)}
                   disabled={bulkIssueTargets.length === 0 || bulkIssueBusy}
                   title={bulkIssueTargets.length === 0 ? 'Everyone selected already has a scanner' : `Issue a scanner to ${bulkIssueTargets.length} selected user${bulkIssueTargets.length === 1 ? '' : 's'}`}
-                  className="px-3 py-1 rounded-lg bg-white border border-brand-300 text-brand-700 text-xs font-medium flex items-center gap-1 hover:bg-brand-100 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                  className="px-3 py-1 rounded-lg bg-white border border-brand-300 text-brand-700 text-xs font-medium flex items-center gap-1 hover:bg-brand-100 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]">
                   <ScanLine size={12} aria-hidden="true" /> Issue Scanner ({bulkIssueTargets.length})
                 </button>
               )}
-              <button onClick={() => setSelectedUsers({})} className="text-xs text-surface-500 hover:text-surface-700">Deselect All</button>
+              <button onClick={() => setSelectedUsers({})} className="text-xs text-surface-500 hover:text-surface-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Deselect All</button>
               <div className="ml-auto flex gap-1">
                 {ROLES.map(r => (
                   <button key={r} onClick={() => selectByRole(r)}
-                    className="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-100 text-surface-600 hover:bg-surface-200">
+                    className="px-2 py-0.5 rounded text-[10px] font-medium bg-surface-100 text-surface-600 hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                     + {r}s
                   </button>
                 ))}
@@ -406,7 +407,7 @@ export default function UsersPage() {
             <div className="text-center py-12 text-surface-400">Loading users...</div>
           ) : filtered.length === 0 ? (
             <div className="text-center py-12 text-surface-400">
-              <Users size={32} className="mx-auto mb-2 opacity-40" />
+              <Users size={32} className="mx-auto mb-2 opacity-40" aria-hidden="true" />
               <p className="text-sm">No users found</p>
             </div>
           ) : (
@@ -533,15 +534,15 @@ export default function UsersPage() {
                                 <button onClick={() => setEditingUser(u)}
                                   title="Edit User"
                                   aria-label={`Edit ${u.first_name} ${u.last_name}`}
-                                  className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600">
-                                  <Edit3 size={14} />
+                                  className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                                  <Edit3 size={14} aria-hidden="true" />
                                 </button>
                                 {/* View Request History */}
                                 <button onClick={(e) => { e.stopPropagation(); navigate(`/request-history?student=${encodeURIComponent(u.email)}`) }}
                                   title="View Request History"
                                   aria-label={`View request history for ${u.first_name} ${u.last_name}`}
-                                  className="p-1.5 rounded-lg hover:bg-purple-50 text-surface-400 hover:text-purple-600">
-                                  <FileSearch size={14} />
+                                  className="p-1.5 rounded-lg hover:bg-purple-50 text-surface-400 hover:text-purple-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                                  <FileSearch size={14} aria-hidden="true" />
                                 </button>
                                 {/* Scanner: issue / check in / mark lost */}
                                 {u.status !== 'Archived' && (
@@ -550,7 +551,7 @@ export default function UsersPage() {
                                       disabled={scannerSaving}
                                       title="Issue Scanner"
                                       aria-label={`Issue scanner to ${fullName}`}
-                                      className="p-1.5 rounded-lg hover:bg-emerald-50 text-surface-400 hover:text-emerald-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                      className="p-1.5 rounded-lg hover:bg-emerald-50 text-surface-400 hover:text-emerald-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                                       <ScanLine size={14} aria-hidden="true" />
                                     </button>
                                   ) : (
@@ -559,7 +560,7 @@ export default function UsersPage() {
                                         disabled={scannerSaving}
                                         title={scState === 'pending' ? 'Cancel Scanner Issue (not yet signed)' : 'Check In Scanner'}
                                         aria-label={scState === 'pending' ? `Cancel unsigned scanner issue for ${fullName}` : `Check in scanner from ${fullName}`}
-                                        className="p-1.5 rounded-lg hover:bg-sky-50 text-surface-400 hover:text-sky-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                        className="p-1.5 rounded-lg hover:bg-sky-50 text-surface-400 hover:text-sky-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                                         <PackageCheck size={14} aria-hidden="true" />
                                       </button>
                                       {scState === 'issued' && (
@@ -567,7 +568,7 @@ export default function UsersPage() {
                                           disabled={scannerSaving}
                                           title="Mark Scanner Lost / Replacement Ordered"
                                           aria-label={`Mark scanner lost for ${fullName}`}
-                                          className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                          className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                                           <PackageX size={14} aria-hidden="true" />
                                         </button>
                                       )}
@@ -579,8 +580,8 @@ export default function UsersPage() {
                                   <button onClick={() => setResetConfirm(u)}
                                     title="Reset Password"
                                     aria-label={`Reset password for ${u.first_name} ${u.last_name}`}
-                                    className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-600">
-                                    <KeyRound size={14} />
+                                    className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                                    <KeyRound size={14} aria-hidden="true" />
                                   </button>
                                 )}
                                 {/* Archive / Unarchive */}
@@ -588,8 +589,8 @@ export default function UsersPage() {
                                   <button onClick={() => setArchiveConfirm(u)}
                                     title="Archive User"
                                     aria-label={`Archive ${u.first_name} ${u.last_name}`}
-                                    className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-600">
-                                    <UserMinus size={14} />
+                                    className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                                    <UserMinus size={14} aria-hidden="true" />
                                   </button>
                                 ) : (
                                   <button onClick={async () => {
@@ -598,8 +599,8 @@ export default function UsersPage() {
                                   }}
                                     title="Reactivate User"
                                     aria-label={`Reactivate ${u.first_name} ${u.last_name}`}
-                                    className="p-1.5 rounded-lg hover:bg-emerald-50 text-surface-400 hover:text-emerald-600">
-                                    <UserCheck size={14} />
+                                    className="p-1.5 rounded-lg hover:bg-emerald-50 text-surface-400 hover:text-emerald-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                                    <UserCheck size={14} aria-hidden="true" />
                                   </button>
                                 )}
                                 {/* Permanently Delete — super admin only */}
@@ -607,8 +608,8 @@ export default function UsersPage() {
                                   <button onClick={() => setDeleteConfirm(u)}
                                     title="Permanently Delete"
                                     aria-label={`Permanently delete ${u.first_name} ${u.last_name}`}
-                                    className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600">
-                                    <X size={14} />
+                                    className="p-1.5 rounded-lg hover:bg-red-50 text-surface-400 hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                                    <X size={14} aria-hidden="true" />
                                   </button>
                                 )}
                               </div>
@@ -717,6 +718,7 @@ export default function UsersPage() {
 // use the Edit modal to change role, set TCO, assign classes, etc.
 
 function AddUserModal({ onClose, onAdded }) {
+  const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const { profile } = useAuth()
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -801,24 +803,24 @@ function AddUserModal({ onClose, onAdded }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="add-user-title">
-      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-brand-100 flex items-center justify-center">
-              <UserPlus size={16} className="text-brand-600" />
+              <UserPlus size={16} className="text-brand-600" aria-hidden="true" />
             </div>
             <h3 id="add-user-title" className="text-sm font-bold text-surface-900">Add User</h3>
           </div>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close">
-            <X size={16} />
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close">
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
 
         {/* Info note */}
         <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-200">
-          <AlertCircle size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
+          <AlertCircle size={14} className="text-blue-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <p className="text-xs text-blue-700 leading-snug">
             New users are added as <strong>Student</strong> by default. Use the Edit button after
             creation to change role, assign classes, or set Time Clock Only (TCO).
@@ -870,12 +872,12 @@ function AddUserModal({ onClose, onAdded }) {
           <button
             onClick={handleSubmit}
             disabled={saving || !canSubmit}
-            className="flex-1 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-colors"
+            className="flex-1 px-4 py-2 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            {saving ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
+            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <UserPlus size={14} aria-hidden="true" />}
             {saving ? 'Adding...' : 'Add User'}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200 transition-colors">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
         </div>
@@ -899,6 +901,7 @@ function generateTempPassword() {
 }
 
 function ResetPasswordModal({ user, actions, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [tempPassword, setTempPassword] = useState(() => generateTempPassword())
   const [showPassword, setShowPassword] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -938,17 +941,17 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="reset-pw-title">
-      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center">
-              <KeyRound size={16} className="text-amber-600" />
+              <KeyRound size={16} className="text-amber-600" aria-hidden="true" />
             </div>
             <h3 id="reset-pw-title" className="text-sm font-bold text-surface-900">Reset Password</h3>
           </div>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close"><X size={16} /></button>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close"><X size={16} aria-hidden="true" /></button>
         </div>
 
         {/* Who */}
@@ -960,7 +963,7 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
 
         {/* Warning */}
         <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200">
-          <AlertTriangle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
+          <AlertTriangle size={14} className="text-amber-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <p className="text-xs text-amber-700 leading-snug">
             This immediately changes the student's password and requires them to set a
             new one on their next login. Share this temporary password with them in person.
@@ -985,11 +988,11 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
               <button
                 type="button"
                 onClick={() => setShowPassword(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-surface-400 hover:text-surface-600"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                 title={showPassword ? 'Hide password' : 'Show password'}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
-                {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                {showPassword ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
               </button>
             </div>
             {/* Regenerate */}
@@ -998,9 +1001,9 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
               onClick={handleRegenerate}
               title="Generate new password"
               aria-label="Generate new password"
-              className="p-2 rounded-lg border border-surface-200 bg-white text-surface-500 hover:text-brand-600 hover:border-brand-300 transition-colors"
+              className="p-2 rounded-lg border border-surface-200 bg-white text-surface-500 hover:text-brand-600 hover:border-brand-300 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             >
-              <RefreshCcw size={14} />
+              <RefreshCcw size={14} aria-hidden="true" />
             </button>
             {/* Copy */}
             <button
@@ -1008,13 +1011,13 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
               onClick={handleCopy}
               title="Copy to clipboard"
               aria-label="Copy to clipboard"
-              className={`p-2 rounded-lg border transition-colors ${
+              className={`p-2 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 copied
                   ? 'border-emerald-300 bg-emerald-50 text-emerald-600'
                   : 'border-surface-200 bg-white text-surface-500 hover:text-brand-600 hover:border-brand-300'
               }`}
             >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
             </button>
           </div>
           <p className="text-[10px] text-surface-400">
@@ -1027,12 +1030,12 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
           <button
             onClick={handleSubmit}
             disabled={processing || tempPassword.length < 6}
-            className="flex-1 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+            className="flex-1 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            {processing ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
+            {processing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <KeyRound size={14} aria-hidden="true" />}
             {processing ? 'Setting Password…' : 'Set Password'}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Cancel
           </button>
         </div>
@@ -1046,6 +1049,7 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [processing, setProcessing] = useState(false)
   const fullName = `${user.first_name} ${user.last_name}`
   const hasScanner = !!scannerRow
@@ -1064,10 +1068,10 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="archive-user-title">
-      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
-            <Archive size={20} className="text-amber-600" />
+            <Archive size={20} className="text-amber-600" aria-hidden="true" />
           </div>
           <div>
             <h3 id="archive-user-title" className="text-sm font-bold text-surface-900">Archive User</h3>
@@ -1105,11 +1109,11 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone
 
         <div className="flex gap-2 pt-1">
           <button onClick={handleArchive} disabled={processing}
-            className="flex-1 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 flex items-center justify-center gap-1.5">
-            {processing ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
+            className="flex-1 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            {processing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
             {processing ? 'Archiving...' : hasScanner ? 'Archive Anyway' : 'Archive User'}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
         </div>
       </div>
     </div>
@@ -1121,6 +1125,7 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function DeleteConfirmModal({ user, actions, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [step, setStep] = useState(1)
   const [typedName, setTypedName] = useState('')
   const [processing, setProcessing] = useState(false)
@@ -1141,10 +1146,10 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
-      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
-            <Trash2 size={20} className="text-red-600" />
+            <Trash2 size={20} className="text-red-600" aria-hidden="true" />
           </div>
           <div>
             <h3 id="delete-user-title" className="text-sm font-bold text-red-700">Permanently Delete User</h3>
@@ -1172,10 +1177,10 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
 
             <div className="flex gap-2 pt-1">
               <button onClick={() => setStep(2)}
-                className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                className="flex-1 px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                 Continue
               </button>
-              <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+              <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
             </div>
           </>
         ) : (
@@ -1194,14 +1199,14 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
 
             <div className="flex gap-2 pt-1">
               <button onClick={handleDelete} disabled={!nameMatches || processing}
-                className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-1.5 ${
+                className={`flex-1 px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                   nameMatches ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-surface-200 text-surface-400 cursor-not-allowed'
                 }`}>
-                {processing ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                {processing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
                 {processing ? 'Deleting...' : 'DELETE PERMANENTLY'}
               </button>
               <button onClick={() => { setStep(1); setTypedName('') }}
-                className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Back</button>
+                className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Back</button>
             </div>
           </>
         )}
@@ -1215,6 +1220,7 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
+  const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [form, setForm] = useState({
     firstName: user.first_name || '',
     lastName: user.last_name || '',
@@ -1235,10 +1241,10 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="edit-user-title">
-      <div className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 id="edit-user-title" className="text-sm font-bold text-surface-900">Edit User</h3>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close"><X size={16} /></button>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close"><X size={16} aria-hidden="true" /></button>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -1289,10 +1295,10 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
         </label>
 
         <div className="flex gap-2 pt-1">
-          <button onClick={handleSave} disabled={actions.saving} className="btn-primary text-sm gap-1.5 flex-1">
-            {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
+          <button onClick={handleSave} disabled={actions.saving} className="btn-primary text-sm gap-1.5 flex-1 min-h-[44px]">
+            {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />} Save
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
         </div>
       </div>
     </div>
@@ -1359,7 +1365,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
 
       onRefresh()
     } catch (err) {
-      alert('Error: ' + err.message)
+      toast.error('Error: ' + err.message)
     } finally {
       setProcessing(null)
     }
@@ -1407,7 +1413,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
   // Manual add: create profile directly (bypasses email verification)
   const handleManualAdd = async () => {
     if (!manualEmail.trim() || !manualFirst.trim() || !manualLast.trim()) {
-      alert('All fields are required')
+      toast.error('All fields are required')
       return
     }
     setManualLoading(true)
@@ -1420,7 +1426,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
         .maybeSingle()
 
       if (existing) {
-        alert('A user with this email already exists')
+        toast.error('A user with this email already exists')
         setManualLoading(false)
         return
       }
@@ -1456,10 +1462,10 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
       setManualFirst('')
       setManualLast('')
       setShowManualAdd(false)
-      alert(`${manualFirst} ${manualLast} added as ${manualRole}!`)
+      toast.success(`${manualFirst} ${manualLast} added as ${manualRole}!`)
       onRefresh()
     } catch (err) {
-      alert('Error: ' + err.message)
+      toast.error('Error: ' + err.message)
     } finally {
       setManualLoading(false)
     }
@@ -1474,9 +1480,9 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
       <div className="flex justify-end">
         <button
           onClick={() => setShowManualAdd(!showManualAdd)}
-          className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 flex items-center gap-1"
+          className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
-          <UserPlus size={14} /> Add User Manually
+          <UserPlus size={14} aria-hidden="true" /> Add User Manually
         </button>
       </div>
 
@@ -1527,14 +1533,14 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
             <button
               onClick={handleManualAdd}
               disabled={manualLoading}
-              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 flex items-center gap-1"
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
-              {manualLoading ? <Loader2 size={14} className="animate-spin" /> : <UserCheck size={14} />}
+              {manualLoading ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <UserCheck size={14} aria-hidden="true" />}
               Add User
             </button>
             <button
               onClick={() => setShowManualAdd(false)}
-              className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200"
+              className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             >
               Cancel
             </button>
@@ -1545,14 +1551,14 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
       {/* Pending requests */}
       {requests.length === 0 && !showManualAdd ? (
         <div className="text-center py-12">
-          <CheckCircle2 size={36} className="mx-auto mb-3 text-emerald-400" />
+          <CheckCircle2 size={36} className="mx-auto mb-3 text-emerald-400" aria-hidden="true" />
           <p className="text-sm text-surface-500">No pending access requests</p>
         </div>
       ) : (
         requests.map(req => (
           <div key={req.request_id} className="bg-white rounded-xl border border-yellow-200 p-4 flex items-center gap-4">
             <div className="w-10 h-10 rounded-full bg-yellow-100 flex items-center justify-center">
-              <UserPlus size={18} className="text-yellow-600" />
+              <UserPlus size={18} className="text-yellow-600" aria-hidden="true" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-surface-900">{req.first_name} {req.last_name}</div>
@@ -1563,12 +1569,12 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
             </div>
             <div className="flex gap-2">
               <button onClick={() => approve(req)} disabled={processing === req.request_id}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 flex items-center gap-1">
-                {processing === req.request_id ? <Loader2 size={12} className="animate-spin" /> : <UserCheck size={12} />} Approve
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {processing === req.request_id ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <UserCheck size={12} aria-hidden="true" />} Approve
               </button>
               <button onClick={() => reject(req)} disabled={processing === req.request_id}
-                className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 flex items-center gap-1">
-                <UserX size={12} /> Reject
+                className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <UserX size={12} aria-hidden="true" /> Reject
               </button>
             </div>
           </div>
@@ -1600,6 +1606,7 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ComposeModal({ users, selectedIds, templates, onClose, onSent }) {
+  const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const { profile } = useAuth()
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
@@ -1609,8 +1616,8 @@ function ComposeModal({ users, selectedIds, templates, onClose, onSent }) {
   const recipients = users.filter(u => selectedIds.includes(u.id))
 
   const handleSend = async () => {
-    if (!subject.trim()) return alert('Subject is required')
-    if (!body.trim()) return alert('Message is required')
+    if (!subject.trim()) return void toast.error('Subject is required')
+    if (!body.trim()) return void toast.error('Message is required')
     setSending(true)
     try {
       const emails = recipients.map(u => u.email).filter(Boolean)
@@ -1639,10 +1646,10 @@ function ComposeModal({ users, selectedIds, templates, onClose, onSent }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="compose-title">
-      <div className="bg-white rounded-2xl w-full max-w-lg p-5 space-y-3" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-lg p-5 space-y-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 id="compose-title" className="text-sm font-bold text-surface-900">Compose Message</h3>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600" aria-label="Close"><X size={16} /></button>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close"><X size={16} aria-hidden="true" /></button>
         </div>
 
         {/* Recipients */}
@@ -1679,11 +1686,11 @@ function ComposeModal({ users, selectedIds, templates, onClose, onSent }) {
         </div>
 
         <div className="flex gap-2 pt-1">
-          <button onClick={handleSend} disabled={sending} className="btn-primary text-sm gap-1.5 flex-1">
-            {sending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          <button onClick={handleSend} disabled={sending} className="btn-primary text-sm gap-1.5 flex-1 min-h-[44px]">
+            {sending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Send size={14} aria-hidden="true" />}
             {sending ? 'Sending...' : `Send to ${recipients.length}`}
           </button>
-          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
         </div>
       </div>
     </div>
