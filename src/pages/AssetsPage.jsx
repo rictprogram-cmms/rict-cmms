@@ -16,6 +16,9 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import toast from 'react-hot-toast'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { generateSafeAssetId } from '@/lib/generateSafeAssetId'
@@ -37,6 +40,8 @@ function formatDate(iso) {
 }
 
 export default function AssetsPage() {
+  // `return toastErr(msg)` keeps the old `return alert(msg)` early-return shape
+  const toastErr = (msg) => { toast.error(msg); return undefined }
   const { user, profile } = useAuth()
   const navigate = useNavigate()
 
@@ -107,6 +112,20 @@ export default function AssetsPage() {
   const [showCheckOutModal, setShowCheckOutModal] = useState(false)
   const [showCheckInModal, setShowCheckInModal] = useState(false)
   const [showCheckoutHistoryModal, setShowCheckoutHistoryModal] = useState(false)
+  // a11y: focus trap / Escape / focus restore for each modal (role=dialog is on the overlay)
+  const assetDialogRef = useDialogA11y(showAssetModal, () => setShowAssetModal(false))
+  const viewDialogRef = useDialogA11y(showViewModal, () => setShowViewModal(false))
+  const dupDialogRef = useDialogA11y(showDuplicateModal, () => setShowDuplicateModal(false))
+  const woDialogRef = useDialogA11y(showWOModal, () => setShowWOModal(false))
+  const docsDialogRef = useDialogA11y(showDocsModal, () => setShowDocsModal(false))
+  const docTypeDialogRef = useDialogA11y(showDocTypeModal, () => setShowDocTypeModal(false))
+  const labelsDialogRef = useDialogA11y(showLabelsModal, () => setShowLabelsModal(false))
+  const previewDialogRef = useDialogA11y(showLabelsPreview, () => setShowLabelsPreview(false))
+  // Accessible replacement for window.confirm(): await askConfirm({...}) → boolean
+  const [confirmState, setConfirmState] = useState(null)
+  const confirmResolveRef = useRef(null)
+  const askConfirm = useCallback((opts) => new Promise(resolve => { confirmResolveRef.current = resolve; setConfirmState(opts) }), [])
+  const settleConfirm = (value) => { setConfirmState(null); confirmResolveRef.current?.(value); confirmResolveRef.current = null }
 
   const checkoutActions = useCheckoutActions()
 
@@ -323,7 +342,7 @@ export default function AssetsPage() {
   function handleImageSelect(e) {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 5 * 1024 * 1024) return alert('Image too large (max 5MB)')
+    if (file.size > 5 * 1024 * 1024) return toastErr('Image too large (max 5MB)')
     const reader = new FileReader()
     reader.onload = ev => {
       setImagePreview(ev.target.result)
@@ -348,7 +367,7 @@ export default function AssetsPage() {
 
   /* ── Save Asset ────────────────────────────────────────────────── */
   async function saveAsset() {
-    if (!formData.name?.trim()) return alert('Asset name is required')
+    if (!formData.name?.trim()) return toastErr('Asset name is required')
     setSaving(true)
     try {
       let imageFileId = formData.image_url || ''
@@ -389,7 +408,7 @@ export default function AssetsPage() {
         const { data: rows, error } = await supabase.from('assets').update(row).eq('asset_id', formData.asset_id).select()
         if (error) throw error
         if (!rows || rows.length === 0) {
-          alert('Save failed — you may not have permission to edit assets.')
+          toast.error('Save failed — you may not have permission to edit assets.')
           setSaving(false)
           return
         }
@@ -401,7 +420,7 @@ export default function AssetsPage() {
         const { data: rows, error } = await supabase.from('assets').insert(row).select()
         if (error) throw error
         if (!rows || rows.length === 0) {
-          alert('Create failed — you may not have permission to add assets.')
+          toast.error('Create failed — you may not have permission to add assets.')
           setSaving(false)
           return
         }
@@ -419,7 +438,7 @@ export default function AssetsPage() {
       setShowAssetModal(false)
       loadAssets()
     } catch (e) {
-      alert('Error: ' + e.message)
+      toast.error('Error: ' + e.message)
     }
     setSaving(false)
   }
@@ -466,7 +485,7 @@ export default function AssetsPage() {
         })
       } catch {}
 
-      alert(`Asset archived. ${pms.length} PM schedule${pms.length === 1 ? '' : 's'} also auto-archived.`)
+      toast.success(`Asset archived. ${pms.length} PM schedule${pms.length === 1 ? '' : 's'} also auto-archived.`)
     } catch (err) {
       console.warn('cascadeArchivePMs error:', err.message)
     }
@@ -485,11 +504,15 @@ export default function AssetsPage() {
 
       if (!archivedPMs || archivedPMs.length === 0) return
 
-      const proceed = confirm(
-        `This asset has ${archivedPMs.length} archived PM schedule${archivedPMs.length === 1 ? '' : 's'}.\n\n` +
-        `Restore ${archivedPMs.length === 1 ? 'it' : 'them all'} to Active status?\n\n` +
-        `Cancel to leave them archived — you can restore individual ones from the PM page.`
-      )
+      const proceed = await askConfirm({
+        title: `Restore ${archivedPMs.length} archived PM schedule${archivedPMs.length === 1 ? '' : 's'}?`,
+        confirmLabel: 'Restore to Active',
+        cancelLabel: 'Leave archived',
+        message:
+        `This asset has ${archivedPMs.length} archived PM schedule${archivedPMs.length === 1 ? '' : 's'}. ` +
+        `Restore ${archivedPMs.length === 1 ? 'it' : 'them all'} to Active status? ` +
+        `Choose Leave archived to keep them — you can restore individual ones from the PM page.`
+      })
 
       if (!proceed) return
 
@@ -519,7 +542,7 @@ export default function AssetsPage() {
         })
       } catch {}
 
-      alert(`Restored ${archivedPMs.length} PM schedule${archivedPMs.length === 1 ? '' : 's'} to Active.`)
+      toast.success(`Restored ${archivedPMs.length} PM schedule${archivedPMs.length === 1 ? '' : 's'} to Active.`)
     } catch (err) {
       console.warn('maybeRestorePMs error:', err.message)
     }
@@ -527,11 +550,11 @@ export default function AssetsPage() {
 
   /* ── Delete Asset ──────────────────────────────────────────────── */
   async function deleteAsset(assetId) {
-    if (!confirm('Delete this asset? This cannot be undone.')) return
+    if (!(await askConfirm({ title: 'Delete this asset?', message: 'This cannot be undone.', confirmLabel: 'Delete asset' }))) return
     const { data: rows, error } = await supabase.from('assets').delete().eq('asset_id', assetId).select()
-    if (error) { alert('Delete error: ' + error.message); return }
+    if (error) { toast.error('Delete error: ' + error.message); return }
     if (!rows || rows.length === 0) {
-      alert('Delete failed — you may not have permission to delete assets.')
+      toast.error('Delete failed — you may not have permission to delete assets.')
       return
     }
     setShowViewModal(false)
@@ -548,7 +571,7 @@ export default function AssetsPage() {
 
   async function saveDuplicate() {
     if (!duplicateSerial.trim()) {
-      alert('Serial number is required — each physical unit must have a unique serial number.')
+      toast.error('Serial number is required — each physical unit must have a unique serial number.')
       return
     }
     setDuplicateSaving(true)
@@ -573,13 +596,13 @@ export default function AssetsPage() {
       const { data: rows, error } = await supabase.from('assets').insert(row).select()
       if (error) throw error
       if (!rows || rows.length === 0) {
-        alert('Duplicate failed — you may not have permission to add assets.')
+        toast.error('Duplicate failed — you may not have permission to add assets.')
         setDuplicateSaving(false)
         return
       }
       setShowDuplicateModal(false)
       loadAssets()
-    } catch (e) { alert('Error: ' + e.message) }
+    } catch (e) { toast.error('Error: ' + e.message) }
     setDuplicateSaving(false)
   }
 
@@ -671,7 +694,7 @@ export default function AssetsPage() {
       const file = pendingDocFile
       const path = `asset-docs/${docAssetId}/${Date.now()}-${file.name}`
       const { error: upErr } = await supabase.storage.from('asset-documents').upload(path, file)
-      if (upErr) { alert('Upload error: ' + upErr.message); return }
+      if (upErr) { toast.error('Upload error: ' + upErr.message); return }
 
       const { data: nextId } = await supabase.rpc('get_next_id', { p_type: 'document' })
       const docId = nextId || `DOC-${Date.now()}`
@@ -685,9 +708,9 @@ export default function AssetsPage() {
         uploaded_by: `${profile.first_name} ${profile.last_name?.charAt(0)}.`,
         uploaded_at: new Date().toISOString(),
       }).select()
-      if (docErr) { alert('Insert error: ' + docErr.message); return }
+      if (docErr) { toast.error('Insert error: ' + docErr.message); return }
       if (!docRows || docRows.length === 0) {
-        alert('Upload failed — file saved to storage but database insert was blocked. Check permissions.')
+        toast.error('Upload failed — file saved to storage but database insert was blocked. Check permissions.')
         return
       }
       loadAssetDocs(docAssetId)
@@ -699,11 +722,11 @@ export default function AssetsPage() {
   }
 
   async function deleteDoc(docId) {
-    if (!confirm('Delete this document?')) return
+    if (!(await askConfirm({ title: 'Delete this document?', message: 'The file will be removed from this asset. This cannot be undone.', confirmLabel: 'Delete' }))) return
     const { data: rows, error } = await supabase.from('asset_documents').delete().eq('document_id', docId).select()
-    if (error) { alert('Delete error: ' + error.message); return }
+    if (error) { toast.error('Delete error: ' + error.message); return }
     if (!rows || rows.length === 0) {
-      alert('Delete failed — you may not have permission to delete documents.')
+      toast.error('Delete failed — you may not have permission to delete documents.')
       return
     }
     loadAssetDocs(docAssetId)
@@ -732,7 +755,7 @@ export default function AssetsPage() {
   }
 
   function previewLabels() {
-    if (selectedLabelIds.length === 0) return alert('Please select at least one asset')
+    if (selectedLabelIds.length === 0) return toastErr('Please select at least one asset')
     setShowLabelsPreview(true)
   }
 
@@ -781,7 +804,7 @@ export default function AssetsPage() {
     const content = selectedAssets.map(a => {
       const qrUrl = getQRUrl(a.asset_id)
       const snLine = a.serial_number ? `<div class="asset-serial">SN: ${a.serial_number}</div>` : ''
-      return `<div class="label-preview-item"><div class="qr-code"><img src="${qrUrl}"></div><div class="label-text"><div class="asset-num">${a.asset_id}</div><div class="asset-title">${a.name}</div>${snLine}</div></div>`
+      return `<div class="label-preview-item"><div class="qr-code"><img src="${qrUrl}" alt="QR code for ${a.asset_id}"></div><div class="label-text"><div class="asset-num">${a.asset_id}</div><div class="asset-title">${a.name}</div>${snLine}</div></div>`
     }).join('')
 
     const printWin = window.open('', '_blank')
@@ -804,7 +827,7 @@ export default function AssetsPage() {
   /* ── Print Asset List ────────────────────────────────────────────── */
   function printAssetList() {
     const listData = sortedAssets
-    if (listData.length === 0) return alert('No assets to print — adjust your filters.')
+    if (listData.length === 0) return toastErr('No assets to print — adjust your filters.')
 
     const rows = listData.map(a => {
       const sn = a.serial_number ? a.serial_number : '—'
@@ -842,7 +865,7 @@ export default function AssetsPage() {
       <div class="meta">Printed ${new Date().toLocaleDateString()} · ${listData.length} item${listData.length !== 1 ? 's' : ''}</div>
       ${filterLine}
       <table>
-        <thead><tr><th>Asset ID</th><th>Name</th><th>Serial #</th><th>Category</th><th>Location</th><th>Status</th></tr></thead>
+        <thead><tr><th scope="col">Asset ID</th><th scope="col">Name</th><th scope="col">Serial #</th><th scope="col">Category</th><th scope="col">Location</th><th scope="col">Status</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </body></html>`)
@@ -860,7 +883,7 @@ export default function AssetsPage() {
       <div className="page-toolbar">
         <div className="toolbar-left">
           <div className="search-box">
-            <span className="material-icons">search</span>
+            <span className="material-icons" aria-hidden="true">search</span>
             <input type="text" placeholder="Search assets..." value={search} onChange={e => setSearch(e.target.value)} aria-label="Search assets" />
           </div>
           <select className="filter-select" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} aria-label="Filter by category">
@@ -885,19 +908,19 @@ export default function AssetsPage() {
         </div>
         <div className="toolbar-right" style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary" onClick={printAssetList} title="Print a clean one-line-per-asset list">
-            <span className="material-icons">list_alt</span>Print List
+            <span className="material-icons" aria-hidden="true">list_alt</span>Print List
           </button>
           <button className="btn btn-secondary" onClick={() => navigate('/assets/scan')} title="Scan QR code to look up an asset">
-            <span className="material-icons">qr_code_scanner</span>Asset Lookup
+            <span className="material-icons" aria-hidden="true">qr_code_scanner</span>Asset Lookup
           </button>
           {hasPerm('print_labels') && (
             <button className="btn btn-secondary" onClick={openLabelsModal}>
-              <span className="material-icons">print</span>Print Labels
+              <span className="material-icons" aria-hidden="true">print</span>Print Labels
             </button>
           )}
           {hasPerm('add_assets') && (
             <button className="btn btn-primary" onClick={openAddModal}>
-              <span className="material-icons">add</span>Add Asset
+              <span className="material-icons" aria-hidden="true">add</span>Add Asset
             </button>
           )}
         </div>
@@ -908,7 +931,7 @@ export default function AssetsPage() {
         <div className="loading-message">Loading assets...</div>
       ) : filtered.length === 0 ? (
         <div className="no-assets-message">
-          <span className="material-icons">inventory_2</span>
+          <span className="material-icons" aria-hidden="true">inventory_2</span>
           <h3>No Assets Found</h3>
           <p>No assets match your search criteria.</p>
         </div>
@@ -1014,9 +1037,19 @@ export default function AssetsPage() {
       {/* MODALS                                                        */}
       {/* ═══════════════════════════════════════════════════════════════ */}
 
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || 'Confirm'}
+        message={confirmState?.message || ''}
+        confirmLabel={confirmState?.confirmLabel || 'OK'}
+        cancelLabel={confirmState?.cancelLabel || 'Cancel'}
+        onConfirm={() => settleConfirm(true)}
+        onClose={() => settleConfirm(false)}
+      />
+
       {/* ── Add/Edit Asset Modal ─────────────────────────────────── */}
       {showAssetModal && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="asset-modal-title" onClick={e => e.target === e.currentTarget && setShowAssetModal(false)} onKeyDown={e => e.key === 'Escape' && setShowAssetModal(false)}>
+        <div ref={assetDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="asset-modal-title" onClick={e => e.target === e.currentTarget && setShowAssetModal(false)} onKeyDown={e => e.key === 'Escape' && setShowAssetModal(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="asset-modal-title">{formData.asset_id ? 'Edit Asset' : 'Add New Asset'}</h3>
@@ -1025,14 +1058,14 @@ export default function AssetsPage() {
             <div className="modal-body">
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Asset Name *</label>
-                  <input type="text" className="form-input" placeholder="Enter asset name"
+                  <label htmlFor="as-fld-asset-name-1" className="form-label">Asset Name *</label>
+                  <input id="as-fld-asset-name-1" type="text" className="form-input" placeholder="Enter asset name"
                     value={formData.name || ''}
                     onChange={e => setFormData({ ...formData, name: e.target.value })} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Status</label>
-                  <select className="form-input" value={formData.status || 'Active'}
+                  <label htmlFor="as-fld-status-2" className="form-label">Status</label>
+                  <select id="as-fld-status-2" className="form-input" value={formData.status || 'Active'}
                     onChange={e => setFormData({ ...formData, status: e.target.value })}>
                     <option value="Active">Active</option>
                     <option value="Archived">Archived</option>
@@ -1041,8 +1074,8 @@ export default function AssetsPage() {
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Serial Number</label>
-                  <input type="text" className="form-input" placeholder="e.g. SN-12345 (leave blank if N/A)"
+                  <label htmlFor="as-fld-serial-number-3" className="form-label">Serial Number</label>
+                  <input id="as-fld-serial-number-3" type="text" className="form-input" placeholder="e.g. SN-12345 (leave blank if N/A)"
                     style={{ fontFamily: 'monospace' }}
                     value={formData.serial_number || ''}
                     onChange={e => setFormData({ ...formData, serial_number: e.target.value })} />
@@ -1080,23 +1113,23 @@ export default function AssetsPage() {
                 </div>
               </div>
               <div className="form-group">
-                <label className="form-label">Description</label>
-                <textarea className="form-input" rows={3} placeholder="Enter description"
+                <label htmlFor="as-fld-description-4" className="form-label">Description</label>
+                <textarea id="as-fld-description-4" className="form-input" rows={3} placeholder="Enter description"
                   value={formData.description || ''}
                   onChange={e => setFormData({ ...formData, description: e.target.value })} />
               </div>
               <div className="form-row">
                 <div className="form-group">
-                  <label className="form-label">Category</label>
-                  <select className="form-input" value={formData.category || ''}
+                  <label htmlFor="as-fld-category-5" className="form-label">Category</label>
+                  <select id="as-fld-category-5" className="form-input" value={formData.category || ''}
                     onChange={e => setFormData({ ...formData, category: e.target.value })}>
                     <option value="">Select category</option>
                     {categories.map(c => <option key={c.category_id} value={c.category_name}>{c.category_name}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Location</label>
-                  <select className="form-input" value={formData.location || ''}
+                  <label htmlFor="as-fld-location-6" className="form-label">Location</label>
+                  <select id="as-fld-location-6" className="form-input" value={formData.location || ''}
                     onChange={e => setFormData({ ...formData, location: e.target.value })}>
                     <option value="">Select location</option>
                     {locations.map(l => <option key={l.location_id} value={l.location_name}>{l.location_name}</option>)}
@@ -1105,18 +1138,20 @@ export default function AssetsPage() {
               </div>
               <div className="form-group">
                 <label className="form-label">Image</label>
-                <div className="image-upload-area" onClick={() => document.getElementById('asset-image-input')?.click()}>
+                <div className="image-upload-area" role="button" tabIndex={0} aria-label="Choose an image for this asset"
+                  onClick={() => document.getElementById('asset-image-input')?.click()}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.getElementById('asset-image-input')?.click() } }}>
                   <input type="file" id="asset-image-input" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
                   {imagePreview ? (
                     <div className="image-preview-wrap">
                       <img src={imagePreview} alt="Preview" style={{ maxHeight: 200, borderRadius: 8 }} referrerPolicy="no-referrer" />
-                      <button className="remove-image-btn" onClick={e => { e.stopPropagation(); setImagePreview(null); setImageData(null) }}>
-                        <span className="material-icons">close</span>
+                      <button type="button" className="remove-image-btn" aria-label="Remove image" onClick={e => { e.stopPropagation(); setImagePreview(null); setImageData(null) }}>
+                        <span className="material-icons" aria-hidden="true">close</span>
                       </button>
                     </div>
                   ) : (
                     <div className="upload-placeholder">
-                      <span className="material-icons">cloud_upload</span>
+                      <span className="material-icons" aria-hidden="true">cloud_upload</span>
                       <p>Click or drag image here</p>
                     </div>
                   )}
@@ -1135,7 +1170,7 @@ export default function AssetsPage() {
 
       {/* ── View Asset Detail Modal ──────────────────────────────── */}
       {showViewModal && viewAsset && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="view-modal-title" onClick={e => e.target === e.currentTarget && setShowViewModal(false)} onKeyDown={e => e.key === 'Escape' && setShowViewModal(false)}>
+        <div ref={viewDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="view-modal-title" onClick={e => e.target === e.currentTarget && setShowViewModal(false)} onKeyDown={e => e.key === 'Escape' && setShowViewModal(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="view-modal-title">Asset Details</h3>
@@ -1146,7 +1181,7 @@ export default function AssetsPage() {
                 <div className="asset-detail-image">
                   {getImageUrl(viewAsset.image_url)
                     ? <img src={getImageUrl(viewAsset.image_url)} alt="" referrerPolicy="no-referrer" />
-                    : <span className="material-icons">precision_manufacturing</span>
+                    : <span className="material-icons" aria-hidden="true">precision_manufacturing</span>
                   }
                 </div>
                 <div className="asset-detail-info">
@@ -1203,7 +1238,7 @@ export default function AssetsPage() {
               {/* ── Linked SOPs ──────────────────────────────────── */}
               <div className="linked-sops-section">
                 <div className="linked-sops-header">
-                  <span className="material-icons" style={{ color: '#1971c2', fontSize: '1.1rem' }}>menu_book</span>
+                  <span className="material-icons" aria-hidden="true" style={{ color: '#1971c2', fontSize: '1.1rem' }}>menu_book</span>
                   <strong>Linked SOPs {viewModalSOPsLoading ? '' : `(${viewModalSOPs.length})`}</strong>
                   <button
                     className="btn btn-secondary btn-sm"
@@ -1211,7 +1246,7 @@ export default function AssetsPage() {
                     onClick={() => navigate(`/sops?asset=${viewAsset.asset_id}`)}
                     title="Open SOPs page filtered to this asset"
                   >
-                    <span className="material-icons" style={{ fontSize: '0.9rem' }}>open_in_new</span>View All
+                    <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.9rem' }}>open_in_new</span>View All
                   </button>
                 </div>
                 {viewModalSOPsLoading ? (
@@ -1223,7 +1258,7 @@ export default function AssetsPage() {
                     {viewModalSOPs.map(sop => (
                       <div key={sop.sop_id} className="linked-sop-item">
                         <div className="linked-sop-icon">
-                          <span className="material-icons">description</span>
+                          <span className="material-icons" aria-hidden="true">description</span>
                         </div>
                         <div className="linked-sop-info">
                           <div className="linked-sop-name">{sop.name}</div>
@@ -1239,15 +1274,16 @@ export default function AssetsPage() {
                               title="Open PDF"
                               onClick={e => e.stopPropagation()}
                             >
-                              <span className="material-icons">picture_as_pdf</span>
+                              <span className="material-icons" aria-hidden="true">picture_as_pdf</span>
                             </a>
                           )}
                           <button
                             className="action-btn"
                             title="Go to SOP"
+                            aria-label={`Go to SOP ${sop.sop_id}`}
                             onClick={() => { setShowViewModal(false); navigate(`/sops?open=${sop.sop_id}`) }}
                           >
-                            <span className="material-icons">open_in_new</span>
+                            <span className="material-icons" aria-hidden="true">open_in_new</span>
                           </button>
                         </div>
                       </div>
@@ -1457,7 +1493,7 @@ export default function AssetsPage() {
 
       {/* ── Duplicate Asset Modal ────────────────────────────────── */}
       {showDuplicateModal && duplicateSource && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="dup-modal-title" onClick={e => e.target === e.currentTarget && setShowDuplicateModal(false)} onKeyDown={e => e.key === 'Escape' && setShowDuplicateModal(false)}>
+        <div ref={dupDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="dup-modal-title" onClick={e => e.target === e.currentTarget && setShowDuplicateModal(false)} onKeyDown={e => e.key === 'Escape' && setShowDuplicateModal(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="dup-modal-title"><span className="material-icons" style={{ color: '#7c3aed' }} aria-hidden="true">content_copy</span>Duplicate Asset</h3>
@@ -1465,7 +1501,7 @@ export default function AssetsPage() {
             </div>
             <div className="modal-body">
               <div style={{ background: '#f3e8ff', border: '1px solid #d8b4fe', borderRadius: 8, padding: '12px 16px', marginBottom: 20, display: 'flex', gap: 10 }}>
-                <span className="material-icons" style={{ color: '#7c3aed', fontSize: '1.1rem', marginTop: 1, flexShrink: 0 }}>info</span>
+                <span className="material-icons" aria-hidden="true" style={{ color: '#7c3aed', fontSize: '1.1rem', marginTop: 1, flexShrink: 0 }}>info</span>
                 <div>
                   <div style={{ fontWeight: 600, color: '#5b21b6', marginBottom: 2 }}>Creating a copy of this asset</div>
                   <div style={{ fontSize: '0.85rem', color: '#6b21a8' }}>
@@ -1491,11 +1527,12 @@ export default function AssetsPage() {
                 </div>
               </div>
               <div style={{ background: '#fffbeb', border: '2px solid #fbbf24', borderRadius: 8, padding: 16 }}>
-                <label style={{ display: 'block', fontWeight: 700, color: '#92400e', marginBottom: 8, fontSize: '0.9rem' }}>
-                  <span className="material-icons" style={{ fontSize: '1rem', verticalAlign: 'middle', marginRight: 4 }}>tag</span>
+                <label htmlFor="as-dup-serial" style={{ display: 'block', fontWeight: 700, color: '#92400e', marginBottom: 8, fontSize: '0.9rem' }}>
+                  <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem', verticalAlign: 'middle', marginRight: 4 }}>tag</span>
                   Serial Number for New Unit *
                 </label>
                 <input
+                  id="as-dup-serial"
                   type="text"
                   className="form-input"
                   placeholder="Enter the serial number found on this specific unit"
@@ -1515,7 +1552,7 @@ export default function AssetsPage() {
               <button className="btn btn-primary" style={{ background: '#7c3aed', borderColor: '#7c3aed' }}
                 disabled={duplicateSaving || !duplicateSerial.trim()}
                 onClick={saveDuplicate}>
-                <span className="material-icons" style={{ fontSize: '1rem' }}>content_copy</span>
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>content_copy</span>
                 {duplicateSaving ? 'Creating...' : 'Confirm & Create Duplicate'}
               </button>
             </div>
@@ -1525,7 +1562,7 @@ export default function AssetsPage() {
 
       {/* ── Work Orders Modal ────────────────────────────────────── */}
       {showWOModal && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="wo-modal-title" onClick={e => e.target === e.currentTarget && setShowWOModal(false)} onKeyDown={e => e.key === 'Escape' && setShowWOModal(false)}>
+        <div ref={woDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="wo-modal-title" onClick={e => e.target === e.currentTarget && setShowWOModal(false)} onKeyDown={e => e.key === 'Escape' && setShowWOModal(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="wo-modal-title"><span className="material-icons" aria-hidden="true">assignment</span>Work Orders for {woAssetName}</h3>
@@ -1559,7 +1596,7 @@ export default function AssetsPage() {
 
       {/* ── Documents Modal ──────────────────────────────────────── */}
       {showDocsModal && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="docs-modal-title" onClick={e => e.target === e.currentTarget && setShowDocsModal(false)} onKeyDown={e => e.key === 'Escape' && setShowDocsModal(false)}>
+        <div ref={docsDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="docs-modal-title" onClick={e => e.target === e.currentTarget && setShowDocsModal(false)} onKeyDown={e => e.key === 'Escape' && setShowDocsModal(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="docs-modal-title"><span className="material-icons" aria-hidden="true">description</span>Documents for {docAssetName}</h3>
@@ -1573,7 +1610,7 @@ export default function AssetsPage() {
                   {assetDocs.map(d => (
                     <div className="document-item" key={d.document_id}>
                       <div className="document-icon">
-                        <span className="material-icons">description</span>
+                        <span className="material-icons" aria-hidden="true">description</span>
                       </div>
                       <div className="document-info">
                         <h4>{d.document_name}</h4>
@@ -1582,11 +1619,11 @@ export default function AssetsPage() {
                       <div className="document-actions">
                         <a href={getDocUrl(d.file_url)} target="_blank" rel="noopener noreferrer"
                           className="btn btn-sm btn-secondary">
-                          <span className="material-icons">visibility</span>
+                          <span className="material-icons" aria-hidden="true">visibility</span>
                         </a>
                         {hasPerm('delete_assets') && (
-                          <button className="btn btn-sm btn-danger" onClick={() => deleteDoc(d.document_id)}>
-                            <span className="material-icons">delete</span>
+                          <button type="button" className="btn btn-sm btn-danger" aria-label={`Delete ${d.document_name || d.file_name || 'document'}`} onClick={() => deleteDoc(d.document_id)}>
+                            <span className="material-icons" aria-hidden="true">delete</span>
                           </button>
                         )}
                       </div>
@@ -1599,7 +1636,7 @@ export default function AssetsPage() {
               <button className="btn btn-secondary" onClick={() => setShowDocsModal(false)}>Close</button>
               {hasPerm('upload_docs') && (
                 <button className="btn btn-primary" onClick={uploadDoc}>
-                  <span className="material-icons">upload_file</span>Upload
+                  <span className="material-icons" aria-hidden="true">upload_file</span>Upload
                 </button>
               )}
             </div>
@@ -1609,7 +1646,7 @@ export default function AssetsPage() {
 
       {/* ── Document Type Modal ───────────────────────────────── */}
       {showDocTypeModal && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="doctype-modal-title" onClick={e => e.target === e.currentTarget && !docUploading && (setShowDocTypeModal(false), setPendingDocFile(null))} onKeyDown={e => e.key === 'Escape' && !docUploading && (setShowDocTypeModal(false), setPendingDocFile(null))}>
+        <div ref={docTypeDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="doctype-modal-title" onClick={e => e.target === e.currentTarget && !docUploading && (setShowDocTypeModal(false), setPendingDocFile(null))} onKeyDown={e => e.key === 'Escape' && !docUploading && (setShowDocTypeModal(false), setPendingDocFile(null))}>
           <div className="modal" style={{ maxWidth: 420 }}>
             <div className="modal-header">
               <h3 id="doctype-modal-title"><span className="material-icons" aria-hidden="true">label</span>Classify Document</h3>
@@ -1620,8 +1657,8 @@ export default function AssetsPage() {
                 Choose a category for <strong>{pendingDocFile?.name}</strong> so it's easy to find later.
               </p>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Document Type</label>
-                <select
+                <label htmlFor="as-fld-document-type-7" className="form-label">Document Type</label>
+                <select id="as-fld-document-type-7"
                   className="form-input"
                   value={selectedDocType}
                   onChange={e => setSelectedDocType(e.target.value)}
@@ -1643,9 +1680,9 @@ export default function AssetsPage() {
               <button className="btn btn-secondary" disabled={docUploading} onClick={() => { setShowDocTypeModal(false); setPendingDocFile(null) }}>Cancel</button>
               <button className="btn btn-primary" disabled={docUploading} onClick={confirmDocUpload}>
                 {docUploading ? (
-                  <><span className="material-icons" style={{ fontSize: '1rem', animation: 'spin 1s linear infinite' }}>sync</span>Uploading...</>
+                  <><span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem', animation: 'spin 1s linear infinite' }}>sync</span>Uploading...</>
                 ) : (
-                  <><span className="material-icons">upload_file</span>Upload</>
+                  <><span className="material-icons" aria-hidden="true">upload_file</span>Upload</>
                 )}
               </button>
             </div>
@@ -1655,7 +1692,7 @@ export default function AssetsPage() {
 
       {/* ── Print Labels Selection Modal ─────────────────────────── */}
       {showLabelsModal && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="labels-modal-title" onClick={e => e.target === e.currentTarget && setShowLabelsModal(false)} onKeyDown={e => e.key === 'Escape' && setShowLabelsModal(false)}>
+        <div ref={labelsDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="labels-modal-title" onClick={e => e.target === e.currentTarget && setShowLabelsModal(false)} onKeyDown={e => e.key === 'Escape' && setShowLabelsModal(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="labels-modal-title"><span className="material-icons" aria-hidden="true">print</span>Print Asset Labels</h3>
@@ -1678,13 +1715,14 @@ export default function AssetsPage() {
                     <div key={a.asset_id} className="label-select-item"
                       onClick={() => toggleLabelAsset(a.asset_id)}>
                       <input type="checkbox"
+                        aria-label={`Select ${a.name || a.asset_id} for label printing`}
                         checked={selectedLabelIds.includes(a.asset_id)}
-                        onChange={() => { }}
+                        onChange={() => toggleLabelAsset(a.asset_id)}
                         onClick={e => e.stopPropagation()} />
                       <div className="asset-thumb">
                         {thumbUrl
                           ? <img src={thumbUrl} alt="" />
-                          : <span className="material-icons">precision_manufacturing</span>
+                          : <span className="material-icons" aria-hidden="true">precision_manufacturing</span>
                         }
                       </div>
                       <div className="asset-details">
@@ -1700,7 +1738,7 @@ export default function AssetsPage() {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowLabelsModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={previewLabels}>
-                <span className="material-icons">visibility</span>Preview Labels
+                <span className="material-icons" aria-hidden="true">visibility</span>Preview Labels
               </button>
             </div>
           </div>
@@ -1709,7 +1747,7 @@ export default function AssetsPage() {
 
       {/* ── Labels Preview Modal ─────────────────────────────────── */}
       {showLabelsPreview && (
-        <div className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title" onClick={e => e.target === e.currentTarget && setShowLabelsPreview(false)} onKeyDown={e => e.key === 'Escape' && setShowLabelsPreview(false)}>
+        <div ref={previewDialogRef} className="modal-overlay visible" role="dialog" aria-modal="true" aria-labelledby="preview-modal-title" onClick={e => e.target === e.currentTarget && setShowLabelsPreview(false)} onKeyDown={e => e.key === 'Escape' && setShowLabelsPreview(false)}>
           <div className="modal modal-lg">
             <div className="modal-header">
               <h3 id="preview-modal-title"><span className="material-icons" aria-hidden="true">visibility</span>Label Preview</h3>
@@ -1734,7 +1772,7 @@ export default function AssetsPage() {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowLabelsPreview(false)}>Back</button>
               <button className="btn btn-primary" onClick={printLabels}>
-                <span className="material-icons">print</span>Print
+                <span className="material-icons" aria-hidden="true">print</span>Print
               </button>
             </div>
           </div>
@@ -1747,8 +1785,9 @@ export default function AssetsPage() {
         .toolbar-left { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
         .search-box { display: flex; align-items: center; gap: 8px; background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 8px 12px; }
         .search-box input { border: none; outline: none; font-size: 0.9rem; min-width: 200px; }
+        .search-box:focus-within { box-shadow: 0 0 0 3px rgba(34,139,230,0.35); border-color: #228be6; } /* visible focus ring */
         .search-box .material-icons { color: #868e96; }
-        .filter-select { padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; background: white; }
+        .filter-select { padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; background: white; min-height: 44px; }
         .filter-select:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
         .table-wrapper { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
         .table-header-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #e9ecef; }
@@ -1767,7 +1806,7 @@ export default function AssetsPage() {
         .part-thumb { width: 48px; height: 48px; background: #f8f9fa; border-radius: 6px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
         .part-thumb img { width: 100%; height: 100%; object-fit: cover; }
         .part-thumb .material-icons { font-size: 1.5rem; color: #dee2e6; }
-        .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; }
+        .action-btn { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #495057; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .action-btn:hover { background: #e9ecef; }
         .action-btn.danger:hover { background: #ffe3e3; color: #c92a2a; }
         .action-btn .material-icons { font-size: 1.1rem; }
@@ -1785,7 +1824,7 @@ export default function AssetsPage() {
         .modal-lg { max-width: 700px; }
         .modal-header { padding: 20px; border-bottom: 1px solid #e9ecef; display: flex; justify-content: space-between; align-items: center; }
         .modal-header h3 { margin: 0; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
-        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; }
+        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #868e96; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
         .modal-close:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 4px; }
         .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
         .modal-footer { padding: 16px 20px; border-top: 1px solid #e9ecef; display: flex; justify-content: flex-end; gap: 12px; }
@@ -1793,13 +1832,13 @@ export default function AssetsPage() {
         .form-group { margin-bottom: 16px; }
         .form-label { display: block; font-size: 0.85rem; font-weight: 500; color: #495057; margin-bottom: 6px; }
         .form-input { width: 100%; padding: 10px 12px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 0.9rem; font-family: inherit; box-sizing: border-box; }
-        .form-input:focus { outline: none; border-color: #228be6; }
+        .form-input:focus { outline: none; border-color: #228be6; box-shadow: 0 0 0 3px rgba(34,139,230,0.35); } /* visible focus ring (WCAG 2.4.7) */
         .image-upload-area { border: 2px dashed #dee2e6; border-radius: 8px; padding: 30px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
         .image-upload-area:hover { border-color: #228be6; }
         .upload-placeholder .material-icons { font-size: 3rem; color: #dee2e6; }
         .upload-placeholder p { margin: 8px 0 0; color: #868e96; font-size: 0.85rem; }
         .image-preview-wrap { position: relative; display: inline-block; }
-        .remove-image-btn { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .remove-image-btn { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.5); color: white; border: none; border-radius: 50%; width: 44px; height: 44px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
         .asset-detail-header { display: flex; gap: 20px; margin-bottom: 20px; }
         .asset-detail-image { width: 200px; height: 200px; background: #f8f9fa; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .asset-detail-image img { width: 100%; height: 100%; object-fit: cover; }
@@ -1810,12 +1849,12 @@ export default function AssetsPage() {
         .detail-row { display: flex; padding: 12px 0; border-bottom: 1px solid #e9ecef; }
         .detail-label { width: 140px; font-weight: 500; color: #495057; }
         .detail-value { flex: 1; }
-        .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+        .btn { padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 500; cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; min-height: 44px; }
         .btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
         .btn-primary { background: #228be6; color: white; } .btn-primary:disabled { opacity: 0.6; }
         .btn-secondary { background: #f8f9fa; color: #495057; }
         .btn-danger { background: #fa5252; color: white; }
-        .btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+        .btn-sm { padding: 6px 12px; font-size: 0.8rem; min-height: 44px; }
         .wo-list { display: flex; flex-direction: column; gap: 12px; }
         .wo-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: #f8f9fa; border-radius: 8px; }
         .wo-item.closed { opacity: 0.6; }
@@ -2045,6 +2084,7 @@ function CheckoutStatusSection({ asset, hasCheckoutPerm, onCheckOut, onCheckIn, 
 /*    - Escape closes the right thing depending on inner state              */
 /* ════════════════════════════════════════════════════════════════════════ */
 function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const meEmail = profile?.email || ''
   const meName  = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : ''
   const meUserId = profile?.user_id || null
@@ -2223,6 +2263,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
 
   return (
     <div
+      ref={dialogRef}
       className="modal-overlay visible"
       role="dialog"
       aria-modal="true"
@@ -2334,7 +2375,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                   <button
                     type="button"
                     onClick={() => { setSelectedEmail(''); setUserSearch('') }}
-                    style={{
+                    style={{ minHeight: 44,
                       padding: '8px 12px', borderRadius: 8,
                       border: '1px solid #40c057', background: 'white',
                       color: '#2b8a3e', fontSize: '0.8rem', fontWeight: 600,
@@ -2421,7 +2462,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                 { label: '+30 days', days: 30 },
               ].map(p => (
                 <button key={p.days} type="button" onClick={() => setPreset(p.days)}
-                  style={{
+                  style={{ minHeight: 44,
                     padding: '4px 10px', fontSize: '0.78rem',
                     border: '1px solid #dee2e6', borderRadius: 16,
                     background: 'white', color: '#495057',
@@ -2595,7 +2636,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                 <button
                   type="button"
                   onClick={() => { setStudentSignedAt(null); setAcknowledgmentName('') }}
-                  style={{
+                  style={{ minHeight: 44,
                     background: 'none', border: 'none', padding: 0,
                     color: '#2f9e44', fontSize: '0.78rem', textDecoration: 'underline',
                     cursor: 'pointer',
@@ -2668,7 +2709,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                   <button
                     type="button"
                     onClick={() => { setHandoffActive(false); setAcknowledgmentName('') }}
-                    style={{
+                    style={{ minHeight: 44,
                       flex: 1, padding: '12px', borderRadius: 10,
                       border: '1px solid #dee2e6', background: 'white',
                       color: '#495057', fontWeight: 500, fontSize: '0.9rem',
@@ -2728,7 +2769,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                     <button
                       type="button"
                       onClick={() => setHandoffActive(true)}
-                      style={{
+                      style={{ minHeight: 44,
                         width: '100%', padding: '14px', borderRadius: 10,
                         border: 'none', background: '#228be6', color: 'white',
                         fontWeight: 600, fontSize: '0.95rem', cursor: 'pointer',
@@ -2759,7 +2800,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                 <button
                   type="button"
                   onClick={() => setOtherFlow('in_person')}
-                  style={{
+                  style={{ minHeight: 44,
                     background: 'none', border: 'none', padding: '4px 8px',
                     color: '#868e96', fontSize: '0.8rem', textDecoration: 'underline',
                     cursor: 'pointer',
@@ -2771,7 +2812,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
                 <button
                   type="button"
                   onClick={() => { setOtherFlow('send'); setAcknowledgmentName('') }}
-                  style={{
+                  style={{ minHeight: 44,
                     background: 'none', border: 'none', padding: '4px 8px',
                     color: '#1971c2', fontSize: '0.8rem', textDecoration: 'underline',
                     cursor: 'pointer',
@@ -2833,6 +2874,7 @@ function CheckOutAssetModal({ asset, profile, actions, hasCheckoutPerm, onClose,
 }
 
 function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onDone }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [condition, setCondition] = useState('Good')
   const [notes, setNotes] = useState('')
   const [needsRepair, setNeedsRepair] = useState(false)
@@ -2864,7 +2906,7 @@ function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onD
 
   const handleSubmit = async () => {
     if (!resolvedCheckoutId) {
-      alert('Could not find an open checkout to close.')
+      toast.error('Could not find an open checkout to close.')
       return
     }
     setSubmitting(true)
@@ -2917,6 +2959,7 @@ function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onD
 
   return (
     <div
+      ref={dialogRef}
       className="modal-overlay visible"
       role="dialog"
       aria-modal="true"
@@ -3011,10 +3054,12 @@ function CheckInAssetModal({ asset, openCheckout, profile, actions, onClose, onD
 }
 
 function CheckoutHistoryModal({ asset, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const { history, loading } = useAssetCheckoutHistory(asset.asset_id)
 
   return (
     <div
+      ref={dialogRef}
       className="modal-overlay visible"
       role="dialog"
       aria-modal="true"
