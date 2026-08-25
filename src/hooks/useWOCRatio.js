@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { parseLabVisibleDays, DEFAULT_LAB_DAYS } from '@/hooks/useLabDays'
@@ -1250,11 +1250,11 @@ export function useClosedDaysActions() {
     setSaving(true)
     try {
       // Get current value
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'custom_closed_days')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       const current = existing?.setting_value || ''
       const dates = current.split(',').map(s => s.trim()).filter(Boolean)
@@ -1299,11 +1299,11 @@ export function useClosedDaysActions() {
   const removeClosedDay = async (dateStr) => {
     setSaving(true)
     try {
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'custom_closed_days')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       if (!existing) return
 

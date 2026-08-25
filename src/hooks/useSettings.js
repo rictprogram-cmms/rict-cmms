@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -70,11 +70,11 @@ export function useSettingsActions() {
     const { silent = false, category, description } = meta
     setSaving(true)
     try {
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('settings')
         .select('setting_key')
         .eq('setting_key', key)
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       if (existing) {
         const { data: rows, error } = await supabase.from('settings').update({
@@ -724,11 +724,11 @@ export function useStudentsInClass(classId) {
     try {
       // 1. Look up the class to get BOTH class_id and course_id, since
       //    profile.classes may contain either form.
-      const { data: cls } = await supabase
+      const cls = mustData(await supabase
         .from('classes')
         .select('class_id, course_id')
         .eq('class_id', classId)
-        .maybeSingle()
+        .maybeSingle(), 'classes.select')
 
       const cid = String(classId).trim()
       const courseId = cls?.course_id ? String(cls.course_id).trim() : null

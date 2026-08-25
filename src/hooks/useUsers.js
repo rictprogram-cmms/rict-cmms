@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -105,12 +105,12 @@ export function useUserActions() {
     try {
       // Check if card already assigned
       if (cardId && cardId.trim()) {
-        const { data: existing } = await supabase
+        const existing = mustData(await supabase
           .from('profiles')
           .select('id, first_name, last_name')
           .eq('card_id', cardId)
           .neq('id', userId)
-          .maybeSingle()
+          .maybeSingle(), 'profiles.select')
 
         if (existing) {
           toast.error(`Card ID already assigned to ${existing.first_name} ${existing.last_name}`)
@@ -337,10 +337,10 @@ export function useMessageTemplates() {
 
   const fetch = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('message_templates')
         .select('*')
-        .order('template_name')
+        .order('template_name'), 'message_templates.select')
       setTemplates(data || [])
     } catch {}
   }, [])

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -377,10 +377,10 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
       overallEnd.setHours(23, 59, 59, 999)
 
       // 1. Equipment (active scheduling status + non-retired asset)
-      const { data: eqData } = await supabase
+      const eqData = mustData(await supabase
         .from('lab_equipment')
         .select('*, assets:asset_id (name, description, category, location, status, image_url)')
-        .neq('status', 'Retired')
+        .neq('status', 'Retired'), 'lab_equipment.select')
 
       const equipment = (eqData || [])
         .filter(r => r.assets && r.assets.status !== 'Retired')
@@ -388,11 +388,11 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
         .sort((a, b) => a.name.localeCompare(b.name))
 
       // 2. Lab calendar entries for the range
-      const { data: calData } = await supabase
+      const calData = mustData(await supabase
         .from('lab_calendar')
         .select('*')
         .gte('date', firstWeek.toISOString())
-        .lte('date', overallEnd.toISOString())
+        .lte('date', overallEnd.toISOString()), 'lab_calendar.select')
 
       const calByDate = {}
       ;(calData || []).forEach(row => {
@@ -415,12 +415,12 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
       })
 
       // 3. Bookings for the range
-      const { data: bookingData } = await supabase
+      const bookingData = mustData(await supabase
         .from('equipment_bookings')
         .select('booking_id, equipment_id, user_email, user_name, date, start_time, end_time, status, purpose')
         .neq('status', 'Cancelled')
         .gte('date', firstWeek.toISOString())
-        .lte('date', overallEnd.toISOString())
+        .lte('date', overallEnd.toISOString()), 'equipment_bookings.select')
 
       const bookingsByKey = {}              // keyed by `${dateStr}_${startMin}_${equipmentId}`
       const mySlotsByTime = {}              // keyed by `${dateStr}_${startMin}`
@@ -623,27 +623,27 @@ export function useEquipmentBookingActions() {
       // real guard, but pre-checking gives a cleaner error message.
       for (const min of startMinutes) {
         const startTime = minutesToTimeStr(min)
-        const { data: existsEq } = await supabase
+        const existsEq = mustData(await supabase
           .from('equipment_bookings')
           .select('booking_id')
           .eq('equipment_id', equipmentId)
           .eq('date', targetDate.toISOString())
           .eq('start_time', startTime)
           .neq('status', 'Cancelled')
-          .maybeSingle()
+          .maybeSingle(), 'equipment_bookings.select')
         if (existsEq) {
           toast.error(`That equipment is already booked at ${formatMinutes(min)}`)
           return { success: false }
         }
 
-        const { data: existsUser } = await supabase
+        const existsUser = mustData(await supabase
           .from('equipment_bookings')
           .select('booking_id, equipment_id')
           .eq('user_email', profile.email)
           .eq('date', targetDate.toISOString())
           .eq('start_time', startTime)
           .neq('status', 'Cancelled')
-          .maybeSingle()
+          .maybeSingle(), 'equipment_bookings.select')
         if (existsUser) {
           toast.error(`You are already booked on other equipment at ${formatMinutes(min)}`)
           return { success: false }

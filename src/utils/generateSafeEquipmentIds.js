@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 
 /**
  * Collision-safe ID generators for the Equipment Scheduling module.
@@ -41,12 +42,12 @@ export async function generateSafeEquipmentId() {
   // Step 2: fallback — derive from existing rows
   if (!id) {
     try {
-      const { data: maxRow } = await supabase
+      const maxRow = mustData(await supabase
         .from('lab_equipment')
         .select('equipment_id')
         .order('equipment_id', { ascending: false })
         .limit(1)
-        .maybeSingle()
+        .maybeSingle(), 'lab_equipment.select')
       const maxNum = maxRow?.equipment_id ? parseInt(maxRow.equipment_id.replace(/\D/g, ''), 10) : 0
       numericId = Math.max(maxNum, 1000) + 1
       id = EQ_PREFIX + pad(numericId, EQ_PAD)
@@ -110,12 +111,12 @@ export async function generateSafeEquipmentBookingId() {
   // Step 2: fallback
   if (!id) {
     try {
-      const { data: maxRow } = await supabase
+      const maxRow = mustData(await supabase
         .from('equipment_bookings')
         .select('booking_id')
         .order('booking_id', { ascending: false })
         .limit(1)
-        .maybeSingle()
+        .maybeSingle(), 'equipment_bookings.select')
       const maxNum = maxRow?.booking_id ? parseInt(maxRow.booking_id.replace(/\D/g, ''), 10) : 0
       numericId = Math.max(maxNum, 100000) + 1
       id = EB_PREFIX + pad(numericId, EB_PAD)

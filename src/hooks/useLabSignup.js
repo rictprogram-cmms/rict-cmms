@@ -329,12 +329,12 @@ async function generateSafeCalendarId() {
   // Step 2 — MAX-scan of clean CAL#### IDs (cheap: the table is small)
   let scanMax = 0
   try {
-    const { data: rows } = await supabase
+    const rows = mustData(await supabase
       .from('lab_calendar')
       .select('calendar_id')
       .like('calendar_id', `${CAL_PREFIX}%`)
       .order('calendar_id', { ascending: false })
-      .limit(200)
+      .limit(200), 'lab_calendar.select')
     ;(rows || []).forEach(r => {
       const m = new RegExp(`^${CAL_PREFIX}(\\d{1,8})$`).exec(r.calendar_id || '')
       if (m) {
@@ -432,12 +432,12 @@ export async function generateSafeSignupIds(count) {
   // Step 2 — MAX-scan safety net (counter behind reality, or RPC missing)
   let scanMax = 0
   try {
-    const { data: idRows } = await supabase
+    const idRows = mustData(await supabase
       .from('lab_signup')
       .select('signup_id')
       .like('signup_id', `${SU_PREFIX}%`)
       .order('signup_id', { ascending: false })
-      .limit(50)
+      .limit(50), 'lab_signup.select')
     const rx = new RegExp(`^${SU_PREFIX}([0-9]{1,10})$`)
     ;(idRows || []).forEach(r => {
       const m = rx.exec(r.signup_id || '')
@@ -457,10 +457,10 @@ export async function generateSafeSignupIds(count) {
     const ids = Array.from({ length: n }, (_, i) => format(start + i))
     let taken = []
     try {
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('lab_signup')
         .select('signup_id')
-        .in('signup_id', ids)
+        .in('signup_id', ids), 'lab_signup.select')
       taken = existing || []
     } catch (e) {
       console.warn('Signup ID collision check failed, assuming free:', e?.message || e)

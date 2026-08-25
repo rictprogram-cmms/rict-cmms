@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry } from '@/lib/supabaseRetry'
@@ -155,13 +155,13 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
   let signups = []
   if (userEmail) {
     try {
-      const { data: suData } = await supabase
+      const suData = mustData(await supabase
         .from('lab_signup')
         .select('date, start_time, end_time, class_id, status')
         .eq('user_email', userEmail)
         .eq('status', 'Confirmed')
         .gte('date', reportStart)
-        .lte('date', reportEnd + 'T23:59:59')
+        .lte('date', reportEnd + 'T23:59:59'), 'lab_signup.select')
       signups = suData || []
     } catch {}
   }
@@ -190,10 +190,10 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
   try {
     const orFilter = [`user_email.eq.${userEmail}`]
     if (profileId) orFilter.push(`user_id.eq.${profileId}`)
-    const { data: ltData } = await supabase
+    const ltData = mustData(await supabase
       .from('weekly_lab_tracker')
       .select('*')
-      .or(orFilter.join(','))
+      .or(orFilter.join(',')), 'weekly_lab_tracker.select')
     labTrackerData = ltData || []
   } catch {}
 
@@ -629,22 +629,22 @@ export function useTimeCardData() {
     const weekEndOffset = weekEndOffsetFromDays(await fetchLabVisibleDays())
     try {
       // 1. Get user email for lab_signup matching
-      const { data: userData } = await supabase
+      const userData = mustData(await supabase
         .from('profiles')
         .select('email, classes')
         .eq('user_id', userId)
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
       const userEmail = userData?.email || ''
 
       // 2. Fetch grace period from settings
       let gracePeriod = 10 // default
       try {
-        const { data: graceSetting } = await supabase
+        const graceSetting = mustData(await supabase
           .from('settings')
           .select('setting_value')
           .eq('setting_key', 'grace_period_minutes')
-          .maybeSingle()
+          .maybeSingle(), 'settings.select')
         if (graceSetting?.setting_value) {
           gracePeriod = parseInt(graceSetting.setting_value) || 10
         }
@@ -666,12 +666,12 @@ export function useTimeCardData() {
       const pendingMap = {}
       if (userEmail) {
         try {
-          const { data: pendingReqs } = await supabase
+          const pendingReqs = mustData(await supabase
             .from('time_entry_requests')
             .select('request_id, time_clock_record_id, start_time, end_time, requested_date, reason, status')
             .eq('user_email', userEmail)
             .eq('status', 'Pending')
-            .eq('entry_type', 'Edit')
+            .eq('entry_type', 'Edit'), 'time_entry_requests.select')
           if (pendingReqs) {
             pendingReqs.forEach(r => {
               if (r.time_clock_record_id) {
@@ -687,13 +687,13 @@ export function useTimeCardData() {
       let signups = []
       if (userEmail) {
         try {
-          const { data: suData } = await supabase
+          const suData = mustData(await supabase
             .from('lab_signup')
             .select('date, start_time, end_time, class_id, status')
             .eq('user_email', userEmail)
             .eq('status', 'Confirmed')
             .gte('date', startDate)
-            .lte('date', endDate + 'T23:59:59')
+            .lte('date', endDate + 'T23:59:59'), 'lab_signup.select')
           signups = suData || []
         } catch (err) {
           console.warn('Lab signup fetch for attendance:', err)
@@ -709,10 +709,10 @@ export function useTimeCardData() {
         try {
           const orFilter = [`user_email.eq.${userEmail}`]
           if (userId) orFilter.push(`user_id.eq.${userId}`)
-          const { data: ltData } = await supabase
+          const ltData = mustData(await supabase
             .from('weekly_lab_tracker')
             .select('course_id, class_id, week_number, week_start_date, week_end_date, all_done, lab_complete, required_hours_met')
-            .or(orFilter.join(','))
+            .or(orFilter.join(',')), 'weekly_lab_tracker.select')
           labTrackerRows = ltData || []
         } catch (err) {
           console.warn('Weekly lab tracker fetch:', err)
@@ -924,10 +924,10 @@ export function useTimeCardData() {
 
       let classesData = []
       if (allRelevantCourseIds.length > 0) {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('classes')
           .select('class_id, course_id, course_name, required_hours, status, start_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end')
-          .in('course_id', allRelevantCourseIds)
+          .in('course_id', allRelevantCourseIds), 'classes.select')
         classesData = data || []
       }
 
@@ -1337,21 +1337,21 @@ export function useClassWeeklyReport() {
     lastFetchParamsRef.current = { courseId, startDate, endDate }
     setLoading(true)
     try {
-      const { data: classData } = await supabase
+      const classData = mustData(await supabase
         .from('classes')
         .select('*')
         .eq('course_id', courseId)
-        .maybeSingle()
+        .maybeSingle(), 'classes.select')
 
       setClassInfo(classData)
       const requiredHours = parseFloat(classData?.required_hours) || 0
       const classId = classData?.class_id || courseId
 
-      const { data: allUsers } = await supabase
+      const allUsers = mustData(await supabase
         .from('profiles')
         .select('user_id, first_name, last_name, role, classes, email')
         .eq('status', 'Active')
-        .in('role', ['Student', 'Work Study'])
+        .in('role', ['Student', 'Work Study']), 'profiles.select')
 
       const enrolled = (allUsers || []).filter(u => {
         if (!u.user_id || u.user_id.trim() === '') return false
@@ -1362,13 +1362,13 @@ export function useClassWeeklyReport() {
       const userIds = enrolled.map(u => u.user_id)
       let tcRecords = []
       if (userIds.length > 0) {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('time_clock')
           .select('*')
           .in('user_id', userIds)
           .gte('punch_in', startDate)
           .lte('punch_in', endDate + 'T23:59:59')
-          .neq('entry_type', 'Volunteer')
+          .neq('entry_type', 'Volunteer'), 'time_clock.select')
 
         tcRecords = data || []
       }
@@ -1386,13 +1386,13 @@ export function useClassWeeklyReport() {
       let allSignups = []
       if (emails.length > 0) {
         try {
-          const { data: suData } = await supabase
+          const suData = mustData(await supabase
             .from('lab_signup')
             .select('user_email, date, start_time, end_time, class_id, status')
             .in('user_email', emails)
             .eq('status', 'Confirmed')
             .gte('date', startDate)
-            .lte('date', endDate + 'T23:59:59')
+            .lte('date', endDate + 'T23:59:59'), 'lab_signup.select')
           allSignups = suData || []
         } catch {}
       }
@@ -1400,11 +1400,11 @@ export function useClassWeeklyReport() {
       // Fetch grace period
       let gracePeriod = 10
       try {
-        const { data: gs } = await supabase
+        const gs = mustData(await supabase
           .from('settings')
           .select('setting_value')
           .eq('setting_key', 'grace_period_minutes')
-          .maybeSingle()
+          .maybeSingle(), 'settings.select')
         if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10
       } catch {}
 
@@ -1567,11 +1567,11 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     if (!canEdit) { toast.error('Not authorized'); return }
     setSaving(true)
     try {
-      const { data: user } = await supabase
+      const user = mustData(await supabase
         .from('profiles')
         .select('first_name, last_name, email')
         .eq('user_id', userId)
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
       if (!user) throw new Error('User not found')
       const uName = `${user.first_name} ${(user.last_name || '').charAt(0)}.`
@@ -1640,12 +1640,12 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         return
       }
 
-      const { data: latest } = await supabase
+      const latest = mustData(await supabase
         .from('time_entry_requests')
         .select('request_id')
         .like('request_id', 'TER%')
         .order('request_id', { ascending: false })
-        .limit(1)
+        .limit(1), 'time_entry_requests.select')
 
       let nextNum = 1
       if (latest && latest.length > 0) {
@@ -1732,12 +1732,12 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       }
 
       // Check if there's already a pending edit for this entry
-      const { data: existingReq } = await supabase
+      const existingReq = mustData(await supabase
         .from('time_entry_requests')
         .select('request_id')
         .eq('time_clock_record_id', entry.record_id)
         .eq('status', 'Pending')
-        .maybeSingle()
+        .maybeSingle(), 'time_entry_requests.select')
 
       if (existingReq) {
         toast.error('There is already a pending edit request for this entry')
@@ -1745,12 +1745,12 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         return
       }
 
-      const { data: latest } = await supabase
+      const latest = mustData(await supabase
         .from('time_entry_requests')
         .select('request_id')
         .like('request_id', 'TER%')
         .order('request_id', { ascending: false })
-        .limit(1)
+        .limit(1), 'time_entry_requests.select')
 
       let nextNum = 1
       if (latest && latest.length > 0) {
@@ -1918,11 +1918,11 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     try {
       if (request.entry_type === 'New') {
         // ── NEW request: create a time_clock entry from the request data ──
-        const { data: reqUser } = await supabase
+        const reqUser = mustData(await supabase
           .from('profiles')
           .select('user_id, first_name, last_name, email')
           .eq('email', request.user_email)
-          .maybeSingle()
+          .maybeSingle(), 'profiles.select')
 
         if (!reqUser) throw new Error('Student profile not found')
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -192,20 +193,20 @@ export function useClassAttendanceReport() {
       // 1. Get class data (could be active or archived)
       // Try matching by class_id first, then course_id
       let classData = null
-      const { data: byClassId } = await supabase
+      const byClassId = mustData(await supabase
         .from('classes')
         .select('*')
         .eq('class_id', classId)
-        .maybeSingle()
+        .maybeSingle(), 'classes.select')
 
       if (byClassId) {
         classData = byClassId
       } else {
-        const { data: byCourseId } = await supabase
+        const byCourseId = mustData(await supabase
           .from('classes')
           .select('*')
           .eq('course_id', classId)
-          .maybeSingle()
+          .maybeSingle(), 'classes.select')
         classData = byCourseId
       }
 
@@ -234,10 +235,10 @@ export function useClassAttendanceReport() {
       )
 
       // 4. Find enrolled students
-      const { data: allUsers } = await supabase
+      const allUsers = mustData(await supabase
         .from('profiles')
         .select('user_id, first_name, last_name, role, classes, email, status')
-        .in('role', ['Student', 'Work Study'])
+        .in('role', ['Student', 'Work Study']), 'profiles.select')
 
       const enrolled = (allUsers || []).filter(u => {
         if (!u.user_id || u.user_id.trim() === '') return false
@@ -249,14 +250,14 @@ export function useClassAttendanceReport() {
       const userIds = enrolled.map(u => u.user_id)
       let tcRecords = []
       if (userIds.length > 0 && effectiveStart && effectiveEnd) {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('time_clock')
           .select('*')
           .in('user_id', userIds)
           .or(`course_id.eq.${courseId},class_id.eq.${clsId}`)
           .gte('punch_in', effectiveStart)
           .lte('punch_in', effectiveEnd + 'T23:59:59')
-          .eq('status', 'Punched Out')
+          .eq('status', 'Punched Out'), 'time_clock.select')
         tcRecords = data || []
       }
 
@@ -348,11 +349,11 @@ export function useStudentAttendanceReport() {
 
     try {
       // 1. Get student profile
-      const { data: profile } = await supabase
+      const profile = mustData(await supabase
         .from('profiles')
         .select('user_id, first_name, last_name, role, email, status, classes')
         .eq('user_id', userId)
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
       if (!profile) {
         toast.error('Student not found')
@@ -362,12 +363,12 @@ export function useStudentAttendanceReport() {
       }
 
       // 2. Get ALL time_clock entries for this student (no date filter — full history)
-      const { data: allEntries } = await supabase
+      const allEntries = mustData(await supabase
         .from('time_clock')
         .select('*')
         .eq('user_id', userId)
         .eq('status', 'Punched Out')
-        .order('punch_in', { ascending: true })
+        .order('punch_in', { ascending: true }), 'time_clock.select')
 
       const tcRecords = allEntries || []
 
@@ -382,10 +383,10 @@ export function useStudentAttendanceReport() {
       // 4. Fetch class metadata for all relevant courses (active + archived)
       let classesData = []
       if (allCourseIds.length > 0) {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('classes')
           .select('*')
-          .in('course_id', allCourseIds)
+          .in('course_id', allCourseIds), 'classes.select')
         classesData = data || []
       }
 

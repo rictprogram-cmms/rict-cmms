@@ -31,6 +31,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
 
@@ -114,10 +115,10 @@ async function generateSafeAbsenceId() {
   // ── Step 2: Fallback — derive from MAX(request_id), computed numerically ──
   if (!absId || !Number.isFinite(numericId)) {
     try {
-      const { data: rows } = await supabase
+      const rows = mustData(await supabase
         .from('absence_requests')
         .select('request_id')
-        .like('request_id', `${ABS_PREFIX}%`)
+        .like('request_id', `${ABS_PREFIX}%`), 'absence_requests.select')
       let maxNum = 0
       for (const r of rows || []) {
         const digits = String(r.request_id || '').replace(/\D/g, '')
@@ -630,11 +631,11 @@ export function useAbsenceClasses(profileForFilter = null) {
     async function load() {
       setLoading(true)
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('classes')
           .select('class_id, course_id, course_name, status, end_date')
           .eq('status', 'Active')
-          .order('course_id', { ascending: true })
+          .order('course_id', { ascending: true }), 'classes.select')
         let list = data || []
 
         if (profileForFilter?.classes) {
@@ -679,11 +680,11 @@ export function useAbsenceStudentOptions({ enabled = true } = {}) {
     async function load() {
       setLoading(true)
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('profiles')
           .select('user_id, email, first_name, last_name, role, status, classes, time_clock_only')
           .eq('status', 'Active')
-          .order('last_name', { ascending: true })
+          .order('last_name', { ascending: true }), 'profiles.select')
         const list = (data || []).filter(p =>
           p.role !== 'Instructor' &&
           p.time_clock_only !== 'Yes' &&

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -300,11 +300,11 @@ export function useBudgetTransactions(schoolYear) {
       const dates = parseSchoolYearDates(sy)
 
       // Manual entries
-      const { data: entries } = await supabase
+      const entries = mustData(await supabase
         .from('program_budget')
         .select('*')
         .eq('school_year', sy)
-        .order('entry_date', { ascending: false })
+        .order('entry_date', { ascending: false }), 'program_budget.select')
 
       const txns = (entries || []).map(e => ({
         id: e.id,
@@ -325,10 +325,10 @@ export function useBudgetTransactions(schoolYear) {
       }))
 
       // POs
-      const { data: orders } = await supabase
+      const orders = mustData(await supabase
         .from('orders')
         .select('order_id, vendor_name, other_vendor, order_date, ordered_date, ordered_by, status, total, notes')
-        .in('status', ['Ordered', 'Partial', 'Received'])
+        .in('status', ['Ordered', 'Partial', 'Received']), 'orders.select')
 
       ;(orders || []).forEach(o => {
         const d = new Date(o.ordered_date || o.order_date)
@@ -504,13 +504,13 @@ export function useBudgetActions() {
     setSaving(true)
     try {
       // Check if one already exists
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('program_budget')
         .select('id')
         .eq('school_year', schoolYear)
         .eq('type', 'Starting Balance')
         .neq('status', 'Voided')
-        .maybeSingle()
+        .maybeSingle(), 'program_budget.select')
 
       if (existing) {
         // Update
@@ -613,10 +613,10 @@ export function useBudgetYearSummary() {
     setLoading(true)
     try {
       // Get all budget entries
-      const { data: entries } = await supabase
+      const entries = mustData(await supabase
         .from('program_budget')
         .select('*')
-        .neq('status', 'Voided')
+        .neq('status', 'Voided'), 'program_budget.select')
 
       // Group by school year
       const yearMap = {}
@@ -628,10 +628,10 @@ export function useBudgetYearSummary() {
       })
 
       // Get POs for each year
-      const { data: orders } = await supabase
+      const orders = mustData(await supabase
         .from('orders')
         .select('order_id, order_date, ordered_date, status, total')
-        .in('status', ['Ordered', 'Partial', 'Received'])
+        .in('status', ['Ordered', 'Partial', 'Received']), 'orders.select')
 
       ;(orders || []).forEach(o => {
         const d = new Date(o.ordered_date || o.order_date)
@@ -738,17 +738,17 @@ export function useSpreadsheetImport(schoolYear) {
       const sy = schoolYear || getCurrentSchoolYear()
       const dates = parseSchoolYearDates(sy)
 
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('program_budget')
         .select('description, amount, entry_date, reference, status')
         .eq('school_year', sy)
-        .neq('status', 'Voided')
+        .neq('status', 'Voided'), 'program_budget.select')
 
       // Also fetch PO orders within this school year to catch PO-sourced duplicates
-      const { data: orders } = await supabase
+      const orders = mustData(await supabase
         .from('orders')
         .select('order_id, vendor_name, other_vendor, order_date, ordered_date, status, total, notes')
-        .in('status', ['Ordered', 'Partial', 'Received'])
+        .in('status', ['Ordered', 'Partial', 'Received']), 'orders.select')
 
       // Filter orders to current school year
       const yearOrders = (orders || []).filter(o => {

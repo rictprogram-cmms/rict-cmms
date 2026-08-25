@@ -27,6 +27,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
@@ -79,12 +80,12 @@ export function usePermissions(pageName) {
         // 2. Load active temp permission grants for the effective user
         const tempPermObj = {}
         try {
-          const { data: tempData } = await supabase
+          const tempData = mustData(await supabase
             .from('temp_access_requests')
             .select('approved_permissions, expiry_date')
             .eq('user_email', profile.email)
             .eq('status', 'Active')
-            .eq('request_type', 'permissions')
+            .eq('request_type', 'permissions'), 'temp_access_requests.select')
 
           if (!cancelled && tempData) {
             const now = new Date()
@@ -140,12 +141,12 @@ export function usePermissions(pageName) {
             ;(async () => {
               try {
                 const tempPermObj = {}
-                const { data: tempData } = await supabase
+                const tempData = mustData(await supabase
                   .from('temp_access_requests')
                   .select('approved_permissions, expiry_date')
                   .eq('user_email', profile.email)
                   .eq('status', 'Active')
-                  .eq('request_type', 'permissions')
+                  .eq('request_type', 'permissions'), 'temp_access_requests.select')
 
                 const now = new Date()
                 ;(tempData || []).forEach(grant => {
@@ -232,12 +233,12 @@ export function useMultiPagePermissions(pageNames = []) {
         // 2. Temp permission grants
         const tempMap = {}
         try {
-          const { data: tempData } = await supabase
+          const tempData = mustData(await supabase
             .from('temp_access_requests')
             .select('approved_permissions, expiry_date')
             .eq('user_email', profile.email)
             .eq('status', 'Active')
-            .eq('request_type', 'permissions')
+            .eq('request_type', 'permissions'), 'temp_access_requests.select')
 
           if (!cancelled && tempData) {
             const now = new Date()
@@ -286,12 +287,12 @@ export function useMultiPagePermissions(pageNames = []) {
             ;(async () => {
               try {
                 const tempMap = {}
-                const { data: tempData } = await supabase
+                const tempData = mustData(await supabase
                   .from('temp_access_requests')
                   .select('approved_permissions, expiry_date')
                   .eq('user_email', profile.email)
                   .eq('status', 'Active')
-                  .eq('request_type', 'permissions')
+                  .eq('request_type', 'permissions'), 'temp_access_requests.select')
 
                 const now = new Date()
                 ;(tempData || []).forEach(grant => {

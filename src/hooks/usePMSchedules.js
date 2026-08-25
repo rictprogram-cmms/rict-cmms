@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -170,11 +170,11 @@ export function usePMGlobalPause() {
   const fetch = useCallback(async () => {
     if (!hasLoadedRef.current) setLoading(true)
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'pm_generation_paused')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
       setPaused(data?.setting_value === 'true')
       hasLoadedRef.current = true
     } catch (err) {
@@ -189,11 +189,11 @@ export function usePMGlobalPause() {
     const newVal = !paused
     try {
       // Upsert the setting
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('settings')
         .select('setting_key')
         .eq('setting_key', 'pm_generation_paused')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       if (existing) {
         const { error } = assertWrite(
@@ -265,11 +265,11 @@ export function usePMGlobalPause() {
       const count = typeof resetData === 'number' ? resetData : 0
 
       // 2) Unpause — mirror toggle's upsert logic, forced to 'false'.
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('settings')
         .select('setting_key')
         .eq('setting_key', 'pm_generation_paused')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       if (existing) {
         const { error } = assertWrite(
@@ -388,12 +388,12 @@ export function usePMActions() {
     setSaving(true)
     try {
       // Generate PM ID
-      const { data: maxRow } = await supabase
+      const maxRow = mustData(await supabase
         .from('pm_schedules')
         .select('pm_id')
         .order('pm_id', { ascending: false })
         .limit(1)
-        .maybeSingle()
+        .maybeSingle(), 'pm_schedules.select')
 
       let nextNum = 1
       if (maxRow?.pm_id) {
@@ -405,11 +405,11 @@ export function usePMActions() {
       // Get asset name if needed
       let assetName = pmData.assetName || ''
       if (pmData.assetId && !assetName) {
-        const { data: asset } = await supabase
+        const asset = mustData(await supabase
           .from('assets')
           .select('name')
           .eq('asset_id', pmData.assetId)
-          .maybeSingle()
+          .maybeSingle(), 'assets.select')
         if (asset) assetName = asset.name
       }
 
@@ -508,11 +508,11 @@ export function usePMActions() {
     setSaving(true)
     try {
       // Get file path first
-      const { data: pm } = await supabase
+      const pm = mustData(await supabase
         .from('pm_schedules')
         .select('procedure_file_id')
         .eq('pm_id', pmId)
-        .maybeSingle()
+        .maybeSingle(), 'pm_schedules.select')
 
       if (pm?.procedure_file_id) {
         await deleteProcedureFile(pm.procedure_file_id)
@@ -562,11 +562,11 @@ export function usePMActions() {
     setSaving(true)
     try {
       // ── Check global pause ──
-      const { data: pauseSetting } = await supabase
+      const pauseSetting = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'pm_generation_paused')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       if (pauseSetting?.setting_value === 'true') {
         toast.error('PM generation is currently paused (break period). Unpause to generate work orders.')
@@ -635,18 +635,18 @@ export function usePMActions() {
       // Pre-check existing pairs to make this idempotent without depending on a
       // unique constraint at the DB level.
       try {
-        const { data: pmSops } = await supabase
+        const pmSops = mustData(await supabase
           .from('sop_pm_schedules')
           .select('sop_id')
-          .eq('pm_id', pmId)
+          .eq('pm_id', pmId), 'sop_pm_schedules.select')
 
         const sopIds = (pmSops || []).map(r => r.sop_id).filter(Boolean)
         if (sopIds.length > 0) {
-          const { data: existing } = await supabase
+          const existing = mustData(await supabase
             .from('sop_work_orders')
             .select('sop_id')
             .eq('wo_id', woId)
-            .in('sop_id', sopIds)
+            .in('sop_id', sopIds), 'sop_work_orders.select')
           const existingSet = new Set((existing || []).map(r => r.sop_id))
           const toInsert = sopIds
             .filter(id => !existingSet.has(id))

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -130,11 +130,11 @@ export function useBugActions() {
     setSaving(true)
     try {
       // Generate next ID
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('bug_tracker')
         .select('request_id')
         .order('request_id', { ascending: false })
-        .limit(1)
+        .limit(1), 'bug_tracker.select')
 
       let nextNum = 1001
       if (existing && existing.length > 0) {
@@ -757,11 +757,11 @@ async function addChangelogEntry(requestId, type, title, releasedBy, description
     // Get current version from settings first, fall back to changelog
     let currentVersion = null
 
-    const { data: settingsData } = await supabase
+    const settingsData = mustData(await supabase
       .from('settings')
       .select('setting_value')
       .eq('setting_key', 'app_version')
-      .maybeSingle()
+      .maybeSingle(), 'settings.select')
 
     if (settingsData?.setting_value) {
       currentVersion = settingsData.setting_value
@@ -769,11 +769,11 @@ async function addChangelogEntry(requestId, type, title, releasedBy, description
 
     // Fall back to latest changelog version if settings doesn't have it
     if (!currentVersion) {
-      const { data: latestChangelog } = await supabase
+      const latestChangelog = mustData(await supabase
         .from('changelog')
         .select('version')
         .order('version', { ascending: false })
-        .limit(1)
+        .limit(1), 'changelog.select')
 
       if (latestChangelog && latestChangelog.length > 0) {
         currentVersion = latestChangelog[0].version

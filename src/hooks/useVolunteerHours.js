@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
@@ -208,12 +208,12 @@ export function useVolunteerSettings() {
           currentSemester = ''
         }
         try {
-          const { data: classData } = await supabase
+          const classData = mustData(await supabase
             .from('classes')
             .select('start_date, end_date, semester')
             .eq('status', 'Active')
             .order('start_date', { ascending: true })
-            .limit(10)
+            .limit(10), 'classes.select')
 
           if (classData && classData.length > 0) {
             const starts = classData.map(c => c.start_date).filter(Boolean).sort()
@@ -335,14 +335,14 @@ export function useVolunteerData() {
       // 3. Recently rejected requests (last 30 days)
       const thirtyDaysAgo = new Date()
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-      const { data: rejData } = await supabase
+      const rejData = mustData(await supabase
         .from('time_entry_requests')
         .select('*')
         .eq('user_email', profile.email)
         .eq('status', 'Rejected')
         .or('entry_type.eq.Volunteer,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY')
         .gte('created_at', thirtyDaysAgo.toISOString())
-        .order('created_at', { ascending: false })
+        .order('created_at', { ascending: false }), 'time_entry_requests.select')
 
       setRejectedEntries(rejData || [])
       hasLoadedRef.current = true
@@ -582,12 +582,12 @@ export function useVolunteerData() {
       }
 
       // Prevent duplicate pending edits for same record
-      const { data: existingReq } = await supabase
+      const existingReq = mustData(await supabase
         .from('time_entry_requests')
         .select('request_id')
         .eq('time_clock_record_id', entry.record_id)
         .eq('status', 'Pending')
-        .maybeSingle()
+        .maybeSingle(), 'time_entry_requests.select')
 
       if (existingReq) {
         toast.error('There is already a pending edit request for this entry')
@@ -704,11 +704,11 @@ export function useVolunteerOverview() {
       if (tcErr) throw tcErr
 
       // 3. Fetch pending volunteer + club activity time_entry_requests
-      const { data: reqData } = await supabase
+      const reqData = mustData(await supabase
         .from('time_entry_requests')
         .select('request_id, user_email, total_hours, status, entry_type, class_id')
         .eq('status', 'Pending')
-        .or('entry_type.eq.Volunteer,entry_type.eq.Club Activity,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY')
+        .or('entry_type.eq.Volunteer,entry_type.eq.Club Activity,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY'), 'time_entry_requests.select')
 
       // Build lookup maps
       const approvedByEmail = {}
@@ -886,25 +886,25 @@ export function useStudentVolunteerDetail(studentEmail) {
 
       // All volunteer + club activity time_clock entries (approved + pending)
       // Club Activity total_hours is already the credited (0.25x) amount, so summing is correct.
-      const { data: tcData } = await supabase
+      const tcData = mustData(await supabase
         .from('time_clock')
         .select('*')
         .eq('user_email', studentEmail)
         .in('entry_type', ['Volunteer', 'Club Activity'])
         .gte('punch_in', semStart + 'T00:00:00')
         .lte('punch_in', semEnd + 'T23:59:59')
-        .order('punch_in', { ascending: false })
+        .order('punch_in', { ascending: false }), 'time_clock.select')
 
       setEntries(tcData || [])
 
       // All time_entry_requests for this student (Pending, Approved, Rejected)
       // Includes Volunteer, Club Activity, and Edit-request entries.
-      const { data: reqData } = await supabase
+      const reqData = mustData(await supabase
         .from('time_entry_requests')
         .select('*')
         .eq('user_email', studentEmail)
         .or('entry_type.eq.Volunteer,entry_type.eq.Club Activity,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY')
-        .order('created_at', { ascending: false })
+        .order('created_at', { ascending: false }), 'time_entry_requests.select')
 
       const editReqs = (reqData || []).filter(r => r.entry_type === 'Edit')
       const manualReqs = (reqData || []).filter(r => r.entry_type !== 'Edit')

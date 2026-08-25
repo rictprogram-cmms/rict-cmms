@@ -27,7 +27,7 @@
  * File: src/hooks/useAuditLog.js
  */
 
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -275,11 +275,11 @@ export function useAuditLog() {
       const since = new Date()
       since.setDate(since.getDate() - 90)
 
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('audit_log')
         .select('user_email, user_name, entity_type, action')
         .gte('timestamp', since.toISOString())
-        .limit(10000)
+        .limit(10000), 'audit_log.select')
 
       const userMap     = new Map()
       const entityTypes = new Set()
@@ -337,11 +337,11 @@ export function useAuditLog() {
   const loadFailedCount = useCallback(async () => {
     if (!hasPerm('view_failed_writes') && !isSuperAdmin) return
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'audit_failed_count')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
       setFailedCount(Number(data?.setting_value) || 0)
     } catch {
       setFailedCount(0)
@@ -393,10 +393,10 @@ export function useAuditLog() {
   const loadSuspicious = useCallback(async () => {
     if (!hasPerm('view_suspicious') && !isSuperAdmin) return
     try {
-      const { data: sets } = await supabase
+      const sets = mustData(await supabase
         .from('settings')
         .select('setting_key, setting_value')
-        .eq('category', 'audit')
+        .eq('category', 'audit'), 'settings.select')
 
       const cfg = {}
       ;(sets || []).forEach(s => { cfg[s.setting_key] = s.setting_value })
@@ -613,11 +613,11 @@ export function useAuditLog() {
   const trackView = useCallback(async (entityType, entityId, details) => {
     if (!profile?.email) return
     try {
-      const { data: cfg } = await supabase
+      const cfg = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'audit_track_view_entities')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
 
       const trackedList = (cfg?.setting_value || '')
         .split(',')

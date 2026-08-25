@@ -18,6 +18,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -451,11 +452,11 @@ export function useRequestHistory({ dateFrom = null, dateTo = null } = {}) {
           .filter(Boolean)
 
         if (rejectedIds.length > 0) {
-          const { data: auditData } = await supabase
+          const auditData = mustData(await supabase
             .from('audit_log')
             .select('entity_id, action, details')
             .in('entity_id', rejectedIds)
-            .ilike('action', '%Reject%')
+            .ilike('action', '%Reject%'), 'audit_log.select')
 
           const sentMap = {}
           ;(auditData || []).forEach(entry => {

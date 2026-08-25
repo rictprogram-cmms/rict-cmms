@@ -23,7 +23,7 @@
  * File: src/hooks/usePushNotifications.js
  */
 
-import { assertWrite } from '@/lib/supabaseData';
+import { mustData, assertWrite } from '@/lib/supabaseData';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
@@ -103,12 +103,12 @@ export function usePushNotifications() {
         if (existingSub) {
           // Verify it's still saved in Supabase (could have been deleted there).
           // Always lowercase email for lookup — see saveSubscriptionToSupabase below for rationale.
-          const { data } = await supabase
+          const data = mustData(await supabase
             .from('push_subscriptions')
             .select('id')
             .eq('user_email', (profile.email || '').toLowerCase())
             .eq('endpoint', existingSub.endpoint)
-            .maybeSingle();
+            .maybeSingle(), 'push_subscriptions.select');
 
           if (data) {
             setPushStatus('subscribed');

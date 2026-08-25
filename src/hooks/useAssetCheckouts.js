@@ -42,6 +42,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry, warmSession } from '@/lib/supabaseRetry'
 import toast from 'react-hot-toast'
@@ -788,13 +789,13 @@ export function useCheckoutActions() {
     setSaving(true)
     try {
       // Pre-check: is this asset already out (or pending)?
-      const { data: openRow } = await supabase
+      const openRow = mustData(await supabase
         .from('asset_checkouts')
         .select('checkout_id, user_name, status')
         .eq('asset_id', asset.asset_id)
         .eq('is_pooled', false)
         .is('returned_at', null)
-        .maybeSingle()
+        .maybeSingle(), 'asset_checkouts.select')
 
       if (openRow) {
         if (openRow.status === 'pending_acknowledgment') {

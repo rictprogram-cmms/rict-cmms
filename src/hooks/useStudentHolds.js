@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useId } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -519,11 +520,11 @@ export function useHoldActions() {
   // ──────────────────────────────────────────────────────────────────────
   const recordView = async (targetId) => {
     try {
-      const { data: current } = await supabase
+      const current = mustData(await supabase
         .from('student_hold_targets')
         .select('view_count')
         .eq('target_id', targetId)
-        .maybeSingle()
+        .maybeSingle(), 'student_hold_targets.select')
 
       await supabase
         .from('student_hold_targets')

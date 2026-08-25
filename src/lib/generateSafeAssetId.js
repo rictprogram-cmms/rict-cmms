@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 
 /**
  * Generate a collision-safe asset ID.
@@ -44,12 +45,12 @@ export async function generateSafeAssetId() {
       // Pull recent assets and parse client-side. We deliberately filter out
       // legacy AST-<timestamp> rows because parsing them as numbers would
       // produce 13-digit IDs and corrupt the counter forever.
-      const { data: rows } = await supabase
+      const rows = mustData(await supabase
         .from('assets')
         .select('asset_id')
         .like('asset_id', 'AST%')
         .order('asset_id', { ascending: false })
-        .limit(500)
+        .limit(500), 'assets.select')
 
       let maxNum = 1020  // Floor — safe minimum if the table is empty/all-legacy
       ;(rows || []).forEach(r => {

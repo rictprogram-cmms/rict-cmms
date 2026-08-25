@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
@@ -429,24 +429,24 @@ export function usePOActions() {
     setSaving(true)
     try {
       // Clear order_date on linked inventory items
-      const { data: linkedLines } = await supabase
+      const linkedLines = mustData(await supabase
         .from('order_line_items')
         .select('inventory_part_id')
-        .eq('order_id', orderId)
+        .eq('order_id', orderId), 'order_line_items.select')
       const inventoryPartIds = [...new Set(
         (linkedLines || []).map(l => l.inventory_part_id).filter(Boolean)
       )]
       for (const partId of inventoryPartIds) {
-        const { data: otherLines } = await supabase
+        const otherLines = mustData(await supabase
           .from('order_line_items')
           .select('order_id')
           .eq('inventory_part_id', partId)
           .neq('order_id', orderId)
-          .limit(1)
+          .limit(1), 'order_line_items.select')
         let hasOtherActive = false
         if (otherLines && otherLines.length > 0) {
-          const { data: otherOrder } = await supabase
-            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single()
+          const otherOrder = mustData(await supabase
+            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single(), 'orders.select')
           hasOtherActive = otherOrder && !['Received', 'Cancelled', 'Rejected'].includes(otherOrder.status)
         }
         if (!hasOtherActive) {
@@ -460,7 +460,7 @@ export function usePOActions() {
         approved_date: new Date().toISOString()
       }
       if (reason) {
-        const { data: current } = await supabase.from('orders').select('notes').eq('order_id', orderId).single()
+        const current = mustData(await supabase.from('orders').select('notes').eq('order_id', orderId).single(), 'orders.select')
         updates.notes = current?.notes ? `${current.notes} | Rejection: ${reason}` : `Rejection: ${reason}`
       }
       const { data: rejRows, error } = await supabase.from('orders').update(updates).eq('order_id', orderId).select()
@@ -510,11 +510,11 @@ export function usePOActions() {
 
       for (const item of receivedItems) {
         const newQty = parseInt(item.receivedQty) || 0
-        const { data: lineData } = await supabase
+        const lineData = mustData(await supabase
           .from('order_line_items')
           .select('quantity, received_qty, inventory_part_id, wo_id')
           .eq('line_id', item.lineId)
-          .single()
+          .single(), 'order_line_items.select')
 
         const orderedQty = parseInt(lineData?.quantity) || 0
         const clampedQty = Math.min(newQty, orderedQty)
@@ -545,11 +545,11 @@ export function usePOActions() {
         // Update inventory if linked
         const qtyIncrease = clampedQty - previousQty
         if (lineData?.inventory_part_id && qtyIncrease > 0) {
-          const { data: invItem } = await supabase
+          const invItem = mustData(await supabase
             .from('inventory')
             .select('qty_in_stock')
             .eq('part_id', lineData.inventory_part_id)
-            .single()
+            .single(), 'inventory.select')
           if (invItem) {
             await supabase.from('inventory').update({
               qty_in_stock: (parseInt(invItem.qty_in_stock) || 0) + qtyIncrease,
@@ -575,7 +575,7 @@ export function usePOActions() {
       // First, for items with no wo_id, try to assign from orders.work_order_id
       if (Object.keys(woStatusMap).length === 0 || woStatusMap['']) {
         try {
-          const { data: orderData } = await supabase.from('orders').select('work_order_id').eq('order_id', orderId).single()
+          const orderData = mustData(await supabase.from('orders').select('work_order_id').eq('order_id', orderId).single(), 'orders.select')
           if (orderData?.work_order_id) {
             // Move empty-key counts to the order-level WO
             if (woStatusMap['']) {
@@ -622,25 +622,25 @@ export function usePOActions() {
     setSaving(true)
     try {
       // Clear order_date on linked inventory items (same logic as delete)
-      const { data: linkedLines } = await supabase
+      const linkedLines = mustData(await supabase
         .from('order_line_items')
         .select('inventory_part_id')
-        .eq('order_id', orderId)
+        .eq('order_id', orderId), 'order_line_items.select')
       const inventoryPartIds = [...new Set(
         (linkedLines || []).map(l => l.inventory_part_id).filter(Boolean)
       )]
       for (const partId of inventoryPartIds) {
         // Only clear if no OTHER active PO references this part
-        const { data: otherLines } = await supabase
+        const otherLines = mustData(await supabase
           .from('order_line_items')
           .select('order_id')
           .eq('inventory_part_id', partId)
           .neq('order_id', orderId)
-          .limit(1)
+          .limit(1), 'order_line_items.select')
         let hasOtherActive = false
         if (otherLines && otherLines.length > 0) {
-          const { data: otherOrder } = await supabase
-            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single()
+          const otherOrder = mustData(await supabase
+            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single(), 'orders.select')
           hasOtherActive = otherOrder && !['Received', 'Cancelled', 'Rejected'].includes(otherOrder.status)
         }
         if (!hasOtherActive) {
@@ -669,30 +669,30 @@ export function usePOActions() {
     setSaving(true)
     try {
       // 0. Find linked inventory items BEFORE deleting line items, and clear their order_date
-      const { data: linkedLines } = await supabase
+      const linkedLines = mustData(await supabase
         .from('order_line_items')
         .select('inventory_part_id')
-        .eq('order_id', orderId)
+        .eq('order_id', orderId), 'order_line_items.select')
       const inventoryPartIds = [...new Set(
         (linkedLines || []).map(l => l.inventory_part_id).filter(Boolean)
       )]
       if (inventoryPartIds.length > 0) {
         // Check each part — only clear order_date if no OTHER active PO references it
         for (const partId of inventoryPartIds) {
-          const { data: otherLines } = await supabase
+          const otherLines = mustData(await supabase
             .from('order_line_items')
             .select('order_id')
             .eq('inventory_part_id', partId)
             .neq('order_id', orderId)
-            .limit(1)
+            .limit(1), 'order_line_items.select')
           // Check if those other orders are still active (not Received/Cancelled/Rejected)
           let hasOtherActive = false
           if (otherLines && otherLines.length > 0) {
-            const { data: otherOrder } = await supabase
+            const otherOrder = mustData(await supabase
               .from('orders')
               .select('status')
               .eq('order_id', otherLines[0].order_id)
-              .single()
+              .single(), 'orders.select')
             hasOtherActive = otherOrder && !['Received', 'Cancelled', 'Rejected'].includes(otherOrder.status)
           }
           if (!hasOtherActive) {
@@ -715,9 +715,9 @@ export function usePOActions() {
       await supabase.from('audit_log').delete().eq('entity_id', orderId)
 
       // 4. Delete work_log entries that mention this PO
-      const { data: relatedLogs } = await supabase.from('work_log')
+      const relatedLogs = mustData(await supabase.from('work_log')
         .select('log_id')
-        .like('work_description', `%${orderId}%`)
+        .like('work_description', `%${orderId}%`), 'work_log.select')
       if (relatedLogs && relatedLogs.length > 0) {
         await supabase.from('work_log').delete().in('log_id', relatedLogs.map(l => l.log_id))
       }
@@ -779,26 +779,26 @@ export function usePOActions() {
     setSaving(true)
     try {
       // Get the line item first to check for inventory link
-      const { data: lineData } = await supabase
+      const lineData = mustData(await supabase
         .from('order_line_items')
         .select('inventory_part_id')
         .eq('line_id', lineId)
-        .single()
+        .single(), 'order_line_items.select')
 
       // Clear inventory order_date if this was the only active PO line for that part
       if (lineData?.inventory_part_id) {
-        const { data: otherLines } = await supabase
+        const otherLines = mustData(await supabase
           .from('order_line_items')
           .select('line_id, order_id')
           .eq('inventory_part_id', lineData.inventory_part_id)
           .neq('line_id', lineId)
           .not('status', 'in', '("Received","Cancelled")')
-          .limit(1)
+          .limit(1), 'order_line_items.select')
         // Check if those other lines are on active orders
         let hasOtherActive = false
         if (otherLines && otherLines.length > 0) {
-          const { data: otherOrder } = await supabase
-            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single()
+          const otherOrder = mustData(await supabase
+            .from('orders').select('status').eq('order_id', otherLines[0].order_id).single(), 'orders.select')
           hasOtherActive = otherOrder && !['Received', 'Cancelled', 'Rejected'].includes(otherOrder.status)
         }
         if (!hasOtherActive) {
@@ -865,7 +865,7 @@ export function usePOActions() {
           }
         }
         // Update order total
-        const { data: currentOrder } = await supabase.from('orders').select('total, status').eq('order_id', orderId).single()
+        const currentOrder = mustData(await supabase.from('orders').select('total, status').eq('order_id', orderId).single(), 'orders.select')
         const newTotal = (parseFloat(currentOrder?.total) || 0) + addedTotal
         // If order was Approved, reset to Pending for re-approval (only if user can't approve)
         const statusUpdate = (!canApprove && currentOrder?.status === 'Approved') ? { status: 'Pending' } : {}
@@ -921,20 +921,20 @@ export function useLowStockItems() {
       if (error) throw error
 
       // Get all inventory part IDs that are actually on an active PO
-      const { data: activeLines } = await supabase
+      const activeLines = mustData(await supabase
         .from('order_line_items')
         .select('inventory_part_id, order_id')
         .neq('inventory_part_id', '')
-        .not('status', 'in', '("Received","Cancelled")')
+        .not('status', 'in', '("Received","Cancelled")'), 'order_line_items.select')
       // Get the orders to check their status too
       const activeOrderIds = [...new Set((activeLines || []).map(l => l.order_id))]
       let activeOrderSet = new Set()
       if (activeOrderIds.length > 0) {
-        const { data: orders } = await supabase
+        const orders = mustData(await supabase
           .from('orders')
           .select('order_id, status')
           .in('order_id', activeOrderIds)
-          .not('status', 'in', '("Received","Cancelled","Rejected")')
+          .not('status', 'in', '("Received","Cancelled","Rejected")'), 'orders.select')
         activeOrderSet = new Set((orders || []).map(o => o.order_id))
       }
       // Build set of part IDs that are truly on an active PO

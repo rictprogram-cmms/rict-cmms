@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 
@@ -159,11 +160,11 @@ export function AuthProvider({ children }) {
   // Reads session_timeout_hours from DB. 0 = disabled (never auto-logout).
   const fetchTimeoutSetting = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'session_timeout_hours')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
       const hours = parseFloat(data?.setting_value) || 0
       sessionTimeoutHoursRef.current = hours
     } catch {

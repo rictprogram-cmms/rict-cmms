@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
@@ -138,12 +138,12 @@ export function useLabReport(className) {
 
     try {
       // Get class info
-      const { data: classData } = await supabase
+      const classData = mustData(await supabase
         .from('classes')
         .select('*')
         .eq('course_id', className)
         .eq('status', 'Active')
-        .maybeSingle()
+        .maybeSingle(), 'classes.select')
 
       if (!classData) {
         setReport(null)
@@ -167,10 +167,10 @@ export function useLabReport(className) {
       const totalWeeks = classWeeks.length || 8
 
       // Get students enrolled in this class
-      const { data: profilesData } = await supabase
+      const profilesData = mustData(await supabase
         .from('profiles')
         .select('id, first_name, last_name, email, classes, role, time_clock_only')
-        .eq('status', 'Active')
+        .eq('status', 'Active'), 'profiles.select')
 
       const enrolledStudents = (profilesData || []).filter(p => {
         if (p.role === 'Instructor') return false
@@ -180,10 +180,10 @@ export function useLabReport(className) {
       })
 
       // Get tracker data for this class
-      const { data: trackerData } = await supabase
+      const trackerData = mustData(await supabase
         .from('weekly_lab_tracker')
         .select('*')
-        .eq('course_id', className)
+        .eq('course_id', className), 'weekly_lab_tracker.select')
 
       // Build student rows
       const students = enrolledStudents.map(student => {
@@ -266,18 +266,18 @@ export function useStudentLabReport() {
 
       // Get class configs — exclude future classes not yet in session
       const todayStr = new Date().toISOString().substring(0, 10)
-      const { data: classesData } = await supabase
+      const classesData = mustData(await supabase
         .from('classes')
         .select('*')
         .in('course_id', userClasses)
         .eq('status', 'Active')
-        .or(`start_date.is.null,start_date.lte.${todayStr}`)
+        .or(`start_date.is.null,start_date.lte.${todayStr}`), 'classes.select')
 
       // Get tracker data for this user
-      const { data: trackerData } = await supabase
+      const trackerData = mustData(await supabase
         .from('weekly_lab_tracker')
         .select('*')
-        .or(`user_id.eq.${profile.id},user_email.eq.${profile.email}`)
+        .or(`user_id.eq.${profile.id},user_email.eq.${profile.email}`), 'weekly_lab_tracker.select')
 
       // Resolve the current lab-open days once for all classes so week
       // ranges end on the last open day (Thu=3, Fri=4 offset from Monday).
@@ -709,12 +709,12 @@ export function useLabTrackerActions() {
       // original punch_in row will close out normally when they swipe out themselves —
       // and any volunteer/work-study attribution on that punch is preserved (the old
       // approach overwrote entry_type on the active row, discarding it).
-      const { data: activeEntry } = await supabase
+      const activeEntry = mustData(await supabase
         .from('time_clock')
         .select('record_id, user_id, class_id, course_id, week_start')
         .eq('user_email', userEmail)
         .eq('status', 'Punched In')
-        .maybeSingle()
+        .maybeSingle(), 'time_clock.select')
 
       if (activeEntry) {
         try {

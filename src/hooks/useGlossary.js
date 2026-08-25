@@ -18,6 +18,7 @@
 
 import { useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 
 // Fake-UTC convention: local wall-clock time stored with +00 offset.
 function localToUtcIso(date) {
@@ -130,11 +131,11 @@ async function reserveTermIdBatch(count) {
 
   // Prefer the counter value as the starting point
   try {
-    const { data: counterRow } = await supabase
+    const counterRow = mustData(await supabase
       .from('counters')
       .select('current_value')
       .eq('counter_name', 'glossary_term')
-      .maybeSingle()
+      .maybeSingle(), 'counters.select')
     if (counterRow?.current_value != null) startNum = counterRow.current_value + 1
   } catch (e) {
     // fall through to table max
@@ -142,12 +143,12 @@ async function reserveTermIdBatch(count) {
 
   // Cross-check against the true table max (whichever is higher wins)
   try {
-    const { data: maxRow } = await supabase
+    const maxRow = mustData(await supabase
       .from('glossary')
       .select('term_id')
       .order('term_id', { ascending: false })
       .limit(1)
-      .maybeSingle()
+      .maybeSingle(), 'glossary.select')
     const maxNum = maxRow?.term_id ? parseInt(maxRow.term_id.replace(/\D/g, ''), 10) : 1000
     if (startNum === null || maxNum + 1 > startNum) startNum = maxNum + 1
   } catch (e) {
