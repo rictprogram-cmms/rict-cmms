@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -194,7 +195,7 @@ function printPlan(plan, studentName) {
         <div class="sem-head"><span>${esc(sem.label)}${doneLabel}${isSummer?' ☀ Gen Ed Only':''}</span><span>${semTotal} cr</span></div>
         ${isSummer?'<div class="summer-note">Summer — General Education courses only. No RICT program courses offered in summer.</div>':''}
         <table>
-          <thead><tr><th style="width:22px;text-align:center">✓</th><th>Course #</th><th>Course Title</th><th>Prerequisites</th><th class="cr">Cr</th><th>Offered</th></tr></thead>
+          <thead><tr><th scope="col" style="width:22px;text-align:center">✓</th><th scope="col">Course #</th><th scope="col">Course Title</th><th scope="col">Prerequisites</th><th scope="col" class="cr">Cr</th><th scope="col">Offered</th></tr></thead>
           <tbody>${rows}<tr class="sem-total"><td></td><td colspan="3" style="text-align:right;font-weight:bold">Semester Total</td><td class="cr">${semTotal}</td><td></td></tr></tbody>
         </table>
       </div>`
@@ -250,13 +251,14 @@ function printPlan(plan, studentName) {
 
 // ─── DeleteSemesterDialog ─────────────────────────────────────────────────────
 function DeleteSemesterDialog({ semester, onConfirm, onCancel }) {
+  const dialogRef = useDialogA11y(true, onCancel)
   const courseCount = (semester.courses||[]).filter(c=>c.course_num||c.course_title).length
   return (
     <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+      <div ref={dialogRef} role="alertdialog" aria-modal="true" aria-label="Remove semester" className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-red-100 rounded-xl flex items-center justify-center shrink-0">
-            <Trash2 size={18} className="text-red-600"/>
+            <Trash2 size={18} className="text-red-600" aria-hidden="true" />
           </div>
           <div>
             <h3 className="text-sm font-bold text-surface-900">Remove Semester</h3>
@@ -273,8 +275,8 @@ function DeleteSemesterDialog({ semester, onConfirm, onCancel }) {
           <p className="text-sm text-surface-700 mb-5">Remove the empty <strong>{semester.label}</strong> semester from this plan?</p>
         )}
         <div className="flex gap-2 justify-end">
-          <button onClick={onCancel} className="px-4 py-2 text-sm border border-surface-200 text-surface-600 rounded-lg hover:bg-surface-50">Cancel</button>
-          <button onClick={onConfirm} className="px-4 py-2 text-sm font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700">Remove Semester</button>
+          <button onClick={onCancel} className="px-4 py-2 text-sm border border-surface-200 text-surface-600 rounded-lg hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
+          <button onClick={onConfirm} className="px-4 py-2 text-sm font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Remove Semester</button>
         </div>
       </div>
     </div>
@@ -283,6 +285,7 @@ function DeleteSemesterDialog({ semester, onConfirm, onCancel }) {
 
 // ─── PlanEditorModal ──────────────────────────────────────────────────────────
 function PlanEditorModal({ plan, onSave, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [wasMigrated, setWasMigrated] = useState(false)
   const [semesters, setSemesters] = useState(() => {
     const raw = JSON.parse(JSON.stringify(plan.semesters || []))
@@ -363,7 +366,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/60 flex items-start justify-center p-3 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl my-4">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Edit plan" className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl my-4">
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 sticky top-0 bg-white rounded-t-2xl z-10">
@@ -373,15 +376,15 @@ function PlanEditorModal({ plan, onSave, onClose }) {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>printPlan({...plan,semesters},plan.student_name)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50">
-              <Printer size={13}/> Print
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Printer size={13} aria-hidden="true" /> Print
             </button>
             <button onClick={handleSave} disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-              <Save size={13}/>{saving ? 'Saving…' : 'Save Plan'}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Save size={13} aria-hidden="true" />{saving ? 'Saving…' : 'Save Plan'}
             </button>
-            <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg">
-              <X size={16} className="text-surface-400"/>
+            <button type="button" onClick={onClose} aria-label="Close plan editor" className="p-1.5 hover:bg-surface-100 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+              <X size={16} className="text-surface-400" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -398,7 +401,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
               </p>
             </div>
             <button onClick={handleSave} disabled={saving}
-              className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50">
+              className="shrink-0 px-3 py-1.5 text-xs font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               Save Now
             </button>
           </div>
@@ -407,7 +410,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
         {/* ── Credit warning ── */}
         {creditWarning && (
           <div className="mx-6 mt-3 flex items-center gap-2 bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-2.5">
-            <AlertCircle size={14} className="text-yellow-600 shrink-0"/>
+            <AlertCircle size={14} className="text-yellow-600 shrink-0" aria-hidden="true" />
             <p className="text-xs text-yellow-800">{creditWarning}</p>
           </div>
         )}
@@ -423,7 +426,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                 {/* Semester header */}
                 <div className={`border-b px-4 py-2.5 flex items-center justify-between gap-2 ${isSummer?'bg-amber-50 border-amber-200':'bg-brand-50 border-surface-200'}`}>
                   <div className="flex items-center gap-2 min-w-0">
-                    {isSummer && <Sun size={13} className="text-amber-500 shrink-0"/>}
+                    {isSummer && <Sun size={13} className="text-amber-500 shrink-0" aria-hidden="true" />}
                     <p className={`text-xs font-bold ${isSummer?'text-amber-700':'text-brand-700'}`}>{sem.label}</p>
                     {isSummer && (
                       <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full shrink-0">
@@ -438,9 +441,9 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                       </span>
                     )}
                     <span className="text-xs text-surface-400">{semTotal} credits</span>
-                    <button onClick={()=>setDeleteConfirm(si)} title={`Remove ${sem.label}`}
-                      className="p-1 rounded-lg text-surface-300 hover:text-red-500 hover:bg-red-50 transition-colors">
-                      <Trash2 size={12}/>
+                    <button onClick={()=>setDeleteConfirm(si)} title={`Remove ${sem.label}`} aria-label={`Remove ${sem.label}`}
+                      className="p-1 rounded-lg text-surface-300 hover:text-red-500 hover:bg-red-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                      <Trash2 size={12} aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -448,14 +451,14 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-surface-50 border-b border-surface-200">
-                      <th className="p-2 w-5"/>
-                      <th className="text-center p-2 font-semibold text-surface-600 w-[7%]">Done</th>
-                      <th className="text-left p-2 font-semibold text-surface-600 w-[13%]">Course #</th>
-                      <th className="text-left p-2 font-semibold text-surface-600 w-[28%]">Course Title</th>
-                      <th className="text-left p-2 font-semibold text-surface-600 w-[24%]">Prerequisites</th>
-                      <th className="text-center p-2 font-semibold text-surface-600 w-[8%]">Credits</th>
-                      <th className="text-center p-2 font-semibold text-surface-600 w-[10%]">Offered</th>
-                      <th className="p-2 w-7"/>
+                      <th scope="col" className="p-2 w-5"/>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[7%]">Done</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[13%]">Course #</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[28%]">Course Title</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[24%]">Prerequisites</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[8%]">Credits</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[10%]">Offered</th>
+                      <th scope="col" className="p-2 w-7"/>
                     </tr>
                   </thead>
                   <tbody>
@@ -488,35 +491,34 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                           </td>
                           <td className="p-1 text-center">
                             <button onClick={()=>updRow(si,ri,'completed',!course.completed)}
-                              title={course.completed?'Mark incomplete':'Mark complete'}
-                              className={`w-6 h-6 rounded-full border-2 flex items-center justify-center mx-auto transition-colors
-                                ${course.completed?'bg-emerald-500 border-emerald-500 text-white':'border-surface-300 hover:border-emerald-400 text-transparent'}`}>
-                              <Check size={11}/>
+                              title={course.completed?'Mark incomplete':'Mark complete'} aria-label={course.completed?'Mark incomplete':'Mark complete'}
+                              className={`w-6 h-6 rounded-full border-2 flex items-center justify-center mx-auto transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${course.completed?'bg-emerald-500 border-emerald-500 text-white':'border-surface-300 hover:border-emerald-400 text-transparent'}`}>
+                              <Check size={11} aria-hidden="true" />
                             </button>
                           </td>
                           <td className="p-1">
-                            <input value={course.course_num||''} onChange={e=>updRow(si,ri,'course_num',e.target.value.toUpperCase())}
+                            <input aria-label={`Course number, ${sem.label} row ${ri + 1}`} value={course.course_num||''} onChange={e=>updRow(si,ri,'course_num',e.target.value.toUpperCase())}
                               className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-400 uppercase"/>
                           </td>
                           <td className="p-1">
                             <div className="flex items-center gap-1">
-                              <input value={course.course_title||''} onChange={e=>updRow(si,ri,'course_title',e.target.value)}
+                              <input aria-label={`Course title, ${sem.label} row ${ri + 1}`} value={course.course_title||''} onChange={e=>updRow(si,ri,'course_title',e.target.value)}
                                 className={`flex-1 px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-400 ${course.completed?'line-through text-surface-400':''}`}/>
                               {isShared && <span className="text-[9px] font-bold text-violet-600 bg-violet-100 px-1 rounded shrink-0">★</span>}
                             </div>
                           </td>
                           <td className="p-1">
-                            <input value={course.prerequisites||''} onChange={e=>updRow(si,ri,'prerequisites',e.target.value)}
+                            <input aria-label={`Prerequisites, ${sem.label} row ${ri + 1}`} value={course.prerequisites||''} onChange={e=>updRow(si,ri,'prerequisites',e.target.value)}
                               className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-400"/>
                           </td>
                           <td className="p-1">
-                            <input value={course.credits||''} onChange={e=>updRow(si,ri,'credits',e.target.value)}
+                            <input aria-label={`Credits, ${sem.label} row ${ri + 1}`} value={course.credits||''} onChange={e=>updRow(si,ri,'credits',e.target.value)}
                               className="w-full px-1.5 py-1 text-xs border border-surface-200 rounded text-center focus:outline-none focus:ring-1 focus:ring-brand-400"/>
                           </td>
                           <td className="p-1 text-center text-surface-500">{course.offered||''}</td>
                           <td className="p-1 text-center">
-                            <button onClick={()=>delRow(si,ri)} className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors">
-                              <Trash2 size={11}/>
+                            <button type="button" onClick={()=>delRow(si,ri)} aria-label={`Remove course row ${ri + 1} from ${sem.label}`} className="p-1 hover:bg-red-50 rounded text-surface-300 hover:text-red-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                              <Trash2 size={11} aria-hidden="true" />
                             </button>
                           </td>
                         </tr>
@@ -525,8 +527,8 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                   </tbody>
                 </table>
                 <div className="px-4 py-2 border-t border-surface-100 flex items-center justify-between">
-                  <button onClick={()=>addRow(si)} className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium">
-                    <Plus size={11}/> Add course
+                  <button onClick={()=>addRow(si)} className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                    <Plus size={11} aria-hidden="true" /> Add course
                   </button>
                   <span className="text-xs font-semibold text-surface-500">Total: {semTotal} cr</span>
                 </div>
@@ -538,15 +540,15 @@ function PlanEditorModal({ plan, onSave, onClose }) {
         {/* ── Footer: Add Semester controls ── */}
         <div className="px-6 pb-5 pt-0 border-t border-surface-100 pt-4 flex flex-wrap items-center gap-2">
           <button onClick={addSemester}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border border-brand-300 bg-brand-50 text-brand-700 rounded-lg hover:bg-brand-100 transition-colors">
-            <PlusCircle size={13}/> Add Semester
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border border-brand-300 bg-brand-50 text-brand-700 rounded-lg hover:bg-brand-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <PlusCircle size={13} aria-hidden="true" /> Add Semester
           </button>
 
           <div className="relative">
             <button onClick={()=>setShowSummerPicker(p=>!p)}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border border-amber-300 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition-colors">
-              <Sun size={13}/> Add Summer Semester
-              <ChevronRight size={11} className={`transition-transform ${showSummerPicker?'rotate-90':''}`}/>
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold border border-amber-300 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Sun size={13} aria-hidden="true" /> Add Summer Semester
+              <ChevronRight size={11} className={`transition-transform ${showSummerPicker?'rotate-90':''}`} aria-hidden="true" />
             </button>
             {showSummerPicker && (
               <div className="absolute bottom-full mb-1.5 left-0 bg-white border border-amber-200 rounded-xl shadow-xl p-2 z-20 min-w-[180px]">
@@ -558,7 +560,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                   const exists = semesters.some(s=>s.label===label)
                   return (
                     <button key={yr} onClick={()=>addSummerSemester(yr)} disabled={exists}
-                      className={`w-full text-left px-2 py-1.5 text-xs rounded-lg transition-colors ${exists?'text-surface-300 cursor-not-allowed':'text-amber-700 hover:bg-amber-50'}`}>
+                      className={`w-full text-left px-2 py-1.5 text-xs rounded-lg transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${exists?'text-surface-300 cursor-not-allowed':'text-amber-700 hover:bg-amber-50'}`}>
                       {label}{exists?' ✓ added':''}
                     </button>
                   )
@@ -586,6 +588,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
 
 // ─── NewPlanModal ─────────────────────────────────────────────────────────────
 function NewPlanModal({ onCreated, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const { user } = useAuth()
   const [students, setStudents] = useState([])
   const [masterPlanners, setMasterPlanners] = useState([])
@@ -658,17 +661,17 @@ function NewPlanModal({ onCreated, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="New student plan" className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100">
           <h2 className="text-base font-bold text-surface-900">New Student Plan</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg"><X size={16} className="text-surface-400"/></button>
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 hover:bg-surface-100 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><X size={16} className="text-surface-400" aria-hidden="true" /></button>
         </div>
         <div className="px-6 py-5 space-y-4">
           <div>
             <label className="block text-xs font-semibold text-surface-700 mb-1.5">Student <span className="text-red-500">*</span></label>
             <div className="relative mb-1.5">
-              <Search size={13} className="absolute left-2.5 top-2.5 text-surface-400"/>
-              <input value={studentSearch} onChange={e=>setStudentSearch(e.target.value)} placeholder="Search students…"
+              <Search size={13} className="absolute left-2.5 top-2.5 text-surface-400" aria-hidden="true" />
+              <input aria-label="Search students" value={studentSearch} onChange={e=>setStudentSearch(e.target.value)} placeholder="Search students…"
                 className="w-full pl-7 pr-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/40"/>
             </div>
             <div className="border border-surface-200 rounded-lg max-h-36 overflow-y-auto">
@@ -676,7 +679,7 @@ function NewPlanModal({ onCreated, onClose }) {
                 ? <p className="text-xs text-surface-400 italic p-3">No students found</p>
                 : filteredStudents.map(s=>(
                     <button key={s.email} onClick={()=>{setForm(p=>({...p,student_email:s.email,student_name:`${s.first_name} ${s.last_name}`}));setStudentSearch(`${s.first_name} ${s.last_name}`)}}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-brand-50 transition-colors ${form.student_email===s.email?'bg-brand-50 text-brand-700 font-medium':''}`}>
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-brand-50 transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${form.student_email===s.email?'bg-brand-50 text-brand-700 font-medium':''}`}>
                       {s.first_name} {s.last_name} <span className="text-surface-400 text-xs">{s.email}</span>
                     </button>
                   ))}
@@ -697,25 +700,25 @@ function NewPlanModal({ onCreated, onClose }) {
             </div>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-surface-700 mb-1.5">Start Semester <span className="text-red-500">*</span></label>
-            <select value={form.start_semester} onChange={e=>setForm(p=>({...p,start_semester:e.target.value}))}
+            <label htmlFor="pp-fld-start-semester-1" className="block text-xs font-semibold text-surface-700 mb-1.5">Start Semester <span className="text-red-500">*</span></label>
+            <select id="pp-fld-start-semester-1" value={form.start_semester} onChange={e=>setForm(p=>({...p,start_semester:e.target.value}))}
               className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/40 bg-white">
               {SEMESTERS_LIST.map(s=><option key={s} value={s}>{s}</option>)}
             </select>
             {form.start_semester&&!form.start_semester.startsWith('Fall')&&(
-              <p className="text-[11px] text-amber-600 mt-1 flex items-center gap-1"><AlertCircle size={11}/> Plan will be rotated to start from {form.start_semester}.</p>
+              <p className="text-[11px] text-amber-600 mt-1 flex items-center gap-1"><AlertCircle size={11} aria-hidden="true" /> Plan will be rotated to start from {form.start_semester}.</p>
             )}
           </div>
           <div>
-            <label className="block text-xs font-semibold text-surface-700 mb-1.5">Plan Name (optional)</label>
-            <input value={form.plan_name} onChange={e=>setForm(p=>({...p,plan_name:e.target.value}))} placeholder="Auto-generated if blank"
+            <label htmlFor="pp-fld-plan-name-optional-2" className="block text-xs font-semibold text-surface-700 mb-1.5">Plan Name (optional)</label>
+            <input id="pp-fld-plan-name-optional-2" value={form.plan_name} onChange={e=>setForm(p=>({...p,plan_name:e.target.value}))} placeholder="Auto-generated if blank"
               className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/40"/>
           </div>
         </div>
         <div className="px-6 pb-5 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm border border-surface-200 text-surface-600 rounded-lg hover:bg-surface-50">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-surface-200 text-surface-600 rounded-lg hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
           <button onClick={handleCreate} disabled={saving||!form.student_email||!form.programs.length}
-            className="px-5 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-40">
+            className="px-5 py-2 text-sm font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             {saving?'Creating…':'Create Plan'}
           </button>
         </div>
@@ -726,6 +729,7 @@ function NewPlanModal({ onCreated, onClose }) {
 
 // ─── StudentPlanView (read-only) ──────────────────────────────────────────────
 export function StudentPlanView({ plan, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const { semesters: cleanSemesters } = useMemo(
     () => migrateLegacySummerSemesters(plan?.semesters||[], plan?.start_semester),
     [plan]
@@ -737,13 +741,13 @@ export function StudentPlanView({ plan, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Student plan" className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] flex flex-col">
 
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center">
-              <GraduationCap size={16} className="text-brand-600"/>
+              <GraduationCap size={16} className="text-brand-600" aria-hidden="true" />
             </div>
             <div>
               <h2 className="text-base font-bold text-surface-900">My Program Plan</h2>
@@ -752,10 +756,10 @@ export function StudentPlanView({ plan, onClose }) {
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50">
-              <Printer size={13}/> Print / Save PDF
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Printer size={13} aria-hidden="true" /> Print / Save PDF
             </button>
-            {onClose&&<button onClick={onClose} className="p-1.5 hover:bg-surface-100 rounded-lg"><X size={16} className="text-surface-400"/></button>}
+            {onClose&&<button type="button" onClick={onClose} aria-label="Close" className="p-1.5 hover:bg-surface-100 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><X size={16} className="text-surface-400" aria-hidden="true" /></button>}
           </div>
         </div>
 
@@ -822,7 +826,7 @@ export function StudentPlanView({ plan, onClose }) {
               <div key={si} className={`border rounded-xl overflow-hidden ${isSummer?'border-amber-200':'border-surface-200'}`}>
                 <div className={`px-4 py-2.5 flex items-center justify-between gap-2 ${isSummer?'bg-amber-600':'bg-brand-600'}`}>
                   <div className="flex items-center gap-2">
-                    {isSummer&&<Sun size={13} className="text-amber-200 shrink-0"/>}
+                    {isSummer&&<Sun size={13} className="text-amber-200 shrink-0" aria-hidden="true" />}
                     <p className="text-sm font-bold text-white">{sem.label}</p>
                     {isSummer&&<span className="text-[10px] font-semibold text-amber-100 bg-amber-700/60 border border-amber-400/40 px-1.5 py-0.5 rounded-full">Gen Ed only</span>}
                   </div>
@@ -833,18 +837,18 @@ export function StudentPlanView({ plan, onClose }) {
                 </div>
                 {isSummer&&(
                   <div className="bg-amber-50 border-b border-amber-200 px-4 py-1.5">
-                    <p className="text-[11px] text-amber-700 flex items-center gap-1.5"><Sun size={10}/> Summer semester — General Education courses only. No RICT program courses are offered in summer.</p>
+                    <p className="text-[11px] text-amber-700 flex items-center gap-1.5"><Sun size={10} aria-hidden="true" /> Summer semester — General Education courses only. No RICT program courses are offered in summer.</p>
                   </div>
                 )}
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-surface-50 border-b border-surface-200">
-                      <th className="text-center p-2 font-semibold text-surface-600 w-[7%]">✓</th>
-                      <th className="text-left p-2 font-semibold text-surface-600 w-[15%]">Course #</th>
-                      <th className="text-left p-2 font-semibold text-surface-600">Course Title</th>
-                      <th className="text-left p-2 font-semibold text-surface-600 w-[22%]">Prerequisites</th>
-                      <th className="text-center p-2 font-semibold text-surface-600 w-[10%]">Credits</th>
-                      <th className="text-center p-2 font-semibold text-surface-600 w-[13%]">Offered</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[7%]">✓</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[15%]">Course #</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-600">Course Title</th>
+                      <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[22%]">Prerequisites</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[10%]">Credits</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[13%]">Offered</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -854,7 +858,7 @@ export function StudentPlanView({ plan, onClose }) {
                         <tr key={ri} className={`border-b border-surface-100 last:border-0 ${course.completed?'bg-emerald-50/60':isShared?'bg-violet-50/40':''}`}>
                           <td className="p-2 text-center">
                             {course.completed
-                              ?<span className="inline-flex w-5 h-5 bg-emerald-500 rounded-full items-center justify-center"><Check size={11} className="text-white"/></span>
+                              ?<span className="inline-flex w-5 h-5 bg-emerald-500 rounded-full items-center justify-center"><Check size={11} className="text-white" aria-hidden="true" /></span>
                               :<span className="inline-flex w-5 h-5 border-2 border-surface-200 rounded-full"/>}
                           </td>
                           <td className={`p-2 font-medium ${course.completed?'text-surface-400 line-through':'text-surface-800'}`}>{course.course_num}</td>
@@ -883,7 +887,7 @@ export function StudentPlanView({ plan, onClose }) {
         {/* DAR Reference */}
         <div className="px-6 py-3 border-t border-surface-100 shrink-0 space-y-2">
           <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-            <AlertCircle size={13} className="text-blue-500 mt-0.5 shrink-0"/>
+            <AlertCircle size={13} className="text-blue-500 mt-0.5 shrink-0" aria-hidden="true" />
             <div>
               <p className="text-[11px] font-semibold text-blue-700">Degree Audit Report (DAR)</p>
               <p className="text-[11px] text-blue-600">This plan is for advising purposes only. For your official degree audit and transfer credit evaluation, contact your instructor or advisor to request a DAR through the college's student records system.</p>
@@ -1013,7 +1017,7 @@ export default function ProgramPlannerPage() {
     return (
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-10 h-10 bg-brand-50 rounded-xl flex items-center justify-center"><GraduationCap size={22} className="text-brand-600"/></div>
+          <div className="w-10 h-10 bg-brand-50 rounded-xl flex items-center justify-center"><GraduationCap size={22} className="text-brand-600" aria-hidden="true" /></div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">My Program Plan</h1>
             <p className="text-sm text-surface-500">Your academic course sequence — see your instructor to request changes.</p>
@@ -1022,7 +1026,7 @@ export default function ProgramPlannerPage() {
         {loading&&<div className="text-sm text-surface-400 text-center py-12">Loading your plan…</div>}
         {!loading&&plans.length===0&&(
           <div className="bg-white border border-surface-200 rounded-2xl p-12 text-center">
-            <GraduationCap size={40} className="text-surface-300 mx-auto mb-3"/>
+            <GraduationCap size={40} className="text-surface-300 mx-auto mb-3" aria-hidden="true" />
             <p className="text-surface-600 font-medium">No plan on file yet</p>
             <p className="text-sm text-surface-400 mt-1">Ask your instructor to set up your program plan.</p>
           </div>
@@ -1050,12 +1054,12 @@ export default function ProgramPlannerPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50">
-                        <Printer size={13}/> Print
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                        <Printer size={13} aria-hidden="true" /> Print
                       </button>
                       <button onClick={()=>setViewing(plan)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700">
-                        <BookOpen size={13}/> View Plan
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                        <BookOpen size={13} aria-hidden="true" /> View Plan
                       </button>
                     </div>
                   </div>
@@ -1086,11 +1090,11 @@ export default function ProgramPlannerPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={()=>navigate('/instructor-tools')}
-            className="flex items-center gap-1 text-sm text-surface-500 hover:text-brand-600 hover:bg-surface-100 px-2 py-1.5 rounded-lg transition-colors">
-            <ChevronLeft size={15}/> Back
+            className="flex items-center gap-1 text-sm text-surface-500 hover:text-brand-600 hover:bg-surface-100 px-2 py-1.5 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <ChevronLeft size={15} aria-hidden="true" /> Back
           </button>
           <div className="w-10 h-10 bg-brand-50 rounded-xl flex items-center justify-center">
-            <GraduationCap size={22} className="text-brand-600"/>
+            <GraduationCap size={22} className="text-brand-600" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">Program Planner</h1>
@@ -1098,10 +1102,10 @@ export default function ProgramPlannerPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={loadPlans} className="p-2 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-lg transition-colors"><RefreshCw size={16}/></button>
+          <button type="button" onClick={loadPlans} aria-label="Refresh plans" className="p-2 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><RefreshCw size={16} aria-hidden="true" /></button>
           <button onClick={()=>setShowNew(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-semibold rounded-xl hover:bg-brand-700 transition-colors">
-            <Plus size={15}/> New Student Plan
+            className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-semibold rounded-xl hover:bg-brand-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Plus size={15} aria-hidden="true" /> New Student Plan
           </button>
         </div>
       </div>
@@ -1109,7 +1113,7 @@ export default function ProgramPlannerPage() {
       {/* Master Planners */}
       <div>
         <h2 className="text-sm font-bold text-surface-700 mb-3 flex items-center gap-2">
-          <BookOpen size={15} className="text-brand-500"/> Program Master Planners
+          <BookOpen size={15} className="text-brand-500" aria-hidden="true" /> Program Master Planners
           <span className="text-[11px] font-normal text-surface-400">— Approved program plans for prospective & new students</span>
         </h2>
         {loadingMaster&&<div className="flex gap-3">{[1,2,3].map(i=><div key={i} className="h-24 w-56 bg-surface-100 rounded-xl animate-pulse shrink-0"/>)}</div>}
@@ -1136,8 +1140,8 @@ export default function ProgramPlannerPage() {
                     {approvedDate&&<><span>·</span><span>Approved {approvedDate}</span></>}
                   </div>
                   <button onClick={()=>printPlan({plan_name:planner.current_program_name||planner.planner_name,programs:[],start_semester:(planner.planner_semesters?.[0]?.label)||'Fall',semesters:planner.planner_semesters||[],student_name:'Prospective Student',student_email:''},planner.current_program_name||planner.planner_name)}
-                    className="flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold border border-brand-200 text-brand-600 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors w-full">
-                    <Printer size={12}/> Print Generic Plan
+                    className="flex items-center justify-center gap-1.5 py-1.5 text-xs font-semibold border border-brand-200 text-brand-600 bg-brand-50 rounded-lg hover:bg-brand-100 transition-colors w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                    <Printer size={12} aria-hidden="true" /> Print Generic Plan
                   </button>
                 </div>
               )
@@ -1150,12 +1154,12 @@ export default function ProgramPlannerPage() {
 
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-bold text-surface-700 flex items-center gap-2">
-          <GraduationCap size={15} className="text-brand-500"/> Student Custom Plans
+          <GraduationCap size={15} className="text-brand-500" aria-hidden="true" /> Student Custom Plans
         </h2>
         <div className="flex items-center gap-1 bg-surface-100 rounded-lg p-0.5">
           {[{val:'recent',label:'Recent'},{val:'first',label:'First Name'},{val:'last',label:'Last Name'}].map(opt=>(
             <button key={opt.val} onClick={()=>handleSortChange(opt.val)}
-              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors ${sortOrder===opt.val?'bg-white text-brand-700 shadow-sm':'text-surface-500 hover:text-surface-700'}`}>
+              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${sortOrder===opt.val?'bg-white text-brand-700 shadow-sm':'text-surface-500 hover:text-surface-700'}`}>
               {opt.label}
             </button>
           ))}
@@ -1163,8 +1167,8 @@ export default function ProgramPlannerPage() {
       </div>
 
       <div className="relative">
-        <Search size={14} className="absolute left-3 top-2.5 text-surface-400"/>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by student name, email, or plan name…"
+        <Search size={14} className="absolute left-3 top-2.5 text-surface-400" aria-hidden="true" />
+        <input aria-label="Search plans" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by student name, email, or plan name…"
           className="w-full pl-9 pr-4 py-2 text-sm border border-surface-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/40"/>
       </div>
 
@@ -1172,7 +1176,7 @@ export default function ProgramPlannerPage() {
 
       {!loading&&filtered.length===0&&(
         <div className="bg-white border border-surface-200 rounded-2xl p-12 text-center">
-          <GraduationCap size={40} className="text-surface-300 mx-auto mb-3"/>
+          <GraduationCap size={40} className="text-surface-300 mx-auto mb-3" aria-hidden="true" />
           <p className="text-surface-600 font-medium">{search?'No plans match your search':'No student plans yet'}</p>
           <p className="text-sm text-surface-400 mt-1">Click "New Student Plan" to create one.</p>
         </div>
@@ -1222,30 +1226,30 @@ export default function ProgramPlannerPage() {
                   </div>
                   <p className="text-[10px] text-surface-300 shrink-0 w-24 text-right hidden xl:block">{lastUpdated}</p>
                   <button onClick={()=>toggleNote(plan.plan_id,plan.instructor_notes)}
-                    title={hasNote?'View/edit instructor note':'Add instructor note'}
-                    className={`p-1.5 rounded-lg transition-colors shrink-0 ${hasNote?'text-amber-500 bg-amber-50 hover:bg-amber-100':'text-surface-300 hover:text-amber-400 hover:bg-amber-50'}`}>
-                    <StickyNote size={14}/>
+                    title={hasNote?'View/edit instructor note':'Add instructor note'} aria-label={hasNote?'View/edit instructor note':'Add instructor note'}
+                    className={`p-1.5 rounded-lg transition-colors shrink-0 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${hasNote?'text-amber-500 bg-amber-50 hover:bg-amber-100':'text-surface-300 hover:text-amber-400 hover:bg-amber-50'}`}>
+                    <StickyNote size={14} aria-hidden="true" />
                   </button>
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button onClick={()=>setViewing(plan)}
-                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors">
-                      <BookOpen size={11}/> View
+                      className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                      <BookOpen size={11} aria-hidden="true" /> View
                     </button>
                     <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name)}
-                      className="p-1.5 border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors" title="Print">
-                      <Printer size={12}/>
+                      className="p-1.5 border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Print" aria-label="Print">
+                      <Printer size={12} aria-hidden="true" />
                     </button>
                     <button onClick={()=>setEditing(plan)}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors">
+                      className="px-2.5 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg hover:bg-brand-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       Edit
                     </button>
-                    <button onClick={()=>handleDuplicatePlan(plan)}
-                      className="p-1.5 border border-surface-200 rounded-lg text-surface-500 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200 transition-colors" title="Duplicate plan">
-                      <Copy size={12}/>
+                    <button type="button" aria-label={`Duplicate plan for ${plan.student_name}`} onClick={()=>handleDuplicatePlan(plan)}
+                      className="p-1.5 border border-surface-200 rounded-lg text-surface-500 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Duplicate plan">
+                      <Copy size={12} aria-hidden="true" />
                     </button>
                     <button onClick={()=>setConfirmDeletePlan(plan)}
-                      className="p-1.5 text-surface-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors" title="Delete plan">
-                      <Trash2 size={12}/>
+                      className="p-1.5 text-surface-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Delete plan" aria-label="Delete plan">
+                      <Trash2 size={12} aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -1253,16 +1257,16 @@ export default function ProgramPlannerPage() {
                 {isNoteOpen&&(
                   <div className="border-t border-amber-100 bg-amber-50/50 px-4 pb-3 pt-2.5 rounded-b-xl">
                     <p className="text-[11px] font-semibold text-amber-600 mb-1.5 flex items-center gap-1.5">
-                      <StickyNote size={11}/> Instructor Note <span className="text-surface-400 font-normal">— not visible to students</span>
+                      <StickyNote size={11} aria-hidden="true" /> Instructor Note <span className="text-surface-400 font-normal">— not visible to students</span>
                     </p>
-                    <textarea value={noteText} onChange={e=>setNoteText(e.target.value)}
+                    <textarea aria-label="Instructor note" value={noteText} onChange={e=>setNoteText(e.target.value)}
                       placeholder="Add private notes about why this plan was created, exceptions made, advising context…"
                       rows={3} className="w-full text-xs border border-amber-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400/40 bg-white"/>
                     <div className="flex justify-end gap-2 mt-1.5">
-                      <button onClick={()=>setExpandedNoteId(null)} className="px-3 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-500 hover:bg-surface-50">Cancel</button>
+                      <button onClick={()=>setExpandedNoteId(null)} className="px-3 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-500 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
                       <button onClick={()=>handleSaveNote(plan.plan_id,noteText)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600">
-                        <Save size={11}/> Save Note
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-500 text-white rounded-lg hover:bg-amber-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                        <Save size={11} aria-hidden="true" /> Save Note
                       </button>
                     </div>
                   </div>

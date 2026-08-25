@@ -28,6 +28,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
@@ -345,6 +346,10 @@ export default function AccessPage() {
   const [needsSetup, setNeedsSetup] = useState(false)
   const [integrityResult, setIntegrityResult] = useState(null)
   const [seedSQL, setSeedSQL] = useState(null)
+  // a11y: focus trap / Escape / focus restore for the three dialogs
+  const confirmDialogRef = useDialogA11y(!!confirmModal, () => setConfirmModal(null))
+  const integrityDialogRef = useDialogA11y(!!integrityResult, () => setIntegrityResult(null))
+  const seedDialogRef = useDialogA11y(!!seedSQL, () => setSeedSQL(null))
 
   const isSuperAdmin = isSuperAdminEmail(profile?.email)
   const arrayHasIssues = ARRAY_VALIDATION.hasIssues
@@ -808,19 +813,19 @@ export default function AccessPage() {
           <span className="super-badge">SUPER ADMIN</span>
         </div>
         <div className="access-actions">
-          <button className="btn btn-secondary" onClick={loadPermissions} aria-label="Refresh permissions list">
+          <button className="btn btn-secondary min-h-[44px]" onClick={loadPermissions} aria-label="Refresh permissions list">
             <span className="material-icons" aria-hidden="true">refresh</span>Refresh
           </button>
-          <button className="btn btn-primary" onClick={syncMissing} disabled={arrayHasIssues} aria-label="Add any permissions missing from the database">
+          <button className="btn btn-primary min-h-[44px]" onClick={syncMissing} disabled={arrayHasIssues} aria-label="Add any permissions missing from the database">
             <span className="material-icons" aria-hidden="true">sync</span>Add Missing
           </button>
-          <button className="btn btn-secondary" onClick={verifyIntegrity} aria-label="Verify integrity of permissions data">
+          <button className="btn btn-secondary min-h-[44px]" onClick={verifyIntegrity} aria-label="Verify integrity of permissions data">
             <span className="material-icons" aria-hidden="true">fact_check</span>Verify
           </button>
-          <button className="btn btn-secondary" onClick={exportSeedSQL} aria-label="Export current permissions as SQL seed script">
+          <button className="btn btn-secondary min-h-[44px]" onClick={exportSeedSQL} aria-label="Export current permissions as SQL seed script">
             <span className="material-icons" aria-hidden="true">file_download</span>Export Seed
           </button>
-          <button className="btn btn-secondary" style={{ color: '#fa5252' }} onClick={cleanupDuplicates} aria-label="Remove duplicate permission rows from database">
+          <button className="btn btn-secondary min-h-[44px]" style={{ color: '#fa5252' }} onClick={cleanupDuplicates} aria-label="Remove duplicate permission rows from database">
             <span className="material-icons" aria-hidden="true">delete_sweep</span>Remove Duplicates
           </button>
         </div>
@@ -882,7 +887,7 @@ export default function AccessPage() {
             <span className="material-icons setup-icon" aria-hidden="true">settings_suggest</span>
             <div className="setup-title">Setup Required</div>
             <div className="setup-text">No permissions found. Click below to create the default permissions.</div>
-            <button className="btn btn-primary" onClick={initializePermissions} disabled={saving || arrayHasIssues}>
+            <button className="btn btn-primary min-h-[44px]" onClick={initializePermissions} disabled={saving || arrayHasIssues}>
               {saving ? 'Creating...' : 'Create Permissions'}
             </button>
           </div>
@@ -897,7 +902,7 @@ export default function AccessPage() {
                 {/* Page header — now a real button so keyboard / screen-reader users can expand */}
                 <button
                   type="button"
-                  className="page-header"
+                  className="page-header focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   onClick={() => toggleSection(pageName)}
                   aria-expanded={isExpanded}
                   aria-controls={sectionId}
@@ -926,10 +931,10 @@ export default function AccessPage() {
                   <table className="permission-table">
                     <thead>
                       <tr>
-                        <th>Feature</th>
-                        <th className="role-col">Student</th>
-                        <th className="role-col">Work Study</th>
-                        <th className="role-col">Instructor</th>
+                        <th scope="col">Feature</th>
+                        <th scope="col" className="role-col">Student</th>
+                        <th scope="col" className="role-col">Work Study</th>
+                        <th scope="col" className="role-col">Instructor</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -991,8 +996,8 @@ export default function AccessPage() {
             <span className="changes-count" aria-live="polite">{changeCount}</span>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <button className="btn btn-secondary" onClick={discardChanges}>Discard</button>
-            <button className="btn btn-success" onClick={saveAllChanges} disabled={saving}>
+            <button className="btn btn-secondary min-h-[44px]" onClick={discardChanges}>Discard</button>
+            <button className="btn btn-success min-h-[44px]" onClick={saveAllChanges} disabled={saving}>
               <span className="material-icons" aria-hidden="true">save</span>
               {saving ? 'Saving...' : 'Save'}
             </button>
@@ -1004,6 +1009,7 @@ export default function AccessPage() {
       {confirmModal && (
         <div
           className="modal-overlay visible"
+          ref={confirmDialogRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-modal-title"
@@ -1012,7 +1018,7 @@ export default function AccessPage() {
           <div className="modal" style={{ maxWidth: 440 }}>
             <div className="modal-header">
               <h3 id="confirm-modal-title">{confirmModal.title}</h3>
-              <button className="modal-close" onClick={() => setConfirmModal(null)} aria-label="Close dialog">&times;</button>
+              <button className="modal-close focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => setConfirmModal(null)} aria-label="Close dialog">&times;</button>
             </div>
             <div className="modal-body">
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -1021,8 +1027,8 @@ export default function AccessPage() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setConfirmModal(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={confirmModal.onConfirm} autoFocus>Continue</button>
+              <button className="btn btn-secondary min-h-[44px]" onClick={() => setConfirmModal(null)}>Cancel</button>
+              <button className="btn btn-primary min-h-[44px]" onClick={confirmModal.onConfirm} autoFocus>Continue</button>
             </div>
           </div>
         </div>
@@ -1032,6 +1038,7 @@ export default function AccessPage() {
       {integrityResult && (
         <div
           className="modal-overlay visible"
+          ref={integrityDialogRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="integrity-modal-title"
@@ -1042,7 +1049,7 @@ export default function AccessPage() {
               <h3 id="integrity-modal-title">
                 {integrityClean ? '✓ Integrity Check: Clean' : 'Integrity Check Results'}
               </h3>
-              <button className="modal-close" onClick={() => setIntegrityResult(null)} aria-label="Close dialog">&times;</button>
+              <button className="modal-close focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => setIntegrityResult(null)} aria-label="Close dialog">&times;</button>
             </div>
             <div className="modal-body" style={{ overflowY: 'auto' }}>
               {integrityClean ? (
@@ -1100,7 +1107,7 @@ export default function AccessPage() {
               )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-primary" onClick={() => setIntegrityResult(null)} autoFocus>Close</button>
+              <button className="btn btn-primary min-h-[44px]" onClick={() => setIntegrityResult(null)} autoFocus>Close</button>
             </div>
           </div>
         </div>
@@ -1110,6 +1117,7 @@ export default function AccessPage() {
       {seedSQL && (
         <div
           className="modal-overlay visible"
+          ref={seedDialogRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="seed-modal-title"
@@ -1118,7 +1126,7 @@ export default function AccessPage() {
           <div className="modal" style={{ maxWidth: 800, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-header">
               <h3 id="seed-modal-title">Permissions Seed SQL</h3>
-              <button className="modal-close" onClick={() => setSeedSQL(null)} aria-label="Close dialog">&times;</button>
+              <button className="modal-close focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => setSeedSQL(null)} aria-label="Close dialog">&times;</button>
             </div>
             <div className="modal-body" style={{ overflowY: 'auto' }}>
               <p style={{ fontSize: '0.85rem', color: '#495057', margin: '0 0 12px' }}>
@@ -1143,8 +1151,8 @@ export default function AccessPage() {
               />
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setSeedSQL(null)}>Close</button>
-              <button className="btn btn-primary" onClick={copySeedToClipboard} autoFocus>
+              <button className="btn btn-secondary min-h-[44px]" onClick={() => setSeedSQL(null)}>Close</button>
+              <button className="btn btn-primary min-h-[44px]" onClick={copySeedToClipboard} autoFocus>
                 <span className="material-icons" aria-hidden="true">content_copy</span>Copy to Clipboard
               </button>
             </div>

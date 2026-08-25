@@ -1,7 +1,10 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
+import toast from 'react-hot-toast'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import {
   usePMSchedules, usePMActions, useActiveAssets, usePMGlobalPause, calculateNextDueDate
@@ -53,7 +56,14 @@ export default function PMPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('Active')
   const [showForm, setShowForm] = useState(false)
+  const navigate = useNavigate()
+  // Accessible replacement for window.confirm(): await askConfirm({...}) → boolean
+  const [confirmState, setConfirmState] = useState(null)
+  const confirmResolveRef = useRef(null)
+  const askConfirm = useCallback((opts) => new Promise(resolve => { confirmResolveRef.current = resolve; setConfirmState(opts) }), [])
+  const settleConfirm = (value) => { setConfirmState(null); confirmResolveRef.current?.(value); confirmResolveRef.current = null }
   const [editingPM, setEditingPM] = useState(null)
+  const formDialogRef = useDialogA11y(showForm, () => { setShowForm(false); setEditingPM(null) })
   const [expandedId, setExpandedId] = useState(null)
   const [openWOMap, setOpenWOMap] = useState({}) // pm_id -> open WO info
   const [sopLinkedPMIds, setSopLinkedPMIds] = useState(new Set()) // pm_ids that have a linked SOP
@@ -125,7 +135,7 @@ export default function PMPage() {
   }
 
   const handleDelete = async (pmId) => {
-    if (!confirm('Delete this PM schedule? This cannot be undone.')) return
+    if (!(await askConfirm({ title: 'Delete this PM schedule?', message: 'This cannot be undone.', confirmLabel: 'Delete' }))) return
     await actions.deletePM(pmId)
     refresh()
   }
@@ -134,10 +144,15 @@ export default function PMPage() {
     // Check for open WO first (UI-level check)
     const existing = openWOMap[pmId]
     if (existing) {
-      if (!confirm(`⚠️ ${existing.wo_id} (${existing.status}) is still open for this PM.\n\nThe system will not generate a duplicate. Close the existing WO first.\n\nOpen the Work Orders page instead?`)) return
+      const go = await askConfirm({
+        title: `${existing.wo_id} is still open`,
+        message: `${existing.wo_id} (${existing.status}) is still open for this PM. The system will not generate a duplicate — close the existing work order first.`,
+        confirmLabel: 'Open Work Orders', cancelLabel: 'Close',
+      })
+      if (go) navigate('/work-orders')
       return
     }
-    if (!confirm('Generate a work order from this PM schedule?')) return
+    if (!(await askConfirm({ title: 'Generate a work order?', message: 'A new work order will be created from this PM schedule.', confirmLabel: 'Generate' }))) return
     const woId = await actions.generateWO(pmId)
     if (woId) refresh()
   }
@@ -170,7 +185,7 @@ export default function PMPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-bold text-surface-900 flex items-center gap-2">
-            <Wrench size={20} className="text-brand-600" /> Preventive Maintenance
+            <Wrench size={20} className="text-brand-600" aria-hidden="true" /> Preventive Maintenance
           </h1>
           <p className="text-xs text-surface-500 mt-0.5">
             {activeCount} active schedule{activeCount !== 1 && 's'}
@@ -180,8 +195,8 @@ export default function PMPage() {
         </div>
         <div className="flex items-center gap-2">
           {hasPerm('create_pm') && (
-            <button onClick={() => { setEditingPM(null); setShowForm(true) }} className="btn-primary text-sm gap-1.5">
-              <Plus size={14} /> New PM Schedule
+            <button onClick={() => { setEditingPM(null); setShowForm(true) }} className="btn-primary text-sm gap-1.5 min-h-[44px]">
+              <Plus size={14} aria-hidden="true" /> New PM Schedule
             </button>
           )}
         </div>
@@ -196,9 +211,9 @@ export default function PMPage() {
         }`}>
           <div className="flex items-center gap-3">
             {globalPause.paused ? (
-              <PauseCircle size={22} className="text-amber-600 flex-shrink-0" />
+              <PauseCircle size={22} className="text-amber-600 flex-shrink-0" aria-hidden="true" />
             ) : (
-              <PlayCircle size={22} className="text-emerald-600 flex-shrink-0" />
+              <PlayCircle size={22} className="text-emerald-600 flex-shrink-0" aria-hidden="true" />
             )}
             <div>
               <div className={`text-sm font-semibold ${globalPause.paused ? 'text-amber-800' : 'text-emerald-800'}`}>
@@ -214,18 +229,18 @@ export default function PMPage() {
           <button
             onClick={handlePauseResumeClick}
             disabled={globalPause.saving}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all ${
+            className={`px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
               globalPause.paused
                 ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                 : 'bg-amber-500 text-white hover:bg-amber-600'
             } disabled:opacity-50`}
           >
             {globalPause.saving ? (
-              <Loader2 size={14} className="animate-spin" />
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" />
             ) : globalPause.paused ? (
-              <Play size={14} />
+              <Play size={14} aria-hidden="true" />
             ) : (
-              <Pause size={14} />
+              <Pause size={14} aria-hidden="true" />
             )}
             {globalPause.paused ? 'Resume Generation' : 'Pause for Break'}
           </button>
@@ -235,7 +250,7 @@ export default function PMPage() {
       {/* Non-manager pause notice */}
       {!hasPerm('pause_generation') && globalPause.paused && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center gap-3">
-          <PauseCircle size={18} className="text-amber-600 flex-shrink-0" />
+          <PauseCircle size={18} className="text-amber-600 flex-shrink-0" aria-hidden="true" />
           <span className="text-sm text-amber-800">PM work order generation is currently paused by an instructor.</span>
         </div>
       )}
@@ -263,11 +278,11 @@ export default function PMPage() {
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search schedules"
             placeholder="Search schedules..." className="input pl-9 text-sm" />
         </div>
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-sm w-auto">
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter by status" className="input text-sm w-auto">
           <option value="">All Status</option>
           <option value="Active">Active</option>
           <option value="Paused">Paused</option>
@@ -275,9 +290,19 @@ export default function PMPage() {
         </select>
       </div>
 
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || 'Confirm'}
+        message={confirmState?.message || ''}
+        confirmLabel={confirmState?.confirmLabel || 'OK'}
+        cancelLabel={confirmState?.cancelLabel || 'Cancel'}
+        onConfirm={() => settleConfirm(true)}
+        onClose={() => settleConfirm(false)}
+      />
+
       {/* Create/Edit Form Modal */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+        <div ref={formDialogRef} role="dialog" aria-modal="true" aria-label={editingPM ? 'Edit PM schedule' : 'New PM schedule'} className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
           onClick={e => { if (e.target === e.currentTarget) { setShowForm(false); setEditingPM(null) } }}>
           <PMForm pm={editingPM} assets={assets} actions={actions}
             onClose={() => { setShowForm(false); setEditingPM(null) }}
@@ -297,12 +322,12 @@ export default function PMPage() {
       {/* Schedule List */}
       {loading ? (
         <div className="text-center py-12 text-surface-400">
-          <Loader2 size={24} className="animate-spin mx-auto mb-2" />
+          <Loader2 size={24} className="animate-spin mx-auto mb-2" aria-hidden="true" />
           Loading PM schedules...
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12">
-          <Wrench size={36} className="mx-auto mb-3 text-surface-300" />
+          <Wrench size={36} className="mx-auto mb-3 text-surface-300" aria-hidden="true" />
           <p className="text-sm text-surface-400">No PM schedules found</p>
         </div>
       ) : (
@@ -348,7 +373,7 @@ function ResumeConfirmModal({ open, overdueCount = 0, saving, onConfirm, onCance
         aria-modal="true"
         aria-labelledby="resume-pm-title"
         aria-describedby="resume-pm-desc"
-        className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 focus:outline-none"
+        className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
       >
         <div className="flex items-start gap-3">
           <div className="mt-0.5 flex-shrink-0 rounded-full bg-emerald-100 p-2">
@@ -386,7 +411,7 @@ function ResumeConfirmModal({ open, overdueCount = 0, saving, onConfirm, onCance
             type="button"
             onClick={onCancel}
             disabled={saving}
-            className="px-4 py-2 rounded-lg text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-surface-400 focus-visible:outline-none disabled:opacity-50"
+            className="px-4 py-2 rounded-lg text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 focus-visible:ring-2 focus-visible:ring-surface-400 focus-visible:outline-none disabled:opacity-50 min-h-[44px]"
           >
             Cancel
           </button>
@@ -394,7 +419,7 @@ function ResumeConfirmModal({ open, overdueCount = 0, saving, onConfirm, onCance
             type="button"
             onClick={onConfirm}
             disabled={saving}
-            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:outline-none disabled:opacity-50 flex items-center gap-2 min-h-[44px]"
           >
             {saving ? (
               <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Resuming…</>
@@ -479,14 +504,14 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
 
   return (
     <div className={`bg-white rounded-xl border border-surface-200 border-l-4 ${statusColor} overflow-hidden`}>
-      <button onClick={onToggle} className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-50/50 transition-colors">
+      <button onClick={onToggle} className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-50/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-surface-900">{pm.pm_name}</span>
             <span className="text-[10px] font-mono text-surface-400">{pm.pm_id}</span>
             {pm.status === 'Paused' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-surface-200 text-surface-500 flex items-center gap-0.5">
-                <Pause size={8} /> Paused
+                <Pause size={8} aria-hidden="true" /> Paused
               </span>
             )}
             {pm.status === 'Archived' && (
@@ -496,12 +521,12 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
             )}
             {hasProcedure && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 flex items-center gap-0.5">
-                <FileText size={8} /> Procedure
+                <FileText size={8} aria-hidden="true" /> Procedure
               </span>
             )}
             {openWO && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600 flex items-center gap-0.5">
-                <Link2 size={8} /> {openWO.wo_id}
+                <Link2 size={8} aria-hidden="true" /> {openWO.wo_id}
               </span>
             )}
           </div>
@@ -514,14 +539,14 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
         </div>
         <div className="text-right mr-2 flex-shrink-0">
           {pm.isOverdue ? (
-            <span className="text-xs font-semibold text-red-600 flex items-center gap-1"><AlertTriangle size={12} /> Overdue — {fmtDate(pm.next_due_date)}</span>
+            <span className="text-xs font-semibold text-red-600 flex items-center gap-1"><AlertTriangle size={12} aria-hidden="true" /> Overdue — {fmtDate(pm.next_due_date)}</span>
           ) : pm.isDueSoon ? (
-            <span className="text-xs font-semibold text-yellow-600 flex items-center gap-1"><Clock size={12} /> Generates: {fmtDate(pm.next_due_date)}</span>
+            <span className="text-xs font-semibold text-yellow-600 flex items-center gap-1"><Clock size={12} aria-hidden="true" /> Generates: {fmtDate(pm.next_due_date)}</span>
           ) : pm.status === 'Active' ? (
             <span className="text-xs text-surface-400">Next: {fmtDate(pm.next_due_date)}</span>
           ) : null}
         </div>
-        {expanded ? <ChevronUp size={14} className="text-surface-400" /> : <ChevronDown size={14} className="text-surface-400" />}
+        {expanded ? <ChevronUp size={14} className="text-surface-400" aria-hidden="true" /> : <ChevronDown size={14} className="text-surface-400" aria-hidden="true" />}
       </button>
 
       {expanded && (
@@ -548,13 +573,13 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
           {/* Procedure File — direct attachment */}
           {hasFileProcedure && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 flex items-center gap-2">
-              <FileText size={14} className="text-blue-600 flex-shrink-0" />
+              <FileText size={14} className="text-blue-600 flex-shrink-0" aria-hidden="true" />
               <span className="text-xs text-blue-800 font-medium flex-1">
                 Procedure attached: <span className="font-normal text-blue-600">{pm.procedure_file_id?.split('/').pop()}</span>
               </span>
               <button onClick={handleViewProcedure}
-                className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1">
-                <Download size={12} /> View
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <Download size={12} aria-hidden="true" /> View
               </button>
             </div>
           )}
@@ -562,12 +587,12 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
           {/* Procedure via linked SOP — shows SOP name(s) */}
           {hasSopProcedure && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 flex items-start gap-2">
-              <FileText size={14} className="text-blue-600 flex-shrink-0 mt-0.5" />
+              <FileText size={14} className="text-blue-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-blue-800 font-medium">Procedure via linked SOP</span>
                 {sopsLoading ? (
                   <div className="flex items-center gap-1 mt-0.5">
-                    <Loader2 size={10} className="animate-spin text-blue-400" />
+                    <Loader2 size={10} className="animate-spin text-blue-400" aria-hidden="true" />
                     <span className="text-[10px] text-blue-400">Loading...</span>
                   </div>
                 ) : linkedSOPs.length > 0 ? (
@@ -584,7 +609,7 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
               </div>
               <a href="/sops" onClick={e => e.stopPropagation()}
                 className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 flex-shrink-0">
-                <Eye size={12} /> SOPs
+                <Eye size={12} aria-hidden="true" /> SOPs
               </a>
             </div>
           )}
@@ -592,7 +617,7 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
           {/* Open WO Warning */}
           {openWO && (
             <div className="bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 flex items-center gap-2">
-              <ShieldAlert size={14} className="text-orange-600 flex-shrink-0" />
+              <ShieldAlert size={14} className="text-orange-600 flex-shrink-0" aria-hidden="true" />
               <span className="text-xs text-orange-800">
                 <strong>{openWO.wo_id}</strong> ({openWO.status}) is still open. A new WO will not generate until it's closed.
               </span>
@@ -604,20 +629,20 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
               {hasPerm('generate_wo') && (
                 <button onClick={onGenerate} disabled={generateDisabled}
                   title={generateTooltip}
-                  className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1">
-                  <Zap size={12} /> Generate WO
+                  className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Zap size={12} aria-hidden="true" /> Generate WO
                 </button>
               )}
               {hasPerm('edit_pm') && (
                 <button onClick={onEdit}
-                  className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 flex items-center gap-1">
-                  <Edit3 size={12} /> Edit
+                  className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Edit3 size={12} aria-hidden="true" /> Edit
                 </button>
               )}
               {hasPerm('delete_pm') && (
                 <button onClick={onDelete} disabled={saving}
-                  className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 flex items-center gap-1">
-                  <Trash2 size={12} /> Delete
+                  className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <Trash2 size={12} aria-hidden="true" /> Delete
                 </button>
               )}
             </div>
@@ -654,7 +679,7 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
       const file = e.target.files?.[0]
       if (file) {
         if (file.size > 10 * 1024 * 1024) {
-          alert('File must be under 10MB')
+          toast.error('File must be under 10MB')
           return
         }
         setProcedureFile(file)
@@ -670,7 +695,7 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
   }
 
   const handleSubmit = async () => {
-    if (!form.pmName.trim()) return alert('PM name is required')
+    if (!form.pmName.trim()) return void toast.error('PM name is required')
     try {
       if (pm) {
         // ── Update existing PM ──
@@ -715,20 +740,20 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
       onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-surface-900">{pm ? 'Edit PM Schedule' : 'New PM Schedule'}</h3>
-        <button onClick={onClose} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+        <button type="button" onClick={onClose} aria-label="Close" className="text-surface-400 hover:text-surface-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"><X size={16} aria-hidden="true" /></button>
       </div>
 
       {/* PM Name */}
       <div>
-        <label className="label">PM Name / Description *</label>
-        <input value={form.pmName} onChange={e => setForm(f => ({ ...f, pmName: e.target.value }))}
+        <label htmlFor="pm-fld-pm-name-description-1" className="label">PM Name / Description *</label>
+        <input id="pm-fld-pm-name-description-1" value={form.pmName} onChange={e => setForm(f => ({ ...f, pmName: e.target.value }))}
           className="input text-sm" placeholder="e.g. Monthly Filter Change — follow attached procedure" />
       </div>
 
       {/* Asset */}
       <div>
-        <label className="label">Asset</label>
-        <select value={form.assetId} onChange={e => {
+        <label htmlFor="pm-fld-asset-2" className="label">Asset</label>
+        <select id="pm-fld-asset-2" value={form.assetId} onChange={e => {
           const a = assets.find(a => a.asset_id === e.target.value)
           setForm(f => ({ ...f, assetId: e.target.value, assetName: a?.name || '' }))
         }} className="input text-sm">
@@ -740,24 +765,24 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
       {/* Frequency + Custom Value */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="label">Frequency</label>
-          <select value={form.frequency} onChange={e => setForm(f => ({ ...f, frequency: e.target.value }))} className="input text-sm">
+          <label htmlFor="pm-fld-frequency-3" className="label">Frequency</label>
+          <select id="pm-fld-frequency-3" value={form.frequency} onChange={e => setForm(f => ({ ...f, frequency: e.target.value }))} className="input text-sm">
             {FREQ_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
           <p className="text-[10px] text-surface-400 mt-0.5">{getDueDateLabel(form.frequency)}</p>
         </div>
         {form.frequency === 'Custom' && (
           <div>
-            <label className="label">Every X Days</label>
-            <input type="number" min={1} value={form.frequencyValue}
+            <label htmlFor="pm-fld-every-x-days-4" className="label">Every X Days</label>
+            <input id="pm-fld-every-x-days-4" type="number" min={1} value={form.frequencyValue}
               onChange={e => setForm(f => ({ ...f, frequencyValue: e.target.value }))}
               className="input text-sm" />
           </div>
         )}
         {pm && (
           <div>
-            <label className="label">Status</label>
-            <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
+            <label htmlFor="pm-fld-status-5" className="label">Status</label>
+            <select id="pm-fld-status-5" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
               <option value="Active">Active</option>
               <option value="Paused">Paused</option>
               <option value="Archived">Archived</option>
@@ -768,8 +793,8 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
 
       {pm && (
         <div>
-          <label className="label">Next Due Date</label>
-          <input type="date" value={form.nextDueDate}
+          <label htmlFor="pm-fld-next-due-date-6" className="label">Next Due Date</label>
+          <input id="pm-fld-next-due-date-6" type="date" value={form.nextDueDate}
             onChange={e => setForm(f => ({ ...f, nextDueDate: e.target.value }))}
             className="input text-sm" />
         </div>
@@ -778,7 +803,7 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
       {/* ── Procedure File Section ── */}
       <div>
         <label className="label flex items-center gap-1">
-          <FileText size={12} className="text-brand-600" /> Procedure File
+          <FileText size={12} className="text-brand-600" aria-hidden="true" /> Procedure File
         </label>
         <p className="text-[10px] text-surface-400 mb-1.5">
           Attach a procedure document (PDF, DOC, image). It will automatically follow through to generated work orders.
@@ -786,29 +811,29 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
 
         {effectiveProcedure ? (
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 flex items-center gap-2">
-            <FileText size={14} className="text-blue-600 flex-shrink-0" />
+            <FileText size={14} className="text-blue-600 flex-shrink-0" aria-hidden="true" />
             <span className="text-xs text-blue-800 flex-1 truncate">{effectiveProcedure}</span>
             {procedureFile && <span className="text-[10px] text-blue-500 italic">(new)</span>}
             <button onClick={handleFileSelect}
-              className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-0.5">
-              <RotateCcw size={10} /> Replace
+              className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <RotateCcw size={10} aria-hidden="true" /> Replace
             </button>
             <button onClick={handleRemoveProcedure}
-              className="text-xs text-red-500 hover:text-red-700 font-medium flex items-center gap-0.5">
-              <XCircle size={10} /> Remove
+              className="text-xs text-red-500 hover:text-red-700 font-medium flex items-center gap-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <XCircle size={10} aria-hidden="true" /> Remove
             </button>
           </div>
         ) : (
           <button onClick={handleFileSelect}
-            className="w-full border-2 border-dashed border-surface-200 rounded-lg px-3 py-3 text-xs text-surface-400 hover:border-brand-300 hover:text-brand-600 hover:bg-brand-50/30 transition-all flex items-center justify-center gap-2">
-            <Upload size={14} /> Click to attach a procedure file
+            className="w-full border-2 border-dashed border-surface-200 rounded-lg px-3 py-3 text-xs text-surface-400 hover:border-brand-300 hover:text-brand-600 hover:bg-brand-50/30 transition-all flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Upload size={14} aria-hidden="true" /> Click to attach a procedure file
           </button>
         )}
       </div>
 
       {/* Due Date Info */}
       <div className="bg-surface-50 rounded-lg px-3 py-2 flex items-start gap-2">
-        <Info size={14} className="text-surface-400 mt-0.5 flex-shrink-0" />
+        <Info size={14} className="text-surface-400 mt-0.5 flex-shrink-0" aria-hidden="true" />
         <div className="text-[11px] text-surface-500 space-y-0.5">
           <div><strong>Due date rules:</strong> Daily = next day, Weekly = 1 week, all others = 3 weeks.</div>
           <div><strong>Duplicate prevention:</strong> A new WO will not generate while one is still open for this PM.</div>
@@ -820,11 +845,11 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
 
       {/* Actions */}
       <div className="flex gap-2 pt-1">
-        <button onClick={handleSubmit} disabled={actions.saving} className="btn-primary text-sm gap-1.5">
-          {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+        <button onClick={handleSubmit} disabled={actions.saving} className="btn-primary text-sm gap-1.5 min-h-[44px]">
+          {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
           {pm ? 'Update' : 'Create'} Schedule
         </button>
-        <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm">Cancel</button>
+        <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
       </div>
     </div>
   )

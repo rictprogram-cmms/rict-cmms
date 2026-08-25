@@ -72,11 +72,12 @@ Instructor / admin:
 - [x] `AssetsPage.jsx` — delivered 2026-08-24: all 11 dialogs (8 page modals + Check Out / Check In / History) on `useDialogA11y` (they had `role="dialog"` but no focus trap/Escape); 20 `alert()`s → toasts, 3 `confirm()`s → promise-based `ConfirmDialog` (`askConfirm`); 8 form labels linked; image upload area keyboard-operable; label-print checkboxes named; SOP/delete/remove-image icon buttons named; `scope="col"`; 26 material icons hidden; QR `<img>` alt; embedded CSS: 44px on `.btn`, `.btn-sm`, `.action-btn`, `.modal-close`, `.filter-select`, `.remove-image-btn`, visible focus on `.form-input`/search. Table rows were already keyboard-operable; checkout names already shortened.
 - [x] `UsersPage.jsx` — delivered 2026-08-24: already well-built (labels, dialog roles, named action icons, tablist, live regions); added `useDialogA11y` focus trap/restore to all 6 modals; 7 `alert()`s → toasts; 51 icons hidden; focus rings + 44px on all 44 buttons
 - [x] `SOPsPage.jsx` — delivered 2026-08-24: all 9 modals given `role="dialog"`/`alertdialog` + `useDialogA11y`; SOP cards keyboard-operable; 17 `alert()`s → toasts; search inputs and 4 form labels linked; unlink/remove-file/clear/dismiss icon buttons named; 56 material icons hidden; embedded CSS: 44px on all `.sops-btn-*` classes and icon buttons (focus visible via global rule + existing input focus styles). Also: SOP "Created By" now "First L." for non-instructors
-- [ ] `AccessPage.jsx` (dialog without hook)
-- [ ] `NetworkMapPage.jsx` (dialog without hook, `outline-none`)
-- [ ] `ProgramPlannerPage.jsx`, `ProgramCostPage.jsx` (overlays, icon-only button)
-- [ ] `WeeklyLabsTrackerPage.jsx` (overlay)
-- [ ] `PMPage.jsx` (`outline-none`)
+- [x] `AccessPage.jsx` — 2026-08-24: 3 dialogs on `useDialogA11y` (roles/labels already present); `scope="col"`; focus rings + 44px on all buttons
+- [x] `NetworkMapPage.jsx` — 2026-08-24: shared `Modal` already had its own focus trap/Escape (false positive); asset search input given focus ring; 2 icons hidden; 44px on all 31 buttons
+- [x] `ProgramPlannerPage.jsx` — 2026-08-24: 4 dialogs (Delete Semester, Plan Editor, New Plan, Student Plan View) on `useDialogA11y` with roles; 11 icon buttons named; 9 controls labelled incl. per-row grid inputs; `scope="col"` on 20 headers; 44 icons hidden; focus rings + 44px on all 34 buttons
+- [x] `ProgramCostPage.jsx` — 2026-08-24: Tuition & Fees dialog on `useDialogA11y`; 12 rate/fee inputs + materials cost labelled; `scope="col"`; 18 icons hidden; focus rings + 44px on all 14 buttons
+- [x] `WeeklyLabsTrackerPage.jsx` — 2026-08-24: Sign Off + All Done modals on `useDialogA11y` with roles; "Mark as Done" `window.confirm` → `ConfirmDialog`; close/sign-off icon buttons named; Select Class linked; `scope="col"`; 54 icons hidden; focus rings + 44px on all buttons
+- [x] `PMPage.jsx` — 2026-08-24: PM form modal on `useDialogA11y` with role; 3 `window.confirm`s → `askConfirm`/`ConfirmDialog` (open-WO warning now offers to open Work Orders); 2 `alert()`s → toasts; search/filter labelled; close button named; 36 icons hidden; focus rings + 44px
 - [ ] `components/NotificationBell.jsx` (7 clickable divs)
 - [x] `components/RejectionModal.jsx` — verified: has its own focus trap/Escape; audit flag was a false positive
 - [ ] `components/holds/StudentHoldsTab.jsx`, `components/EmulationBar.jsx` (dialog/overlay without hook)

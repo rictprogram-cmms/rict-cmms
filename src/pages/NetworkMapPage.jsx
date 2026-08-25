@@ -434,7 +434,7 @@ export default function NetworkMapPage() {
               title={`Outdated: ${staleSheets.map(s => `sheet ${s.sheet_index}`).join(', ')}`}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg
                 bg-amber-50 border border-amber-300 text-amber-800
-                hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                hover:bg-amber-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 min-h-[44px]"
               aria-label={`${staleSheetCount} printed wall ${staleSheetCount === 1 ? 'sheet' : 'sheets'} outdated — open print view`}
             >
               <AlertTriangle size={14} aria-hidden="true" />
@@ -446,7 +446,7 @@ export default function NetworkMapPage() {
               onClick={() => navigate('/network-map/print')}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg
                 bg-white border border-surface-200 text-surface-700
-                hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
               aria-label="Open print view"
             >
               <Printer size={14} aria-hidden="true" /> Print 11×17
@@ -457,7 +457,7 @@ export default function NetworkMapPage() {
               onClick={handleExport}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg
                 bg-white border border-surface-200 text-surface-700
-                hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
               aria-label="Export to Excel"
             >
               <FileSpreadsheet size={14} aria-hidden="true" /> Export
@@ -468,7 +468,7 @@ export default function NetworkMapPage() {
               onClick={() => setAddTarget({ subnet: activeTab })}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg
                 bg-brand-600 text-white shadow-sm
-                hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
             >
               <Plus size={14} aria-hidden="true" /> Add Device
             </button>
@@ -522,7 +522,7 @@ export default function NetworkMapPage() {
               disabled={isSearching}
               className={`px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
-                disabled:opacity-60 disabled:cursor-not-allowed ${
+                disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] ${
                 activeTab === s.id && !isSearching
                   ? 'bg-white text-brand-700 shadow-sm'
                   : 'text-surface-600 hover:text-surface-900'
@@ -571,7 +571,7 @@ export default function NetworkMapPage() {
                 type="button"
                 onClick={() => setSearch('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-surface-400 hover:text-surface-700 hover:bg-surface-100
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                 aria-label="Clear search"
               >
                 <X size={14} aria-hidden="true" />
@@ -824,7 +824,7 @@ function SubnetCard({ subnet, active, onClick }) {
       onClick={onClick}
       aria-label={`Subnet ${subnet.name}: ${subnet.assigned} assigned, ${subnet.available} available, ${subnet.doNotUse} do not use`}
       className={`text-left rounded-xl border p-3 transition-all
-        focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] ${
         active
           ? 'bg-brand-50 border-brand-300 shadow-sm'
           : 'bg-white border-surface-200 hover:border-brand-200'
@@ -848,7 +848,7 @@ function PendingCard({ count, onClick }) {
       type="button"
       onClick={onClick}
       className={`text-left rounded-xl border p-3 transition-all
-        focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 min-h-[44px] ${
         count > 0
           ? 'bg-amber-50 border-amber-300 hover:shadow-sm'
           : 'bg-white border-surface-200'
@@ -938,7 +938,7 @@ function NetworkRow({
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold
                   bg-purple-50 text-purple-700 border border-purple-200
                   hover:bg-purple-100 hover:border-purple-300
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 min-h-[44px]"
                 title={`Linked to asset ${linkedAsset.asset_id} — click to open`}
                 aria-label={`Linked asset ${linkedAsset.asset_id}, open on Assets page`}
               >
@@ -963,7 +963,7 @@ function NetworkRow({
               type="button"
               onClick={onHistory}
               className="p-1.5 rounded-md text-surface-400 hover:text-surface-700 hover:bg-surface-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               aria-label={`View history for ${ip}`}
               title="View change history"
             >
@@ -975,7 +975,7 @@ function NetworkRow({
               type="button"
               onClick={onEdit}
               className="p-1.5 rounded-md text-brand-600 hover:bg-brand-50
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               aria-label={`Edit ${ip}`}
               title="Edit device"
             >
@@ -987,7 +987,7 @@ function NetworkRow({
               type="button"
               onClick={onDelete}
               className="p-1.5 rounded-md text-red-600 hover:bg-red-50
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
               aria-label={`Delete ${ip}`}
               title="Delete device"
             >
@@ -1001,7 +1001,7 @@ function NetworkRow({
               onClick={() => onSuggest('edit')}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
                 text-brand-700 bg-brand-50 hover:bg-brand-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
               aria-label={`Suggest change to ${ip}`}
             >
               <Send size={11} aria-hidden="true" /> Suggest
@@ -1014,7 +1014,7 @@ function NetworkRow({
               onClick={onAdd}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
                 text-surface-600 bg-surface-50 hover:bg-surface-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
               aria-label={`Add device at ${ip}`}
             >
               <Plus size={11} aria-hidden="true" /> Add
@@ -1027,7 +1027,7 @@ function NetworkRow({
               onClick={() => onSuggest('add')}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
                 text-surface-600 bg-surface-50 hover:bg-surface-100
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
               aria-label={`Suggest adding a device at ${ip}`}
             >
               <Send size={11} aria-hidden="true" /> Suggest add
@@ -1079,10 +1079,10 @@ function PendingRequestCard({ req, canApprove, isOwn, assetById, onApprove, onRe
             type="button"
             onClick={() => setExpanded(v => !v)}
             className="inline-flex items-center gap-1 text-[11px] font-medium text-brand-600 hover:underline mt-2
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded"
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded min-h-[44px]"
             aria-expanded={expanded}
           >
-            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {expanded ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
             {expanded ? 'Hide' : 'Show'} changes
           </button>
           {expanded && (
@@ -1126,7 +1126,7 @@ function PendingRequestCard({ req, canApprove, isOwn, assetById, onApprove, onRe
                 onClick={onApprove}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium
                   bg-green-600 text-white hover:bg-green-700
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 min-h-[44px]"
               >
                 <CheckCircle2 size={12} aria-hidden="true" /> Approve
               </button>
@@ -1135,7 +1135,7 @@ function PendingRequestCard({ req, canApprove, isOwn, assetById, onApprove, onRe
                 onClick={onReject}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium
                   bg-white border border-red-200 text-red-700 hover:bg-red-50
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 min-h-[44px]"
               >
                 <XCircle size={12} aria-hidden="true" /> Reject
               </button>
@@ -1147,7 +1147,7 @@ function PendingRequestCard({ req, canApprove, isOwn, assetById, onApprove, onRe
               onClick={onCancel}
               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium
                 bg-white border border-surface-200 text-surface-600 hover:bg-surface-50
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-500"
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-500 min-h-[44px]"
             >
               <X size={12} aria-hidden="true" /> Cancel
             </button>
@@ -1223,7 +1223,7 @@ function ModalShell({ title, subtitle, onClose, children, icon: Icon, size = 'md
             type="button"
             onClick={onClose}
             className="p-1.5 rounded-lg text-surface-400 hover:bg-surface-200 hover:text-surface-700
-              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
             aria-label="Close dialog"
           >
             <X size={16} aria-hidden="true" />
@@ -1341,7 +1341,7 @@ function AssetPicker({
                 type="button"
                 onClick={() => onChange('')}
                 className="p-0.5 rounded text-surface-400 hover:text-red-600 hover:bg-red-50
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 min-h-[44px]"
                 aria-label="Unlink asset"
                 title="Unlink asset"
               >
@@ -1351,7 +1351,7 @@ function AssetPicker({
                 type="button"
                 onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 10) }}
                 className="text-xs text-brand-600 hover:text-brand-700 hover:underline
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded px-1"
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded px-1 min-h-[44px]"
               >
                 Change
               </button>
@@ -1371,7 +1371,7 @@ function AssetPicker({
               onFocus={() => setOpen(true)}
               onKeyDown={handleKeyDown}
               placeholder={selected ? selected.name : 'Type to search active assets…'}
-              className="flex-1 text-sm outline-none border-0 bg-transparent"
+              className="flex-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded border-0 bg-transparent"
             />
           )}
         </div>
@@ -1635,7 +1635,7 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
           onClick={onCancel}
           disabled={saving}
           className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg
-            hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
         >
           Cancel
         </button>
@@ -1645,7 +1645,7 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
           disabled={saving}
           className="px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg
             hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
-            disabled:opacity-50 flex items-center gap-2"
+            disabled:opacity-50 flex items-center gap-2 min-h-[44px]"
         >
           {saving ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Saving…</> : (mode === 'add' ? 'Add Device' : 'Save Changes')}
         </button>
@@ -1842,7 +1842,7 @@ function SuggestChangeModal({ target, activeAssets, linkedAssetIds, assetDeviceC
           onClick={onCancel}
           disabled={saving}
           className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg
-            hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
         >
           Cancel
         </button>
@@ -1852,7 +1852,7 @@ function SuggestChangeModal({ target, activeAssets, linkedAssetIds, assetDeviceC
           disabled={saving}
           className="px-4 py-2 text-sm font-medium text-white bg-brand-600 rounded-lg
             hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500
-            disabled:opacity-50 flex items-center gap-2"
+            disabled:opacity-50 flex items-center gap-2 min-h-[44px]"
         >
           {saving ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Sending…</> : <><Send size={14} aria-hidden="true" /> Submit for Review</>}
         </button>
@@ -1898,11 +1898,11 @@ function ConfirmDeleteModal({ device, onCancel, onConfirm }) {
       </div>
       <div className="px-5 py-3 border-t border-surface-200 bg-surface-50 flex justify-end gap-2">
         <button type="button" onClick={onCancel} disabled={saving}
-          className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-100">
+          className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           Cancel
         </button>
         <button type="button" onClick={handleConfirm} disabled={saving}
-          className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50">
+          className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           {saving ? 'Deleting…' : 'Delete Device'}
         </button>
       </div>
@@ -2006,11 +2006,11 @@ function ApproveChangeModal({ req, device, assetById, onCancel, onConfirm }) {
       </div>
       <div className="px-5 py-3 border-t border-surface-200 bg-surface-50 flex justify-end gap-2 flex-shrink-0">
         <button type="button" onClick={onCancel} disabled={saving}
-          className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-100">
+          className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           Cancel
         </button>
         <button type="button" onClick={handleConfirm} disabled={saving}
-          className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
+          className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           {saving ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Approving…</> : <><CheckCircle2 size={14} aria-hidden="true" /> Approve &amp; Apply</>}
         </button>
       </div>
@@ -2107,7 +2107,7 @@ function DeviceHistoryModal({ device, changeRequests, onClose }) {
       </div>
       <div className="px-5 py-3 border-t border-surface-200 bg-surface-50 flex justify-end flex-shrink-0">
         <button type="button" onClick={onClose}
-          className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-100">
+          className="px-4 py-2 text-sm font-medium text-surface-600 bg-white border border-surface-200 rounded-lg hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
           Close
         </button>
       </div>

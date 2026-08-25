@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -53,6 +54,7 @@ function calcTuition(credits, isOnline, rates) {
 
 // ─── Tuition Settings Modal ───────────────────────────────────────────────────
 function TuitionSettingsModal({ rates, onSave, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
   const [local, setLocal] = useState({ ...DEFAULT_TUITION_RATES, ...rates })
   const set = (key, val) => setLocal(p => ({ ...p, [key]: parseFloat(val) || 0 }))
 
@@ -62,13 +64,13 @@ function TuitionSettingsModal({ rates, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label="Tuition and fee rates" className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b border-surface-100 flex items-center justify-between shrink-0">
           <div>
             <h2 className="text-base font-bold text-surface-900">Tuition &amp; Fee Rates</h2>
             <p className="text-xs text-surface-400 mt-0.5">Per-credit rates — apply across all programs</p>
           </div>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 text-xl leading-none">x</button>
+          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 text-xl leading-none focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">x</button>
         </div>
         <div className="px-6 py-5 space-y-5 overflow-y-auto">
           <div>
@@ -81,13 +83,13 @@ function TuitionSettingsModal({ rates, onSave, onClose }) {
                 <div key={key} className="flex items-center gap-3">
                   <div className="flex items-center gap-1.5 flex-1">
                     {icon === 'building'
-                      ? <Building2 size={13} className="text-blue-500"/>
-                      : <Wifi size={13} className="text-violet-500"/>}
-                    <label className="text-sm text-surface-700">{label}</label>
+                      ? <Building2 size={13} className="text-blue-500" aria-hidden="true" />
+                      : <Wifi size={13} className="text-violet-500" aria-hidden="true" />}
+                    <label htmlFor={`pc-rate-${key}`} className="text-sm text-surface-700">{label}</label>
                   </div>
                   <div className="relative w-28">
-                    <span className="absolute left-3 top-2 text-surface-400 text-sm">$</span>
-                    <input type="number" min={0} step={0.01} value={local[key] ?? ''}
+                    <span className="absolute left-3 top-2 text-surface-400 text-sm" aria-hidden="true">$</span>
+                    <input id={`pc-rate-${key}`} type="number" min={0} step={0.01} value={local[key] ?? ''}
                       onChange={e => set(key, e.target.value)}
                       className="w-full pl-7 pr-3 py-1.5 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/40"/>
                   </div>
@@ -108,10 +110,10 @@ function TuitionSettingsModal({ rates, onSave, onClose }) {
                 { key: 'fee_student_assoc', label: 'Student Association Fee' },
               ].map(({ key, label }) => (
                 <div key={key} className="flex items-center gap-3">
-                  <label className="text-sm text-surface-700 flex-1">{label}</label>
+                  <label htmlFor={`pc-fee-${key}`} className="text-sm text-surface-700 flex-1">{label}</label>
                   <div className="relative w-28">
-                    <span className="absolute left-3 top-2 text-surface-400 text-sm">$</span>
-                    <input type="number" min={0} step={0.01} value={local[key] ?? ''}
+                    <span className="absolute left-3 top-2 text-surface-400 text-sm" aria-hidden="true">$</span>
+                    <input id={`pc-fee-${key}`} type="number" min={0} step={0.01} value={local[key] ?? ''}
                       onChange={e => set(key, e.target.value)}
                       className="w-full pl-7 pr-3 py-1.5 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/40"/>
                   </div>
@@ -138,9 +140,9 @@ function TuitionSettingsModal({ rates, onSave, onClose }) {
           )}
         </div>
         <div className="px-6 pb-5 flex justify-end gap-2 shrink-0 border-t border-surface-100 pt-4">
-          <button onClick={onClose} className="px-4 py-2 text-sm border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
           <button onClick={() => { onSave(local); onClose() }}
-            className="px-5 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700">
+            className="px-5 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Save Rates
           </button>
         </div>
@@ -259,7 +261,7 @@ function printCostReport(programName, breakdown, tuitionRates) {
     }).join('')
     return `<div class="sem"><div class="sh"><span>${esc(sem.label)}</span>
       <span>Tuition:${fmt(sem.semTuition)} | Materials:${fmt(sem.semTools)} | <b>Semester:${fmt(sem.semTotal)}</b></span></div>
-      <table><thead><tr><th>Course #</th><th>Description</th><th>Category</th><th class="amt">Cost</th></tr></thead>
+      <table><thead><tr><th scope="col">Course #</th><th scope="col">Description</th><th scope="col">Category</th><th scope="col" class="amt">Cost</th></tr></thead>
       <tbody>${rows}<tr class="st2"><td colspan="3" style="text-align:right;font-weight:bold">Semester Total</td><td class="amt"><b>${fmt(sem.semTotal)}</b></td></tr></tbody></table></div>`
   }).join('')
 
@@ -304,9 +306,9 @@ function SemesterBlock({ sem, defaultOpen, externalCosts, deliveryModes, onManua
   return (
     <div className="border border-surface-200 rounded-xl overflow-hidden">
       <button onClick={() => setOpen(o=>!o)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-emerald-700 hover:bg-emerald-800 transition-colors">
+        className="w-full flex items-center justify-between px-4 py-3 bg-emerald-700 hover:bg-emerald-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
         <div className="flex items-center gap-2">
-          {open ? <ChevronDown size={14} className="text-emerald-200"/> : <ChevronRight size={14} className="text-emerald-200"/>}
+          {open ? <ChevronDown size={14} className="text-emerald-200" aria-hidden="true" /> : <ChevronRight size={14} className="text-emerald-200" aria-hidden="true" />}
           <span className="text-sm font-bold text-white">{sem.label}</span>
         </div>
         <div className="flex items-center gap-4 text-xs text-emerald-200">
@@ -374,8 +376,8 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
     <div className="bg-white">
       {/* Row header */}
       <div className="flex items-center gap-2 px-4 py-2.5 hover:bg-surface-50 transition-colors">
-        <button onClick={()=>setOpen(o=>!o)} className="flex items-center gap-2 flex-1 text-left min-w-0">
-          {open ? <ChevronDown size={12} className="text-surface-400 shrink-0"/> : <ChevronRight size={12} className="text-surface-400 shrink-0"/>}
+        <button onClick={()=>setOpen(o=>!o)} className="flex items-center gap-2 flex-1 text-left min-w-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+          {open ? <ChevronDown size={12} className="text-surface-400 shrink-0" aria-hidden="true" /> : <ChevronRight size={12} className="text-surface-400 shrink-0" aria-hidden="true" />}
           <span className="text-xs font-bold text-surface-700 w-20 shrink-0">{course.course_num}</span>
           <span className="text-xs text-surface-700 flex-1 truncate">{course.course_title}</span>
         </button>
@@ -386,22 +388,20 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
             <button
               onClick={()=>onDeliveryModeChange(course.course_num,'in-person')}
               title="Apply Resident / Non-resident rate"
-              className={`flex items-center gap-1 px-2 py-1 transition-colors
-                ${!isOnline ? 'bg-blue-600 text-white' : 'bg-white text-surface-500 hover:bg-surface-50'}`}>
-              <Building2 size={10}/> In-Person
+              className={`flex items-center gap-1 px-2 py-1 transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${!isOnline ? 'bg-blue-600 text-white' : 'bg-white text-surface-500 hover:bg-surface-50'}`}>
+              <Building2 size={10} aria-hidden="true" /> In-Person
             </button>
             <button
               onClick={()=>onDeliveryModeChange(course.course_num,'online')}
               title="Apply Online rate"
-              className={`flex items-center gap-1 px-2 py-1 transition-colors border-l border-surface-200
-                ${isOnline ? 'bg-violet-600 text-white' : 'bg-white text-surface-500 hover:bg-surface-50'}`}>
-              <Wifi size={10}/> Online
+              className={`flex items-center gap-1 px-2 py-1 transition-colors border-l border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${isOnline ? 'bg-violet-600 text-white' : 'bg-white text-surface-500 hover:bg-surface-50'}`}>
+              <Wifi size={10} aria-hidden="true" /> Online
             </button>
             {isManualOverride && (
               <button
                 onClick={()=>onDeliveryModeChange(course.course_num,'auto')}
                 title="Reset to Syllabus Wizard setting"
-                className="flex items-center gap-1 px-2 py-1 bg-white text-surface-400 hover:bg-surface-50 hover:text-surface-600 transition-colors border-l border-surface-200">
+                className="flex items-center gap-1 px-2 py-1 bg-white text-surface-400 hover:bg-surface-50 hover:text-surface-600 transition-colors border-l border-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                 ↺
               </button>
             )}
@@ -464,16 +464,15 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
                   <span className="absolute left-2.5 top-1.5 text-amber-500 text-xs font-medium pointer-events-none">$</span>
-                  <input type="number" min="0" step="0.01" placeholder="0.00"
+                  <input type="number" min="0" step="0.01" placeholder="0.00" aria-label={`Estimated materials cost for ${course.course_num || course.course_title || 'course'}`}
                     value={inputVal}
                     onChange={e=>{setInputVal(e.target.value);setSaved(false)}}
                     onKeyDown={e=>e.key==='Enter'&&handleMaterialSave()}
                     className="w-full pl-6 pr-3 py-1.5 text-xs border border-amber-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-400/40 text-right"/>
                 </div>
                 <button onClick={handleMaterialSave}
-                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all shrink-0
-                    ${saved?'bg-emerald-100 text-emerald-700 border border-emerald-200':'bg-amber-600 text-white hover:bg-amber-700'}`}>
-                  {saved?<><Check size={11}/> Saved</>:'Save'}
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all shrink-0 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${saved?'bg-emerald-100 text-emerald-700 border border-emerald-200':'bg-amber-600 text-white hover:bg-amber-700'}`}>
+                  {saved?<><Check size={11} aria-hidden="true" /> Saved</>:'Save'}
                 </button>
               </div>
             </div>
@@ -612,12 +611,12 @@ export default function ProgramCostPage() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate('/instructor-tools')}
-            className="flex items-center gap-1 text-sm text-surface-500 hover:text-brand-600 hover:bg-surface-100 px-2 py-1.5 rounded-lg transition-colors"
+            className="flex items-center gap-1 text-sm text-surface-500 hover:text-brand-600 hover:bg-surface-100 px-2 py-1.5 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
-            <ChevronLeft size={15} /> Back
+            <ChevronLeft size={15} aria-hidden="true" /> Back
           </button>
           <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center">
-            <DollarSign size={22} className="text-emerald-600"/>
+            <DollarSign size={22} className="text-emerald-600" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">Program Cost</h1>
@@ -625,8 +624,8 @@ export default function ProgramCostPage() {
           </div>
         </div>
         <button onClick={()=>setShowTuitionModal(true)}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors">
-          <Settings size={13}/> Tuition Rates
+          className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+          <Settings size={13} aria-hidden="true" /> Tuition Rates
         </button>
       </div>
 
@@ -634,11 +633,11 @@ export default function ProgramCostPage() {
       {hasTuitionRates && (
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-full text-xs text-blue-700">
-            <Building2 size={11}/>
+            <Building2 size={11} aria-hidden="true" />
             <span>Resident/Non-res: <strong>{fmtCurrencyShort((tuitionRates.resident_per_credit||0)+feeTotal)}/cr</strong></span>
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-50 border border-violet-200 rounded-full text-xs text-violet-700">
-            <Wifi size={11}/>
+            <Wifi size={11} aria-hidden="true" />
             <span>Online: <strong>{fmtCurrencyShort((tuitionRates.online_per_credit||0)+feeTotal)}/cr</strong></span>
           </div>
           <span className="text-[10px] text-surface-400 italic">incl. all per-credit fees · click "Tuition Rates" to edit</span>
@@ -648,13 +647,13 @@ export default function ProgramCostPage() {
       {/* Tuition warning */}
       {!hasTuitionRates && (
         <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-          <AlertCircle size={15} className="text-amber-500 shrink-0"/>
+          <AlertCircle size={15} className="text-amber-500 shrink-0" aria-hidden="true" />
           <div className="flex-1">
             <p className="text-xs font-semibold text-amber-800">Tuition rates not set</p>
             <p className="text-[11px] text-amber-600">Cost totals will show $0.00 for tuition. Click "Tuition Rates" to configure rates and fees.</p>
           </div>
           <button onClick={()=>setShowTuitionModal(true)}
-            className="px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors shrink-0">
+            className="px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             Set Rates
           </button>
         </div>
@@ -669,8 +668,7 @@ export default function ProgramCostPage() {
             const hasPlanner = !!planner
             return (
               <button key={prog.id} onClick={()=>hasPlanner&&setSelectedProgram(prog.id)} disabled={!hasPlanner}
-                className={`relative flex flex-col gap-1.5 px-4 py-3.5 rounded-xl border-2 text-left transition-all
-                  ${selectedProgram===prog.id?'bg-emerald-50 border-emerald-400 shadow-sm':hasPlanner?'bg-white border-surface-200 hover:border-emerald-300 hover:bg-emerald-50/30':'bg-surface-50 border-surface-100 opacity-50 cursor-not-allowed'}`}>
+                className={`relative flex flex-col gap-1.5 px-4 py-3.5 rounded-xl border-2 text-left transition-all min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${selectedProgram===prog.id?'bg-emerald-50 border-emerald-400 shadow-sm':hasPlanner?'bg-white border-surface-200 hover:border-emerald-300 hover:bg-emerald-50/30':'bg-surface-50 border-surface-100 opacity-50 cursor-not-allowed'}`}>
                 <span className="text-sm font-semibold text-surface-900 leading-tight">{prog.name}</span>
                 {hasPlanner?<span className="text-[10px] text-emerald-600 font-medium">✓ Approved planner available</span>:<span className="text-[10px] text-surface-400 italic">No approved planner yet</span>}
                 {selectedProgram===prog.id&&<span className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-emerald-500"/>}
@@ -683,13 +681,13 @@ export default function ProgramCostPage() {
       {loading && <div className="text-sm text-surface-400 text-center py-12">Loading program data…</div>}
       {!loading&&!selectedProgram&&(
         <div className="bg-surface-50 border border-surface-200 rounded-2xl p-12 text-center">
-          <GraduationCap size={40} className="text-surface-300 mx-auto mb-3"/>
+          <GraduationCap size={40} className="text-surface-300 mx-auto mb-3" aria-hidden="true" />
           <p className="text-surface-600 font-medium">Select a program above to view the cost breakdown</p>
         </div>
       )}
       {!loading&&selectedProgram&&!activePlanner&&(
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-8 text-center">
-          <AlertCircle size={32} className="text-amber-400 mx-auto mb-3"/>
+          <AlertCircle size={32} className="text-amber-400 mx-auto mb-3" aria-hidden="true" />
           <p className="text-amber-700 font-medium">No approved program revision found for this program</p>
           <p className="text-sm text-amber-600 mt-1">Approve a Program Revision with planner data to generate cost estimates.</p>
         </div>
@@ -744,8 +742,8 @@ export default function ProgramCostPage() {
               </p>
             </div>
             <button onClick={()=>printCostReport(programName,breakdown,tuitionRates)}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-xl hover:bg-emerald-100 transition-colors">
-              <Printer size={14}/> Print Cost Report
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-xl hover:bg-emerald-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Printer size={14} aria-hidden="true" /> Print Cost Report
             </button>
           </div>
 

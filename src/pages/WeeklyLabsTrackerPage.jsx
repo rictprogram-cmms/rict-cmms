@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -51,6 +53,7 @@ export default function WeeklyLabsTrackerPage() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function SignOffModal({ isOpen, onClose, studentName, weekNumber, weekDate, className, onSignOff }) {
+  const dialogRef = useDialogA11y(!!isOpen, onClose)
   const [badge, setBadge] = useState('')
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState('')
@@ -145,16 +148,17 @@ function SignOffModal({ isOpen, onClose, studentName, weekNumber, weekDate, clas
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
       <div
+        ref={dialogRef} role="dialog" aria-modal="true" aria-label="Sign off lab week"
         className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="relative bg-gradient-to-r from-brand-600 to-brand-700 px-6 py-5 text-white text-center">
-          <button onClick={onClose} className="absolute top-3 right-3 p-1 rounded-full hover:bg-white/20 transition">
-            <X size={20} />
+          <button type="button" onClick={onClose} aria-label="Close" className="absolute top-3 right-3 p-1 rounded-full hover:bg-white/20 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+            <X size={20} aria-hidden="true" />
           </button>
           <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
-            <ShieldCheck size={28} />
+            <ShieldCheck size={28} aria-hidden="true" />
           </div>
           <h2 className="text-lg font-bold">Sign Off Lab</h2>
           <p className="text-sm opacity-80 mt-1">Have an instructor swipe their badge to sign off on this lab.</p>
@@ -213,12 +217,12 @@ function SignOffModal({ isOpen, onClose, studentName, weekNumber, weekDate, clas
             disabled={verifying || !badge.trim()}
             className="w-full mt-4 px-4 py-3 bg-brand-600 text-white rounded-xl font-semibold text-sm
                        hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed transition
-                       flex items-center justify-center gap-2"
+                       flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
           >
             {verifying ? (
-              <><Loader2 size={18} className="animate-spin" /> Verifying...</>
+              <><Loader2 size={18} className="animate-spin" aria-hidden="true" /> Verifying...</>
             ) : (
-              <><ShieldCheck size={18} /> Verify & Sign Off</>
+              <><ShieldCheck size={18} aria-hidden="true" /> Verify & Sign Off</>
             )}
           </button>
         </div>
@@ -232,6 +236,7 @@ function SignOffModal({ isOpen, onClose, studentName, weekNumber, weekDate, clas
 // ═══════════════════════════════════════════════════════════════════════════
 
 function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, weekDate, weekStartDate, weekEndDate, classes, labStatuses, onAllDone }) {
+  const dialogRef = useDialogA11y(!!isOpen, onClose)
   const [badge, setBadge] = useState('')
   const [verifying, setVerifying] = useState(false)
   const [error, setError] = useState('')
@@ -598,16 +603,17 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
       <div
+        ref={dialogRef} role="dialog" aria-modal="true" aria-label="Mark week done"
         className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* Header — Emerald gradient to distinguish from regular Sign Off */}
         <div className="relative bg-gradient-to-r from-emerald-600 to-emerald-700 px-6 py-5 text-white text-center flex-shrink-0">
-          <button onClick={onClose} className="absolute top-3 right-3 p-1 rounded-full hover:bg-white/20 transition">
-            <X size={20} />
+          <button type="button" onClick={onClose} aria-label="Close" className="absolute top-3 right-3 p-1 rounded-full hover:bg-white/20 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+            <X size={20} aria-hidden="true" />
           </button>
           <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3">
-            <Star size={28} />
+            <Star size={28} aria-hidden="true" />
           </div>
           <h2 className="text-lg font-bold">Mark All Done</h2>
           <p className="text-sm opacity-80 mt-1">
@@ -634,7 +640,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
           {/* ── LAB SIGN-OFF STATUS ── */}
           <div className="px-6 py-4 border-b border-surface-200">
             <div className="flex items-center gap-2 mb-3">
-              <BookOpen size={16} className="text-surface-500" />
+              <BookOpen size={16} className="text-surface-500" aria-hidden="true" />
               <h3 className="text-sm font-semibold text-surface-900">Lab Sign-Off Status</h3>
             </div>
 
@@ -656,15 +662,15 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                     <span className="font-medium text-surface-900">{ls.className}</span>
                     {ls.allDone ? (
                       <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700">
-                        <CheckCircle2 size={14} /> Done
+                        <CheckCircle2 size={14} aria-hidden="true" /> Done
                       </span>
                     ) : ls.labComplete ? (
                       <span className="flex items-center gap-1 text-xs font-semibold text-blue-700">
-                        <CheckCircle2 size={14} /> Lab Signed Off
+                        <CheckCircle2 size={14} aria-hidden="true" /> Lab Signed Off
                       </span>
                     ) : (
                       <span className="flex items-center gap-1 text-xs font-semibold text-amber-700">
-                        <Clock size={14} /> Not Signed Off
+                        <Clock size={14} aria-hidden="true" /> Not Signed Off
                       </span>
                     )}
                   </div>
@@ -672,12 +678,12 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
 
                 {allLabsDone ? (
                   <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700 font-medium">
-                    <CheckCircle2 size={14} />
+                    <CheckCircle2 size={14} aria-hidden="true" />
                     All labs signed off — ready for All Done
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700 font-medium">
-                    <AlertTriangle size={14} />
+                    <AlertTriangle size={14} aria-hidden="true" />
                     Some labs not yet signed off — instructor can still approve All Done
                   </div>
                 )}
@@ -753,30 +759,30 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                 ? 'bg-emerald-100 border border-emerald-200'
                 : ''
             }`}>
-              <ClipboardList size={16} className={hasOpenWOs && anyWOMissingLog ? 'text-red-600' : hasOpenWOs && !anyWOMissingLog ? 'text-emerald-600' : 'text-surface-500'} />
+              <ClipboardList size={16} className={hasOpenWOs && anyWOMissingLog ? 'text-red-600' : hasOpenWOs && !anyWOMissingLog ? 'text-emerald-600' : 'text-surface-500'} aria-hidden="true" />
               <h3 className={`text-sm font-semibold ${hasOpenWOs && anyWOMissingLog ? 'text-red-800' : hasOpenWOs && !anyWOMissingLog ? 'text-emerald-800' : 'text-surface-900'}`}>
                 Open Work Orders
                 <span className="font-normal opacity-70 ml-1">(assigned to {studentName})</span>
               </h3>
               {hasOpenWOs && anyWOMissingLog && (
                 <span className="ml-auto text-[10px] font-bold text-red-700 flex items-center gap-1">
-                  <AlertTriangle size={11} /> Missing log entries this week
+                  <AlertTriangle size={11} aria-hidden="true" /> Missing log entries this week
                 </span>
               )}
               {hasOpenWOs && !anyWOMissingLog && (
                 <span className="ml-auto text-[10px] font-bold text-emerald-700 flex items-center gap-1">
-                  <CheckCircle2 size={11} /> Log entries recorded this week
+                  <CheckCircle2 size={11} aria-hidden="true" /> Log entries recorded this week
                 </span>
               )}
             </div>
 
             {loadingWOs ? (
               <div className="flex justify-center py-4">
-                <Loader2 size={20} className="animate-spin text-surface-400" />
+                <Loader2 size={20} className="animate-spin text-surface-400" aria-hidden="true" />
               </div>
             ) : studentWorkOrders.length === 0 ? (
               <div className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-700">
-                <CheckCircle2 size={16} />
+                <CheckCircle2 size={16} aria-hidden="true" />
                 No open work orders — good to go!
               </div>
             ) : (
@@ -805,7 +811,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                               </span>
                               {isLate && (
                                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 flex items-center gap-0.5">
-                                  <AlertTriangle size={10} /> LATE
+                                  <AlertTriangle size={10} aria-hidden="true" /> LATE
                                 </span>
                               )}
                             </div>
@@ -824,13 +830,13 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                       {logs.length > 0 ? (
                         <div className="border-t border-surface-200 divide-y divide-surface-100">
                           <div className={`px-3 py-1.5 flex items-center gap-1.5 ${hasLogThisWeek ? 'bg-emerald-50' : 'bg-red-50'}`}>
-                            <Clock size={11} className={hasLogThisWeek ? 'text-emerald-500' : 'text-red-400'} />
+                            <Clock size={11} className={hasLogThisWeek ? 'text-emerald-500' : 'text-red-400'} aria-hidden="true" />
                             <span className={`text-[10px] font-semibold uppercase tracking-wide ${hasLogThisWeek ? 'text-emerald-700' : 'text-red-600'}`}>
                               Work Log — {logs.length} {logs.length === 1 ? 'entry' : 'entries'} &nbsp;·&nbsp; {logs.reduce((sum, l) => sum + (parseFloat(l.hours) || 0), 0).toFixed(2)} hrs total
                             </span>
                             {!hasLogThisWeek && (
                               <span className="ml-auto text-[10px] font-bold text-red-600 flex items-center gap-0.5">
-                                <AlertTriangle size={10} /> No entry this week
+                                <AlertTriangle size={10} aria-hidden="true" /> No entry this week
                               </span>
                             )}
                           </div>
@@ -858,7 +864,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                         </div>
                       ) : (
                         <div className="border-t border-surface-200 px-3 py-2 bg-white flex items-center gap-1.5">
-                          <Clock size={11} className="text-surface-300" />
+                          <Clock size={11} className="text-surface-300" aria-hidden="true" />
                           <span className="text-[10px] text-surface-400 italic">No work log entries yet</span>
                         </div>
                       )}
@@ -878,30 +884,30 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                 ? 'bg-emerald-100 border border-emerald-200'
                 : ''
             }`}>
-              <AlertTriangle size={16} className={hasLateWOs && anyLateWOMissingLog ? 'text-red-600' : hasLateWOs ? 'text-emerald-600' : 'text-red-500'} />
+              <AlertTriangle size={16} className={hasLateWOs && anyLateWOMissingLog ? 'text-red-600' : hasLateWOs ? 'text-emerald-600' : 'text-red-500'} aria-hidden="true" />
               <h3 className={`text-sm font-semibold ${hasLateWOs && anyLateWOMissingLog ? 'text-red-800' : hasLateWOs ? 'text-emerald-800' : 'text-surface-900'}`}>
                 Late Work Orders
                 <span className="font-normal opacity-70 ml-1">(all students)</span>
               </h3>
               {hasLateWOs && anyLateWOMissingLog && (
                 <span className="ml-auto text-[10px] font-bold text-red-700 flex items-center gap-1">
-                  <AlertTriangle size={11} /> Missing log entries this week
+                  <AlertTriangle size={11} aria-hidden="true" /> Missing log entries this week
                 </span>
               )}
               {hasLateWOs && !anyLateWOMissingLog && (
                 <span className="ml-auto text-[10px] font-bold text-emerald-700 flex items-center gap-1">
-                  <CheckCircle2 size={11} /> All have log entries this week
+                  <CheckCircle2 size={11} aria-hidden="true" /> All have log entries this week
                 </span>
               )}
             </div>
 
             {loadingWOs ? (
               <div className="flex justify-center py-4">
-                <Loader2 size={20} className="animate-spin text-surface-400" />
+                <Loader2 size={20} className="animate-spin text-surface-400" aria-hidden="true" />
               </div>
             ) : lateWorkOrders.length === 0 ? (
               <div className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-700">
-                <CheckCircle2 size={16} />
+                <CheckCircle2 size={16} aria-hidden="true" />
                 No late work orders — everyone is on track!
               </div>
             ) : (
@@ -939,7 +945,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                                 {wo.priority}
                               </span>
                               <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200 flex items-center gap-0.5">
-                                <AlertTriangle size={10} /> LATE
+                                <AlertTriangle size={10} aria-hidden="true" /> LATE
                               </span>
                               {isThisStudent && (
                                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 border border-orange-200">
@@ -965,7 +971,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                       <div className="border-t border-surface-200 divide-y divide-surface-100">
                         {/* This-week logs header */}
                         <div className={`px-3 py-1.5 flex items-center gap-1.5 ${hasLateLogThisWeek ? 'bg-emerald-50' : 'bg-red-50'}`}>
-                          <Clock size={11} className={hasLateLogThisWeek ? 'text-emerald-500' : 'text-red-400'} />
+                          <Clock size={11} className={hasLateLogThisWeek ? 'text-emerald-500' : 'text-red-400'} aria-hidden="true" />
                           <span className={`text-[10px] font-semibold uppercase tracking-wide ${hasLateLogThisWeek ? 'text-emerald-700' : 'text-red-600'}`}>
                             {hasLateLogThisWeek
                               ? `This week — ${thisWeekLogs.length} ${thisWeekLogs.length === 1 ? 'entry' : 'entries'}`
@@ -973,7 +979,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                           </span>
                           {!hasLateLogThisWeek && (
                             <span className="ml-auto text-[10px] font-bold text-red-600 flex items-center gap-0.5">
-                              <AlertTriangle size={10} /> Required
+                              <AlertTriangle size={10} aria-hidden="true" /> Required
                             </span>
                           )}
                         </div>
@@ -1041,7 +1047,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                         {/* No logs at all */}
                         {lateLogs.length === 0 && (
                           <div className="px-3 py-2 bg-white flex items-center gap-1.5">
-                            <Clock size={11} className="text-surface-300" />
+                            <Clock size={11} className="text-surface-300" aria-hidden="true" />
                             <span className="text-[10px] text-surface-400 italic">No work log entries recorded</span>
                           </div>
                         )}
@@ -1057,7 +1063,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
           {(hasOpenWOs || hasLateWOs || !allLabsDone) && (
             <div className="px-6 py-3 bg-amber-50 border-b border-amber-200">
               <p className="text-xs text-amber-800 font-medium flex items-center gap-2">
-                <AlertTriangle size={14} className="flex-shrink-0" />
+                <AlertTriangle size={14} className="flex-shrink-0" aria-hidden="true" />
                 Instructor: Review the items above before approving All Done. Swiping your badge will mark everything complete regardless.
               </p>
             </div>
@@ -1188,7 +1194,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
           <div className="px-6 py-5">
             {!canVerify && (
               <div className="mb-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 space-y-1">
-                <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={13} /> Complete the following before the instructor can swipe:</p>
+                <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={13} aria-hidden="true" /> Complete the following before the instructor can swipe:</p>
                 {!allLabsDone && <p className="pl-4">• All labs must be signed off</p>}
                 {anyWOMissingLog && <p className="pl-4">• Work log entry required for each open work order this week</p>}
                 {anyLateWOMissingLog && <p className="pl-4">• Work log entry required for each late work order this week (any student)</p>}
@@ -1236,16 +1242,15 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
               onClick={() => canVerify && doVerify()}
               disabled={verifying || !badge.trim() || !canVerify}
               className={`w-full mt-4 px-4 py-3 rounded-xl font-semibold text-sm transition
-                flex items-center justify-center gap-2
-                ${canVerify
+                flex items-center justify-center gap-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${canVerify
                   ? 'bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed'
                   : 'bg-surface-200 text-surface-400 cursor-not-allowed'
                 }`}
             >
               {verifying ? (
-                <><Loader2 size={18} className="animate-spin" /> Verifying...</>
+                <><Loader2 size={18} className="animate-spin" aria-hidden="true" /> Verifying...</>
               ) : (
-                <><Star size={18} /> Verify & Mark All Done</>
+                <><Star size={18} aria-hidden="true" /> Verify & Mark All Done</>
               )}
             </button>
           </div>
@@ -1264,10 +1269,13 @@ function InstructorView() {
   const [selectedClass, setSelectedClass] = useState('')
   const { report, loading: reportLoading, refresh } = useLabReport(selectedClass)
   const { updateStatus } = useLabTrackerActions()
+  const [confirmDone, setConfirmDone] = useState(null) // { student, weekNumber } awaiting confirmation
 
-  const handleCheckbox = async (student, weekNumber, field, checked) => {
-    if (field === 'done' && checked) {
-      if (!confirm(`Mark ${student.fullName} as Done for Week ${weekNumber}? This will also mark Lab as complete.`)) return
+  const handleCheckbox = async (student, weekNumber, field, checked, confirmed = false) => {
+    if (field === 'done' && checked && !confirmed) {
+      // Accessible confirmation (replaces window.confirm); re-enters with confirmed=true
+      setConfirmDone({ student, weekNumber })
+      return
     }
     // Look up week date context from classWeeks for proper insert data
     const weekInfo = report.classWeeks?.find(w => w.weekNumber === weekNumber)
@@ -1280,16 +1288,25 @@ function InstructorView() {
   }
 
   if (classesLoading) {
-    return <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" /></div>
+    return <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" aria-hidden="true" /></div>
   }
 
   return (
     <div className="space-y-4">
+      <ConfirmDialog
+        open={!!confirmDone}
+        title={confirmDone ? `Mark ${confirmDone.student.fullName} as Done for Week ${confirmDone.weekNumber}?` : ''}
+        message="This will also mark Lab as complete."
+        confirmLabel="Mark done"
+        cancelLabel="Cancel"
+        onConfirm={() => { const c = confirmDone; setConfirmDone(null); if (c) handleCheckbox(c.student, c.weekNumber, 'done', true, true) }}
+        onClose={() => setConfirmDone(null)}
+      />
       {/* Controls */}
       <div className="flex gap-4 items-end flex-wrap">
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs font-medium text-surface-600 mb-1.5">Select Class</label>
-          <select
+          <label htmlFor="wl-fld-select-class-1" className="block text-xs font-medium text-surface-600 mb-1.5">Select Class</label>
+          <select id="wl-fld-select-class-1"
             value={selectedClass}
             onChange={e => setSelectedClass(e.target.value)}
             className="w-full px-3 py-2.5 border border-surface-200 rounded-lg text-sm bg-white"
@@ -1305,15 +1322,15 @@ function InstructorView() {
         <button
           onClick={() => window.print()}
           disabled={!report}
-          className="flex items-center gap-2 px-4 py-2.5 bg-surface-100 text-surface-600 rounded-lg text-sm font-medium hover:bg-surface-200 disabled:opacity-40"
+          className="flex items-center gap-2 px-4 py-2.5 bg-surface-100 text-surface-600 rounded-lg text-sm font-medium hover:bg-surface-200 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
-          <Printer size={16} /> Print
+          <Printer size={16} aria-hidden="true" /> Print
         </button>
       </div>
 
       {/* Report */}
       {reportLoading ? (
-        <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" /></div>
+        <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" aria-hidden="true" /></div>
       ) : !selectedClass ? (
         <EmptyState text="Select a class to view student progress" />
       ) : !report ? (
@@ -1335,7 +1352,7 @@ function InstructorView() {
             <table className="w-full text-xs min-w-[700px]">
               <thead>
                 <tr className="bg-surface-50">
-                  <th className="px-3 py-2.5 text-left font-semibold text-surface-600 min-w-[180px]">Student Name</th>
+                  <th scope="col" className="px-3 py-2.5 text-left font-semibold text-surface-600 min-w-[180px]">Student Name</th>
                   {Array.from({ length: report.totalWeeks }, (_, i) => {
                     const wk = report.classWeeks?.[i]
                     const label = wk?.isFinals ? 'Finals' : `W${i + 1}`
@@ -1346,7 +1363,7 @@ function InstructorView() {
                       dateRange = `${s.getMonth() + 1}/${s.getDate()}-${e.getMonth() + 1}/${e.getDate()}`
                     }
                     return (
-                      <th key={i} className="px-2 py-2.5 text-center font-semibold text-surface-600 min-w-[80px]">
+                      <th scope="col" key={i} className="px-2 py-2.5 text-center font-semibold text-surface-600 min-w-[80px]">
                         <div className={wk?.isFinals ? 'text-red-600' : ''}>{label}</div>
                         {dateRange && <div className="text-[10px] font-normal text-surface-400">{dateRange}</div>}
                       </th>
@@ -1440,7 +1457,7 @@ function StudentView() {
   })
 
   if (loading) {
-    return <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" /></div>
+    return <div className="flex justify-center py-20"><Loader2 size={24} className="animate-spin text-brand-600" aria-hidden="true" /></div>
   }
 
   if (!report || report.classes.length === 0) {
@@ -1626,15 +1643,15 @@ function StudentView() {
                       </span>
                     ) : allDone ? (
                       <span className="flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
-                        <BadgeCheck size={14} /> Done
+                        <BadgeCheck size={14} aria-hidden="true" /> Done
                       </span>
                     ) : labDone ? (
                       <span className="flex items-center gap-1 text-xs font-semibold text-blue-700 bg-blue-50 px-3 py-1.5 rounded-full border border-blue-200">
-                        <CheckCircle2 size={14} /> Lab Signed Off
+                        <CheckCircle2 size={14} aria-hidden="true" /> Lab Signed Off
                       </span>
                     ) : (
                       <span className="flex items-center gap-1 text-xs font-semibold text-surface-400 bg-surface-50 px-3 py-1.5 rounded-full border border-surface-200">
-                        <Clock size={14} /> Not Signed Off
+                        <Clock size={14} aria-hidden="true" /> Not Signed Off
                       </span>
                     )}
 
@@ -1645,9 +1662,9 @@ function StudentView() {
                           openSignOff(cls, currentWeek.weekNumber, currentWeek.startDate, currentWeek.endDate)
                         }}
                         className="flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200
-                                   hover:bg-amber-100 transition cursor-pointer"
+                                   hover:bg-amber-100 transition cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                       >
-                        <ShieldCheck size={14} /> Sign Off Lab
+                        <ShieldCheck size={14} aria-hidden="true" /> Sign Off Lab
                       </button>
                     )}
                   </div>
@@ -1660,7 +1677,7 @@ function StudentView() {
           {allClassesDone ? (
             <div className="text-center py-3">
               <span className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 bg-emerald-50 px-6 py-3 rounded-full">
-                <BadgeCheck size={20} /> All Classes Done This Week
+                <BadgeCheck size={20} aria-hidden="true" /> All Classes Done This Week
               </span>
             </div>
           ) : (() => {
@@ -1672,7 +1689,7 @@ function StudentView() {
                 <div className="flex items-center justify-between gap-4 flex-wrap">
                   <div className="flex-1 min-w-[200px]">
                     <h4 className={`text-sm font-bold flex items-center gap-2 ${allLabsSigned ? 'text-emerald-900' : 'text-surface-500'}`}>
-                      <Star size={16} className={allLabsSigned ? 'text-emerald-600' : 'text-surface-400'} />
+                      <Star size={16} className={allLabsSigned ? 'text-emerald-600' : 'text-surface-400'} aria-hidden="true" />
                       All work completed for the week?
                     </h4>
                     {allLabsSigned ? (
@@ -1683,7 +1700,7 @@ function StudentView() {
                       </p>
                     ) : (
                       <p className="text-xs text-amber-700 mt-1 flex items-center gap-1.5">
-                        <AlertTriangle size={12} className="flex-shrink-0" />
+                        <AlertTriangle size={12} className="flex-shrink-0" aria-hidden="true" />
                         {unsignedCount === 1
                           ? '1 lab still needs to be signed off before you can mark All Done.'
                           : `${unsignedCount} labs still need to be signed off before you can mark All Done.`}
@@ -1694,13 +1711,12 @@ function StudentView() {
                     onClick={allLabsSigned ? openAllDone : undefined}
                     disabled={!allLabsSigned}
                     title={!allLabsSigned ? 'All labs must be signed off first' : undefined}
-                    className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition
-                      ${allLabsSigned
+                    className={`flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-sm transition min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${allLabsSigned
                         ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-md shadow-emerald-200 active:scale-[0.98] cursor-pointer'
                         : 'bg-surface-200 text-surface-400 cursor-not-allowed'
                       }`}
                   >
-                    <Star size={18} />
+                    <Star size={18} aria-hidden="true" />
                     All Done
                   </button>
                 </div>
@@ -1714,18 +1730,18 @@ function StudentView() {
       <div>
         <button
           onClick={() => window.print()}
-          className="flex items-center gap-2 px-4 py-2 bg-surface-100 text-surface-600 rounded-lg text-sm font-medium hover:bg-surface-200"
+          className="flex items-center gap-2 px-4 py-2 bg-surface-100 text-surface-600 rounded-lg text-sm font-medium hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
         >
-          <Printer size={16} /> Print Report
+          <Printer size={16} aria-hidden="true" /> Print Report
         </button>
       </div>
 
       {/* History Toggle */}
       <button
         onClick={() => setShowHistory(!showHistory)}
-        className="flex items-center gap-2 px-4 py-2.5 bg-surface-50 border border-surface-200 rounded-lg text-sm font-medium text-surface-600 hover:bg-surface-100"
+        className="flex items-center gap-2 px-4 py-2.5 bg-surface-50 border border-surface-200 rounded-lg text-sm font-medium text-surface-600 hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
       >
-        {showHistory ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        {showHistory ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
         {showHistory ? 'Hide History' : 'Show Full History'}
       </button>
 
@@ -1758,7 +1774,7 @@ function StudentView() {
                         dateRange = `${s.getMonth() + 1}/${s.getDate()}-${e.getMonth() + 1}/${e.getDate()}`
                       }
                       return (
-                        <th key={i} className="px-2 py-2.5 text-center font-semibold text-surface-600 min-w-[80px]">
+                        <th scope="col" key={i} className="px-2 py-2.5 text-center font-semibold text-surface-600 min-w-[80px]">
                           <div className={wk?.isFinals ? 'text-red-600' : ''}>{label}</div>
                           {dateRange && <div className="text-[10px] font-normal text-surface-400">{dateRange}</div>}
                         </th>
@@ -1784,7 +1800,7 @@ function StudentView() {
                         content = (
                           <div className="flex flex-col items-center">
                             <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center">
-                              <Lock size={16} className="text-amber-500" />
+                              <Lock size={16} className="text-amber-500" aria-hidden="true" />
                             </div>
                           </div>
                         )
@@ -1792,13 +1808,14 @@ function StudentView() {
                         // Past/current signable week — clickable sign-off button
                         content = (
                           <button
+                            type="button" aria-label={`Sign off week ${wn}`}
                             onClick={() => openSignOff(cls, wn, wk?.startDate || '', wk?.endDate || '')}
                             className="w-8 h-8 rounded-lg bg-brand-50 border border-brand-200 flex items-center justify-center
                                        hover:bg-brand-100 hover:border-brand-300 transition cursor-pointer mx-auto
-                                       active:scale-95"
+                                       active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                             title={`Sign off lab for Week ${wn}`}
                           >
-                            <ShieldCheck size={16} className="text-brand-600" />
+                            <ShieldCheck size={16} className="text-brand-600" aria-hidden="true" />
                           </button>
                         )
                       }
@@ -1823,11 +1840,11 @@ function StudentView() {
         <span><span className="text-blue-600 font-semibold">✓ Lab</span> = Lab Signed Off</span>
         <span className="inline-flex items-center gap-1">
           <span className="inline-flex w-5 h-5 rounded bg-brand-50 border border-brand-200 items-center justify-center">
-            <ShieldCheck size={10} className="text-brand-600" />
+            <ShieldCheck size={10} className="text-brand-600" aria-hidden="true" />
           </span>
           = Click to Sign Off
         </span>
-        <span className="inline-flex items-center gap-1"><Lock size={12} className="text-amber-500" /> = Future Week (locked)</span>
+        <span className="inline-flex items-center gap-1"><Lock size={12} className="text-amber-500" aria-hidden="true" /> = Future Week (locked)</span>
       </div>
 
       {/* Sign Off Modal */}
@@ -1864,7 +1881,7 @@ function StudentView() {
 function EmptyState({ text }) {
   return (
     <div className="text-center py-16 text-surface-400">
-      <BarChart3 size={40} className="mx-auto mb-4 text-surface-200" />
+      <BarChart3 size={40} className="mx-auto mb-4 text-surface-200" aria-hidden="true" />
       <p className="text-sm">{text}</p>
     </div>
   )
