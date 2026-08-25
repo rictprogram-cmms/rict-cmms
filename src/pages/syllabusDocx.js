@@ -47,7 +47,10 @@ import {
   HorizontalPositionRelativeFrom, VerticalPositionRelativeFrom,
   TextWrappingType, TextWrappingSide,
 } from 'docx'
-import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate'
+// fflate is loaded on demand inside finalizeDocxAccessibility() (see below) so
+// it stays in its own chunk — it's only needed at export time. This also
+// matches courseOutlineDocx.js / CourseProposalWizard.jsx and silences Vite's
+// mixed static/dynamic import warning.
 
 // ─── Layout constants (US Letter, 1" side margins to match the print CSS) ────
 const FW     = 9360                                   // content width in DXA
@@ -734,6 +737,7 @@ export function buildSyllabusDoc(data, commonSections, defaultSections, images =
 // to the unpatched blob, so a surprise in a future docx version can never
 // block an instructor from downloading their syllabus.
 async function finalizeDocxAccessibility(blob) {
+  const { unzipSync, zipSync, strToU8, strFromU8 } = await import('fflate')
   const bytes = new Uint8Array(await blob.arrayBuffer())
   const files = unzipSync(bytes)
 

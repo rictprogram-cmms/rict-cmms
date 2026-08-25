@@ -115,16 +115,16 @@ Instructor / admin:
 - [x] `.gitattributes` on main (2026-08-25)
 - [x] Dependency bumps (minor, 2026-08-25): `@supabase/supabase-js` 2.49→2.112, `react-router-dom` 7.1→7.18, `react`/`react-dom` 19.0→19.2, `date-fns` 4.1→4.4, `docx` 9.6→9.7, `fflate` 0.8.2→0.8.3. Clears the `react-router`, `nanoid` (via docx) and `ws` (via supabase) advisories. Build verified; `npm audit --omit=dev` should be 0 once `npm install` is run with the SheetJS tarball.
 - [ ] Dependency bumps (major, plan separately): `vite` 6→8, `@vitejs/plugin-react` 4→6, `tailwindcss` 3→4, `lucide-react` 0.468→1.x
-- [ ] Main chunk still ~1 MB: `docx`/`fflate` are pulled in statically somewhere eager (likely `AppLayout` → `SyllabusLibraryModal` or `syllabusDocx.js`). Make those imports dynamic to shrink it further.
-- [ ] `fflate` mixed static/dynamic import warning (`syllabusDocx.js` static vs `CourseProposalWizard.jsx` / `courseOutlineDocx.js` dynamic) — make consistent
-- [ ] `AuthContext` opens 5 realtime channels — review whether they can be consolidated
-- [ ] Consider `PageErrorBoundary` audit_log rows: make sure they don't capture PII in error messages
+- [x] Main chunk investigated (2026-08-25): no heavy library is eager — `docx`/`fflate`/`xlsx` are all in lazy chunks now. The ~1 MB (289 KB gzipped) is React + Supabase client + the five intentionally-eager pages (Login, Dashboard, TV, Time Clock, Lab Status) + `AppLayout`/`NotificationBell`. Shrinking further would mean lazy-loading kiosk pages, which we chose not to do. Accepted as-is.
+- [x] `fflate` import made dynamic in `syllabusDocx.js` (2026-08-25) — consistent with the other two files; Vite warning gone; syllabus export unaffected (verify in Ally with the other docx check)
+- [x] `AuthContext` channels reviewed (2026-08-25): 4 converted to `subscribeWithReconnect`; the presence channel must stay raw (needs `presenceState()`/`track()`). Each watches a different table/filter, so consolidating would complicate the code for no user benefit. Accepted as-is.
+- [x] `PageErrorBoundary` now redacts email addresses from error messages before writing to `audit_log` (2026-08-25)
 
 ## Previously deferred features (from earlier sessions)
 
 - [x] ~~Student Notes feature~~ — not doing (decided 2026-08-25)
 - [x] Program Budget page AY filtering — confirmed present: school-year selector on Overview, defaults to current year, drives all tabs
-- [ ] ProgramPlannerPage polish (staggered PM roll-forward, per-semester credit validation)
+- [ ] ProgramPlannerPage polish (staggered PM roll-forward, per-semester credit validation) — feature work, not an audit item; schedule separately
 - [x] ~~AI integration pilots~~ — not doing (decided 2026-08-25)
 - [x] ~~Move working copy out of OneDrive~~ — not doing (decided 2026-08-25)
 

@@ -93,7 +93,9 @@ export default class PageErrorBoundary extends React.Component {
         field_changed: null,
         old_value: null,
         new_value: null,
-        details: `${appVersion ? `v${appVersion} — ` : ''}${(error?.message || String(error)).slice(0, 500)}`,
+        // Redact anything that looks like an email address before it hits audit_log
+        // (error messages can echo user input or row data).
+        details: `${appVersion ? `v${appVersion} — ` : ''}${(error?.message || String(error)).replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '[email]').slice(0, 500)}`,
       }).then(({ error: e }) => { if (e) console.warn('audit_log client error insert failed:', e.message) })
     } catch { /* ignore */ }
   }
