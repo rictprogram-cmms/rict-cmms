@@ -52,3 +52,29 @@ export function isRlsBlock(err) {
   const msg = String(err?.message || '').toLowerCase()
   return code === '42501' || code === 'PGRST301' || msg.includes('row-level security') || msg.includes('permission denied')
 }
+
+/**
+ * assertWrite(result, label)
+ *
+ * For INSERT / UPDATE / UPSERT / DELETE chains. Append `.select()` to the
+ * write so Supabase returns the affected rows, then pass the result through
+ * this helper. It preserves the { data, error } shape so existing
+ * `if (error) …` handling keeps working, but converts a "success" that
+ * touched ZERO rows into an error — that is what an RLS denial looks like
+ * (Supabase does not raise; it silently affects nothing).
+ *
+ *   const { error } = assertWrite(
+ *     await supabase.from('orders').update({ status }).eq('order_id', id).select(),
+ *     'orders.update'
+ *   )
+ *   if (error) throw error
+ */
+export function assertWrite(result, label = 'write') {
+  if (!result) return { data: null, error: { message: `${label}: no response`, code: 'NO_RESPONSE' } }
+  if (result.error) return result
+  const rows = Array.isArray(result.data) ? result.data : (result.data ? [result.data] : [])
+  if (rows.length === 0) {
+    return { ...result, data: [], error: { message: `${label}: no rows were affected — you may not have permission for this change`, code: 'NO_ROWS' } }
+  }
+  return result
+}

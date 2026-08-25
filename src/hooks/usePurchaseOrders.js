@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -320,7 +321,8 @@ export function usePOActions() {
       // Auto-approve if user has approve_po permission (not just role-based)
       const initialStatus = canApprove ? 'Approved' : 'Pending'
 
-      const { error } = await supabase.from('orders').insert({
+      const { error } = assertWrite(
+      await supabase.from('orders').insert({
         order_id: orderId,
         vendor_id: orderData.vendorId || null,
         vendor_name: orderData.vendorName || '',
@@ -333,7 +335,9 @@ export function usePOActions() {
         notes: orderData.notes || '',
         approved_by: canApprove ? userName : '',
         approved_date: canApprove ? now : null,
-      })
+      }).select(),
+      'orders.insert'
+    )
       if (error) throw error
 
       // Add line items
@@ -341,7 +345,8 @@ export function usePOActions() {
         const lineId = await getNextLineId()
         const unitPrice = parseFloat(li.unitPrice) || 0
         const qty = parseInt(li.quantity) || 0
-        const { error: lineErr } = await supabase.from('order_line_items').insert({
+        const { error: lineErr } = assertWrite(
+      await supabase.from('order_line_items').insert({
           line_id: lineId,
           order_id: orderId,
           part_number: li.partNumber || '',
@@ -354,7 +359,9 @@ export function usePOActions() {
           status: 'Pending',
           inventory_part_id: li.inventoryPartId || '',
           wo_id: orderData.workOrderId || ''
-        })
+        }).select(),
+      'order_line_items.insert'
+    )
         if (lineErr) {
           console.error(`Failed to insert line item for PO ${orderId}:`, lineErr)
           throw new Error(`Failed to save line item: ${lineErr.message}`)
@@ -718,7 +725,10 @@ export function usePOActions() {
       }
 
       // 5. Delete the order itself
-      const { error } = await supabase.from('orders').delete().eq('order_id', orderId)
+      const { error } = assertWrite(
+      await supabase.from('orders').delete().eq('order_id', orderId).select(),
+      'orders.delete'
+    )
       if (error) throw error
 
       toast.success(`PO ${orderId} and all related records permanently deleted`)
@@ -802,7 +812,10 @@ export function usePOActions() {
         }
       }
 
-      const { error } = await supabase.from('order_line_items').delete().eq('line_id', lineId)
+      const { error } = assertWrite(
+      await supabase.from('order_line_items').delete().eq('line_id', lineId).select(),
+      'order_line_items.delete'
+    )
       if (error) throw error
 
       // Recalculate order total
@@ -832,7 +845,8 @@ export function usePOActions() {
           const qty = parseInt(li.quantity) || 1
           const subtotal = unitPrice * qty
           addedTotal += subtotal
-          const { error: lineErr } = await supabase.from('order_line_items').insert({
+          const { error: lineErr } = assertWrite(
+      await supabase.from('order_line_items').insert({
             line_id: lineId,
             order_id: orderId,
             part_number: li.partNumber || '',
@@ -844,7 +858,9 @@ export function usePOActions() {
             received_qty: 0,
             status: 'Pending',
             inventory_part_id: li.inventoryPartId || '',
-          })
+          }).select(),
+      'order_line_items.insert'
+    )
           if (lineErr) {
             console.error(`Failed to insert line item for PO ${orderId}:`, lineErr)
             throw new Error(`Failed to save line item: ${lineErr.message}`)

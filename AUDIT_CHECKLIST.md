@@ -91,7 +91,9 @@ Instructor / admin:
 
 - [ ] **Date convention sweep** — note: `reverted_date` is written as real-UTC `new Date().toISOString()` in both `DashboardPage.jsx` (revoke) and `AppLayout.jsx`; change both together with `localToUtcIso()` when doing the sweep so they stay consistent
 - [ ] **Date convention sweep (list)** (~450 `new Date().toISOString()` / `toLocale*String()` uses). Replace with `localToUtcIso()` / `getUTC*` helpers. Highest counts: `WorkOrdersPage`, `NotificationBell`, `useBugTracker`, `SOPsPage`, `AssetsPage`, `AnnouncementsPage`, `usePurchaseOrders`, `SyllabusWizard`, `useWeeklyLabs`, `usePMSchedules`, `useNetworkMap`, `useEquipment`, `AppLayout`, `WeeklyLabsTrackerPage`, `UsersPage`, `TimeCardsPage`, `ProgramBudgetPage`, `DashboardPage`
-- [ ] **`.select()` + row-count validation on all writes** (~380 chains missing it). Highest counts: `NotificationBell`, `usePurchaseOrders`, `useBugTracker`, `SOPsPage`, `usePMSchedules`, `useVolunteerHours`, `WorkOrdersPage`, `useTimeCards`, `UsersPage`, `AnnouncementsPage`, `AppLayout`, `useSettings`
+- [ ] **`.select()` + row-count validation on all writes.** Added `assertWrite(result, label)` to `src/lib/supabaseData.js` (2026-08-24): append `.select()` to the write, pass through `assertWrite`, keep the existing `if (error)` handling — zero affected rows now surfaces as an error. Batch 1 done: 34 primary writes (`const { error } = await …` shape) in `useBugTracker`, `usePMSchedules`, `useTimeCards`, `useVolunteerHours`, `usePurchaseOrders`, `useSettings`. Still to do: fire-and-forget writes (`await supabase.from(...).update(...)` with no destructure — mostly `audit_log` and secondary updates), and the remaining hooks/pages below.
+  - ⚠ Smoke-test after deploy: if a table's RLS allows UPDATE/DELETE but not SELECT on the same rows, `.select()` returns 0 rows and the action will now report "no rows were affected". Fix is to grant SELECT in the policy, not to remove the check.
+  - Original note: Highest counts: `NotificationBell`, `usePurchaseOrders`, `useBugTracker`, `SOPsPage`, `usePMSchedules`, `useVolunteerHours`, `WorkOrdersPage`, `useTimeCards`, `UsersPage`, `AnnouncementsPage`, `AppLayout`, `useSettings`
 - [ ] **`mustData()`** on reads that gate a write or feed a user-visible number (currently 6 files use it)
 - [ ] **`subscribeWithReconnect()`** replaces raw `supabase.channel()` in: `NotificationBell`, `usePurchaseOrders`, `useStudentHolds`, `AuthContext` (5 channels), `InstructorToolsPage`, `WorkOrdersPage`, `ProgramCostPage`, `SettingsPage`, `SOPsPage`
 - [ ] `useTimeCards.js` — four `buildClassWeeks` call sites should pass the offset explicitly
@@ -99,14 +101,14 @@ Instructor / admin:
 ## P4 — Code health
 
 - [x] **Route-level code splitting** — on main `8e51988` (main chunk 3.8 MB → 1.0 MB) — `React.lazy()` + `<Suspense fallback={<PageLoading />}>` in `App.jsx`. Main chunk is 3.8 MB (984 KB gz). Keep `LoginPage`, `DashboardPage`, kiosk pages eager.
-- [ ] **Delete dead files** (verify unreferenced first):
-  - [ ] `src/pages/NotificationBell.jsx` (1,461-line stale duplicate of `components/NotificationBell.jsx`)
-  - [ ] `src/hooks/useWorkOrders.js`
-  - [ ] `src/hooks/useAssets.js`
-  - [ ] `src/hooks/useInventory.js`
-  - [ ] `src/hooks/useSOPs.js`
-  - [ ] `src/hooks/useViewTracker.js`
-  - [ ] `src/pages/CourseRevisionWizard.jsx`
+- [x] **Delete dead files** — verified unreferenced and removed 2026-08-24 (build passes without them):
+  - [x] `src/pages/NotificationBell.jsx` (1,461-line stale duplicate of `components/NotificationBell.jsx`)
+  - [x] `src/hooks/useWorkOrders.js`
+  - [x] `src/hooks/useAssets.js`
+  - [x] `src/hooks/useInventory.js`
+  - [x] `src/hooks/useSOPs.js`
+  - [x] `src/hooks/useViewTracker.js`
+  - [x] `src/pages/CourseRevisionWizard.jsx`
   - [x] `src/pages/AuthContext.jsx` (deleted 2026-08-24)
 - [ ] **Deferred pooled-scanner follow-ups** (not on main):
   - [x] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx` (delivered 2026-08-24)

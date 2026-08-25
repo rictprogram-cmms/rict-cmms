@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -161,7 +162,10 @@ export function useBugActions() {
         laste_updated: new Date().toLocaleString()
       }
 
-      const { error } = await supabase.from('bug_tracker').insert(insertData)
+      const { error } = assertWrite(
+      await supabase.from('bug_tracker').insert(insertData).select(),
+      'bug_tracker.insert'
+    )
       if (error) throw error
 
       // Audit log
@@ -325,10 +329,13 @@ export function useBugActions() {
         updateData.resolved_date = now
       }
 
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('bug_tracker')
         .update(updateData)
-        .eq('request_id', requestId)
+        .eq('request_id', requestId).select(),
+      'bug_tracker.update'
+    )
       if (error) throw error
 
       // If status changed to Closed, add changelog entry.
@@ -367,10 +374,13 @@ export function useBugActions() {
   const deleteRequest = async (requestId) => {
     setSaving(true)
     try {
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('bug_tracker')
         .delete()
-        .eq('request_id', requestId)
+        .eq('request_id', requestId).select(),
+      'bug_tracker.delete'
+    )
       if (error) throw error
 
       await supabase.from('audit_log').insert({
@@ -398,7 +408,8 @@ export function useBugActions() {
     setSaving(true)
     try {
       const now = new Date().toISOString()
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('bug_tracker')
         .update({
           status: 'Open',
@@ -406,7 +417,9 @@ export function useBugActions() {
           updated_by: userName,
           laste_updated: new Date().toLocaleString()
         })
-        .eq('request_id', requestId)
+        .eq('request_id', requestId).select(),
+      'bug_tracker.update'
+    )
       if (error) throw error
 
       await supabase.from('audit_log').insert({
@@ -433,10 +446,13 @@ export function useBugActions() {
   const rejectRequest = async (requestId, reason = '') => {
     setSaving(true)
     try {
-      const { error } = await supabase
+      const { error } = assertWrite(
+      await supabase
         .from('bug_tracker')
         .delete()
-        .eq('request_id', requestId)
+        .eq('request_id', requestId).select(),
+      'bug_tracker.delete'
+    )
       if (error) throw error
 
       await supabase.from('audit_log').insert({
@@ -661,7 +677,8 @@ export function useAutoClose() {
 
         // Auto-close this item
         const closeTime = new Date().toISOString()
-        const { error: updateError } = await supabase
+        const { error: updateError } = assertWrite(
+      await supabase
           .from('bug_tracker')
           .update({
             status: 'Closed',
@@ -669,7 +686,9 @@ export function useAutoClose() {
             updated_by: 'System (Auto-Close)',
             laste_updated: new Date().toLocaleString()
           })
-          .eq('request_id', item.request_id)
+          .eq('request_id', item.request_id).select(),
+      'bug_tracker.update'
+    )
 
         if (updateError) {
           console.error(`Auto-close failed for ${item.request_id}:`, updateError)
@@ -817,7 +836,10 @@ async function addChangelogEntry(requestId, type, title, releasedBy, description
       insertPayload.description = String(description).trim()
     }
 
-    const { error: changelogError } = await supabase.from('changelog').insert(insertPayload)
+    const { error: changelogError } = assertWrite(
+      await supabase.from('changelog').insert(insertPayload).select(),
+      'changelog.insert'
+    )
 
     if (changelogError) {
       console.error('Changelog insert error:', changelogError)
@@ -828,14 +850,17 @@ async function addChangelogEntry(requestId, type, title, releasedBy, description
     // + settings page reflect the change. When 'none', skip both the settings
     // update and the version-updated event so the displayed version stays put.
     if (mode !== 'none') {
-      const { error: settingsError } = await supabase
+      const { error: settingsError } = assertWrite(
+      await supabase
         .from('settings')
         .update({
           setting_value: newVersion,
           updated_at: new Date().toISOString(),
           updated_by: releasedBy || 'System'
         })
-        .eq('setting_key', 'app_version')
+        .eq('setting_key', 'app_version').select(),
+      'settings.update'
+    )
 
       if (settingsError) {
         console.error('Settings version update error:', settingsError)

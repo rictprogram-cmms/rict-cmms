@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -568,7 +569,8 @@ export function useWeeklyReminderActions() {
         const { data: newId, error: idErr } = await supabase
           .rpc('get_next_id', { p_type: 'weekly_reminder' })
         if (idErr || !newId) throw idErr || new Error('Failed to generate reminder ID')
-        const { error: insErr } = await supabase
+        const { error: insErr } = assertWrite(
+      await supabase
           .from('weekly_reminders')
           .insert({
             id: newId,
@@ -577,7 +579,9 @@ export function useWeeklyReminderActions() {
             message: trimmed,
             updated_at: new Date().toISOString(),
             updated_by: userName,
-          })
+          }).select(),
+      'weekly_reminders.insert'
+    )
         if (insErr) throw insErr
       }
 

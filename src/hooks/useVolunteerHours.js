@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
@@ -460,7 +461,8 @@ export function useVolunteerData() {
 
       const requestId = await generateTerRequestId()
 
-      const { error } = await supabase.from('time_entry_requests').insert({
+      const { error } = assertWrite(
+      await supabase.from('time_entry_requests').insert({
         request_id: requestId,
         user_name: `${profile.first_name} ${profile.last_name}`,
         user_email: profile.email,
@@ -473,7 +475,9 @@ export function useVolunteerData() {
         entry_type: 'Volunteer',
         reason: reason || 'Volunteer hours',
         status: 'Pending',
-      })
+      }).select(),
+      'time_entry_requests.insert'
+    )
 
       if (error) throw error
 
@@ -514,7 +518,8 @@ export function useVolunteerData() {
 
       const requestId = await generateTerRequestId()
 
-      const { error } = await supabase.from('time_entry_requests').insert({
+      const { error } = assertWrite(
+      await supabase.from('time_entry_requests').insert({
         request_id: requestId,
         user_name: `${profile.first_name} ${profile.last_name}`,
         user_email: profile.email,
@@ -529,7 +534,9 @@ export function useVolunteerData() {
           ? `[Club Activity — ${roundToMinute(rawHours)}h actual → ${creditedHours}h credited] ${reason}`
           : `Club Activity — ${roundToMinute(rawHours)}h actual → ${creditedHours}h credited`,
         status: 'Pending',
-      })
+      }).select(),
+      'time_entry_requests.insert'
+    )
 
       if (error) throw error
 
@@ -590,7 +597,8 @@ export function useVolunteerData() {
 
       const requestId = await generateTerRequestId()
 
-      const { error } = await supabase.from('time_entry_requests').insert({
+      const { error } = assertWrite(
+      await supabase.from('time_entry_requests').insert({
         request_id: requestId,
         user_name: `${profile.first_name} ${profile.last_name}`,
         user_email: profile.email,
@@ -605,7 +613,9 @@ export function useVolunteerData() {
         status: 'Pending',
         created_at: new Date().toISOString(),
         time_clock_record_id: entry.record_id,
-      })
+      }).select(),
+      'time_entry_requests.insert'
+    )
 
       if (error) throw error
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry } from '@/lib/supabaseRetry'
@@ -1584,7 +1585,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       // Retry-safe: recordId was generated above, so a retry of an insert
       // that secretly succeeded hits the primary key instead of duplicating.
       await withNetworkRetry(async () => {
-        const { error } = await supabase.from('time_clock').insert({
+        const { error } = assertWrite(
+      await supabase.from('time_clock').insert({
           record_id: recordId,
           user_id: userId,
           user_name: uName,
@@ -1596,7 +1598,9 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
           total_hours: totalHours,
           status: poDate ? 'Punched Out' : 'Punched In',
           week_start: weekStart
-        })
+        }).select(),
+      'time_clock.insert'
+    )
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the time entry was not saved. Please check your signal and try again.',
@@ -1646,7 +1650,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       // Retry-safe: requestId was computed above, so a retry of an insert
       // that secretly succeeded hits the primary key instead of duplicating.
       await withNetworkRetry(async () => {
-        const { error } = await supabase.from('time_entry_requests').insert({
+        const { error } = assertWrite(
+      await supabase.from('time_entry_requests').insert({
           request_id: requestId,
           user_name: userName,
           user_email: profile.email,
@@ -1660,7 +1665,9 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
           reason: reason || '',
           status: 'Pending',
           created_at: new Date().toISOString()
-        })
+        }).select(),
+      'time_entry_requests.insert'
+    )
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the request was not submitted. Please check your signal and try again.',
@@ -1735,7 +1742,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
       // Retry-safe: requestId was computed above (see note in submitTimeRequest).
       await withNetworkRetry(async () => {
-        const { error } = await supabase.from('time_entry_requests').insert({
+        const { error } = assertWrite(
+      await supabase.from('time_entry_requests').insert({
           request_id: requestId,
           user_name: userName,
           user_email: profile.email,
@@ -1750,7 +1758,9 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
           status: 'Pending',
           created_at: new Date().toISOString(),
           time_clock_record_id: entry.record_id
-        })
+        }).select(),
+      'time_entry_requests.insert'
+    )
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the edit request was not submitted. Please check your signal and try again.',
@@ -1776,7 +1786,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
       // Retry-safe: idempotent update by record_id.
       await withNetworkRetry(async () => {
-        const { error } = await supabase
+        const { error } = assertWrite(
+      await supabase
           .from('time_clock')
           .update({
             punch_in: piDate.toISOString(),
@@ -1786,7 +1797,9 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
             ...(updates.class_id && { class_id: updates.class_id }),
             ...(updates.course_id && { course_id: updates.course_id })
           })
-          .eq('record_id', recordId)
+          .eq('record_id', recordId).select(),
+      'time_clock.update'
+    )
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the time entry was not updated. Please check your signal and try again.',
@@ -1807,10 +1820,13 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     try {
       // Retry-safe: deleting an already-deleted row is a no-op.
       await withNetworkRetry(async () => {
-        const { error } = await supabase
+        const { error } = assertWrite(
+      await supabase
           .from('time_clock')
           .delete()
-          .eq('record_id', recordId)
+          .eq('record_id', recordId).select(),
+      'time_clock.delete'
+    )
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the time entry was not deleted. Please check your signal and try again.',
@@ -1839,14 +1855,17 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       // Retry-safe: idempotent update by record_id. This one matters most on
       // phones — a lost punch-out is the failure students actually notice.
       await withNetworkRetry(async () => {
-        const { error } = await supabase
+        const { error } = assertWrite(
+      await supabase
           .from('time_clock')
           .update({
             punch_out: localToUtcIso(now),
             total_hours: totalHours,
             status: 'Punched Out',
           })
-          .eq('record_id', recordId)
+          .eq('record_id', recordId).select(),
+      'time_clock.update'
+    )
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the punch-out was not saved. Please check your signal and try again.',
@@ -1897,7 +1916,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
         // Retry-safe: recordId generated above (see note in addEntry).
         await withNetworkRetry(async () => {
-          const { error: insertErr } = await supabase.from('time_clock').insert({
+          const { error: insertErr } = assertWrite(
+      await supabase.from('time_clock').insert({
             record_id: recordId,
             user_id: reqUser.user_id,
             user_name: uName,
@@ -1909,7 +1929,9 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
             total_hours: totalHours,
             status: poDate ? 'Punched Out' : 'Punched In',
             week_start: weekStart,
-          })
+          }).select(),
+      'time_clock.insert'
+    )
           if (insertErr) throw insertErr
         }, {
           failureMessage: 'Connection problem — the time entry was not created. Please check your signal and try approving again.',
@@ -1940,10 +1962,13 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
         // Retry-safe: idempotent update by record_id.
         await withNetworkRetry(async () => {
-          const { error: updateErr } = await supabase
+          const { error: updateErr } = assertWrite(
+      await supabase
             .from('time_clock')
             .update(updateFields)
-            .eq('record_id', request.time_clock_record_id)
+            .eq('record_id', request.time_clock_record_id).select(),
+      'time_clock.update'
+    )
           if (updateErr) throw updateErr
         }, {
           failureMessage: 'Connection problem — the time entry was not updated. Please check your signal and try approving again.',
@@ -1953,14 +1978,17 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
       // ── Mark the request as Approved ──
       // Retry-safe: idempotent status flip by request_id.
       await withNetworkRetry(async () => {
-        const { error: statusErr } = await supabase
+        const { error: statusErr } = assertWrite(
+      await supabase
           .from('time_entry_requests')
           .update({
             status: 'Approved',
             reviewed_by: userName,
             review_date: new Date().toISOString(),
           })
-          .eq('request_id', request.request_id)
+          .eq('request_id', request.request_id).select(),
+      'time_entry_requests.update'
+    )
         if (statusErr) throw statusErr
       }, {
         failureMessage: 'Connection problem — the request status was not updated. Please check your signal and try approving again.',

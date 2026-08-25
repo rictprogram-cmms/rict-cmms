@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -195,21 +196,27 @@ export function usePMGlobalPause() {
         .maybeSingle()
 
       if (existing) {
-        const { error } = await supabase.from('settings').update({
+        const { error } = assertWrite(
+      await supabase.from('settings').update({
           setting_value: String(newVal),
           updated_at: new Date().toISOString(),
           updated_by: userName
-        }).eq('setting_key', 'pm_generation_paused')
+        }).eq('setting_key', 'pm_generation_paused').select(),
+      'settings.update'
+    )
         if (error) throw error
       } else {
-        const { error } = await supabase.from('settings').insert({
+        const { error } = assertWrite(
+      await supabase.from('settings').insert({
           setting_key: 'pm_generation_paused',
           setting_value: String(newVal),
           description: 'When true, all PM work order auto-generation is paused (summer/winter break)',
           category: 'PM',
           updated_at: new Date().toISOString(),
           updated_by: userName
-        })
+        }).select(),
+      'settings.insert'
+    )
         if (error) throw error
       }
 
@@ -265,21 +272,27 @@ export function usePMGlobalPause() {
         .maybeSingle()
 
       if (existing) {
-        const { error } = await supabase.from('settings').update({
+        const { error } = assertWrite(
+      await supabase.from('settings').update({
           setting_value: 'false',
           updated_at: new Date().toISOString(),
           updated_by: userName
-        }).eq('setting_key', 'pm_generation_paused')
+        }).eq('setting_key', 'pm_generation_paused').select(),
+      'settings.update'
+    )
         if (error) throw error
       } else {
-        const { error } = await supabase.from('settings').insert({
+        const { error } = assertWrite(
+      await supabase.from('settings').insert({
           setting_key: 'pm_generation_paused',
           setting_value: 'false',
           description: 'When true, all PM work order auto-generation is paused (summer/winter break)',
           category: 'PM',
           updated_at: new Date().toISOString(),
           updated_by: userName
-        })
+        }).select(),
+      'settings.insert'
+    )
         if (error) throw error
       }
 
@@ -408,7 +421,8 @@ export function usePMActions() {
         procedureFileId = await uploadProcedure(pmData.procedureFile)
       }
 
-      const { error } = await supabase.from('pm_schedules').insert({
+      const { error } = assertWrite(
+      await supabase.from('pm_schedules').insert({
         pm_id: pmId,
         pm_name: pmData.pmName,
         asset_id: pmData.assetId || '',
@@ -423,7 +437,9 @@ export function usePMActions() {
         created_at: new Date().toISOString(),
         created_by: userName,
         updated_at: new Date().toISOString()
-      })
+      }).select(),
+      'pm_schedules.insert'
+    )
       if (error) throw error
 
       // Audit log
@@ -470,10 +486,13 @@ export function usePMActions() {
         delete updates._oldProcedureFileId
       }
 
-      const { error } = await supabase.from('pm_schedules').update({
+      const { error } = assertWrite(
+      await supabase.from('pm_schedules').update({
         ...updates,
         updated_at: new Date().toISOString()
-      }).eq('pm_id', pmId)
+      }).eq('pm_id', pmId).select(),
+      'pm_schedules.update'
+    )
       if (error) throw error
       toast.success('PM schedule updated')
     } catch (err) {
@@ -499,7 +518,10 @@ export function usePMActions() {
         await deleteProcedureFile(pm.procedure_file_id)
       }
 
-      const { error } = await supabase.from('pm_schedules').delete().eq('pm_id', pmId)
+      const { error } = assertWrite(
+      await supabase.from('pm_schedules').delete().eq('pm_id', pmId).select(),
+      'pm_schedules.delete'
+    )
       if (error) throw error
 
       // Audit log
@@ -583,7 +605,8 @@ export function usePMActions() {
 
       // Create work order — carry procedure_file_id through
       const now = new Date().toISOString()
-      const { error: woError } = await supabase.from('work_orders').insert({
+      const { error: woError } = assertWrite(
+      await supabase.from('work_orders').insert({
         wo_id: woId,
         description: `[PM] ${pm.pm_name}`,
         priority: 'Medium',
@@ -597,7 +620,9 @@ export function usePMActions() {
         pm_id: pmId,
         updated_at: now,
         updated_by: userName
-      })
+      }).select(),
+      'work_orders.insert'
+    )
       if (woError) throw woError
 
       // NOTE: The PM procedure is linked to the WO via pm_id.
