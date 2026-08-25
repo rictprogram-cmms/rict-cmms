@@ -355,7 +355,7 @@ export default function GlossaryModal({ open, onClose }) {
         rawData = parseCSVText(text)
       } else if (['xls', 'xlsx'].includes(ext)) {
         // Dynamic import for SheetJS (same source as Program Budget import)
-        const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
+        const XLSX = await import('xlsx')
         const buffer = await file.arrayBuffer()
         const wb = XLSX.read(buffer, { type: 'array' })
         const ws = wb.Sheets[wb.SheetNames[0]]

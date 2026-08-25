@@ -30,7 +30,7 @@ Legend: **P1** = privacy/security · **P2** = accessibility (508 / WCAG 2.1 AA) 
   - [x] Replace all 16 hardcoded sites across 15 files (EmulationBar, AppLayout, useBugTracker, useSettings, useAbsenceRequests, usePermissions, AuthContext, ProgramPlannerPage, AbsenceRequestPage, AccessPage, SettingsPage, LabStatusPage, AssetScanPage, AssetsPage, AnnouncementsPage)
   - [ ] Server-side: `profiles_public` view so the client can't forget. Risk: 30+ files query `profiles` and a few (login, AuthContext, EmulationBar, AccessPage) must still see the super admin — needs its own session with testing.
   - [ ] Audit the 24 files that query `profiles` with no filter; confirm none feed a student-visible picker
-- [ ] **`xlsx` 0.18.5 — 5 high-severity advisories, no npm fix.** Options: install SheetJS from `cdn.sheetjs.com` tarball (0.20.x) or migrate exports to `exceljs`. Decide and implement.
+- [x] **`xlsx` 0.18.5 → SheetJS 0.20.3 via CDN tarball** (2026-08-25): `package.json` now points `xlsx` at `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`; `GlossaryModal` and `useProgramBudget` no longer fetch SheetJS from the CDN at runtime (they import the bundled copy like the other five files). Run `npm install` and commit `package-lock.json`. Original note: Options: install SheetJS from `cdn.sheetjs.com` tarball (0.20.x) or migrate exports to `exceljs`. Decide and implement.
 - [x] PII `console.log`s gated behind `import.meta.env.DEV` (2026-08-25): 12 calls in `AuthContext`, `TimeClockPage`, `AppLayout`, `usePushNotifications` that printed emails/names. Remaining ~110 logs are non-PII diagnostics — optional cleanup.
 
 ## P2 — Accessibility (Section 508 / WCAG 2.1 AA)
@@ -112,7 +112,7 @@ Instructor / admin:
 - [x] **Deferred pooled-scanner follow-ups** — both delivered 2026-08-24:
   - [x] Exclude `POOL-SCANNER` rows from instructor checked-out count in `DashboardPage.jsx` (delivered 2026-08-24)
   - [x] Hide pooled asset's checkout indicator in `AssetsPage.jsx` (delivered 2026-08-24)
-- [x] `.gitattributes` added (2026-08-25): `*.bat` / `*.cmd` forced CRLF
+- [ ] `.gitattributes` — delivered 2026-08-25 but **not on main** (dot-file likely lost on download/rename). Re-add at repo root: `*.bat text eol=crlf` / `*.cmd text eol=crlf`
 - [ ] Dependency bumps (minor, safe): `@supabase/supabase-js`, `react-router-dom`, `react`, `date-fns`, `docx`, `fflate`
 - [ ] Dependency bumps (major, plan separately): `vite` 6→8, `@vitejs/plugin-react` 4→6, `tailwindcss` 3→4, `lucide-react` 0.468→1.x
 - [ ] Main chunk still ~1 MB: `docx`/`fflate` are pulled in statically somewhere eager (likely `AppLayout` → `SyllabusLibraryModal` or `syllabusDocx.js`). Make those imports dynamic to shrink it further.

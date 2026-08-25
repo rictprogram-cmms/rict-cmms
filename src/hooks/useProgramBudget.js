@@ -720,7 +720,7 @@ export function useSpreadsheetImport(schoolYear) {
         rawData = parseCSVText(text)
       } else if (['xls', 'xlsx'].includes(ext)) {
         // Dynamic import for SheetJS
-        const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs')
+        const XLSX = await import('xlsx')
         const buffer = await file.arrayBuffer()
         // raw: true → returns raw numbers (not formatted strings like "1,599.00")
         // cellDates: true → converts Excel date serials to JS Date objects
