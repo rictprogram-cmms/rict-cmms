@@ -32,6 +32,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useLabVisibleDays, weekEndDayName } from '@/hooks/useLabDays'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import {
   useSettings, useSettingsActions, useCategories, useCategoryActions,
@@ -1028,11 +1029,11 @@ function LabAccessModeCard() {
   // ── Fetch current value ──
   const fetchMode = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'lab_access_mode')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
       setMode(data?.setting_value || 'in_session')
     } catch {
       setMode('in_session')
@@ -1292,10 +1293,10 @@ function InstructorAwayCard() {
   // ── Fetch current values ──
   const fetchAway = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('settings')
         .select('setting_key, setting_value')
-        .in('setting_key', ['instructor_away_mode', 'instructor_return_time'])
+        .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
       const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode')
       const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time')
       setAwayMode(modeRow?.setting_value === 'true')
@@ -1744,10 +1745,10 @@ function DashboardSettings() {
   // ── Fetch current values ──
   const fetchDefaults = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('settings')
         .select('setting_key, setting_value')
-        .in('setting_key', ['dashboard_day_view_expanded', 'dashboard_temp_access_expanded'])
+        .in('setting_key', ['dashboard_day_view_expanded', 'dashboard_temp_access_expanded']), 'settings.select')
       const get = (key, fallback) => {
         const row = (data || []).find(r => r.setting_key === key)
         return row ? row.setting_value === 'true' : fallback
@@ -3806,11 +3807,11 @@ function ClassesSection() {
   // re-pull when profiles change from any session or kiosk.
   const loadEnrollment = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('profiles')
         .select('first_name, last_name, email, classes, status')
         .in('role', ['Student', 'Work Study'])
-        .in('status', ['Active', 'Archived'])
+        .in('status', ['Active', 'Archived']), 'profiles.select')
       if (!enrollmentMountedRef.current) return
       const map = {}
       ;(data || []).forEach(s => {
@@ -4649,12 +4650,12 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
     async function load() {
       setLoading(true)
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('profiles')
           .select('id, first_name, last_name, email, role, classes, time_clock_only')
           .eq('status', 'Active')
           .in('role', ['Student', 'Work Study'])
-          .order('last_name')
+          .order('last_name'), 'profiles.select')
         if (cancelled) return
 
         const courseId = cls.course_id || ''
@@ -4671,12 +4672,12 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
         // Read-only history — archived (graduated) students who were in this
         // course. Archiving never clears profiles.classes, so this list shows
         // who was previously enrolled even after they've left the program.
-        const { data: archivedData } = await supabase
+        const archivedData = mustData(await supabase
           .from('profiles')
           .select('id, first_name, last_name, email, role, classes')
           .eq('status', 'Archived')
           .in('role', ['Student', 'Work Study'])
-          .order('last_name')
+          .order('last_name'), 'profiles.select')
         if (cancelled) return
         const former = (archivedData || []).filter(s => {
           const classes = (s.classes || '').split(',').map(c => c.trim())

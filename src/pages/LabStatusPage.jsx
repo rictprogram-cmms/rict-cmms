@@ -411,9 +411,9 @@ export default function LabStatusPage() {
   useEffect(() => {
     async function loadInstructors() {
       try {
-        const { data } = await supabase.from('profiles').select('email, first_name, last_name, role')
+        const data = mustData(await supabase.from('profiles').select('email, first_name, last_name, role')
           .eq('role', 'Instructor').eq('status', 'Active').neq('email', SUPER_ADMIN_EMAIL)
-          .order('first_name', { ascending: true });
+          .order('first_name', { ascending: true }), 'profiles.select');
         setInstructors((data || []).map(p => {
           const first = (p.first_name || '').trim(); const last = (p.last_name || '').trim();
           return { email: p.email, displayName: `${first} ${last}`.trim() || p.email, initials: (first.charAt(0) + last.charAt(0)).toUpperCase() || '?' };
@@ -455,7 +455,7 @@ export default function LabStatusPage() {
 
   const fetchAwayMode = useCallback(async () => {
     try {
-      const { data } = await supabase.from('settings').select('setting_key, setting_value').in('setting_key', ['instructor_away_mode', 'instructor_return_time']);
+      const data = mustData(await supabase.from('settings').select('setting_key, setting_value').in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select');
       const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode');
       const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time');
       setInstructorAway(modeRow?.setting_value === 'true'); setAwayReturnTime(timeRow?.setting_value || '');

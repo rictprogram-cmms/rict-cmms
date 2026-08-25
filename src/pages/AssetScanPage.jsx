@@ -21,7 +21,7 @@
  *  - "Back to Assets" navigation
  */
 
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -147,13 +147,13 @@ export default function AssetScanPage() {
     if (!id) return
     setCheckoutLoading(true)
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('asset_checkouts')
         .select('*')
         .eq('asset_id', id)
         .is('returned_at', null)
         .limit(1)
-        .maybeSingle()
+        .maybeSingle(), 'asset_checkouts.select')
       setOpenCheckout(data || null)
     } catch (e) {
       console.warn('loadOpenCheckout error:', e.message)
@@ -170,17 +170,17 @@ export default function AssetScanPage() {
   /* ── Work Orders ─────────────────────────────────────────────────── */
   async function loadWorkOrders(id) {
     try {
-      const { data: openWOs } = await supabase
+      const openWOs = mustData(await supabase
         .from('work_orders')
         .select('wo_id, description, priority, status, assigned_to, created_at')
         .eq('asset_id', id)
-        .order('created_at', { ascending: false })
+        .order('created_at', { ascending: false }), 'work_orders.select')
 
-      const { data: closedWOs } = await supabase
+      const closedWOs = mustData(await supabase
         .from('work_orders_closed')
         .select('wo_id, description, priority, status, assigned_to, created_at, closed_date')
         .eq('asset_id', id)
-        .order('closed_date', { ascending: false })
+        .order('closed_date', { ascending: false }), 'work_orders_closed.select')
 
       const all = [
         ...(openWOs || []).map(wo => ({ ...wo, isClosed: false })),
@@ -193,11 +193,11 @@ export default function AssetScanPage() {
   /* ── Documents ───────────────────────────────────────────────────── */
   async function loadDocuments(id) {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('asset_documents')
         .select('*')
         .eq('asset_id', id)
-        .order('uploaded_at', { ascending: false })
+        .order('uploaded_at', { ascending: false }), 'asset_documents.select')
       setDocuments(data || [])
     } catch { }
   }

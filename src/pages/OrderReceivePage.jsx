@@ -15,6 +15,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 
 export default function OrderReceivePage() {
   const [searchParams] = useSearchParams()
@@ -34,9 +35,9 @@ export default function OrderReceivePage() {
   useEffect(() => {
     (async () => {
       try {
-        const { data } = await supabase.from('settings').select('key, value').in('key', [
+        const data = mustData(await supabase.from('settings').select('key, value').in('key', [
           'mobile_base_font', 'mobile_header_font', 'mobile_form_font'
-        ])
+        ]), 'settings.select')
         const s = {}
         ;(data || []).forEach(r => { s[r.key] = parseFloat(r.value) || 0 })
         setMobileSettings(s)
@@ -74,11 +75,11 @@ export default function OrderReceivePage() {
       setOrder(orderData)
 
       // Load line items
-      const { data: items } = await supabase
+      const items = mustData(await supabase
         .from('order_line_items')
         .select('*')
         .eq('order_id', orderId)
-        .order('line_id', { ascending: true })
+        .order('line_id', { ascending: true }), 'order_line_items.select')
 
       const mapped = (items || []).map(item => ({
         ...item,
@@ -141,11 +142,11 @@ export default function OrderReceivePage() {
           const delta = item.receivedQty - oldReceived
           if (delta > 0) {
             // Get current inventory qty
-            const { data: invItem } = await supabase
+            const invItem = mustData(await supabase
               .from('inventory')
               .select('qty_in_stock')
               .eq('part_id', item.part_id)
-              .single()
+              .single(), 'inventory.select')
 
             if (invItem) {
               await supabase

@@ -30,6 +30,7 @@ import { usePermissions } from '@/hooks/usePermissions'
 import { useVolunteerData, useVolunteerOverview, useStudentVolunteerDetail } from '@/hooks/useVolunteerHours'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2113,22 +2114,22 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
       const emails = targetStudents.map(s => s.email)
 
       // Batch fetch: all volunteer time_clock entries for target students
-      const { data: tcData } = await supabase
+      const tcData = mustData(await supabase
         .from('time_clock')
         .select('*')
         .in('user_email', emails)
         .eq('entry_type', 'Volunteer')
         .gte('punch_in', semStart + 'T00:00:00')
         .lte('punch_in', semEnd + 'T23:59:59')
-        .order('punch_in', { ascending: false })
+        .order('punch_in', { ascending: false }), 'time_clock.select')
 
       // Batch fetch: all pending/approved manual volunteer requests for target students
-      const { data: reqData } = await supabase
+      const reqData = mustData(await supabase
         .from('time_entry_requests')
         .select('*')
         .in('user_email', emails)
         .or('entry_type.eq.Volunteer,class_id.eq.VOLUNTEER')
-        .order('created_at', { ascending: false })
+        .order('created_at', { ascending: false }), 'time_entry_requests.select')
 
       // Build per-email entry maps
       const tcByEmail = {}

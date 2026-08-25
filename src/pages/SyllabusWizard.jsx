@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useId } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import {
@@ -563,11 +563,11 @@ async function generateClassId(options = {}) {
   let counterVal = 1000
   let prefix = 'CLS'
   try {
-    const { data: counter } = await supabase
+    const counter = mustData(await supabase
       .from('counters')
       .select('current_value, prefix')
       .eq('counter_name', 'class')
-      .maybeSingle()
+      .maybeSingle(), 'counters.select')
     if (counter) {
       counterVal = counter.current_value || 1000
       prefix = counter.prefix || 'CLS'
@@ -579,7 +579,7 @@ async function generateClassId(options = {}) {
   // Numeric max scan of existing class_ids (lex-sort is unsafe, e.g. CLS9999 > CLS10000)
   let tableMax = 0
   try {
-    const { data: rows } = await supabase.from('classes').select('class_id')
+    const rows = mustData(await supabase.from('classes').select('class_id'), 'classes.select')
     if (rows && rows.length > 0) {
       for (const r of rows) {
         const digits = (r.class_id || '').toString().replace(/\D/g, '')
@@ -1972,8 +1972,8 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
       }
 
       // Refresh catalog cache
-      const { data: rows } = await supabase.from('program_tools')
-        .select('tool_id, item_name, part_number, cost, item_type')
+      const rows = mustData(await supabase.from('program_tools')
+        .select('tool_id, item_name, part_number, cost, item_type'), 'program_tools.select')
       setCatalog(rows || [])
       setEditingPrice(null)
     } catch (err) {
@@ -2016,8 +2016,8 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
 
       update('required_materials', [...data.required_materials, str])
       // Refresh catalog so price shows immediately without needing to save/reload
-      const { data: freshCatalog } = await supabase
-        .from('program_tools').select('tool_id, item_name, part_number, cost, item_type')
+      const freshCatalog = mustData(await supabase
+        .from('program_tools').select('tool_id, item_name, part_number, cost, item_type'), 'program_tools.select')
       setCatalog(freshCatalog || [])
       toast.success(`"${row.item_name}" saved to catalog and added to syllabus`)
       setNewItem({ item_name: '', item_type: 'Tool', part_number: '', cost: '' })

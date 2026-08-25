@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { mustData } from '@/lib/supabaseData'
 import { createClient } from '@supabase/supabase-js'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
@@ -973,24 +974,24 @@ export default function TimeClockPage() {
     const today = todayStr()
 
     try {
-      const { data: gs } = await supabase
+      const gs = mustData(await supabase
         .from('settings')
         .select('setting_value')
         .eq('setting_key', 'grace_period_minutes')
-        .maybeSingle()
+        .maybeSingle(), 'settings.select')
       if (gs?.setting_value) {
         setGracePeriod(parseInt(gs.setting_value) || 10)
       }
     } catch {}
 
     try {
-      const { data: signups } = await supabase
+      const signups = mustData(await supabase
         .from('lab_signup')
         .select('date, start_time, end_time, status')
         .eq('user_email', userEmail)
         .eq('status', 'Confirmed')
         .gte('date', today)
-        .lte('date', today + 'T23:59:59')
+        .lte('date', today + 'T23:59:59'), 'lab_signup.select')
 
       if (signups && signups.length > 0) {
         let startMin = Infinity
@@ -1383,14 +1384,14 @@ export default function TimeClockPage() {
       let isFirstPunchToday = true
       try {
         const today = todayStr()
-        const { data: earlierPunches } = await supabase
+        const earlierPunches = mustData(await supabase
           .from('time_clock')
           .select('record_id')
           .eq('user_email', user.email)
           .gte('punch_in', today)
           .lte('punch_in', today + 'T23:59:59')
           .neq('record_id', recordId)
-          .limit(1)
+          .limit(1), 'time_clock.select')
         if (earlierPunches && earlierPunches.length > 0) {
           isFirstPunchToday = false
           console.log('[TimeClock] Not first punch today — skipping late/walk-in flags')

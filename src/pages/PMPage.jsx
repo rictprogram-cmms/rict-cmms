@@ -6,6 +6,7 @@ import { useDialogA11y } from '@/hooks/useDialogA11y'
 import toast from 'react-hot-toast'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import {
   usePMSchedules, usePMActions, useActiveAssets, usePMGlobalPause, calculateNextDueDate
 } from '@/hooks/usePMSchedules'
@@ -73,11 +74,11 @@ export default function PMPage() {
   useEffect(() => {
     async function loadOpenPMWOs() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('work_orders')
           .select('wo_id, pm_id, status')
           .not('pm_id', 'is', null)
-          .neq('pm_id', '')
+          .neq('pm_id', ''), 'work_orders.select')
         if (data) {
           const map = {}
           data.forEach(wo => {
@@ -94,9 +95,9 @@ export default function PMPage() {
   useEffect(() => {
     async function loadSopLinkedPMs() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('sop_pm_schedules')
-          .select('pm_id')
+          .select('pm_id'), 'sop_pm_schedules.select')
         if (data) setSopLinkedPMIds(new Set(data.map(r => r.pm_id)))
       } catch {}
     }
@@ -470,15 +471,15 @@ function PMCard({ pm, expanded, onToggle, onEdit, onDelete, onGenerate, saving, 
     setSopsLoading(true)
     ;(async () => {
       try {
-        const { data: links } = await supabase
+        const links = mustData(await supabase
           .from('sop_pm_schedules')
           .select('sop_id')
-          .eq('pm_id', pm.pm_id)
+          .eq('pm_id', pm.pm_id), 'sop_pm_schedules.select')
         if (links?.length) {
-          const { data: sops } = await supabase
+          const sops = mustData(await supabase
             .from('sops')
             .select('sop_id, name')
-            .in('sop_id', links.map(l => l.sop_id))
+            .in('sop_id', links.map(l => l.sop_id)), 'sops.select')
           setLinkedSOPs(sops || [])
         }
       } catch {}

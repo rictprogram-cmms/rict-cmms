@@ -28,6 +28,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import {
   useUsersForReports, useClassesList, useTimeCardData,
   useClassWeeklyReport, useTimeEntryActions, getWeekRange, toDateStr,
@@ -321,12 +322,12 @@ export default function TimeCardsPage() {
 
       let enrolledByTimeClock = new Set()
       if (gbClassConfig.status !== 'Active') {
-        const { data: tcCheck } = await supabase
+        const tcCheck = mustData(await supabase
           .from('time_clock')
           .select('user_id')
           .or(`course_id.eq.${courseId},class_id.eq.${classId}`)
           .gte('punch_in', startDate)
-          .lte('punch_in', endDate + 'T23:59:59')
+          .lte('punch_in', endDate + 'T23:59:59'), 'time_clock.select')
         ;(tcCheck || []).forEach(r => { if (r.user_id) enrolledByTimeClock.add(r.user_id) })
       }
 
@@ -354,16 +355,16 @@ export default function TimeCardsPage() {
       // 2. Grace period
       let gracePeriod = 10
       try {
-        const { data: gs } = await supabase
+        const gs = mustData(await supabase
           .from('settings')
           .select('setting_value')
           .eq('setting_key', 'grace_period_minutes')
-          .maybeSingle()
+          .maybeSingle(), 'settings.select')
         if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10
       } catch {}
 
       // 3. All classes (needed by generateUserReport for cross-class context)
-      const { data: classesData } = await supabase.from('classes').select('*')
+      const classesData = mustData(await supabase.from('classes').select('*'), 'classes.select')
 
       // 4. Volunteer hours per student. IMPORTANT: volunteer hours are graded
       //    PROGRAM-WIDE (semester window), not class-window. Matches the logic
@@ -379,10 +380,10 @@ export default function TimeCardsPage() {
       let volSemStart = null
       let volSemEnd = null
       try {
-        const { data: settingsRows } = await supabase
+        const settingsRows = mustData(await supabase
           .from('settings')
           .select('setting_key, setting_value')
-          .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end'])
+          .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end']), 'settings.select')
         const sMap = {}
         ;(settingsRows || []).forEach(r => { sMap[r.setting_key] = r.setting_value })
         volSemStart = sMap.volunteer_semester_start || null
@@ -392,12 +393,12 @@ export default function TimeCardsPage() {
         const endIsStale = volSemEnd && new Date(volSemEnd + 'T23:59:59') < todayDate
         if (!volSemStart || !volSemEnd || endIsStale) {
           if (endIsStale) { volSemStart = null; volSemEnd = null }
-          const { data: actClasses } = await supabase
+          const actClasses = mustData(await supabase
             .from('classes')
             .select('start_date, end_date')
             .eq('status', 'Active')
             .order('start_date', { ascending: true })
-            .limit(20)
+            .limit(20), 'classes.select')
           if (actClasses && actClasses.length > 0) {
             const starts = actClasses.map(c => c.start_date).filter(Boolean).sort()
             const ends = actClasses.map(c => c.end_date).filter(Boolean).sort()
@@ -417,14 +418,14 @@ export default function TimeCardsPage() {
       const volunteerByEmail = {}
       if (emails.length > 0) {
         try {
-          const { data: volData } = await supabase
+          const volData = mustData(await supabase
             .from('time_clock')
             .select('user_email, total_hours, approval_status, punch_in')
             .in('user_email', emails)
             .eq('entry_type', 'Volunteer')
             .eq('approval_status', 'Approved')
             .gte('punch_in', volSemStart + 'T00:00:00')
-            .lte('punch_in', volSemEnd + 'T23:59:59')
+            .lte('punch_in', volSemEnd + 'T23:59:59'), 'time_clock.select')
           ;(volData || []).forEach(r => {
             const e = (r.user_email || '').toLowerCase().trim()
             if (!e) return
@@ -877,24 +878,24 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
       // Get grace period
       let gracePeriod = 10
       try {
-        const { data: gs } = await supabase
+        const gs = mustData(await supabase
           .from('settings').select('setting_value')
-          .eq('setting_key', 'grace_period_minutes').maybeSingle()
+          .eq('setting_key', 'grace_period_minutes').maybeSingle(), 'settings.select')
         if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10
       } catch {}
 
       // Get ALL class configs (including inactive) so historical reports work correctly
-      const { data: classesData } = await supabase
-        .from('classes').select('*')
+      const classesData = mustData(await supabase
+        .from('classes').select('*'), 'classes.select')
 
       if (reportMode === 'individual') {
         // ── Individual Report ──────────────────────────────────────────
         if (!reportUserId) return
 
-        const { data: userData } = await supabase
+        const userData = mustData(await supabase
           .from('profiles')
           .select('user_id, first_name, last_name, email, classes, role, id')
-          .eq('user_id', reportUserId).maybeSingle()
+          .eq('user_id', reportUserId).maybeSingle(), 'profiles.select')
 
         if (!userData) throw new Error('User not found')
 
@@ -916,10 +917,10 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
         // Get all active students enrolled in this class.
         // For inactive (historical) classes, students may have been moved to new classes
         // in their profile, so we also search time_clock records directly.
-        const { data: profilesData } = await supabase
+        const profilesData = mustData(await supabase
           .from('profiles')
           .select('user_id, first_name, last_name, email, classes, role, id, time_clock_only')
-          .eq('status', 'Active')
+          .eq('status', 'Active'), 'profiles.select')
 
         // Check profile enrollment
         const enrolledByProfile = new Set(
@@ -937,12 +938,12 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
         // in the selected date range (catches students who were removed from the class)
         let enrolledByTimeClock = new Set()
         if (selectedClassConfig?.status !== 'Active') {
-          const { data: tcCheck } = await supabase
+          const tcCheck = mustData(await supabase
             .from('time_clock')
             .select('user_id')
             .or(`course_id.eq.${reportClassId},class_id.eq.${selectedClassId}`)
             .gte('punch_in', reportStart)
-            .lte('punch_in', reportEnd + 'T23:59:59')
+            .lte('punch_in', reportEnd + 'T23:59:59'), 'time_clock.select')
           ;(tcCheck || []).forEach(r => { if (r.user_id) enrolledByTimeClock.add(r.user_id) })
         }
 

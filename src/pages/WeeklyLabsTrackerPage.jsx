@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import {
@@ -397,12 +398,12 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
         // 1b. Work logs for those open WOs, by this student
         if (studentWOs && studentWOs.length > 0) {
           const woIds = studentWOs.map(w => w.wo_id)
-          const { data: logs } = await supabase
+          const logs = mustData(await supabase
             .from('work_log')
             .select('log_id, wo_id, timestamp, user_name, hours, work_description, entry_type')
             .in('wo_id', woIds)
             .eq('user_email', studentEmail)
-            .order('timestamp', { ascending: false })
+            .order('timestamp', { ascending: false }), 'work_log.select')
           // Group by wo_id (all logs)
           const grouped = {}
           ;(logs || []).forEach(l => {
@@ -429,11 +430,11 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
         // 2b. Work logs for late WOs — from ANYONE (not filtered by email)
         if (allLateWOs && allLateWOs.length > 0) {
           const lateWoIds = allLateWOs.map(w => w.wo_id)
-          const { data: lateLogs } = await supabase
+          const lateLogs = mustData(await supabase
             .from('work_log')
             .select('log_id, wo_id, timestamp, user_name, user_email, hours, work_description, entry_type')
             .in('wo_id', lateWoIds)
-            .order('timestamp', { ascending: false })
+            .order('timestamp', { ascending: false }), 'work_log.select')
           const lateGrouped = {}
           ;(lateLogs || []).forEach(l => {
             if (!lateGrouped[l.wo_id]) lateGrouped[l.wo_id] = []

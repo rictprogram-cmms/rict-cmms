@@ -8,7 +8,7 @@
  *        volunteer punch approvals
  */
 
-import { assertWrite } from '@/lib/supabaseData';
+import { mustData, assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
@@ -271,7 +271,7 @@ export default function NotificationBell() {
         // Fetch line items for this order
         let lineItems = [];
         try {
-          const { data: li } = await supabase.from('order_line_items').select('description, part_number, quantity, unit_price, subtotal, wo_id').eq('order_id', o.order_id);
+          const li = mustData(await supabase.from('order_line_items').select('description, part_number, quantity, unit_price, subtotal, wo_id').eq('order_id', o.order_id), 'order_line_items.select');
           lineItems = li || [];
         } catch {}
         // Fetch WO descriptions for linked work orders
@@ -279,7 +279,7 @@ export default function NotificationBell() {
         let woDescs = {};
         if (woIds.length > 0) {
           try {
-            const { data: wos } = await supabase.from('work_orders').select('wo_id, description').in('wo_id', woIds);
+            const wos = mustData(await supabase.from('work_orders').select('wo_id, description').in('wo_id', woIds), 'work_orders.select');
             (wos || []).forEach(w => { woDescs[w.wo_id] = w.description; });
           } catch {}
         }
@@ -341,10 +341,10 @@ export default function NotificationBell() {
           const tcIds = editRequests.map(r => r.time_clock_record_id).filter(Boolean);
           if (tcIds.length > 0) {
             try {
-              const { data: tcData } = await supabase
+              const tcData = mustData(await supabase
                 .from('time_clock')
                 .select('record_id, punch_in, punch_out, total_hours, course_id, class_id')
-                .in('record_id', tcIds);
+                .in('record_id', tcIds), 'time_clock.select');
               (tcData || []).forEach(tc => { originalRecords[tc.record_id] = tc; });
             } catch {}
           }
@@ -460,9 +460,9 @@ export default function NotificationBell() {
             try {
               const targetDate = new Date(dateStr + 'T12:00:00');
               const hour = parseInt(hourStr);
-              const { data: calRow } = await supabase
+              const calRow = mustData(await supabase
                 .from('lab_calendar').select('max_students')
-                .eq('date', targetDate.toISOString()).maybeSingle();
+                .eq('date', targetDate.toISOString()).maybeSingle(), 'lab_calendar.select');
               const maxStudents = calRow?.max_students ?? 24;
               const startTime = `${String(hour).padStart(2, '0')}:00:00`;
               const { count } = await supabase
@@ -487,17 +487,17 @@ export default function NotificationBell() {
             const wEnd   = new Date(weekStartStr + 'T00:00:00');
             wEnd.setDate(wEnd.getDate() + 6);
             wEnd.setHours(23, 59, 59, 999);
-            const { data: signupRows } = await supabase
+            const signupRows = mustData(await supabase
               .from('lab_signup').select('signup_id')
               .eq('user_email', r.user_email)
               .eq('class_id', courseId)
               .neq('status', 'Cancelled')
               .gte('date', wStart.toISOString())
-              .lte('date', wEnd.toISOString());
+              .lte('date', wEnd.toISOString()), 'lab_signup.select');
             weekSignupCount = (signupRows || []).length;
-            const { data: classRow } = await supabase
+            const classRow = mustData(await supabase
               .from('classes').select('required_hours')
-              .eq('course_id', courseId).eq('status', 'Active').maybeSingle();
+              .eq('course_id', courseId).eq('status', 'Active').maybeSingle(), 'classes.select');
             requiredHours = classRow?.required_hours || 0;
           }
         } catch {}
@@ -601,13 +601,13 @@ export default function NotificationBell() {
     const _items = [];
     // ── ALL USERS: Unread announcements ──
     try {
-    const { data } = await supabase
+    const data = mustData(await supabase
       .from('announcements')
       .select('*')
       .eq('recipient_email', profile.email.toLowerCase())
       .eq('read', false)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(20), 'announcements.select');
     (data || []).forEach(a => {
       const isWOAssign = a.notification_type === 'wo_assignment';
       const isStudentMsg = a.notification_type === 'student_message';
@@ -663,12 +663,12 @@ export default function NotificationBell() {
     }
     const _items = [];
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('network_change_requests')
         .select('request_id, ip_address, change_type, submitted_by_name, submitted_by, submitted_date, reason')
         .eq('status', 'Pending')
         .order('submitted_date', { ascending: false })
-        .limit(50);
+        .limit(50), 'network_change_requests.select');
       (data || []).forEach(r => {
         const action =
           r.change_type === 'add' ? 'Add' :
@@ -701,12 +701,12 @@ export default function NotificationBell() {
     }
     const _items = [];
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('absence_requests')
         .select('request_id, user_name, user_email, course_id, class_id, absence_date, hours_missed, submitted_by_email, submitted_by_name, created_at')
         .eq('status', 'Pending')
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(50), 'absence_requests.select');
       (data || []).forEach(r => {
         const cls = r.course_id || r.class_id || '';
         const dateLabel = r.absence_date
@@ -777,11 +777,11 @@ export default function NotificationBell() {
   useEffect(() => {
     (async () => {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('settings')
           .select('setting_value')
           .eq('setting_key', 'notif_poll_interval')
-          .maybeSingle();
+          .maybeSingle(), 'settings.select');
         if (data?.setting_value) {
           const val = parseInt(data.setting_value, 10);
           if (val === 0) setPollInterval(0);
@@ -906,11 +906,11 @@ export default function NotificationBell() {
 
       // 2. Create the user's profile
       // First check if profile already exists
-      const { data: existingProfile } = await supabase
+      const existingProfile = mustData(await supabase
         .from('profiles')
         .select('id')
         .eq('email', req.email)
-        .maybeSingle();
+        .maybeSingle(), 'profiles.select');
 
       if (existingProfile) {
         // Profile already exists — just update role/status
@@ -971,11 +971,11 @@ export default function NotificationBell() {
       try {
         const rotationName = `${req.first_name} ${(req.last_name || '').charAt(0)}.`;
         // Only insert if not already in the rotation (e.g. re-approved user)
-        const { data: existingRotation } = await supabase
+        const existingRotation = mustData(await supabase
           .from('assignment_rotation')
           .select('user_email')
           .eq('user_email', req.email)
-          .maybeSingle();
+          .maybeSingle(), 'assignment_rotation.select');
         if (!existingRotation) {
           await supabase.from('assignment_rotation').insert({
             user_name: rotationName,
@@ -1081,11 +1081,11 @@ export default function NotificationBell() {
       let userEmail = req.user_email || '';
       let userDisplayName = req.user_name || 'Unknown';
       if (!userId && userEmail) {
-        const { data: profileData } = await supabase
+        const profileData = mustData(await supabase
           .from('profiles')
           .select('user_id')
           .eq('email', userEmail)
-          .maybeSingle();
+          .maybeSingle(), 'profiles.select');
         if (profileData?.user_id) userId = profileData.user_id;
       }
 
@@ -1254,9 +1254,9 @@ export default function NotificationBell() {
 
       // 2. Create signups for approved additions
       if (slotsToAdd.length > 0) {
-        const { data: maxRow } = await supabase
+        const maxRow = mustData(await supabase
           .from('lab_signup').select('signup_id')
-          .order('signup_id', { ascending: false }).limit(1).maybeSingle();
+          .order('signup_id', { ascending: false }).limit(1).maybeSingle(), 'lab_signup.select');
         let maxNum = 0;
         if (maxRow?.signup_id) {
           const num = parseInt(maxRow.signup_id.replace('SU', ''));
@@ -1268,10 +1268,10 @@ export default function NotificationBell() {
           if (!dateStr || !hourStr) continue;
           const targetDate = new Date(dateStr + 'T12:00:00');
           const hour = parseInt(hourStr);
-          const { data: existing } = await supabase.from('lab_signup').select('signup_id')
+          const existing = mustData(await supabase.from('lab_signup').select('signup_id')
             .eq('user_email', userEmail).eq('date', targetDate.toISOString())
             .eq('start_time', `${String(hour).padStart(2, '0')}:00:00`)
-            .neq('status', 'Cancelled').maybeSingle();
+            .neq('status', 'Cancelled').maybeSingle(), 'lab_signup.select');
           if (existing) continue;
           maxNum++;
           rows.push({

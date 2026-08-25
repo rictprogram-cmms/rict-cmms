@@ -21,6 +21,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { useNavigate } from 'react-router-dom'
 import { Wrench, Eye, EyeOff, Loader2, CheckCircle, Lock, AlertTriangle, LogOut } from 'lucide-react'
 
@@ -46,11 +47,11 @@ export default function ChangePasswordPage() {
           return
         }
         // Pull their name for the greeting
-        const { data: profile } = await supabase
+        const profile = mustData(await supabase
           .from('profiles')
           .select('first_name')
           .eq('email', session.user.email)
-          .maybeSingle()
+          .maybeSingle(), 'profiles.select')
         if (profile?.first_name) setUserName(profile.first_name)
       } catch {
         // On any error just let them proceed — updateUser will fail naturally

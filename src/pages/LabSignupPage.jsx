@@ -167,10 +167,10 @@ function WeeklySignupTab() {
       const classIds = [...new Set((data || []).map(s => s.class_id).filter(Boolean))]
       let classNames = {}
       if (classIds.length > 0) {
-        const { data: classData } = await supabase
+        const classData = mustData(await supabase
           .from('classes')
           .select('course_id, course_name')
-          .in('course_id', classIds)
+          .in('course_id', classIds), 'classes.select')
         ;(classData || []).forEach(c => { classNames[c.course_id] = c.course_name || '' })
       }
 

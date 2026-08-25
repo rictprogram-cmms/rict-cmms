@@ -20,6 +20,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
+import { mustData } from '@/lib/supabaseData';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
@@ -155,12 +156,12 @@ export default function InventoryPage() {
 
   const loadDropdowns = async () => {
     try {
-      const { data } = await supabase.from('inventory_locations').select('*').eq('status', 'Active').order('location_name');
+      const data = mustData(await supabase.from('inventory_locations').select('*').eq('status', 'Active').order('location_name'), 'inventory_locations.select');
       if (data) setLocations(data);
     } catch (e) { console.error(e); }
 
     try {
-      const { data } = await supabase.from('vendors').select('vendor_id, vendor_name, status').eq('status', 'Active').order('vendor_name');
+      const data = mustData(await supabase.from('vendors').select('vendor_id, vendor_name, status').eq('status', 'Active').order('vendor_name'), 'vendors.select');
       if (data) setVendors(data);
     } catch (e) { console.error(e); }
   };
@@ -177,11 +178,11 @@ export default function InventoryPage() {
       // where inventory_part_id is populated
       let orderMap = {};
       try {
-        const { data: lineItems } = await supabase
+        const lineItems = mustData(await supabase
           .from('order_line_items')
           .select('inventory_part_id, quantity, received_qty, order_id, orders!inner(status)')
           .neq('inventory_part_id', '')
-          .in('orders.status', ['Pending', 'Approved', 'Ordered']);
+          .in('orders.status', ['Pending', 'Approved', 'Ordered']), 'order_line_items.select');
 
         if (lineItems) {
           for (const li of lineItems) {
@@ -521,10 +522,10 @@ export default function InventoryPage() {
     let labelW = 2
     let labelH = 1
     try {
-      const { data: dims } = await supabase
+      const dims = mustData(await supabase
         .from('settings')
         .select('setting_key, setting_value')
-        .in('setting_key', ['label_width_inches', 'label_height_inches']);
+        .in('setting_key', ['label_width_inches', 'label_height_inches']), 'settings.select');
       (dims || []).forEach(d => {
         const v = parseFloat(d.setting_value)
         if (!isNaN(v) && v > 0) {

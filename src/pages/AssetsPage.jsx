@@ -15,7 +15,7 @@
  *  - Permission-gated (add_assets, edit_assets, delete_assets, upload_docs, print_labels)
  */
 
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import toast from 'react-hot-toast'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
@@ -206,10 +206,10 @@ export default function AssetsPage() {
   /* ── Checkout map: who currently has each asset ────────────────── */
   const refreshOpenCheckouts = useCallback(async () => {
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('asset_checkouts')
         .select('checkout_id, asset_id, user_email, user_name, checked_out_at, expected_return')
-        .is('returned_at', null)
+        .is('returned_at', null), 'asset_checkouts.select')
         // The pooled scanner has many simultaneous sign-outs on one asset
         // record; it must not show a single "Out" indicator here.
         .neq('asset_id', POOLED_SCANNER_ASSET_ID)
@@ -248,17 +248,17 @@ export default function AssetsPage() {
     setViewModalSOPs([])
     setViewModalSOPsLoading(true)
     try {
-      const { data: links } = await supabase
+      const links = mustData(await supabase
         .from('sop_assets')
         .select('sop_id')
-        .eq('asset_id', assetId)
+        .eq('asset_id', assetId), 'sop_assets.select')
       const sopIds = (links || []).map(r => r.sop_id)
       if (sopIds.length) {
-        const { data: sops } = await supabase
+        const sops = mustData(await supabase
           .from('sops')
           .select('sop_id, name, description, document_url, updated_at, updated_by')
           .in('sop_id', sopIds)
-          .order('name')
+          .order('name'), 'sops.select')
         setViewModalSOPs(sops || [])
       }
     } catch {}
@@ -451,11 +451,11 @@ export default function AssetsPage() {
   async function cascadeArchivePMs(assetId, userShort) {
     try {
       // Find PMs that aren't already archived
-      const { data: pms } = await supabase
+      const pms = mustData(await supabase
         .from('pm_schedules')
         .select('pm_id, pm_name, status')
         .eq('asset_id', assetId)
-        .neq('status', 'Archived')
+        .neq('status', 'Archived'), 'pm_schedules.select')
 
       if (!pms || pms.length === 0) return
 
@@ -500,11 +500,11 @@ export default function AssetsPage() {
   // some PMs separately. Confirm before bulk-restoring.
   async function maybeRestorePMs(assetId, userShort) {
     try {
-      const { data: archivedPMs } = await supabase
+      const archivedPMs = mustData(await supabase
         .from('pm_schedules')
         .select('pm_id, pm_name')
         .eq('asset_id', assetId)
-        .eq('status', 'Archived')
+        .eq('status', 'Archived'), 'pm_schedules.select')
 
       if (!archivedPMs || archivedPMs.length === 0) return
 
@@ -780,10 +780,10 @@ export default function AssetsPage() {
     let labelW = 2
     let labelH = 1
     try {
-      const { data: dims } = await supabase
+      const dims = mustData(await supabase
         .from('settings')
         .select('setting_key, setting_value')
-        .in('setting_key', ['label_width_inches', 'label_height_inches']);
+        .in('setting_key', ['label_width_inches', 'label_height_inches']), 'settings.select');
       (dims || []).forEach(d => {
         const v = parseFloat(d.setting_value)
         if (!isNaN(v) && v > 0) {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { Wrench, Eye, EyeOff, Loader2, CheckCircle, ArrowLeft, Clock, Mail, Lock, ShieldCheck, RefreshCw } from 'lucide-react'
 
 // ── LoginPage ───────────────────────────────────────────────────────────────
@@ -218,11 +219,11 @@ export default function LoginPage() {
       const cleanEmail = regEmail.toLowerCase().trim()
 
       // Check if the email already has an approved profile
-      const { data: existingUser } = await supabase
+      const existingUser = mustData(await supabase
         .from('profiles')
         .select('email')
         .eq('email', cleanEmail)
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
       if (existingUser) {
         setError('This email is already registered. Please log in instead.')
@@ -231,12 +232,12 @@ export default function LoginPage() {
       }
 
       // Check if there's already a pending access request
-      const { data: existingRequest } = await supabase
+      const existingRequest = mustData(await supabase
         .from('access_requests')
         .select('request_id, status')
         .eq('email', cleanEmail)
         .eq('status', 'Pending')
-        .maybeSingle()
+        .maybeSingle(), 'access_requests.select')
 
       if (existingRequest) {
         setError('An access request for this email is already pending. Please wait for instructor approval.')
@@ -430,17 +431,17 @@ export default function LoginPage() {
       const cleanEmail = forgotEmail.toLowerCase().trim()
 
       // Verify the email exists in our system (profiles or access_requests)
-      const { data: existingProfile } = await supabase
+      const existingProfile = mustData(await supabase
         .from('profiles')
         .select('email')
         .eq('email', cleanEmail)
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
-      const { data: existingRequest } = await supabase
+      const existingRequest = mustData(await supabase
         .from('access_requests')
         .select('email')
         .eq('email', cleanEmail)
-        .maybeSingle()
+        .maybeSingle(), 'access_requests.select')
 
       if (!existingProfile && !existingRequest) {
         setError('No account found with this email. Please register instead.')

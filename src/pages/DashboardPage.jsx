@@ -219,7 +219,7 @@ function AccountabilityMetrics({ navigate }) {
         if (!endDate) endDate = toLocalDateStr(new Date());
         let gracePeriod = 10;
         try {
-          const { data: gs } = await supabase.from('settings').select('setting_value').eq('setting_key', 'grace_period_minutes').maybeSingle();
+          const gs = mustData(await supabase.from('settings').select('setting_value').eq('setting_key', 'grace_period_minutes').maybeSingle(), 'settings.select');
           if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10;
         } catch {}
         // IMPORTANT: time_clock stores USR#### in user_id — must use profile.user_id, not profile.id (UUID)
@@ -435,11 +435,11 @@ function GradeRelevantScores() {
         // 3. Resolve grace period (matches GB Items / TimeCardsPage convention)
         let gracePeriod = 10;
         try {
-          const { data: gs } = await supabase
+          const gs = mustData(await supabase
             .from('settings')
             .select('setting_value')
             .eq('setting_key', 'grace_period_minutes')
-            .maybeSingle();
+            .maybeSingle(), 'settings.select');
           if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10;
         } catch { /* default */ }
 
@@ -476,10 +476,10 @@ function GradeRelevantScores() {
         //    and the GB Items report.
         let volSemStart = null, volSemEnd = null;
         try {
-          const { data: settingsRows } = await supabase
+          const settingsRows = mustData(await supabase
             .from('settings')
             .select('setting_key, setting_value')
-            .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end']);
+            .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end']), 'settings.select');
           const sMap = {};
           (settingsRows || []).forEach(r => { sMap[r.setting_key] = r.setting_value; });
           volSemStart = sMap.volunteer_semester_start || null;
@@ -488,12 +488,12 @@ function GradeRelevantScores() {
           const endIsStale = volSemEnd && new Date(volSemEnd + 'T23:59:59') < todayDate;
           if (!volSemStart || !volSemEnd || endIsStale) {
             if (endIsStale) { volSemStart = null; volSemEnd = null; }
-            const { data: actClasses } = await supabase
+            const actClasses = mustData(await supabase
               .from('classes')
               .select('start_date, end_date')
               .eq('status', 'Active')
               .order('start_date', { ascending: true })
-              .limit(20);
+              .limit(20), 'classes.select');
             if (actClasses && actClasses.length > 0) {
               const starts = actClasses.map(c => c.start_date).filter(Boolean).sort();
               const ends = actClasses.map(c => c.end_date).filter(Boolean).sort();
@@ -1181,10 +1181,10 @@ function InstructorOverview({ navigate }) {
     let cancelled = false;
     (async () => {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('settings')
           .select('setting_key, setting_value')
-          .in('setting_key', ['dashboard_day_view_expanded', 'dashboard_temp_access_expanded']);
+          .in('setting_key', ['dashboard_day_view_expanded', 'dashboard_temp_access_expanded']), 'settings.select');
 
         const getVal = (key, fallback) => {
           const row = (data || []).find(r => r.setting_key === key);
@@ -1423,7 +1423,7 @@ function InstructorOverview({ navigate }) {
   const loadTempHistory = async () => {
     setTempHistoryLoading(true);
     try {
-      const { data } = await supabase.from('temp_access_requests').select('*').order('submitted_date', { ascending: false }).limit(50);
+      const data = mustData(await supabase.from('temp_access_requests').select('*').order('submitted_date', { ascending: false }).limit(50), 'temp_access_requests.select');
       setTempHistory(data || []);
     } catch { setTempHistory([]); }
     setTempHistoryLoading(false);

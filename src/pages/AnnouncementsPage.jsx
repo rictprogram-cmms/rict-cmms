@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
@@ -1065,9 +1065,9 @@ function SentHistoryTab({ refreshKey, viewMode = 'all' }) {
       if (error) throw error
 
       // Name lookup
-      const { data: profiles } = await supabase
+      const profiles = mustData(await supabase
         .from('profiles')
-        .select('email, first_name, last_name')
+        .select('email, first_name, last_name'), 'profiles.select')
       const nameMap = {}
       ;(profiles || []).forEach(p => {
         nameMap[p.email?.toLowerCase()] = `${p.first_name || ''} ${p.last_name || ''}`.trim()

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useNavigate } from 'react-router-dom'
 import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive, Library } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -738,10 +738,10 @@ function RequiredToolsPanel({ onBack }) {
           const newStr = newPartNumber ? `${newName} (Part #: ${newPartNumber})` : newName
 
           // Fetch templates whose required_materials array contains the old string
-          const { data: templates } = await supabase
+          const templates = mustData(await supabase
             .from('syllabus_templates')
             .select('course_id, semester, required_materials')
-            .contains('required_materials', JSON.stringify([oldStr]))
+            .contains('required_materials', JSON.stringify([oldStr])), 'syllabus_templates.select')
 
           if (templates?.length) {
             // Replace old string with new string in each affected template
@@ -1569,19 +1569,19 @@ export default function InstructorToolsPage() {
     setFetchingRevision(true)
     try {
       if (rev._type === 'course') {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('course_outline_revisions')
           .select('*')
           .eq('revision_id', rev.revision_id)
-          .maybeSingle()
+          .maybeSingle(), 'course_outline_revisions.select')
         setEditCourseOutlineRevision(data || rev)
         setShowCourseOutlineRevision(true)
       } else {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('program_revisions')
           .select('*')
           .eq('revision_id', rev.revision_id)
-          .maybeSingle()
+          .maybeSingle(), 'program_revisions.select')
         setEditRevision(data || rev)
         setShowRevision(true)
       }

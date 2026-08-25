@@ -22,6 +22,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { mustData } from '@/lib/supabaseData'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -2029,13 +2030,13 @@ function DeviceHistoryModal({ device, changeRequests, onClose }) {
     async function load() {
       try {
         const { supabase } = await import('@/lib/supabase')
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('audit_log')
           .select('*')
           .eq('entity_type', 'Network Device')
           .eq('entity_id', device.device_id)
           .order('timestamp', { ascending: false })
-          .limit(50)
+          .limit(50), 'audit_log.select')
         if (!cancelled) setAuditRows(data || [])
       } finally {
         if (!cancelled) setLoadingAudit(false)

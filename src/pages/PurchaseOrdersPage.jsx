@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { usePODashboard, usePOList, usePODetail, useVendors, usePOActions, useLowStockItems } from '@/hooks/usePurchaseOrders'
 import { usePOBudgetSummary } from '@/hooks/usePOBudgetSummary'
 import toast from 'react-hot-toast'
@@ -866,12 +867,12 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
         // Look up email from the ordered_by name
         const nameParts = (order.ordered_by || '').split(' ')
         const firstName = nameParts[0] || ''
-        const { data: creator } = await supabase
+        const creator = mustData(await supabase
           .from('profiles')
           .select('email, first_name, last_name')
           .ilike('first_name', firstName)
           .eq('status', 'Active')
-          .limit(5)
+          .limit(5), 'profiles.select')
 
         // Match by checking the formatted name pattern "First L."
         const match = (creator || []).find(p => {

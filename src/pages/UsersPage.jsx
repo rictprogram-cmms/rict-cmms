@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
@@ -748,11 +748,11 @@ function AddUserModal({ onClose, onAdded }) {
     setSaving(true)
     try {
       // Check if a profile with this email already exists
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('profiles')
         .select('id')
         .eq('email', trimmedEmail)
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
       if (existing) {
         toast.error('A user with this email already exists.')
@@ -1435,11 +1435,11 @@ function AccessRequestsPanel({ requests, loading, onRefresh }) {
     setManualLoading(true)
     try {
       // Check if profile already exists
-      const { data: existing } = await supabase
+      const existing = mustData(await supabase
         .from('profiles')
         .select('id')
         .eq('email', manualEmail.toLowerCase().trim())
-        .maybeSingle()
+        .maybeSingle(), 'profiles.select')
 
       if (existing) {
         toast.error('A user with this email already exists')

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import toast from 'react-hot-toast'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -446,14 +446,14 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
     async function loadSemesterEnd() {
       try {
         const todayStr = new Date().toISOString().substring(0, 10)
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('classes')
           .select('end_date')
           .eq('status', 'Active')
           .lte('start_date', todayStr)
           .gte('end_date', todayStr)
           .order('end_date', { ascending: false })
-          .limit(1)
+          .limit(1), 'classes.select')
         if (cancelled || !data?.length || !data[0].end_date) return
         const endStr = data[0].end_date
         // Parse as local date (append T00:00:00 to avoid UTC shift)
@@ -939,12 +939,12 @@ function HelpButton({ profile }) {
     let cancelled = false
     async function checkClockIn() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('time_clock')
           .select('record_id')
           .eq('user_email', profile.email)
           .is('punch_out', null)
-          .limit(1)
+          .limit(1), 'time_clock.select')
         if (!cancelled) setIsClockedIn(!!(data && data.length > 0))
       } catch {
         if (!cancelled) setIsClockedIn(false)
@@ -963,11 +963,11 @@ function HelpButton({ profile }) {
     async function loadLunchHour() {
       try {
         const today = new Date().toISOString().substring(0, 10)
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('lab_calendar')
           .select('lunch_hour')
           .eq('date', today)
-          .limit(1)
+          .limit(1), 'lab_calendar.select')
         if (!cancelled && data && data.length > 0 && data[0].lunch_hour != null) {
           setLunchHour(parseInt(data[0].lunch_hour))
         }
@@ -985,10 +985,10 @@ function HelpButton({ profile }) {
     let cancelled = false
     async function loadAwayMode() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('settings')
           .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time'])
+          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
         if (cancelled) return
         const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode')
         const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time')
@@ -1041,13 +1041,13 @@ function HelpButton({ profile }) {
   const loadHelpStatus = useCallback(async () => {
     if (!profile?.email || isInstructor) return
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('help_requests')
         .select('*')
         .eq('user_email', profile.email)
         .in('status', ['pending', 'acknowledged'])
         .order('requested_at', { ascending: false })
-        .limit(1)
+        .limit(1), 'help_requests.select')
 
       if (data && data.length > 0) {
         const req = data[0]
@@ -1531,10 +1531,10 @@ export default function AppLayout() {
     let cancelled = false
     async function loadAwayMode() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('settings')
           .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time'])
+          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
         if (!cancelled && data) {
           const modeRow = data.find(r => r.setting_key === 'instructor_away_mode')
           const timeRow = data.find(r => r.setting_key === 'instructor_return_time')
@@ -1602,12 +1602,12 @@ export default function AppLayout() {
       return
     }
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('temp_access_requests')
         .select('approved_permissions, expiry_date')
         .eq('user_email', profile.email)
         .eq('status', 'Active')
-        .eq('request_type', 'permissions')
+        .eq('request_type', 'permissions'), 'temp_access_requests.select')
 
       const now = new Date()
       const pages = new Set()
@@ -1656,11 +1656,11 @@ export default function AppLayout() {
   const runExpiryCleanup = useCallback(async () => {
     if (!isInstructor || !profile?.email) return
     try {
-      const { data: expired } = await supabase
+      const expired = mustData(await supabase
         .from('temp_access_requests')
         .select('*')
         .eq('status', 'Active')
-        .lt('expiry_date', new Date().toISOString())
+        .lt('expiry_date', new Date().toISOString()), 'temp_access_requests.select')
 
       if (!expired || expired.length === 0) return
 
@@ -1797,13 +1797,13 @@ export default function AppLayout() {
   const loadTempAccessStatus = useCallback(async () => {
     if (isInstructor || !profile?.email) return
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('temp_access_requests')
         .select('*')
         .eq('user_email', profile.email)
         .in('status', ['Pending', 'Active'])
         .order('submitted_date', { ascending: false })
-        .limit(1)
+        .limit(1), 'temp_access_requests.select')
       if (data && data.length > 0) {
         setTempRequestStatus(data[0].status.toLowerCase())
         setTempRequestData(data[0])

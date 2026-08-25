@@ -276,10 +276,10 @@ export default function TVDisplayPage() {
   useEffect(() => {
     async function loadAwayMode() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('settings')
           .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time'])
+          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
         if (data) {
           const modeRow = data.find(r => r.setting_key === 'instructor_away_mode')
           const timeRow = data.find(r => r.setting_key === 'instructor_return_time')
@@ -334,11 +334,11 @@ export default function TVDisplayPage() {
     }
     async function loadRotationSetting() {
       try {
-        const { data } = await supabase
+        const data = mustData(await supabase
           .from('settings')
           .select('setting_value')
           .eq('setting_key', 'tv_rotation_seconds')
-          .maybeSingle()
+          .maybeSingle(), 'settings.select')
         const v = parseInt(data?.setting_value, 10)
         if (!isNaN(v) && v >= 5) setRotationSeconds(v)
       } catch { /* keep default */ }

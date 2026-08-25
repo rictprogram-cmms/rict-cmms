@@ -19,7 +19,7 @@
  * - Full permission gating via hasPerm()
  */
 
-import { assertWrite } from '@/lib/supabaseData';
+import { mustData, assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
@@ -617,11 +617,11 @@ export default function WorkOrdersPage() {
     setPmProcedureName('');
     if (wo?.is_pm === 'Yes' && wo?.pm_id) {
       try {
-        const { data: pm } = await supabase
+        const pm = mustData(await supabase
           .from('pm_schedules')
           .select('procedure_file_id, pm_name')
           .eq('pm_id', wo.pm_id)
-          .maybeSingle();
+          .maybeSingle(), 'pm_schedules.select');
         if (pm?.procedure_file_id) {
           // Bucket name is `pm-procedures` (plural) — matches usePMSchedules upload bucket.
           const { data } = supabase.storage.from('pm-procedures').getPublicUrl(pm.procedure_file_id);
@@ -643,18 +643,18 @@ export default function WorkOrdersPage() {
     setLinkedSops([]);
     if (!woId) return;
     try {
-      const { data: links } = await supabase
+      const links = mustData(await supabase
         .from('sop_work_orders')
         .select('sop_id')
-        .eq('wo_id', woId);
+        .eq('wo_id', woId), 'sop_work_orders.select');
       const sopIds = [...new Set((links || []).map(l => l.sop_id).filter(Boolean))];
       if (sopIds.length === 0) return;
 
-      const { data: sops } = await supabase
+      const sops = mustData(await supabase
         .from('sops')
         .select('sop_id, name, description, document_url, document_name, status')
         .in('sop_id', sopIds)
-        .order('name', { ascending: true });
+        .order('name', { ascending: true }), 'sops.select');
 
       // Only show Active SOPs in the WO view
       const active = (sops || []).filter(s => s.status !== 'Inactive');
@@ -820,13 +820,13 @@ export default function WorkOrdersPage() {
 
     // Assets
     try {
-      const { data } = await supabase.from('assets').select('asset_id, name, status').eq('status', 'Active').order('name');
+      const data = mustData(await supabase.from('assets').select('asset_id, name, status').eq('status', 'Active').order('name'), 'assets.select');
       if (data) setAssets(data);
     } catch (e) { console.error(e); }
 
     // Users
     try {
-      const { data } = await supabase.from('profiles').select('id, email, first_name, last_name, role, status, time_clock_only').eq('status', 'Active').order('first_name');
+      const data = mustData(await supabase.from('profiles').select('id, email, first_name, last_name, role, status, time_clock_only').eq('status', 'Active').order('first_name'), 'profiles.select');
       // Filter out TCO users from assignment - they only punch in/out
       const assignableUsers = (data || []).filter(u => u.time_clock_only !== 'Yes');
       if (assignableUsers) setUsers(assignableUsers);
@@ -834,14 +834,14 @@ export default function WorkOrdersPage() {
 
     // Inventory (for parts modal)
     try {
-      const { data } = await supabase.from('inventory').select('part_id, part_name, qty_in_stock, supplier_part_number').eq('status', 'Active');
+      const data = mustData(await supabase.from('inventory').select('part_id, part_name, qty_in_stock, supplier_part_number').eq('status', 'Active'), 'inventory.select');
       if (data) setInventoryItems(data);
     } catch (e) { console.error(e); }
 
     // Settings: default work time, time increment, priority days
     try {
-      const { data } = await supabase.from('settings').select('setting_key, setting_value')
-        .in('setting_key', ['default_work_time', 'time_increment', 'priority_high_days', 'priority_medium_days', 'priority_low_days']);
+      const data = mustData(await supabase.from('settings').select('setting_key, setting_value')
+        .in('setting_key', ['default_work_time', 'time_increment', 'priority_high_days', 'priority_medium_days', 'priority_low_days']), 'settings.select');
       if (data?.length) {
         const map = {};
         data.forEach(s => { map[s.setting_key] = s.setting_value });
@@ -857,7 +857,7 @@ export default function WorkOrdersPage() {
 
     // Vendors (for PO generation)
     try {
-      const { data } = await supabase.from('vendors').select('*').eq('status', 'Active').order('vendor_name');
+      const data = mustData(await supabase.from('vendors').select('*').eq('status', 'Active').order('vendor_name'), 'vendors.select');
       if (data) setVendors(data);
     } catch (e) { console.error(e); }
   };
@@ -895,10 +895,10 @@ export default function WorkOrdersPage() {
       if (mapped.length > 0) {
         try {
           const woIds = mapped.map(w => w.wo_id);
-          const { data: aData } = await supabase
+          const aData = mustData(await supabase
             .from('work_order_assignments')
             .select('wo_id, user_email, user_name')
-            .in('wo_id', woIds);
+            .in('wo_id', woIds), 'work_order_assignments.select');
           const aMap = {};
           (aData || []).forEach(a => {
             if (!aMap[a.wo_id]) aMap[a.wo_id] = [];
@@ -923,10 +923,10 @@ export default function WorkOrdersPage() {
         // Batch-load document counts for list display (shows paperclip icon when count > 0)
         try {
           const woIds = mapped.map(w => w.wo_id);
-          const { data: dData } = await supabase
+          const dData = mustData(await supabase
             .from('work_order_documents')
             .select('wo_id')
-            .in('wo_id', woIds);
+            .in('wo_id', woIds), 'work_order_documents.select');
           const dMap = {};
           (dData || []).forEach(d => {
             dMap[d.wo_id] = (dMap[d.wo_id] || 0) + 1;
@@ -945,7 +945,7 @@ export default function WorkOrdersPage() {
 
   const loadRequests = async () => {
     try {
-      const { data } = await supabase.from('work_order_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false });
+      const data = mustData(await supabase.from('work_order_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false }), 'work_order_requests.select');
       if (data) setRequestsData(data);
     } catch (e) { console.error(e); }
   };
@@ -975,17 +975,17 @@ export default function WorkOrdersPage() {
 
     // Load work logs
     try {
-      const { data } = await supabase.from('work_log').select('*').eq('wo_id', woId).order('timestamp', { ascending: false });
+      const data = mustData(await supabase.from('work_log').select('*').eq('wo_id', woId).order('timestamp', { ascending: false }), 'work_log.select');
       setWorkLogs(data || []);
     } catch (e) { console.error(e); }
 
     // Load assignees from junction table
     try {
-      const { data: aData } = await supabase
+      const aData = mustData(await supabase
         .from('work_order_assignments')
         .select('user_email, user_name, assigned_at')
         .eq('wo_id', woId)
-        .order('assigned_at', { ascending: true });
+        .order('assigned_at', { ascending: true }), 'work_order_assignments.select');
       const assignees = (aData || []).map(a => ({ email: a.user_email, name: a.user_name }));
       // Reorder so the current primary assignee (wo.assigned_email) is always index 0
       if (wo.assigned_email && assignees.length > 1) {
@@ -1001,25 +1001,25 @@ export default function WorkOrdersPage() {
 
     // Load parts used
     try {
-      const { data } = await supabase.from('work_order_parts').select('*').eq('wo_id', woId).order('added_date', { ascending: false });
+      const data = mustData(await supabase.from('work_order_parts').select('*').eq('wo_id', woId).order('added_date', { ascending: false }), 'work_order_parts.select');
       setPartsUsed(data || []);
     } catch (e) { console.error(e); }
 
     // Load documents
     try {
-      const { data } = await supabase.from('work_order_documents').select('*').eq('wo_id', woId).order('uploaded_at', { ascending: false });
+      const data = mustData(await supabase.from('work_order_documents').select('*').eq('wo_id', woId).order('uploaded_at', { ascending: false }), 'work_order_documents.select');
       setWoDocs(data || []);
     } catch (e) { setWoDocs([]); }
 
     // Load linked Purchase Orders (check both orders.work_order_id AND line items wo_id)
     try {
-      const { data: directPOs } = await supabase.from('orders').select('*').eq('work_order_id', woId).order('order_date', { ascending: false });
+      const directPOs = mustData(await supabase.from('orders').select('*').eq('work_order_id', woId).order('order_date', { ascending: false }), 'orders.select');
       // Also find POs that have line items tagged with this WO
-      const { data: lineLinks } = await supabase.from('order_line_items').select('order_id').eq('wo_id', woId);
+      const lineLinks = mustData(await supabase.from('order_line_items').select('order_id').eq('wo_id', woId), 'order_line_items.select');
       const lineOrderIds = [...new Set((lineLinks || []).map(l => l.order_id))];
       let extraPOs = [];
       if (lineOrderIds.length > 0) {
-        const { data } = await supabase.from('orders').select('*').in('order_id', lineOrderIds);
+        const data = mustData(await supabase.from('orders').select('*').in('order_id', lineOrderIds), 'orders.select');
         extraPOs = data || [];
       }
       // Merge and deduplicate
@@ -1043,7 +1043,7 @@ export default function WorkOrdersPage() {
   const loadWODetailSilent = async (woId) => {
     try {
       // Refresh WO data from DB
-      const { data: woRow } = await supabase.from('work_orders').select('*').eq('wo_id', woId).single();
+      const woRow = mustData(await supabase.from('work_orders').select('*').eq('wo_id', woId).single(), 'work_orders.select');
       if (woRow) {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -1069,16 +1069,16 @@ export default function WorkOrdersPage() {
         await fetchLinkedSops(woId);
       }
 
-      const { data: logs } = await supabase.from('work_log').select('*').eq('wo_id', woId).order('timestamp', { ascending: false });
+      const logs = mustData(await supabase.from('work_log').select('*').eq('wo_id', woId).order('timestamp', { ascending: false }), 'work_log.select');
       setWorkLogs(logs || []);
 
       // Reload assignees
       try {
-        const { data: aData } = await supabase
+        const aData = mustData(await supabase
           .from('work_order_assignments')
           .select('user_email, user_name, assigned_at')
           .eq('wo_id', woId)
-          .order('assigned_at', { ascending: true });
+          .order('assigned_at', { ascending: true }), 'work_order_assignments.select');
         const assignees = (aData || []).map(a => ({ email: a.user_email, name: a.user_name }));
         // Reorder so the current primary assignee is always first
         const primaryEmail = (woRow?.assigned_email || currentWORef.current?.assigned_email || '').toLowerCase();
@@ -1092,19 +1092,19 @@ export default function WorkOrdersPage() {
         setViewAssignees(assignees);
       } catch (e) { /* keep existing */ }
 
-      const { data: parts } = await supabase.from('work_order_parts').select('*').eq('wo_id', woId).order('added_date', { ascending: false });
+      const parts = mustData(await supabase.from('work_order_parts').select('*').eq('wo_id', woId).order('added_date', { ascending: false }), 'work_order_parts.select');
       setPartsUsed(parts || []);
 
-      const { data: docs } = await supabase.from('work_order_documents').select('*').eq('wo_id', woId).order('uploaded_at', { ascending: false });
+      const docs = mustData(await supabase.from('work_order_documents').select('*').eq('wo_id', woId).order('uploaded_at', { ascending: false }), 'work_order_documents.select');
       setWoDocs(docs || []);
 
       // Load linked POs (check both orders.work_order_id AND line items wo_id)
-      const { data: directPOs } = await supabase.from('orders').select('*').eq('work_order_id', woId).order('order_date', { ascending: false });
-      const { data: lineLinks } = await supabase.from('order_line_items').select('order_id').eq('wo_id', woId);
+      const directPOs = mustData(await supabase.from('orders').select('*').eq('work_order_id', woId).order('order_date', { ascending: false }), 'orders.select');
+      const lineLinks = mustData(await supabase.from('order_line_items').select('order_id').eq('wo_id', woId), 'order_line_items.select');
       const lineOrderIds = [...new Set((lineLinks || []).map(l => l.order_id))];
       let extraPOs = [];
       if (lineOrderIds.length > 0) {
-        const { data: ep } = await supabase.from('orders').select('*').in('order_id', lineOrderIds);
+        const ep = mustData(await supabase.from('orders').select('*').in('order_id', lineOrderIds), 'orders.select');
         extraPOs = ep || [];
       }
       const allPOs = [...(directPOs || [])];
@@ -1129,18 +1129,18 @@ export default function WorkOrdersPage() {
   const checkExistingPOs = async (vendorName) => {
     if (!vendorName) { setExistingPO(null); setAddToExisting(false); return; }
     try {
-      const { data } = await supabase.from('orders')
+      const data = mustData(await supabase.from('orders')
         .select('order_id, vendor_name, other_vendor, status, total, ordered_by, work_order_id')
         .or(`vendor_name.eq.${vendorName},other_vendor.eq.${vendorName}`)
         .in('status', ['Pending', 'Approved', 'Ready', 'Submitted'])
         .order('order_date', { ascending: false })
-        .limit(1);
+        .limit(1), 'orders.select');
       if (data && data.length > 0) {
         // Also load existing line items for display
         const po = data[0];
-        const { data: lines } = await supabase.from('order_line_items')
+        const lines = mustData(await supabase.from('order_line_items')
           .select('line_id, description, quantity, unit_price, subtotal, wo_id')
-          .eq('order_id', po.order_id);
+          .eq('order_id', po.order_id), 'order_line_items.select');
         po.existingLines = lines || [];
         setExistingPO(po);
         setAddToExisting(false);
@@ -1231,7 +1231,7 @@ export default function WorkOrdersPage() {
           if (oid) orderId = oid;
         } catch {}
         if (!orderId) {
-          const { data: maxRow } = await supabase.from('orders').select('order_id').order('order_id', { ascending: false }).limit(1).maybeSingle();
+          const maxRow = mustData(await supabase.from('orders').select('order_id').order('order_id', { ascending: false }).limit(1).maybeSingle(), 'orders.select');
           let next = 1;
           if (maxRow?.order_id) { const num = parseInt(maxRow.order_id.replace(/\D/g, '')); if (!isNaN(num)) next = num + 1; }
           orderId = `ORD${String(next).padStart(4, '0')}`;

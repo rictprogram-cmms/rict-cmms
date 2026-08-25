@@ -22,7 +22,7 @@
  * Permission page key: 'SOPs'
  */
 
-import { assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
@@ -67,10 +67,10 @@ function useLinkCounts(sops) {
         const linkedWoIds = [...new Set((w || []).map(r => r.wo_id).filter(Boolean))]
         let openWoIds = new Set()
         if (linkedWoIds.length > 0) {
-          const { data: openWOs } = await supabase
+          const openWOs = mustData(await supabase
             .from('work_orders')
             .select('wo_id')
-            .in('wo_id', linkedWoIds)
+            .in('wo_id', linkedWoIds), 'work_orders.select')
           openWoIds = new Set((openWOs || []).map(o => o.wo_id))
         }
         const c = {}
@@ -189,7 +189,7 @@ export default function SOPsPage() {
   // ── Fetch SOP Template settings ──
   const fetchTemplate = useCallback(async () => {
     try {
-      const { data } = await supabase.from('settings').select('setting_key, setting_value').in('setting_key', ['sop_template_url', 'sop_template_name'])
+      const data = mustData(await supabase.from('settings').select('setting_key, setting_value').in('setting_key', ['sop_template_url', 'sop_template_name']), 'settings.select')
       if (data) {
         const url = data.find(r => r.setting_key === 'sop_template_url')?.setting_value || ''
         const name = data.find(r => r.setting_key === 'sop_template_name')?.setting_value || ''
@@ -263,19 +263,19 @@ export default function SOPsPage() {
     setClosedWOsLoaded(false)
     setClosedWOsExpanded(false)
     try {
-      const { data: aL } = await supabase.from('sop_assets').select('asset_id').eq('sop_id', sopId)
-      const { data: pL } = await supabase.from('sop_pm_schedules').select('pm_id').eq('sop_id', sopId)
-      const { data: wL } = await supabase.from('sop_work_orders').select('wo_id').eq('sop_id', sopId)
+      const aL = mustData(await supabase.from('sop_assets').select('asset_id').eq('sop_id', sopId), 'sop_assets.select')
+      const pL = mustData(await supabase.from('sop_pm_schedules').select('pm_id').eq('sop_id', sopId), 'sop_pm_schedules.select')
+      const wL = mustData(await supabase.from('sop_work_orders').select('wo_id').eq('sop_id', sopId), 'sop_work_orders.select')
 
       const aIds = (aL || []).map(r => r.asset_id)
       const pIds = (pL || []).map(r => r.pm_id)
       const wIds = (wL || []).map(r => r.wo_id)
 
-      if (aIds.length) { const { data } = await supabase.from('assets').select('asset_id, name, category, location, status').in('asset_id', aIds).order('name'); setLinkedAssets(data || []) } else setLinkedAssets([])
-      if (pIds.length) { const { data } = await supabase.from('pm_schedules').select('pm_id, pm_name, asset_name, frequency, next_due_date, status').in('pm_id', pIds).order('pm_name'); setLinkedPMs(data || []) } else setLinkedPMs([])
+      if (aIds.length) { const data = mustData(await supabase.from('assets').select('asset_id, name, category, location, status').in('asset_id', aIds).order('name'), 'assets.select'); setLinkedAssets(data || []) } else setLinkedAssets([])
+      if (pIds.length) { const data = mustData(await supabase.from('pm_schedules').select('pm_id, pm_name, asset_name, frequency, next_due_date, status').in('pm_id', pIds).order('pm_name'), 'pm_schedules.select'); setLinkedPMs(data || []) } else setLinkedPMs([])
       if (wIds.length) {
         // Only fetch OPEN work orders here. Closed ones are handled by loadClosedWOs on demand.
-        const { data: od } = await supabase.from('work_orders').select('wo_id, description, asset_name, priority, status, assigned_to').in('wo_id', wIds)
+        const od = mustData(await supabase.from('work_orders').select('wo_id, description, asset_name, priority, status, assigned_to').in('wo_id', wIds), 'work_orders.select')
         // Sort newest first by extracting the numeric portion of wo_id (robust to format changes)
         const woNum = (id) => parseInt(String(id || '').replace(/\D/g, ''), 10) || 0
         const sortedOpen = (od || []).slice().sort((a, b) => woNum(b.wo_id) - woNum(a.wo_id))
@@ -299,10 +299,10 @@ export default function SOPsPage() {
     if (closedWOsLoaded || !closedWOIds.length) return
     setClosedWOsLoading(true)
     try {
-      const { data } = await supabase
+      const data = mustData(await supabase
         .from('work_orders_closed')
         .select('wo_id, description, asset_name, priority, status, assigned_to, closed_date, closed_by')
-        .in('wo_id', closedWOIds)
+        .in('wo_id', closedWOIds), 'work_orders_closed.select')
       const woNum = (id) => parseInt(String(id || '').replace(/\D/g, ''), 10) || 0
       const sorted = (data || []).slice().sort((a, b) => woNum(b.wo_id) - woNum(a.wo_id))
       setClosedWOs(sorted)
@@ -326,11 +326,11 @@ export default function SOPsPage() {
   // ── Load available items for link picker ──
   const loadAvailable = useCallback(async (type) => {
     try {
-      if (type === 'assets') { const { data } = await supabase.from('assets').select('asset_id, name, category, location, status').order('name'); setAllAssets(data || []) }
-      if (type === 'pms') { const { data } = await supabase.from('pm_schedules').select('pm_id, pm_name, asset_name, frequency, status').order('pm_name'); setAllPMs(data || []) }
+      if (type === 'assets') { const data = mustData(await supabase.from('assets').select('asset_id, name, category, location, status').order('name'), 'assets.select'); setAllAssets(data || []) }
+      if (type === 'pms') { const data = mustData(await supabase.from('pm_schedules').select('pm_id, pm_name, asset_name, frequency, status').order('pm_name'), 'pm_schedules.select'); setAllPMs(data || []) }
       if (type === 'wos') {
-        const { data: od } = await supabase.from('work_orders').select('wo_id, description, asset_name, priority, status, assigned_to').order('wo_id', { ascending: false })
-        const { data: cd } = await supabase.from('work_orders_closed').select('wo_id, description, asset_name, priority, status, assigned_to').order('wo_id', { ascending: false })
+        const od = mustData(await supabase.from('work_orders').select('wo_id, description, asset_name, priority, status, assigned_to').order('wo_id', { ascending: false }), 'work_orders.select')
+        const cd = mustData(await supabase.from('work_orders_closed').select('wo_id, description, asset_name, priority, status, assigned_to').order('wo_id', { ascending: false }), 'work_orders_closed.select')
         const m = new Map(); (od || []).forEach(w => m.set(w.wo_id, w)); (cd || []).forEach(w => { if (!m.has(w.wo_id)) m.set(w.wo_id, w) })
         setAllWOs(Array.from(m.values()))
       }
