@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -42,7 +43,8 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 function fmtMoney(v) {
-  return '$' + (parseFloat(v) || 0).toFixed(2)
+  // Thousands separators + 2 decimals, e.g. $12,345.60
+  return '$' + (parseFloat(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 // Statuses where line items can be edited
@@ -51,8 +53,6 @@ const EDITABLE_STATUSES = ['Pending', 'Approved', 'Ordered']
 // Closed-status filter values that should trigger AY filtering on the Orders tab
 const CLOSED_STATUS_FILTERS = ['Received', 'Cancelled', 'Rejected']
 
-// localStorage key for remembering the user's selected academic year on the Orders tab
-const AY_STORAGE_KEY = 'po_school_year'
 
 // ── Academic Year helpers ────────────────────────────────────────────────────
 // AY runs July 1 → June 30. The "start year" is the calendar year the AY began in
@@ -107,23 +107,16 @@ export default function PurchaseOrdersPage() {
 
   // QR Scanner state
   const [showScanner, setShowScanner] = useState(false)
+  // closeScanner is a hoisted function declaration below, so it's safe to reference here
+  const scannerDialogRef = useDialogA11y(showScanner, () => closeScanner())
   const html5QrRef = useRef(null)
 
   // ── Shared academic-year state (used by Orders + Dashboard tabs) ────────
   // Lifted out of OrdersTab so the Dashboard's Budget Remaining tile and the
-  // Orders tab's filter share a single source of truth. Persists to localStorage.
-  const [selectedAYStart, setSelectedAYStart] = useState(() => {
-    try {
-      const stored = window.localStorage?.getItem(AY_STORAGE_KEY)
-      const n = stored ? parseInt(stored, 10) : NaN
-      if (!isNaN(n) && n >= 2000 && n <= 2100) return n
-    } catch { /* localStorage unavailable */ }
-    return getCurrentAcademicYearStart()
-  })
-
-  useEffect(() => {
-    try { window.localStorage?.setItem(AY_STORAGE_KEY, String(selectedAYStart)) } catch {}
-  }, [selectedAYStart])
+  // Orders tab's filter share a single source of truth. Always opens on the
+  // current academic year (July 1 boundary); a different year chosen in the
+  // dropdown lasts for the session only, so nobody lands on a stale year.
+  const [selectedAYStart, setSelectedAYStart] = useState(() => getCurrentAcademicYearStart())
 
   // ── Keyboard shortcuts: [ steps to older AY, ] steps to newer AY ────────
   // Active on Orders and Dashboard tabs (where the AY context is meaningful).
@@ -259,7 +252,7 @@ export default function PurchaseOrdersPage() {
     return (
       <div className="p-4 lg:p-6 max-w-7xl mx-auto">
         <div className="text-center py-12 text-surface-400 flex items-center justify-center gap-2">
-          <Loader2 size={16} className="animate-spin" /> Loading...
+          <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading...
         </div>
       </div>
     )
@@ -273,33 +266,33 @@ export default function PurchaseOrdersPage() {
           const Icon = t.icon
           return (
             <button key={t.id} onClick={() => { setTab(t.id); setViewingOrder(null); setAutoReceive(false) }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg text-xs font-medium whitespace-nowrap transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                 tab === t.id ? 'bg-white text-brand-700 shadow-sm' : 'text-surface-500 hover:text-surface-700'
               }`}>
-              <Icon size={14} /> {t.label}
+              <Icon size={14} aria-hidden="true" /> {t.label}
             </button>
           )
         })}
         {/* QR Scan button — show if user has receive_po permission */}
         {hasPerm('receive_po') && (
           <button onClick={openScanner}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors text-surface-500 hover:text-surface-700 hover:bg-white/50 ml-auto"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors text-surface-500 hover:text-surface-700 hover:bg-white/50 ml-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
             title="Scan QR code to receive an order">
-            <ScanLine size={14} /> Scan to Receive
+            <ScanLine size={14} aria-hidden="true" /> Scan to Receive
           </button>
         )}
       </div>
 
       {/* QR Scanner Modal */}
       {showScanner && (
-        <div className="fixed inset-0 bg-black z-50 flex flex-col">
+        <div ref={scannerDialogRef} role="dialog" aria-modal="true" aria-labelledby="po-scanner-title" className="fixed inset-0 bg-black z-50 flex flex-col">
           <div className="flex items-center justify-between px-5 py-4 bg-black/80 absolute top-0 left-0 right-0 z-10">
-            <h2 className="text-white text-sm font-semibold flex items-center gap-2">
-              <ScanLine size={16} /> Scan PO QR Code
+            <h2 id="po-scanner-title" className="text-white text-sm font-semibold flex items-center gap-2">
+              <ScanLine size={16} aria-hidden="true" /> Scan PO QR Code
             </h2>
-            <button onClick={closeScanner}
-              className="w-10 h-10 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors">
-              <X size={18} />
+            <button type="button" onClick={closeScanner} aria-label="Close scanner"
+              className="w-10 h-10 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              <X size={18} aria-hidden="true" />
             </button>
           </div>
           <div className="flex-1 relative">
@@ -499,7 +492,7 @@ function DashboardTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStar
           <div className="divide-y divide-surface-100">
             {summary.recentOrders.map(o => (
               <button key={o.orderId} onClick={() => onViewOrder(o.orderId)}
-                className="w-full px-4 py-3 flex items-center gap-3 hover:bg-surface-50 transition-colors text-left">
+                className="w-full px-4 py-3 flex items-center gap-3 hover:bg-surface-50 transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-surface-900">{o.orderId}</div>
                   <div className="text-xs text-surface-500 truncate">{o.vendor} — {o.orderedBy}</div>
@@ -664,7 +657,13 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
                 {filtered.map(o => (
                   <tr key={o.order_id} onClick={() => onViewOrder(o.order_id)}
                     className="hover:bg-surface-50 cursor-pointer transition-colors">
-                    <td className="px-4 py-2.5 font-medium text-brand-700">{o.order_id}</td>
+                    <td className="px-4 py-2.5 font-medium text-brand-700">
+                      <button type="button" onClick={ev => { ev.stopPropagation(); onViewOrder(o.order_id) }}
+                        aria-label={`Open purchase order ${o.order_id}`}
+                        className="min-h-[44px] px-1 -mx-1 rounded hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                        {o.order_id}
+                      </button>
+                    </td>
                     <td className="px-4 py-2.5 text-surface-700">{o.vendor_name || o.other_vendor || '—'}</td>
                     <td className="px-4 py-2.5 text-surface-500">{o.ordered_by || '—'}</td>
                     <td className="px-4 py-2.5 text-surface-500">{fmtDate(o.order_date)}</td>
@@ -1004,13 +1003,13 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
   <table>
     <thead>
       <tr>
-        <th style="text-align:center;width:40px;">#</th>
-        <th style="text-align:left;">Part #</th>
-        <th style="text-align:left;">Description</th>
-        <th style="text-align:left;">WO</th>
-        <th style="text-align:center;">Qty</th>
-        <th style="text-align:right;">Unit Price</th>
-        <th style="text-align:right;">Subtotal</th>
+        <th scope="col" style="text-align:center;width:40px;">#</th>
+        <th scope="col" style="text-align:left;">Part #</th>
+        <th scope="col" style="text-align:left;">Description</th>
+        <th scope="col" style="text-align:left;">WO</th>
+        <th scope="col" style="text-align:center;">Qty</th>
+        <th scope="col" style="text-align:right;">Unit Price</th>
+        <th scope="col" style="text-align:right;">Subtotal</th>
       </tr>
     </thead>
     <tbody>
@@ -1116,7 +1115,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="p-2 rounded-lg hover:bg-surface-100" aria-label="Go back"><ArrowLeft size={18} /></button>
+        <button onClick={onBack} className="p-2 rounded-lg hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" aria-label="Go back"><ArrowLeft size={18} aria-hidden="true" /></button>
         <div className="flex-1">
           <h2 className="text-lg font-bold text-surface-900">{orderId}</h2>
           <p className="text-sm text-surface-500">{order.vendor_name || order.other_vendor}</p>
@@ -1127,7 +1126,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
       {/* Auto-receive banner */}
       {autoReceive && receiveMode && (
         <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-700 flex items-center gap-2">
-          <ScanLine size={14} /> Opened via QR scan — update received quantities below and save.
+          <ScanLine size={14} aria-hidden="true" /> Opened via QR scan — update received quantities below and save.
         </div>
       )}
 
@@ -1135,17 +1134,17 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
       <div className="flex flex-wrap gap-2">
         {canApprove && order.status === 'Pending' && (
           <>
-            <button onClick={handleApprove} className="btn-primary text-xs gap-1" disabled={actions.saving}>
-              <Check size={14} /> Approve
+            <button onClick={handleApprove} className="btn-primary text-xs gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={actions.saving}>
+              <Check size={14} aria-hidden="true" /> Approve
             </button>
-            <button onClick={() => setShowRejectModal(true)} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700">
-              <Ban size={14} /> Reject
+            <button onClick={() => setShowRejectModal(true)} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-medium hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <Ban size={14} aria-hidden="true" /> Reject
             </button>
           </>
         )}
         {canSend && ['Approved', 'Ready', 'Submitted'].includes(order.status) && (
-          <button onClick={handleMarkOrdered} className="btn-primary text-xs gap-1" disabled={actions.saving}>
-            <Send size={14} /> Mark Ordered
+          <button onClick={handleMarkOrdered} className="btn-primary text-xs gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={actions.saving}>
+            <Send size={14} aria-hidden="true" /> Mark Ordered
           </button>
         )}
         {canReceive && ['Ordered', 'Partial'].includes(order.status) && (
@@ -1155,23 +1154,23 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             setRecQtys(qtys)
             setReceiveMode(true)
             setEditMode(false)
-          }} className="btn-primary text-xs gap-1">
-            <Package size={14} /> Receive Items
+          }} className="btn-primary text-xs gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Package size={14} aria-hidden="true" /> Receive Items
           </button>
         )}
         {canCancel && !['Received', 'Cancelled', 'Rejected'].includes(order.status) && (
-          <button onClick={() => setShowCancelConfirm(true)} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200">
-            <XCircle size={14} /> Cancel
+          <button onClick={() => setShowCancelConfirm(true)} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <XCircle size={14} aria-hidden="true" /> Cancel
           </button>
         )}
         {canPrint && !['Pending', 'Rejected', 'Cancelled'].includes(order.status) && (
-          <button onClick={printPO} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 flex items-center gap-1">
-            <Printer size={14} /> Print PO
+          <button onClick={printPO} className="px-3 py-1.5 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Printer size={14} aria-hidden="true" /> Print PO
           </button>
         )}
         {canCancel && (
-          <button onClick={() => setShowDeleteConfirm(true)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 border border-red-200 flex items-center gap-1 ml-auto">
-            <Trash2 size={14} /> Delete PO
+          <button onClick={() => setShowDeleteConfirm(true)} className="px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100 border border-red-200 flex items-center gap-1 ml-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Trash2 size={14} aria-hidden="true" /> Delete PO
           </button>
         )}
       </div>
@@ -1307,30 +1306,30 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             {/* Edit mode toggle */}
             {isEditable && !receiveMode && !editMode && (
               <button onClick={enterEditMode}
-                className="px-2.5 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 flex items-center gap-1 transition-colors"
+                className="px-2.5 py-1.5 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 flex items-center gap-1 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 aria-label="Edit line items">
-                <Pencil size={12} /> Edit
+                <Pencil size={12} aria-hidden="true" /> Edit
               </button>
             )}
             {editMode && (
               <button onClick={exitEditMode}
                 disabled={editSaving}
-                className="px-2.5 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 transition-colors disabled:opacity-50 flex items-center gap-1">
-                {editSaving ? <><Loader2 size={12} className="animate-spin" /> Saving...</> : <><Check size={12} /> Save &amp; Close</>}
+                className="px-2.5 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-medium hover:bg-brand-700 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {editSaving ? <><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Saving...</> : <><Check size={12} aria-hidden="true" /> Save &amp; Close</>}
               </button>
             )}
             {/* Receive mode controls */}
             {receiveMode && (
               <>
                 <button onClick={() => setShowReceiveAllConfirm(true)}
-                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-1"
+                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 focus-visible:ring-offset-1 min-h-[44px]"
                   disabled={actions.saving}>
                   <PackageCheck size={14} aria-hidden="true" /> Receive All
                 </button>
-                <button onClick={handleReceive} className="btn-primary text-xs" disabled={actions.saving}>
-                  {actions.saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Save
+                <button onClick={handleReceive} className="btn-primary text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={actions.saving}>
+                  {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />} Save
                 </button>
-                <button onClick={() => setReceiveMode(false)} className="px-2 py-1 rounded bg-surface-100 text-xs">Cancel</button>
+                <button onClick={() => setReceiveMode(false)} className="px-2 py-1 rounded bg-surface-100 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
               </>
             )}
           </div>
@@ -1359,7 +1358,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                     <td className="px-4 py-2 font-mono text-xs">{li.part_number || '—'}</td>
                     <td className="px-4 py-2">
                       <div className="text-surface-700">{li.description || '—'}</div>
-                      {li.link && <a href={li.link} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:underline flex items-center gap-0.5"><Link size={10} />Link</a>}
+                      {li.link && <a href={li.link} target="_blank" rel="noopener noreferrer" className="text-xs text-brand-600 hover:underline flex items-center gap-0.5"><Link size={10} aria-hidden="true" />Link</a>}
                     </td>
                     <td className="px-4 py-2 text-xs font-medium text-surface-500">{li.wo_id || order.work_order_id || '—'}</td>
                     <td className="px-4 py-2 text-right">
@@ -1413,21 +1412,21 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                             <button
                               onClick={() => handleSaveLineEdit(li.line_id)}
                               disabled={isSaving}
-                              className="p-1 rounded text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50"
+                              className="p-1 rounded text-emerald-600 hover:bg-emerald-50 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                               aria-label={`Save changes for ${li.description || li.part_number}`}
                               title="Save changes"
                             >
-                              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                              {isSaving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
                             </button>
                           )}
                           <button
                             onClick={() => requestDeleteLine(li)}
                             disabled={isSaving || lineItems.length <= 1}
-                            className="p-1 rounded text-red-500 hover:bg-red-50 transition-colors disabled:opacity-30"
+                            className="p-1 rounded text-red-500 hover:bg-red-50 transition-colors disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                             aria-label={`Remove ${li.description || li.part_number}`}
                             title={lineItems.length <= 1 ? 'Cannot remove the last line item' : 'Remove line item'}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={14} aria-hidden="true" />
                           </button>
                         </div>
                       </td>
@@ -1445,23 +1444,23 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
             {!showAddLine ? (
               <button
                 onClick={() => setShowAddLine(true)}
-                className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1"
+                className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
               >
-                <Plus size={12} /> Add Line Item
+                <Plus size={12} aria-hidden="true" /> Add Line Item
               </button>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-surface-700">New Line Item</span>
                   <button onClick={() => { setShowAddLine(false); setAddInvSearch(''); setAddInvResults([]) }}
-                    className="text-surface-400 hover:text-surface-600" aria-label="Cancel adding line item"><X size={14} /></button>
+                    className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Cancel adding line item"><X size={14} aria-hidden="true" /></button>
                 </div>
 
                 {/* Inventory search */}
                 <div className="relative">
                   <label htmlFor="add-inv-search" className="text-[10px] text-surface-400 block mb-0.5">Search Inventory (optional)</label>
                   <div className="relative">
-                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" />
+                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
                     <input
                       id="add-inv-search"
                       ref={addInvSearchRef}
@@ -1476,7 +1475,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                     <div className="absolute z-10 mt-1 w-full bg-white border border-surface-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                       {addInvResults.map(item => (
                         <button key={item.part_id} onClick={() => selectInventoryItem(item)}
-                          className="w-full text-left px-3 py-2 text-xs hover:bg-surface-50 border-b border-surface-100 last:border-0">
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-surface-50 border-b border-surface-100 last:border-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                           <span className="font-medium">{item.part_name}</span>
                           <span className="text-surface-400 ml-2">{item.supplier_part_number || item.part_id}</span>
                           <span className="text-surface-400 ml-2">({item.qty_in_stock} in stock)</span>
@@ -1515,8 +1514,8 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                   <input id="add-link" value={newLine.link} onChange={e => setNewLine(l => ({ ...l, link: e.target.value }))} className="input text-sm" placeholder="https://..." />
                 </div>
                 <button onClick={handleAddLineSubmit} disabled={addSaving}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50 w-full">
-                  {addSaving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50 w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  {addSaving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Plus size={12} aria-hidden="true" />}
                   {addSaving ? 'Adding...' : 'Add to Order'}
                 </button>
               </div>
@@ -1587,8 +1586,8 @@ function CreatePOTab({ onCreated, hasPerm }) {
   }
 
   const handleSubmit = async () => {
-    if (!form.vendorName && !form.otherVendor) { return alert('Select a vendor') }
-    if (lines.length === 0 || !lines[0].description) { return alert('Add at least one line item') }
+    if (!form.vendorName && !form.otherVendor) { toast.error('Select a vendor'); return }
+    if (lines.length === 0 || !lines[0].description) { toast.error('Add at least one line item'); return }
     try {
       await actions.createOrder({ ...form, lineItems: lines })
       setForm({ vendorId: '', vendorName: '', otherVendor: '', workOrderId: '', notes: '' })
@@ -1603,8 +1602,8 @@ function CreatePOTab({ onCreated, hasPerm }) {
       <div className="bg-white rounded-xl border border-surface-200 p-4 space-y-3">
         <h3 className="text-sm font-semibold text-surface-900">Order Details</h3>
         <div>
-          <label className="label">Vendor</label>
-          <select value={form.vendorId || (form.otherVendor ? 'OTHER' : '')} onChange={e => handleVendorChange(e.target.value)} className="input text-sm">
+          <label htmlFor="po-fld-vendor-1" className="label">Vendor</label>
+          <select id="po-fld-vendor-1" value={form.vendorId || (form.otherVendor ? 'OTHER' : '')} onChange={e => handleVendorChange(e.target.value)} className="input text-sm">
             <option value="">Select vendor...</option>
             {vendors.map(v => <option key={v.vendor_id} value={v.vendor_id}>{v.vendor_name}</option>)}
             <option value="OTHER">Other (type name)</option>
@@ -1612,18 +1611,18 @@ function CreatePOTab({ onCreated, hasPerm }) {
         </div>
         {(!form.vendorId && form.vendorName === '') && (
           <div>
-            <label className="label">Other Vendor Name</label>
-            <input value={form.otherVendor} onChange={e => setForm(f => ({ ...f, otherVendor: e.target.value }))} className="input text-sm" placeholder="Vendor name" />
+            <label htmlFor="po-fld-other-vendor-name-2" className="label">Other Vendor Name</label>
+            <input id="po-fld-other-vendor-name-2" value={form.otherVendor} onChange={e => setForm(f => ({ ...f, otherVendor: e.target.value }))} className="input text-sm" placeholder="Vendor name" />
           </div>
         )}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label">Linked WO (optional)</label>
-            <input value={form.workOrderId} onChange={e => setForm(f => ({ ...f, workOrderId: e.target.value }))} className="input text-sm" placeholder="WO-0001" />
+            <label htmlFor="po-fld-linked-wo-optional-3" className="label">Linked WO (optional)</label>
+            <input id="po-fld-linked-wo-optional-3" value={form.workOrderId} onChange={e => setForm(f => ({ ...f, workOrderId: e.target.value }))} className="input text-sm" placeholder="WO-0001" />
           </div>
           <div>
-            <label className="label">Notes</label>
-            <input value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input text-sm" placeholder="Notes..." />
+            <label htmlFor="po-fld-notes-4" className="label">Notes</label>
+            <input id="po-fld-notes-4" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input text-sm" placeholder="Notes..." />
           </div>
         </div>
       </div>
@@ -1632,7 +1631,7 @@ function CreatePOTab({ onCreated, hasPerm }) {
       <div className="bg-white rounded-xl border border-surface-200 p-4 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-surface-900">Line Items</h3>
-          <button onClick={addLine} className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1"><Plus size={12} /> Add Line</button>
+          <button onClick={addLine} className="text-xs text-brand-600 font-medium hover:underline flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"><Plus size={12} aria-hidden="true" /> Add Line</button>
         </div>
 
         {lines.map((li, i) => (
@@ -1643,7 +1642,7 @@ function CreatePOTab({ onCreated, hasPerm }) {
                 <button
                   type="button"
                   onClick={() => removeLine(i)}
-                  className="p-1 rounded text-red-400 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors"
+                  className="p-1 rounded text-red-400 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
                   aria-label={li.description ? `Remove ${li.description}` : `Remove item ${i + 1}`}
                   title="Remove line item"
                 >
@@ -1653,22 +1652,22 @@ function CreatePOTab({ onCreated, hasPerm }) {
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] text-surface-400">Part Number</label>
-                <input ref={el => (partNumRefs.current[i] = el)} value={li.partNumber} onChange={e => updateLine(i, 'partNumber', e.target.value)} className="input text-sm" placeholder="Part #" />
+                <label htmlFor={`po-line-${i}-partNumber`} className="text-[10px] text-surface-400">Part Number</label>
+                <input id={`po-line-${i}-partNumber`} ref={el => (partNumRefs.current[i] = el)} value={li.partNumber} onChange={e => updateLine(i, 'partNumber', e.target.value)} className="input text-sm" placeholder="Part #" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-400">Description</label>
-                <input value={li.description} onChange={e => updateLine(i, 'description', e.target.value)} className="input text-sm" placeholder="Description" />
+                <label htmlFor={`po-line-${i}-description`} className="text-[10px] text-surface-400">Description</label>
+                <input id={`po-line-${i}-description`} value={li.description} onChange={e => updateLine(i, 'description', e.target.value)} className="input text-sm" placeholder="Description" />
               </div>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <div>
-                <label className="text-[10px] text-surface-400">Unit Price</label>
-                <input type="number" step="0.01" value={li.unitPrice} onChange={e => updateLine(i, 'unitPrice', e.target.value)} className="input text-sm" placeholder="0.00" />
+                <label htmlFor={`po-line-${i}-unitPrice`} className="text-[10px] text-surface-400">Unit Price</label>
+                <input id={`po-line-${i}-unitPrice`} type="number" step="0.01" value={li.unitPrice} onChange={e => updateLine(i, 'unitPrice', e.target.value)} className="input text-sm" placeholder="0.00" />
               </div>
               <div>
-                <label className="text-[10px] text-surface-400">Quantity</label>
-                <input type="number" min={1} value={li.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} className="input text-sm" />
+                <label htmlFor={`po-line-${i}-quantity`} className="text-[10px] text-surface-400">Quantity</label>
+                <input id={`po-line-${i}-quantity`} type="number" min={1} value={li.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} className="input text-sm" />
               </div>
               <div>
                 <label className="text-[10px] text-surface-400">Subtotal</label>
@@ -1676,8 +1675,8 @@ function CreatePOTab({ onCreated, hasPerm }) {
               </div>
             </div>
             <div>
-              <label className="text-[10px] text-surface-400">Link (optional)</label>
-              <input value={li.link} onChange={e => updateLine(i, 'link', e.target.value)} className="input text-sm" placeholder="https://..." />
+              <label htmlFor={`po-line-${i}-link`} className="text-[10px] text-surface-400">Link (optional)</label>
+              <input id={`po-line-${i}-link`} value={li.link} onChange={e => updateLine(i, 'link', e.target.value)} className="input text-sm" placeholder="https://..." />
             </div>
           </div>
         ))}
@@ -1699,8 +1698,8 @@ function CreatePOTab({ onCreated, hasPerm }) {
       </div>
 
       <button onClick={handleSubmit} disabled={actions.saving}
-        className="btn-primary w-full gap-2">
-        {actions.saving ? <Loader2 size={16} className="animate-spin" /> : <ShoppingCart size={16} />}
+        className="btn-primary w-full gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+        {actions.saving ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <ShoppingCart size={16} aria-hidden="true" />}
         {actions.saving ? 'Creating...' : 'Submit Purchase Order'}
       </button>
     </div>
@@ -1766,6 +1765,8 @@ function LowStockTab({ onCreatePO, hasPerm }) {
     setOrderStep('loading')
     setExistingPO(null)
   }
+  const orderDialogRef = useDialogA11y(!!orderModal, closeOrderModal)
+  const adjustDialogRef = useDialogA11y(!!adjustModal, () => setAdjustModal(null))
 
   // Adjust min/max modal
   const openAdjustModal = (item) => {
@@ -1874,7 +1875,7 @@ function LowStockTab({ onCreatePO, hasPerm }) {
   if (items.length === 0) {
     return (
       <div className="text-center py-12">
-        <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-400" />
+        <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-400" aria-hidden="true" />
         <p className="text-surface-500">All inventory items are above minimum levels!</p>
       </div>
     )
@@ -1884,7 +1885,7 @@ function LowStockTab({ onCreatePO, hasPerm }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-surface-900 flex items-center gap-2">
-          <AlertTriangle size={16} className="text-red-500" /> {items.length} items below minimum
+          <AlertTriangle size={16} className="text-red-500" aria-hidden="true" /> {items.length} items below minimum
         </h3>
       </div>
 
@@ -1907,17 +1908,17 @@ function LowStockTab({ onCreatePO, hasPerm }) {
                     {canEditInventory && (
                       <button
                         onClick={() => openAdjustModal(item)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 transition-colors"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-surface-200 text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                       >
-                        <SlidersHorizontal size={11} /> Adjust
+                        <SlidersHorizontal size={11} aria-hidden="true" /> Adjust
                       </button>
                     )}
                     {canCreatePO && (
                       <button
                         onClick={() => openOrderModal(item)}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                       >
-                        <ShoppingCart size={12} /> Order
+                        <ShoppingCart size={12} aria-hidden="true" /> Order
                       </button>
                     )}
                   </div>
@@ -1949,13 +1950,13 @@ function LowStockTab({ onCreatePO, hasPerm }) {
       {/* Order Modal */}
       {orderModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={closeOrderModal}>
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div ref={orderDialogRef} role="dialog" aria-modal="true" aria-labelledby="po-order-title" className="bg-white rounded-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
             {/* Header */}
             <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-surface-900 flex items-center gap-2">
-                <ShoppingCart size={16} className="text-brand-600" /> Order Part
+              <h3 id="po-order-title" className="text-sm font-bold text-surface-900 flex items-center gap-2">
+                <ShoppingCart size={16} className="text-brand-600" aria-hidden="true" /> Order Part
               </h3>
-              <button onClick={closeOrderModal} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+              <button type="button" onClick={closeOrderModal} aria-label="Close" className="text-surface-400 hover:text-surface-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"><X size={16} aria-hidden="true" /></button>
             </div>
 
             <div className="px-5 py-4 space-y-4">
@@ -1974,8 +1975,8 @@ function LowStockTab({ onCreatePO, hasPerm }) {
 
               {/* Quantity */}
               <div>
-                <label className="text-xs font-medium text-surface-600 mb-1 block">Order Quantity</label>
-                <input
+                <label htmlFor="po-fld-order-quantity-5" className="text-xs font-medium text-surface-600 mb-1 block">Order Quantity</label>
+                <input id="po-fld-order-quantity-5"
                   type="number" min={1} value={orderQty}
                   onChange={e => setOrderQty(parseInt(e.target.value) || 1)}
                   className="input text-sm w-28"
@@ -1988,7 +1989,7 @@ function LowStockTab({ onCreatePO, hasPerm }) {
               {/* Loading state */}
               {orderStep === 'loading' && (
                 <div className="text-center py-4 text-surface-400 flex items-center justify-center gap-2">
-                  <Loader2 size={16} className="animate-spin" /> Checking for existing POs...
+                  <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Checking for existing POs...
                 </div>
               )}
 
@@ -1997,7 +1998,7 @@ function LowStockTab({ onCreatePO, hasPerm }) {
                 <div className="space-y-3">
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
                     <div className="flex items-center gap-2">
-                      <FileText size={14} className="text-blue-600" />
+                      <FileText size={14} className="text-blue-600" aria-hidden="true" />
                       <span className="text-xs font-semibold text-blue-800">Existing PO found for {orderModal.primary_supplier}</span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -2012,9 +2013,9 @@ function LowStockTab({ onCreatePO, hasPerm }) {
                   <button
                     onClick={handleAddToExisting}
                     disabled={orderSaving}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   >
-                    {orderSaving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                    {orderSaving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />}
                     Add to {existingPO.order_id}
                   </button>
 
@@ -2027,9 +2028,9 @@ function LowStockTab({ onCreatePO, hasPerm }) {
                   <button
                     onClick={handleCreateNew}
                     disabled={orderSaving}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border border-surface-200 text-surface-700 hover:bg-surface-50 transition-colors disabled:opacity-50"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border border-surface-200 text-surface-700 hover:bg-surface-50 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   >
-                    {orderSaving ? <Loader2 size={14} className="animate-spin" /> : <ShoppingCart size={14} />}
+                    {orderSaving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ShoppingCart size={14} aria-hidden="true" />}
                     Create New PO
                   </button>
                 </div>
@@ -2049,9 +2050,9 @@ function LowStockTab({ onCreatePO, hasPerm }) {
                   <button
                     onClick={handleCreateNew}
                     disabled={orderSaving}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50"
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                   >
-                    {orderSaving ? <Loader2 size={14} className="animate-spin" /> : <ShoppingCart size={14} />}
+                    {orderSaving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ShoppingCart size={14} aria-hidden="true" />}
                     {orderSaving ? 'Creating PO...' : 'Create Purchase Order'}
                   </button>
                 </div>
@@ -2064,12 +2065,12 @@ function LowStockTab({ onCreatePO, hasPerm }) {
       {/* Adjust Min/Max Modal */}
       {adjustModal && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setAdjustModal(null)}>
-          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div ref={adjustDialogRef} role="dialog" aria-modal="true" aria-labelledby="po-adjust-title" className="bg-white rounded-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-surface-900 flex items-center gap-2">
-                <SlidersHorizontal size={16} className="text-surface-500" /> Adjust Stock Levels
+              <h3 id="po-adjust-title" className="text-sm font-bold text-surface-900 flex items-center gap-2">
+                <SlidersHorizontal size={16} className="text-surface-500" aria-hidden="true" /> Adjust Stock Levels
               </h3>
-              <button onClick={() => setAdjustModal(null)} className="text-surface-400 hover:text-surface-600"><X size={16} /></button>
+              <button type="button" onClick={() => setAdjustModal(null)} aria-label="Close" className="text-surface-400 hover:text-surface-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"><X size={16} aria-hidden="true" /></button>
             </div>
             <div className="px-5 py-4 space-y-4">
               <div className="bg-surface-50 rounded-lg p-3">
@@ -2078,25 +2079,25 @@ function LowStockTab({ onCreatePO, hasPerm }) {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-surface-600 mb-1 block">Min Qty</label>
-                  <input type="number" min={0} value={adjustMin} onChange={e => setAdjustMin(e.target.value)}
+                  <label htmlFor="po-fld-min-qty-6" className="text-xs font-medium text-surface-600 mb-1 block">Min Qty</label>
+                  <input id="po-fld-min-qty-6" type="number" min={0} value={adjustMin} onChange={e => setAdjustMin(e.target.value)}
                     className="input text-sm" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-surface-600 mb-1 block">Max Qty</label>
-                  <input type="number" min={0} value={adjustMax} onChange={e => setAdjustMax(e.target.value)}
+                  <label htmlFor="po-fld-max-qty-7" className="text-xs font-medium text-surface-600 mb-1 block">Max Qty</label>
+                  <input id="po-fld-max-qty-7" type="number" min={0} value={adjustMax} onChange={e => setAdjustMax(e.target.value)}
                     className="input text-sm" />
                 </div>
               </div>
               {parseInt(adjustMin) === 0 && (
                 <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                  <AlertTriangle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                  <AlertTriangle size={14} className="text-amber-600 mt-0.5 flex-shrink-0" aria-hidden="true" />
                   <span className="text-xs text-amber-800">Setting min to 0 will remove this item from the low stock list.</span>
                 </div>
               )}
               <button onClick={handleSaveAdjust} disabled={adjustSaving}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50">
-                {adjustSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {adjustSaving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
                 {adjustSaving ? 'Saving...' : 'Save'}
               </button>
             </div>
