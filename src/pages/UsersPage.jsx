@@ -430,7 +430,7 @@ export default function UsersPage() {
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Scanner</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Classes</th>
                       <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600">Last Active</th>
-                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600 text-center">Actions</th>
+                      <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-600 text-center sticky right-0 z-10 bg-surface-50 border-l border-surface-200">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-surface-100">
@@ -454,7 +454,7 @@ export default function UsersPage() {
                           ? `Last active: ${new Date(lastActiveTs).toLocaleString()}`
                           : 'Never active'
                       return (
-                        <tr key={u.id} className={`hover:bg-surface-50 transition-colors ${u.status === 'Archived' ? 'opacity-60' : ''}`}>
+                        <tr key={u.id} className={`group hover:bg-surface-50 transition-colors ${u.status === 'Archived' ? 'opacity-60' : ''}`}>
                           <td className="px-3 py-2">
                             <input type="checkbox" checked={!!selectedUsers[u.id]}
                               onChange={() => toggleSelect(u.id)} className="rounded"
@@ -528,9 +528,10 @@ export default function UsersPage() {
                               <span className="text-surface-300">Never</span>
                             )}
                           </td>
-                          <td className="px-3 py-2">
+                          {/* Actions — sticky to the right edge so buttons stay reachable on wide tables */}
+                          <td className="px-3 py-2 whitespace-nowrap sticky right-0 z-10 bg-white group-hover:bg-surface-50 border-l border-surface-200 transition-colors">
                             {hasPerm('edit_users') && (
-                              <div className="flex items-center justify-center gap-0.5">
+                              <div className="flex flex-nowrap items-center justify-center gap-0.5">
                                 {/* Edit */}
                                 <button onClick={() => setEditingUser(u)}
                                   title="Edit User"

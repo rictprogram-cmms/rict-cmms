@@ -2087,7 +2087,7 @@ export default function AppLayout() {
         </header>
 
         {/* Page content */}
-        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 lg:p-6 focus:outline-none">
+        <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 overflow-y-auto p-4 lg:p-6 focus:outline-none">
           {/* Instructor Away Banner — visible to students/work study on every page */}
           {!isInstructor && instructorAway && (
             <div
