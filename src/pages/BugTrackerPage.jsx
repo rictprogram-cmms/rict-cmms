@@ -1400,7 +1400,10 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50' }) {
 const FORM_TAGS = new Set(['input', 'select', 'textarea'])
 function Field({ label, htmlFor, children }) {
   const autoId = useId()
-  const child = React.Children.only(children)
+  // Multiple children are allowed (e.g. a control plus a helper <p>); only a
+  // lone bare control gets an auto-injected id, everything renders.
+  const kids = React.Children.toArray(children)
+  const child = kids.length === 1 ? kids[0] : null
   const injectable = !htmlFor && React.isValidElement(child) && FORM_TAGS.has(child.type)
   const id = htmlFor || (injectable ? (child.props.id || autoId) : undefined)
   return (
