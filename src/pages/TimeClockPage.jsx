@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { mustData } from '@/lib/supabaseData'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { createClient } from '@supabase/supabase-js'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
@@ -1265,6 +1266,7 @@ export default function TimeClockPage() {
         .from('profiles')
         .select('*')
         .eq('status', 'Active')
+        .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in the student picker
 
       if (userError) throw userError
 

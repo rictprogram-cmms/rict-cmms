@@ -28,6 +28,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { mustData } from '@/lib/supabaseData'
 import {
   useUsersForReports, useClassesList, useTimeCardData,
@@ -307,6 +308,7 @@ export default function TimeCardsPage() {
         .from('profiles')
         .select('user_id, first_name, last_name, email, classes, role, id, time_clock_only')
         .eq('status', 'Active')
+        .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
       if (profilesErr) throw profilesErr
 
       const enrolledByProfile = new Set(
@@ -921,6 +923,7 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
           .from('profiles')
           .select('user_id, first_name, last_name, email, classes, role, id, time_clock_only')
           .eq('status', 'Active'), 'profiles.select')
+          .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
 
         // Check profile enrollment
         const enrolledByProfile = new Set(

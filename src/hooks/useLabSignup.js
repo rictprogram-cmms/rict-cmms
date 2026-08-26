@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -1426,6 +1427,7 @@ export function useStudentsList() {
       .from('profiles')
       .select('id, first_name, last_name, email, classes, role, time_clock_only')
       .eq('status', 'Active')
+      .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
       .neq('role', 'Instructor')
       .order('last_name')
 

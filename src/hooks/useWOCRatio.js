@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import { parseLabVisibleDays, DEFAULT_LAB_DAYS } from '@/hooks/useLabDays'
 import toast from 'react-hot-toast'
@@ -852,6 +853,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
           ]),
         // Always fetch profiles to compute rank for the current user
         supabase.from('profiles').select('*').in('status', ['Active', 'active'])
+        .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
           .not('time_clock_only', 'eq', 'Yes'),
         // Multi-assignment junction table
         supabase.from('work_order_assignments').select('wo_id, user_email'),

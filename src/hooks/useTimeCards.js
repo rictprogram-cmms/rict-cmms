@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry } from '@/lib/supabaseRetry'
 import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
@@ -542,6 +543,7 @@ export function useUsersForReports({ canViewAll = false } = {}) {
         .from('profiles')
         .select('user_id, first_name, last_name, role, email, status')
         .eq('status', 'Active')
+        .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
         .order('last_name')
       if (error) throw error
       const validUsers = (data || []).filter(u => u.user_id && u.user_id.trim() !== '')

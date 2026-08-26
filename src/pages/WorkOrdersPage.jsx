@@ -22,6 +22,7 @@
 import { mustData, assertWrite } from '@/lib/supabaseData';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -826,7 +827,7 @@ export default function WorkOrdersPage() {
 
     // Users
     try {
-      const data = mustData(await supabase.from('profiles').select('id, email, first_name, last_name, role, status, time_clock_only').eq('status', 'Active').order('first_name'), 'profiles.select');
+      const data = mustData(await supabase.from('profiles').select('id, email, first_name, last_name, role, status, time_clock_only').eq('status', 'Active').neq('email', SUPER_ADMIN_EMAIL).order('first_name'), 'profiles.select');
       // Filter out TCO users from assignment - they only punch in/out
       const assignableUsers = (data || []).filter(u => u.time_clock_only !== 'Yes');
       if (assignableUsers) setUsers(assignableUsers);
