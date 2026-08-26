@@ -686,10 +686,24 @@ function InstructorApproveScreen({ user, onApproved, onCancel, loading: parentLo
 }
 
 // ─── Lab Closed Screen ────────────────────────────────────────────────────────
-// Shown on the kiosk when lab_access_mode = 'summer_break'
+// Shown on the kiosk when lab_access_mode is 'summer_break' or
+// 'planned_maintenance'. The maintenance variant also shows the expected
+// return time and admin message from the maintenance schedule settings.
 
-function LabClosedScreen() {
+// Fake-UTC → "Fri, Aug 29 at 5:00 PM" (kiosk keeps its own supabase client,
+// so this helper is local rather than imported from useMaintenanceWindow).
+function formatFakeUtc(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const local = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes())
+  return `${local.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${local.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+}
+
+function LabClosedScreen({ mode, maintenance }) {
   const [time, setTime] = useState(new Date())
+  const isMaintenance = mode === 'planned_maintenance'
+  const returnText = isMaintenance ? formatFakeUtc(maintenance?.endAt) : ''
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000)
@@ -757,11 +771,17 @@ function LabClosedScreen() {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginBottom: 22,
       }}>
-        <svg aria-hidden="true" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
-          <path d="M20 3v4" />
-          <path d="M22 5h-4" />
-        </svg>
+        {isMaintenance ? (
+          <svg aria-hidden="true" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+          </svg>
+        ) : (
+          <svg aria-hidden="true" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93c5fd" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+            <path d="M20 3v4" />
+            <path d="M22 5h-4" />
+          </svg>
+        )}
       </div>
 
       {/* Message */}
@@ -780,7 +800,7 @@ function LabClosedScreen() {
         fontWeight: 500,
         margin: '0 0 10px',
       }}>
-        The lab is closed for semester break
+        {isMaintenance ? 'The system is down for planned maintenance' : 'The lab is closed for semester break'}
       </p>
       <p style={{
         color: 'rgba(255,255,255,0.4)',
@@ -789,8 +809,19 @@ function LabClosedScreen() {
         lineHeight: 1.6,
         margin: 0,
       }}>
-        Student check-in is disabled during the semester break.
-        Please contact your instructor if you have questions.
+        {isMaintenance ? (
+          <>
+            Student check-in is disabled while maintenance is in progress.
+            {returnText ? <> Expected back <strong style={{ color: '#ffffff' }}>{returnText}</strong>.</> : null}
+            {maintenance?.message ? <span style={{ display: 'block', marginTop: 6, color: '#93c5fd' }}>{maintenance.message}</span> : null}
+            <span style={{ display: 'block', marginTop: 6 }}>Please contact your instructor if you have questions.</span>
+          </>
+        ) : (
+          <>
+            Student check-in is disabled during the semester break.
+            Please contact your instructor if you have questions.
+          </>
+        )}
       </p>
     </div>
   )
@@ -814,20 +845,24 @@ export default function TimeClockPage() {
   const [earlyInfo, setEarlyInfo] = useState(null)
 
   // ── Lab Access Mode ─────────────────────────────────────────────────
-  // 'unknown' while loading, 'in_session' or 'summer_break' once fetched.
-  // The kiosk polls every 5 minutes so it responds to mode changes
-  // without requiring a manual page refresh on the Raspberry Pi.
+  // 'unknown' while loading, then 'in_session' | 'summer_break' |
+  // 'planned_maintenance'. The kiosk polls every 5 minutes so it responds
+  // to mode changes without requiring a manual page refresh on the Pi.
+  // The same fetch also picks up the maintenance schedule (expected return
+  // + message) so the closed screen can show them.
   const [labMode, setLabMode] = useState('unknown')
+  const [maintenance, setMaintenance] = useState({ endAt: '', message: '' })
 
   const fetchLabMode = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('settings')
-        .select('setting_value')
-        .eq('setting_key', 'lab_access_mode')
-        .maybeSingle()
+        .select('setting_key, setting_value')
+        .in('setting_key', ['lab_access_mode', 'maintenance_end_at', 'maintenance_message'])
       if (error) throw error
-      setLabMode(data?.setting_value || 'in_session')
+      const get = k => (data || []).find(r => r.setting_key === k)?.setting_value
+      setLabMode(get('lab_access_mode') || 'in_session')
+      setMaintenance({ endAt: get('maintenance_end_at') || '', message: (get('maintenance_message') || '').trim() })
     } catch (e) {
       console.warn('[TimeClock] lab_access_mode fetch error:', e?.message || e)
       // Only fall back to "open" if we have never learned the real mode;
@@ -860,11 +895,13 @@ export default function TimeClockPage() {
           const newMode = payload.new?.setting_value || 'in_session'
           console.log('[TimeClock] Lab access mode changed to:', newMode)
           setLabMode(newMode)
+          // Refresh maintenance return time / message alongside the flip
+          if (newMode === 'planned_maintenance') fetchLabMode()
         }
       )
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, [fetchLabMode])
 
   // Cache classes data for course name lookups
   const classesDataRef = useRef(null)
@@ -1586,8 +1623,8 @@ export default function TimeClockPage() {
   }
 
   // ── Lab closed: show closed screen instead of punch interface ─────────
-  if (labMode === 'summer_break') {
-    return <LabClosedScreen />
+  if (labMode === 'summer_break' || labMode === 'planned_maintenance') {
+    return <LabClosedScreen mode={labMode} maintenance={maintenance} />
   }
 
   // Still determining mode — render nothing briefly to avoid flash

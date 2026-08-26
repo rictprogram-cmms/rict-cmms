@@ -59,6 +59,7 @@ import {
   History,
   BookOpen,
 } from 'lucide-react'
+import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
 
 // Sidebar navigation grouped by section
@@ -1365,9 +1366,15 @@ function HelpButton({ profile }) {
 
 
 // ── Lab Locked Screen ─────────────────────────────────────────────────────────
-// Shown instead of the full app when lab_access_mode = 'summer_break'
-// and the user's role is Student or Work Study.
-function LabLockedScreen({ profile, signOut }) {
+// Shown instead of the full app when lab_access_mode is 'summer_break' or
+// 'planned_maintenance' and the user's role is Student or Work Study.
+// `mode` picks the copy/icon; maintenance also shows the expected return
+// time and the admin's message from the maintenance schedule settings.
+function LabLockedScreen({ profile, signOut, mode }) {
+  const isMaintenance = mode === 'planned_maintenance'
+  const maint = useMaintenanceWindow()
+  const returnText = isMaintenance && maint.endAt ? formatMaintenanceDateTime(maint.endAt) : ''
+  const Icon = isMaintenance ? Wrench : MoonStar
   return (
     <div
       style={{
@@ -1389,7 +1396,7 @@ function LabLockedScreen({ profile, signOut }) {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginBottom: 28,
       }}>
-        <MoonStar size={40} style={{ color: '#93c5fd' }} aria-hidden="true" />
+        <Icon size={40} style={{ color: '#93c5fd' }} aria-hidden="true" />
       </div>
 
       {/* Heading */}
@@ -1400,7 +1407,7 @@ function LabLockedScreen({ profile, signOut }) {
         margin: '0 0 12px',
         letterSpacing: '-0.02em',
       }}>
-        The RICT Lab is Closed
+        {isMaintenance ? 'Scheduled Maintenance in Progress' : 'The RICT Lab is Closed'}
       </h1>
 
       {/* Subheading */}
@@ -1410,7 +1417,7 @@ function LabLockedScreen({ profile, signOut }) {
         fontWeight: 500,
         margin: '0 0 8px',
       }}>
-        Semester Break — Student Access Suspended
+        {isMaintenance ? 'System Maintenance — Student Access Suspended' : 'Semester Break — Student Access Suspended'}
       </p>
 
       {/* Detail */}
@@ -1421,9 +1428,24 @@ function LabLockedScreen({ profile, signOut }) {
         lineHeight: 1.6,
         margin: '0 0 40px',
       }}>
-        The RICT CMMS is not available to students during the semester break.
-        Access will be restored when the new semester begins.
-        Please contact your instructor if you have questions.
+        {isMaintenance ? (
+          <>
+            The RICT CMMS is temporarily offline for planned maintenance.
+            {returnText
+              ? <> Access is expected to return <strong style={{ color: '#ffffff' }}>{returnText}</strong>.</>
+              : <> Access will be restored as soon as the work is complete.</>}
+            {maint.message && (
+              <span style={{ display: 'block', marginTop: 10, color: '#93c5fd' }}>{maint.message}</span>
+            )}
+            <span style={{ display: 'block', marginTop: 10 }}>Please contact your instructor if you have questions.</span>
+          </>
+        ) : (
+          <>
+            The RICT CMMS is not available to students during the semester break.
+            Access will be restored when the new semester begins.
+            Please contact your instructor if you have questions.
+          </>
+        )}
       </p>
 
       {/* User badge */}
@@ -1487,6 +1509,7 @@ export default function AppLayout() {
     profile,
     signOut,
     labLocked,
+    labAccessMode,
     realProfile,
     isEmulating,
     mustChangePassword,
@@ -1882,7 +1905,7 @@ export default function AppLayout() {
   // !isEmulating check is a defensive second guard. Real Student / Work
   // Study sessions during summer break fall through to LabLockedScreen.
   if (labLocked && !isInstructor && !isEmulating) {
-    return <LabLockedScreen profile={profile} signOut={signOut} />
+    return <LabLockedScreen profile={profile} signOut={signOut} mode={labAccessMode} />
   }
 
   return (

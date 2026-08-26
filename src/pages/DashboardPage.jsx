@@ -26,6 +26,7 @@ import { mustData } from '@/lib/supabaseData';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow';
 import { useVolunteerData } from '@/hooks/useVolunteerHours';
 import { useStudentLabReport } from '@/hooks/useWeeklyLabs';
 import { useWOCRatio, computeStudentScoresForWindows } from '@/hooks/useWOCRatio';
@@ -2031,6 +2032,78 @@ function InstructorOverview({ navigate }) {
 /*    - The "Review & Sign" buttons set focus into the dialog automatically  */
 /*      via useDialogA11y on the modal                                       */
 /* ════════════════════════════════════════════════════════════════════════ */
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLANNED MAINTENANCE BANNER
+// Shows on every dashboard once a maintenance window is scheduled and the
+// notice period (maintenance_notice_days, default 14) has begun. Students and
+// Work Study see the prominent version; instructors get a compact strip.
+// Disappears automatically when the super admin clears the schedule.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function MaintenanceBanner({ prominent }) {
+  const maint = useMaintenanceWindow();
+  if (maint.loading || !maint.isScheduled || !maint.isWithinNotice) return null;
+
+  const startText = formatMaintenanceDateTime(maint.startAt);
+  const endText = maint.endAt ? formatMaintenanceDateTime(maint.endAt) : '';
+  const soon = !maint.hasStarted && (maint.startDate.getTime() - maint.now.getTime()) < 24 * 3600000;
+
+  // Tier is paired with icon + wording — color is never the only signal
+  const styles = maint.hasStarted || soon
+    ? { bg: '#fff4e6', border: '#fb923c', fg: '#9a3412', accent: '#c2410c' }
+    : { bg: '#eff6ff', border: '#60a5fa', fg: '#1e3a8a', accent: '#1d4ed8' };
+
+  const headline = maint.hasStarted
+    ? 'Planned maintenance window has begun'
+    : `Planned maintenance in ${maint.countdown}`;
+
+  return (
+    <section
+      role="status"
+      aria-live="polite"
+      aria-label="Planned maintenance notice"
+      style={{
+        background: styles.bg,
+        border: `2px solid ${styles.border}`,
+        borderRadius: 12,
+        padding: prominent ? '14px 16px' : '10px 14px',
+        marginBottom: 16,
+        display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap',
+      }}
+    >
+      <div
+        style={{
+          width: prominent ? 40 : 32, height: prominent ? 40 : 32, borderRadius: '50%',
+          background: 'white', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          border: `2px solid ${styles.border}`,
+        }}
+        aria-hidden="true"
+      >
+        <span className="material-icons" style={{ color: styles.accent, fontSize: prominent ? '1.3rem' : '1.05rem' }}>
+          build
+        </span>
+      </div>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontSize: prominent ? '0.95rem' : '0.88rem', fontWeight: 700, color: styles.fg, marginBottom: 2 }}>
+          {headline}
+        </div>
+        <div style={{ fontSize: prominent ? '0.85rem' : '0.8rem', color: styles.fg, lineHeight: 1.5 }}>
+          The RICT CMMS {maint.hasStarted ? 'is going' : 'will go'} offline for maintenance starting{' '}
+          <strong style={{ color: styles.accent }}>{startText}</strong>
+          {endText && <> and is expected back <strong style={{ color: styles.accent }}>{endText}</strong></>}.
+          {prominent && (
+            <> Please finish and submit any work orders, signups, or time-clock entries before then.</>
+          )}
+          {maint.message && (
+            <span style={{ display: 'block', marginTop: 4, fontStyle: 'italic' }}>{maint.message}</span>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PendingAckBanner() {
   const { profile } = useAuth();
   const { pending, now } = useUserPendingAcknowledgments(profile?.email);
@@ -2205,6 +2278,9 @@ export default function DashboardPage() {
     <div className="dash-root">
       {/* ── Pending Asset Checkout Acknowledgments (top priority — time-sensitive) ── */}
       <PendingAckBanner />
+
+      {/* ── Planned Maintenance notice (prominent for students, compact for instructors) ── */}
+      <MaintenanceBanner prominent={isStudentOrWS} />
 
       {/* ── Welcome Section (compact) ── */}
       <div className="dash-welcome">

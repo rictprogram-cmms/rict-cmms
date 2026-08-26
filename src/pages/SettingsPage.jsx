@@ -48,8 +48,12 @@ import {
   Users, Calendar, Clock, BookOpen, ChevronRight, Search, UserPlus, UserCircle,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
   LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
-  History, Globe, FileSearch, Archive, ArchiveRestore,
+  History, Globe, FileSearch, Archive, ArchiveRestore, Wrench,
 } from 'lucide-react'
+import {
+  useMaintenanceWindow, formatMaintenanceDateTime,
+  fakeUtcToInputValue, inputValueToFakeUtc, DEFAULT_NOTICE_DAYS,
+} from '@/hooks/useMaintenanceWindow'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import WeeklyReminderHistoryModal from '@/components/WeeklyReminderHistoryModal'
@@ -493,7 +497,8 @@ function buildRegistry() {
   const reg = []
 
   // Critical mode toggles (top of General tab)
-  reg.push({ key: 'lab_access_mode', tab: 'general', label: 'Lab Access Mode', desc: 'In Session / Summer Break — locks out students during breaks', aliases: 'summer break shutdown students lockout closed' })
+  reg.push({ key: 'lab_access_mode', tab: 'general', label: 'Lab Access Mode', desc: 'In Session / Summer Break / Planned Maintenance — locks out students', aliases: 'summer break shutdown students lockout closed maintenance' })
+  reg.push({ key: 'maintenance_start_at', tab: 'general', label: 'Planned Maintenance Schedule', desc: 'Shutdown time shown on dashboards before a maintenance window', aliases: 'maintenance schedule shutdown downtime offline notice window' })
   reg.push({ key: 'instructor_away_mode', tab: 'general', label: 'Instructor Away Mode', desc: 'In-meeting toggle — students see "away" notice on help requests', aliases: 'meeting away help return available' })
   reg.push({ key: 'instructor_return_time', tab: 'general', label: 'Expected Return Time', desc: 'Time shown to students when you are away', aliases: 'meeting return time clock' })
 
@@ -1020,11 +1025,14 @@ export default function SettingsPage() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function LabAccessModeCard() {
-  const { profile } = useAuth()
-  const [mode, setMode] = useState(null)         // 'in_session' | 'summer_break' | null
+  const { profile, realProfile, isEmulating } = useAuth()
+  // Planned Maintenance is super-admin only (real account, not emulated).
+  const isSuperAdmin = isSuperAdminEmail(realProfile?.email) && !isEmulating
+  const [mode, setMode] = useState(null)         // 'in_session' | 'summer_break' | 'planned_maintenance' | null
   const [saving, setSaving] = useState(false)
-  const [confirm, setConfirm] = useState(null)   // 'summer_break' | 'in_session' (pending confirm)
+  const [confirm, setConfirm] = useState(null)   // pending target mode
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
+  const maint = useMaintenanceWindow()
 
   // ── Fetch current value ──
   const fetchMode = useCallback(async () => {
@@ -1055,32 +1063,56 @@ function LabAccessModeCard() {
     return () => { channel() }
   }, [])
 
+  // Generic upsert used by the maintenance scheduler (same shape as InstructorAwayCard)
+  const upsertSetting = useCallback(async (key, value, description) => {
+    const { data: rows, error } = await supabase
+      .from('settings')
+      .update({
+        setting_value: value,
+        updated_at: new Date().toISOString(),
+        updated_by: userName,
+      })
+      .eq('setting_key', key)
+      .select()
+    if (error) throw error
+    if (!rows || rows.length === 0) {
+      const { data: ins, error: insErr } = await supabase.from('settings').insert({
+        setting_key: key,
+        setting_value: value,
+        description,
+        category: 'System',
+        updated_at: new Date().toISOString(),
+        updated_by: userName,
+      }).select()
+      if (insErr) throw insErr
+      if (!ins || ins.length === 0) throw new Error(`Insert of ${key} returned no rows (permissions?)`)
+    }
+  }, [userName])
+
+  const MODE_LABELS = {
+    in_session: 'In Session',
+    summer_break: 'Summer Break',
+    planned_maintenance: 'Planned Maintenance',
+  }
+
   const applyMode = async (newMode) => {
     setSaving(true)
     setConfirm(null)
     const oldMode = mode
     try {
       // Update lab_access_mode
-      const { data: rows, error } = await supabase
-        .from('settings')
-        .update({
-          setting_value: newMode,
-          updated_at: new Date().toISOString(),
-          updated_by: userName,
-        })
-        .eq('setting_key', 'lab_access_mode')
-        .select()
+      await upsertSetting(
+        'lab_access_mode', newMode,
+        'Controls whether students and work study can access the system',
+      )
 
-      if (error) throw error
-      if (!rows || rows.length === 0) {
-        await supabase.from('settings').insert({
-          setting_key: 'lab_access_mode',
-          setting_value: newMode,
-          description: 'Controls whether students and work study can access the system',
-          category: 'System',
-          updated_at: new Date().toISOString(),
-          updated_by: userName,
-        })
+      // Returning to In Session from Planned Maintenance clears the schedule
+      // (decision E) so a stale window never lingers on dashboards.
+      const clearedSchedule = oldMode === 'planned_maintenance' && newMode === 'in_session' && maint.isScheduled
+      if (clearedSchedule) {
+        await upsertSetting('maintenance_start_at', '', 'Planned maintenance start (fake-UTC timestamp)')
+        await upsertSetting('maintenance_end_at', '', 'Planned maintenance expected return (fake-UTC timestamp)')
+        await upsertSetting('maintenance_message', '', 'One-line note shown to users about planned maintenance')
       }
 
       setMode(newMode)
@@ -1092,27 +1124,36 @@ function LabAccessModeCard() {
       // request so breaks don't force PM state either direction.
 
       // ── Audit log ────────────────────────────────────────────────────────
+      const actionByMode = {
+        summer_break: 'Enable Summer Break Mode',
+        planned_maintenance: 'Enable Planned Maintenance Mode',
+        in_session: 'Restore In-Session Access',
+      }
+      const detailsByMode = {
+        summer_break: 'Lab Access Mode set to Summer Break — students and work study locked out.',
+        planned_maintenance: 'Lab Access Mode set to Planned Maintenance — students and work study locked out.',
+        in_session: 'Lab Access Mode restored to In Session — students and work study have access.'
+          + (clearedSchedule ? ' Maintenance schedule cleared.' : ''),
+      }
       try {
         await supabase.from('audit_log').insert({
           user_email: profile?.email || 'unknown',
           user_name: profile ? `${profile.first_name} ${profile.last_name}` : 'Unknown',
-          action: newMode === 'summer_break' ? 'Enable Summer Break Mode' : 'Restore In-Session Access',
+          action: actionByMode[newMode] || 'Change Lab Access Mode',
           entity_type: 'Setting',
           entity_id: 'lab_access_mode',
           field_changed: 'lab_access_mode',
           old_value: oldMode,
           new_value: newMode,
-          details: newMode === 'summer_break'
-            ? 'Lab Access Mode set to Summer Break — students and work study locked out.'
-            : 'Lab Access Mode restored to In Session — students and work study have access.',
+          details: detailsByMode[newMode] || `Lab Access Mode set to ${newMode}.`,
         })
       } catch (auditErr) {
         console.warn('[LabAccessMode] Audit log failed (non-fatal):', auditErr.message)
       }
 
-      toast.success(newMode === 'summer_break'
-        ? 'Summer Break Mode enabled — students & work study locked out'
-        : 'In-Session Mode restored — students & work study have access')
+      toast.success(newMode === 'in_session'
+        ? 'In-Session Mode restored — students & work study have access'
+        : `${MODE_LABELS[newMode]} Mode enabled — students & work study locked out`)
     } catch (err) {
       toast.error('Failed to update Lab Access Mode: ' + err.message)
     } finally {
@@ -1121,18 +1162,40 @@ function LabAccessModeCard() {
   }
 
   const isSummerBreak = mode === 'summer_break'
+  const isMaintenance = mode === 'planned_maintenance'
+  const isLocked = isSummerBreak || isMaintenance
   const isLoading = mode === null
 
-  // Card visual state
-  const accent = isSummerBreak ? 'orange' : 'green'
-  const pill = isSummerBreak
-    ? { tone: 'orange', text: 'Summer Break' }
-    : { tone: 'green', text: 'In Session' }
+  // Card visual state — orange for either locked mode; icon distinguishes them
+  const accent = isLocked ? 'orange' : 'green'
+  const pill = isMaintenance
+    ? { tone: 'orange', text: 'Planned Maintenance' }
+    : isSummerBreak
+      ? { tone: 'orange', text: 'Summer Break' }
+      : { tone: 'green', text: 'In Session' }
+  const HeaderIcon = isMaintenance ? Wrench : isSummerBreak ? MoonStar : Sun
+
+  // Non-super-admins see the maintenance option only when it is the active
+  // state (so the toggle reflects reality); they cannot select it.
+  const toggleOptions = [
+    { value: 'in_session', label: 'In Session', icon: Sun },
+    { value: 'summer_break', label: 'Summer Break', icon: MoonStar },
+    ...((isSuperAdmin || isMaintenance)
+      ? [{ value: 'planned_maintenance', label: 'Planned Maintenance', icon: Wrench }]
+      : []),
+  ]
+  const toggleDisabled = saving || isLoading || (isMaintenance && !isSuperAdmin)
+
+  const helperText = isMaintenance
+    ? 'Students and Work Study users are locked out for planned maintenance. The Time Clock kiosk is also disabled. Instructors retain full access.'
+    : isSummerBreak
+      ? 'Students and Work Study users are locked out. The Time Clock kiosk is also disabled. Instructors retain full access.'
+      : 'All users can access the system normally. Switch to Summer Break to lock out students during semester breaks.'
 
   return (
     <>
       <SettingCard
-        icon={isSummerBreak ? MoonStar : Sun}
+        icon={HeaderIcon}
         title="Lab Access Mode"
         accent={accent}
         pill={isLoading ? { tone: 'gray', text: 'Loading…' } : pill}
@@ -1141,7 +1204,7 @@ function LabAccessModeCard() {
             <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
             <span>
               Changes take effect immediately for all logged-in users and the Time Clock kiosk.
-              Use this for spring break, maintenance windows, or any other period when student access should be suspended.
+              Use Summer Break for semester breaks and Planned Maintenance for scheduled system work.
             </span>
           </>
         }
@@ -1149,26 +1212,19 @@ function LabAccessModeCard() {
         <SettingRow
           id="setting-lab_access_mode"
           label="Student & Work Study access"
-          helper={
-            isSummerBreak
-              ? 'Students and Work Study users are locked out. The Time Clock kiosk is also disabled. Instructors retain full access.'
-              : 'All users can access the system normally. Switch to Summer Break to lock out students during semester breaks.'
-          }
+          helper={helperText}
           details={{
-            what: 'Single switch that controls whether non-instructor users can log in at all.',
+            what: 'Single switch that controls whether non-instructor users can log in at all. Summer Break and Planned Maintenance lock students out identically; only the message they see differs.',
             where: 'Affects every page, the Time Clock kiosk, and the Lab Status display. PM work order generation is managed separately on the Preventive Maintenance page.',
-            effect: 'Switching to Summer Break shows a "Lab Closed" screen to students. Switching back to In Session restores all access immediately.',
+            effect: 'Switching to a locked mode shows a "Lab Closed" or "Scheduled Maintenance" screen to students. Switching back to In Session restores all access immediately and clears any maintenance schedule.',
           }}
         >
           <SegmentedToggle
             value={mode}
             ariaLabel="Lab access mode"
-            disabled={saving || isLoading}
-            variant={isSummerBreak ? 'orange' : 'green'}
-            options={[
-              { value: 'in_session', label: 'In Session', icon: Sun },
-              { value: 'summer_break', label: 'Summer Break', icon: MoonStar },
-            ]}
+            disabled={toggleDisabled}
+            variant={isLocked ? 'orange' : 'green'}
+            options={toggleOptions}
             onChange={(v) => setConfirm(v)}
           />
           {saving && (
@@ -1176,13 +1232,28 @@ function LabAccessModeCard() {
               <Loader2 size={11} className="animate-spin" aria-hidden="true" /> Saving…
             </span>
           )}
+          {isMaintenance && !isSuperAdmin && (
+            <span className="settings-row-helper-default">Managed by the program administrator.</span>
+          )}
         </SettingRow>
+
+        {isSuperAdmin && (
+          <MaintenanceScheduler
+            maint={maint}
+            mode={mode}
+            saving={saving}
+            upsertSetting={upsertSetting}
+            profile={profile}
+            onRequestLock={() => setConfirm('planned_maintenance')}
+          />
+        )}
       </SettingCard>
 
       {/* ── Confirmation modal ── */}
       <LabAccessConfirmModal
         confirm={confirm}
         saving={saving}
+        maint={maint}
         onCancel={() => setConfirm(null)}
         onConfirm={() => applyMode(confirm)}
       />
@@ -1190,13 +1261,273 @@ function LabAccessModeCard() {
   )
 }
 
-function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
+// ── Planned Maintenance scheduler (super admin only) ─────────────────────────
+// Sets the informational schedule that drives the dashboard banner. It does
+// NOT flip the lockout — that stays a deliberate manual toggle (decision A).
+function MaintenanceScheduler({ maint, mode, saving, upsertSetting, profile, onRequestLock }) {
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [message, setMessage] = useState('')
+  const [noticeDays, setNoticeDays] = useState(String(DEFAULT_NOTICE_DAYS))
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')     // live-region text
+  const [error, setError] = useState('')
+  const [confirmClear, setConfirmClear] = useState(false)
+  const startId = useId(), endId = useId(), msgId = useId(), daysId = useId()
+  const errId = useId(), statusId = useId()
+
+  // Hydrate form from stored values whenever they change (realtime included)
+  useEffect(() => {
+    if (maint.loading) return
+    setStart(fakeUtcToInputValue(maint.startAt))
+    setEnd(fakeUtcToInputValue(maint.endAt))
+    setMessage(maint.message || '')
+    setNoticeDays(String(maint.noticeDays))
+  }, [maint.loading, maint.startAt, maint.endAt, maint.message, maint.noticeDays])
+
+  const dirty = start !== fakeUtcToInputValue(maint.startAt)
+    || end !== fakeUtcToInputValue(maint.endAt)
+    || message.trim() !== (maint.message || '')
+    || String(parseInt(noticeDays, 10) || 0) !== String(maint.noticeDays)
+
+  const validate = () => {
+    if (!start) return 'A start date and time is required.'
+    if (end && new Date(end).getTime() <= new Date(start).getTime()) return 'Expected return must be after the start time.'
+    const d = parseInt(noticeDays, 10)
+    if (!Number.isFinite(d) || d < 0 || d > 365) return 'Notice period must be between 0 and 365 days.'
+    if (message.length > 200) return 'Message must be 200 characters or fewer.'
+    return ''
+  }
+
+  const audit = async (action, details) => {
+    try {
+      await supabase.from('audit_log').insert({
+        user_email: profile?.email || 'unknown',
+        user_name: profile ? `${profile.first_name} ${profile.last_name}` : 'Unknown',
+        action,
+        entity_type: 'Setting',
+        entity_id: 'maintenance_start_at',
+        field_changed: 'maintenance schedule',
+        old_value: maint.startAt || '',
+        new_value: inputValueToFakeUtc(start) || '',
+        details,
+      })
+    } catch (e) {
+      console.warn('[MaintenanceScheduler] Audit log failed (non-fatal):', e.message)
+    }
+  }
+
+  const save = async () => {
+    const v = validate()
+    setError(v)
+    if (v) return
+    setBusy(true); setStatus('')
+    try {
+      await upsertSetting('maintenance_start_at', inputValueToFakeUtc(start) || '', 'Planned maintenance start (fake-UTC timestamp)')
+      await upsertSetting('maintenance_end_at', inputValueToFakeUtc(end) || '', 'Planned maintenance expected return (fake-UTC timestamp)')
+      await upsertSetting('maintenance_message', message.trim(), 'One-line note shown to users about planned maintenance')
+      await upsertSetting('maintenance_notice_days', String(parseInt(noticeDays, 10)), 'Days before a planned maintenance start that the dashboard notice appears')
+      await audit('Schedule Planned Maintenance',
+        `Maintenance scheduled for ${formatMaintenanceDateTime(inputValueToFakeUtc(start))}`
+        + (end ? `, expected return ${formatMaintenanceDateTime(inputValueToFakeUtc(end))}` : '')
+        + `. Notice ${parseInt(noticeDays, 10)} days.`
+        + (message.trim() ? ` Message: "${message.trim()}"` : ''))
+      setStatus('Maintenance schedule saved. Dashboards will show the notice.')
+      toast.success('Maintenance schedule saved')
+      maint.refresh()
+    } catch (e) {
+      setError('Save failed: ' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clear = async () => {
+    setConfirmClear(false)
+    setBusy(true); setStatus(''); setError('')
+    try {
+      await upsertSetting('maintenance_start_at', '', 'Planned maintenance start (fake-UTC timestamp)')
+      await upsertSetting('maintenance_end_at', '', 'Planned maintenance expected return (fake-UTC timestamp)')
+      await upsertSetting('maintenance_message', '', 'One-line note shown to users about planned maintenance')
+      await audit('Clear Planned Maintenance Schedule', 'Maintenance schedule cleared; dashboard notice removed.')
+      setStart(''); setEnd(''); setMessage('')
+      setStatus('Maintenance schedule cleared.')
+      toast.success('Maintenance schedule cleared')
+      maint.refresh()
+    } catch (e) {
+      setError('Clear failed: ' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const disabled = busy || saving || maint.loading
+  const showNudge = maint.isScheduled && maint.hasStarted && mode === 'in_session'
+  const inputStyle = { minHeight: 44 }
+
+  return (
+    <div className="settings-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
+      <div className="settings-row-label-block">
+        <div className="settings-row-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Wrench size={14} aria-hidden="true" /> Planned maintenance schedule
+        </div>
+        <div className="settings-row-helper">
+          Enter the shutdown time here first. A notice appears on every dashboard once the notice period begins.
+          When you are ready to start, switch the mode above to <strong>Planned Maintenance</strong> — the schedule
+          never locks anyone out on its own.
+        </div>
+        {maint.isScheduled && (
+          <div className="settings-row-helper" style={{ marginTop: 4 }}>
+            Currently scheduled: <strong>{formatMaintenanceDateTime(maint.startAt)}</strong>
+            {maint.endAt && <> → back {formatMaintenanceDateTime(maint.endAt)}</>}
+            {' '}({maint.hasStarted ? 'window has started' : `starts in ${maint.countdown}`})
+          </div>
+        )}
+      </div>
+
+      {showNudge && (
+        <div className="settings-modal-warning" role="status">
+          <AlertTriangle size={18} className="settings-modal-warning-icon" aria-hidden="true" />
+          <p className="settings-modal-warning-text" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+            <span>The scheduled maintenance window has started but students still have access.</span>
+            <button
+              type="button"
+              className="settings-modal-btn settings-modal-btn--warn"
+              style={inputStyle}
+              onClick={onRequestLock}
+              disabled={disabled}
+            >
+              <Wrench size={14} aria-hidden="true" /> Switch to Planned Maintenance now
+            </button>
+          </p>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+        <div>
+          <label htmlFor={startId} className="settings-row-label">Shutdown starts <span aria-hidden="true">*</span></label>
+          <input
+            id={startId}
+            type="datetime-local"
+            className="settings-input"
+            style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            value={start}
+            onChange={e => { setStart(e.target.value); setError('') }}
+            disabled={disabled}
+            required
+            aria-required="true"
+            aria-invalid={!!error && !start}
+            aria-describedby={error ? errId : undefined}
+          />
+        </div>
+        <div>
+          <label htmlFor={endId} className="settings-row-label">Expected return (optional)</label>
+          <input
+            id={endId}
+            type="datetime-local"
+            className="settings-input"
+            style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            value={end}
+            min={start || undefined}
+            onChange={e => { setEnd(e.target.value); setError('') }}
+            disabled={disabled}
+            aria-describedby={error ? errId : undefined}
+          />
+        </div>
+        <div>
+          <label htmlFor={daysId} className="settings-row-label">Show notice this many days ahead</label>
+          <input
+            id={daysId}
+            type="number"
+            min="0"
+            max="365"
+            step="1"
+            className="settings-input settings-input--num"
+            style={inputStyle}
+            value={noticeDays}
+            onChange={e => { setNoticeDays(e.target.value); setError('') }}
+            disabled={disabled}
+            aria-describedby={error ? errId : undefined}
+          />
+          <span className="settings-input-suffix" style={{ marginLeft: 6 }}>days (default {DEFAULT_NOTICE_DAYS})</span>
+        </div>
+      </div>
+
+      <div>
+        <label htmlFor={msgId} className="settings-row-label">Message to users (optional)</label>
+        <input
+          id={msgId}
+          type="text"
+          maxLength={200}
+          className="settings-input"
+          style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+          placeholder="e.g. Upgrading the lab network — submit work orders before Friday"
+          value={message}
+          onChange={e => { setMessage(e.target.value); setError('') }}
+          disabled={disabled}
+        />
+      </div>
+
+      {/* Validation + status live regions */}
+      <div id={errId} role="alert" style={{ color: '#c92a2a', fontSize: '0.82rem', minHeight: error ? undefined : 0 }}>
+        {error}
+      </div>
+      <div id={statusId} role="status" aria-live="polite" style={{ color: '#2b8a3e', fontSize: '0.82rem', minHeight: status ? undefined : 0 }}>
+        {status}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="settings-modal-btn settings-modal-btn--ok"
+          style={inputStyle}
+          onClick={save}
+          disabled={disabled || !dirty}
+        >
+          {busy ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
+          {maint.isScheduled ? 'Update schedule' : 'Save schedule'}
+        </button>
+        {maint.isScheduled && (
+          <button
+            type="button"
+            className="settings-modal-btn settings-modal-btn--secondary"
+            style={inputStyle}
+            onClick={() => setConfirmClear(true)}
+            disabled={disabled}
+          >
+            <X size={14} aria-hidden="true" /> Clear schedule
+          </button>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        variant="danger"
+        title="Clear maintenance schedule?"
+        message="The dashboard notice will be removed for everyone. The current access mode is not changed."
+        confirmLabel="Clear schedule"
+        onConfirm={clear}
+        onClose={() => setConfirmClear(false)}
+      />
+    </div>
+  )
+}
+
+function LabAccessConfirmModal({ confirm, saving, maint, onCancel, onConfirm }) {
   const isOpen = !!confirm
   const dialogRef = useDialogA11y(isOpen, onCancel)
   const titleId = useId()
 
   if (!isOpen) return null
-  const isWarn = confirm === 'summer_break'
+  const isMaint = confirm === 'planned_maintenance'
+  const isWarn = confirm === 'summer_break' || isMaint
+  const Icon = isMaint ? Wrench : isWarn ? MoonStar : Sun
+  const title = isMaint ? 'Start Planned Maintenance?'
+    : isWarn ? 'Enable Summer Break Mode?'
+    : 'Restore In-Session Access?'
+  const cta = isMaint ? 'Start Maintenance'
+    : isWarn ? 'Enable Summer Break'
+    : 'Restore Access'
 
   return (
     <div
@@ -1212,11 +1543,9 @@ function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
       >
         <header className={`settings-modal-header ${isWarn ? 'settings-modal-header--warn' : 'settings-modal-header--ok'}`}>
           <span className="settings-modal-header-icon-wrap">
-            {isWarn ? <MoonStar size={20} aria-hidden="true" /> : <Sun size={20} aria-hidden="true" />}
+            <Icon size={20} aria-hidden="true" />
           </span>
-          <h3 id={titleId} className="settings-modal-title">
-            {isWarn ? 'Enable Summer Break Mode?' : 'Restore In-Session Access?'}
-          </h3>
+          <h3 id={titleId} className="settings-modal-title">{title}</h3>
         </header>
 
         <div className="settings-modal-body">
@@ -1226,10 +1555,23 @@ function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
                 <AlertTriangle size={18} className="settings-modal-warning-icon" aria-hidden="true" />
                 <p className="settings-modal-warning-text">
                   This will <strong>immediately</strong> lock out all Students and Work Study users.
-                  They will see a "Lab Closed" screen and cannot access any part of the system.
+                  They will see a {isMaint ? '"Scheduled Maintenance"' : '"Lab Closed"'} screen and cannot access any part of the system.
                   The Time Clock kiosk will also be disabled.
                 </p>
               </div>
+              {isMaint && maint?.isScheduled && (
+                <p className="settings-modal-text">
+                  Scheduled window: <strong>{formatMaintenanceDateTime(maint.startAt)}</strong>
+                  {maint.endAt && <> → expected return <strong>{formatMaintenanceDateTime(maint.endAt)}</strong></>}.
+                  Students will see the expected return time on the locked screen.
+                </p>
+              )}
+              {isMaint && !maint?.isScheduled && (
+                <p className="settings-modal-text">
+                  No schedule is set, so the locked screen will not show an expected return time.
+                  You can still proceed.
+                </p>
+              )}
               <p className="settings-modal-text">
                 <strong>Instructors are not affected.</strong> You can restore access at any time
                 by switching back to In Session.
@@ -1237,7 +1579,7 @@ function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
               <p className="settings-modal-text" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
                 <Info size={14} aria-hidden="true" style={{ flexShrink: 0, marginTop: 2 }} />
                 <span>
-                  This <strong>no longer</strong> pauses PM work order generation. Pause or resume PMs
+                  This <strong>does not</strong> pause PM work order generation. Pause or resume PMs
                   manually on the Preventive Maintenance page.
                 </span>
               </p>
@@ -1246,6 +1588,7 @@ function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
             <p className="settings-modal-text">
               This will restore full access to all Students and Work Study users immediately.
               The Time Clock kiosk will also be re-enabled.
+              {maint?.isScheduled && <> The maintenance schedule and dashboard notice will be cleared.</>}
             </p>
           )}
         </div>
@@ -1265,9 +1608,8 @@ function LabAccessConfirmModal({ confirm, saving, onCancel, onConfirm }) {
             onClick={onConfirm}
             disabled={saving}
           >
-            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                    : (isWarn ? <MoonStar size={14} aria-hidden="true" /> : <Sun size={14} aria-hidden="true" />)}
-            {isWarn ? 'Enable Summer Break' : 'Restore Access'}
+            {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Icon size={14} aria-hidden="true" />}
+            {cta}
           </button>
         </footer>
       </div>
@@ -1581,6 +1923,10 @@ function GeneralSettings() {
   // so they don't render as raw rows in the System group.
   const SETTINGS_HANDLED_BY_DEDICATED_CARDS = new Set([
     'lab_access_mode',         // → LabAccessModeCard (top of tab)
+    'maintenance_start_at',    // → LabAccessModeCard → MaintenanceScheduler
+    'maintenance_end_at',      // → LabAccessModeCard → MaintenanceScheduler
+    'maintenance_message',     // → LabAccessModeCard → MaintenanceScheduler
+    'maintenance_notice_days', // → LabAccessModeCard → MaintenanceScheduler
     'instructor_away_mode',    // → InstructorAwayCard (top of tab)
     'instructor_return_time',  // → InstructorAwayCard (top of tab)
   ])

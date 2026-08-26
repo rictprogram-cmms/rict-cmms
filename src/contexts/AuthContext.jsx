@@ -13,6 +13,9 @@ const SESSION_LOGIN_KEY = 'rict_cmms_login_at'   // epoch ms of last real sign-i
 // Roles that are subject to lab access mode lockout.
 // Instructors and Super Admin are never locked out.
 const LOCKABLE_ROLES = ['Student', 'Work Study']
+// lab_access_mode values that lock out LOCKABLE_ROLES. 'planned_maintenance'
+// behaves exactly like 'summer_break' for access; only the messaging differs.
+export const LOCKED_LAB_MODES = ['summer_break', 'planned_maintenance']
 
 function getCachedProfile() {
   try {
@@ -146,7 +149,7 @@ export function AuthProvider({ children }) {
   // Re-evaluates automatically when emulation starts/stops (profile
   // identity changes) or when the setting is updated via realtime.
   const labLocked = useMemo(() => {
-    if (labAccessMode !== 'summer_break') return false
+    if (!LOCKED_LAB_MODES.includes(labAccessMode)) return false
     // Super Admin emulating a Student/Work Study is NOT locked out — this
     // lets the admin make training videos and test during summer break.
     // isEmulating is only ever true for the real Super Admin, so real
@@ -954,6 +957,9 @@ export function AuthProvider({ children }) {
     emulatedProfile,
     // ── Lab Access Mode ──
     labLocked,
+    // Raw mode string ('in_session' | 'summer_break' | 'planned_maintenance'
+    // | null) so locked screens can pick the right copy.
+    labAccessMode,
     // ── Real-time Presence ──
     onlineUsers,
     presenceMeta,
