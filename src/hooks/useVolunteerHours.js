@@ -3,6 +3,7 @@ import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
+import { resolveVolunteerWindow } from '@/lib/volunteerWindow'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -166,6 +167,9 @@ export function useVolunteerSettings() {
     currentSemester: '',
     semesterStart: '',
     semesterEnd: '',
+    countStart: '',
+    countEnd: '',
+    includesBreak: false,
   })
   const [loading, setLoading] = useState(true)
 
@@ -190,60 +194,23 @@ export function useVolunteerSettings() {
       const map = {}
       ;(data || []).forEach(s => { map[s.setting_key] = s.setting_value })
 
-      let semesterStart = map.volunteer_semester_start || ''
-      let semesterEnd = map.volunteer_semester_end || ''
-      let currentSemester = map.volunteer_current_semester || ''
-
-      // 2. If volunteer semester dates aren't configured OR are stale
-      //    (today is past the configured end date), fall back to active class dates.
-      //    This auto-detects a new semester without manual settings updates.
-      const today = new Date()
-      const configuredEndIsStale = semesterEnd && new Date(semesterEnd + 'T23:59:59') < today
-
-      if (!semesterStart || !semesterEnd || configuredEndIsStale) {
-        // Clear stale values so they get overwritten by active class dates
-        if (configuredEndIsStale) {
-          semesterStart = ''
-          semesterEnd = ''
-          currentSemester = ''
-        }
-        try {
-          const classData = mustData(await supabase
-            .from('classes')
-            .select('start_date, end_date, semester')
-            .eq('status', 'Active')
-            .order('start_date', { ascending: true })
-            .limit(10), 'classes.select')
-
-          if (classData && classData.length > 0) {
-            const starts = classData.map(c => c.start_date).filter(Boolean).sort()
-            const ends = classData.map(c => c.end_date).filter(Boolean).sort()
-            if (!semesterStart && starts.length > 0) semesterStart = starts[0]
-            if (!semesterEnd && ends.length > 0) semesterEnd = ends[ends.length - 1]
-            if (!currentSemester && classData[0].semester) currentSemester = classData[0].semester
-          }
-        } catch (classErr) {
-          console.warn('Could not fetch class dates for fallback:', classErr)
-        }
-      }
-
-      // 3. Final fallback: use current year start/end
-      if (!semesterStart) {
-        const now = new Date()
-        semesterStart = `${now.getFullYear()}-01-01`
-      }
-      if (!semesterEnd) {
-        const now = new Date()
-        semesterEnd = `${now.getFullYear()}-12-31`
-      }
+      // 2. Semester + hours-counting windows come from the shared resolver
+      //    (src/lib/volunteerWindow.js) so this hook, the Dashboard grade
+      //    card, and the GB Items report all agree. countStart reaches back
+      //    to the day after the previous term ended, so summer hours roll
+      //    into Fall and winter-break hours roll into Spring.
+      const win = await resolveVolunteerWindow()
 
       setSettings({
         totalHoursRequired: parseFloat(map.volunteer_semester_total_hours) || 10,
         midpointHours: parseFloat(map.volunteer_midpoint_hours) || 5,
         midpointWeek: parseInt(map.volunteer_midpoint_week) || 8,
-        currentSemester: currentSemester,
-        semesterStart: semesterStart,
-        semesterEnd: semesterEnd,
+        currentSemester: win.currentSemester,
+        semesterStart: win.semesterStart,
+        semesterEnd: win.semesterEnd,
+        countStart: win.countStart,
+        countEnd: win.countEnd,
+        includesBreak: win.includesBreak,
       })
     } catch (err) {
       console.error('Volunteer settings fetch error:', err)
@@ -294,8 +261,9 @@ export function useVolunteerData() {
     }
     if (!hasLoadedRef.current) setLoading(true)
     try {
-      const semStart = settings.semesterStart || `${new Date().getFullYear()}-01-01`
-      const semEnd = settings.semesterEnd || toDateStr(new Date())
+      // Hours-counting window (includes the preceding break) — see volunteerWindow.js
+      const semStart = settings.countStart || settings.semesterStart || `${new Date().getFullYear()}-01-01`
+      const semEnd = settings.countEnd || settings.semesterEnd || toDateStr(new Date())
 
       // 0. Fetch qualifying classes (requires_volunteer_hours = true)
       const qClasses = await fetchQualifyingClasses(settings.semesterStart, settings.midpointWeek)
@@ -352,7 +320,7 @@ export function useVolunteerData() {
     } finally {
       setLoading(false)
     }
-  }, [profile?.email, settings.semesterStart, settings.semesterEnd])
+  }, [profile?.email, settings.semesterStart, settings.semesterEnd, settings.countStart, settings.countEnd])
 
   useEffect(() => {
     if (!settingsLoading) fetchData()
@@ -672,8 +640,9 @@ export function useVolunteerOverview() {
     if (!isInstructor) { setLoading(false); return }
     setLoading(true)
     try {
-      const semStart = settings.semesterStart || `${new Date().getFullYear()}-01-01`
-      const semEnd = settings.semesterEnd || toDateStr(new Date())
+      // Hours-counting window (includes the preceding break) — see volunteerWindow.js
+      const semStart = settings.countStart || settings.semesterStart || `${new Date().getFullYear()}-01-01`
+      const semEnd = settings.countEnd || settings.semesterEnd || toDateStr(new Date())
 
       // 1. Get all Student + Work Study users (active, excluding time_clock_only)
       const { data: profilesData, error: profErr } = await supabase
@@ -881,8 +850,9 @@ export function useStudentVolunteerDetail(studentEmail) {
     if (!studentEmail) return
     setLoading(true)
     try {
-      const semStart = settings.semesterStart || `${new Date().getFullYear()}-01-01`
-      const semEnd = settings.semesterEnd || toDateStr(new Date())
+      // Hours-counting window (includes the preceding break) — see volunteerWindow.js
+      const semStart = settings.countStart || settings.semesterStart || `${new Date().getFullYear()}-01-01`
+      const semEnd = settings.countEnd || settings.semesterEnd || toDateStr(new Date())
 
       // All volunteer + club activity time_clock entries (approved + pending)
       // Club Activity total_hours is already the credited (0.25x) amount, so summing is correct.
@@ -915,7 +885,7 @@ export function useStudentVolunteerDetail(studentEmail) {
     } finally {
       setLoading(false)
     }
-  }, [studentEmail, settings.semesterStart, settings.semesterEnd])
+  }, [studentEmail, settings.semesterStart, settings.semesterEnd, settings.countStart, settings.countEnd])
 
   useEffect(() => { fetchDetail() }, [fetchDetail])
 

@@ -26,6 +26,7 @@ import {
   Edit3, FilePenLine, Save, Trash2
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { formatWindowDate } from '@/lib/volunteerWindow'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useVolunteerData, useVolunteerOverview, useStudentVolunteerDetail } from '@/hooks/useVolunteerHours'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
@@ -320,7 +321,14 @@ function StudentView() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-surface-900">Volunteer Hours</h1>
-            <p className="text-sm text-surface-400">{settings.currentSemester || 'Current Semester'}</p>
+            <p className="text-sm text-surface-400">
+              {settings.currentSemester || 'Current Semester'}
+              {settings.includesBreak && settings.countStart && (
+                <span className="block text-xs text-surface-400">
+                  Counting hours from {formatWindowDate(settings.countStart)} — includes the break before this semester
+                </span>
+              )}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -2097,8 +2105,9 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
     setLoading(true)
     setProgress({ current: 0, total: 0 })
     try {
-      const semStart = settings.semesterStart || `${new Date().getFullYear()}-01-01`
-      const semEnd = settings.semesterEnd || toDateStr(new Date())
+      // Hours-counting window (includes preceding break) — see volunteerWindow.js
+      const semStart = settings.countStart || settings.semesterStart || `${new Date().getFullYear()}-01-01`
+      const semEnd = settings.countEnd || settings.semesterEnd || toDateStr(new Date())
 
       const targetStudents = mode === 'all'
         ? sortedStudents

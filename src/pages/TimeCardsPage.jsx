@@ -30,6 +30,7 @@ import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { mustData } from '@/lib/supabaseData'
+import { resolveVolunteerWindow } from '@/lib/volunteerWindow'
 import {
   useUsersForReports, useClassesList, useTimeCardData,
   useClassWeeklyReport, useTimeEntryActions, getWeekRange, toDateStr,
@@ -369,47 +370,18 @@ export default function TimeCardsPage() {
       const classesData = mustData(await supabase.from('classes').select('*'), 'classes.select')
 
       // 4. Volunteer hours per student. IMPORTANT: volunteer hours are graded
-      //    PROGRAM-WIDE (semester window), not class-window. Matches the logic
-      //    in useVolunteerHours.js so this report agrees with the Volunteer
-      //    Hours page the student sees. Window resolution:
-      //      a) Explicit settings volunteer_semester_start / _end if present
-      //         and not stale (configured end >= today)
-      //      b) Otherwise: earliest active class start_date → latest active
-      //         class end_date
-      //      c) Final fallback: current calendar year
+      //    PROGRAM-WIDE (semester window), not class-window. The window comes
+      //    from the shared resolver (src/lib/volunteerWindow.js) and uses the
+      //    HOURS-COUNTING range, which starts the day after the previous term
+      //    ended — so summer/winter-break hours count toward the next term.
       //    Filter by approval_status='Approved' so unapproved entries don't
       //    count (matches the page).
       let volSemStart = null
       let volSemEnd = null
       try {
-        const settingsRows = mustData(await supabase
-          .from('settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end']), 'settings.select')
-        const sMap = {}
-        ;(settingsRows || []).forEach(r => { sMap[r.setting_key] = r.setting_value })
-        volSemStart = sMap.volunteer_semester_start || null
-        volSemEnd = sMap.volunteer_semester_end || null
-        // Stale check: if configured end is before today, fall through to fallback
-        const todayDate = new Date()
-        const endIsStale = volSemEnd && new Date(volSemEnd + 'T23:59:59') < todayDate
-        if (!volSemStart || !volSemEnd || endIsStale) {
-          if (endIsStale) { volSemStart = null; volSemEnd = null }
-          const actClasses = mustData(await supabase
-            .from('classes')
-            .select('start_date, end_date')
-            .eq('status', 'Active')
-            .order('start_date', { ascending: true })
-            .limit(20), 'classes.select')
-          if (actClasses && actClasses.length > 0) {
-            const starts = actClasses.map(c => c.start_date).filter(Boolean).sort()
-            const ends = actClasses.map(c => c.end_date).filter(Boolean).sort()
-            if (!volSemStart && starts.length > 0) volSemStart = starts[0]
-            if (!volSemEnd && ends.length > 0) volSemEnd = ends[ends.length - 1]
-          }
-        }
-        if (!volSemStart) volSemStart = `${new Date().getFullYear()}-01-01`
-        if (!volSemEnd) volSemEnd = `${new Date().getFullYear()}-12-31`
+        const win = await resolveVolunteerWindow()
+        volSemStart = win.countStart
+        volSemEnd = win.countEnd
       } catch (semErr) {
         console.warn('GB report: volunteer semester window fetch failed, using class window as fallback:', semErr)
         volSemStart = startDate

@@ -27,6 +27,7 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow';
+import { resolveVolunteerWindow } from '@/lib/volunteerWindow';
 import { useVolunteerData } from '@/hooks/useVolunteerHours';
 import { useStudentLabReport } from '@/hooks/useWeeklyLabs';
 import { useWOCRatio, computeStudentScoresForWindows } from '@/hooks/useWOCRatio';
@@ -471,39 +472,14 @@ function GradeRelevantScores() {
           console.warn('Grade card: WOC computation failed:', e);
         }
 
-        // 6. Volunteer hours — program-wide semester window with approval_status filter.
-        //    Mirrors useVolunteerHours.js semester resolution and the GB Items query
-        //    so the same number appears on the dashboard, the Volunteer Hours page,
-        //    and the GB Items report.
-        let volSemStart = null, volSemEnd = null;
+        // 6. Volunteer hours — program-wide HOURS-COUNTING window (includes the
+        //    preceding break) from the shared resolver, so the same number
+        //    appears here, on the Volunteer Hours page, and in the GB Items report.
+        let volSemStart, volSemEnd;
         try {
-          const settingsRows = mustData(await supabase
-            .from('settings')
-            .select('setting_key, setting_value')
-            .in('setting_key', ['volunteer_semester_start', 'volunteer_semester_end']), 'settings.select');
-          const sMap = {};
-          (settingsRows || []).forEach(r => { sMap[r.setting_key] = r.setting_value; });
-          volSemStart = sMap.volunteer_semester_start || null;
-          volSemEnd = sMap.volunteer_semester_end || null;
-          const todayDate = new Date();
-          const endIsStale = volSemEnd && new Date(volSemEnd + 'T23:59:59') < todayDate;
-          if (!volSemStart || !volSemEnd || endIsStale) {
-            if (endIsStale) { volSemStart = null; volSemEnd = null; }
-            const actClasses = mustData(await supabase
-              .from('classes')
-              .select('start_date, end_date')
-              .eq('status', 'Active')
-              .order('start_date', { ascending: true })
-              .limit(20), 'classes.select');
-            if (actClasses && actClasses.length > 0) {
-              const starts = actClasses.map(c => c.start_date).filter(Boolean).sort();
-              const ends = actClasses.map(c => c.end_date).filter(Boolean).sort();
-              if (!volSemStart && starts.length > 0) volSemStart = starts[0];
-              if (!volSemEnd && ends.length > 0) volSemEnd = ends[ends.length - 1];
-            }
-          }
-          if (!volSemStart) volSemStart = `${new Date().getFullYear()}-01-01`;
-          if (!volSemEnd) volSemEnd = `${new Date().getFullYear()}-12-31`;
+          const win = await resolveVolunteerWindow();
+          volSemStart = win.countStart;
+          volSemEnd = win.countEnd;
         } catch (semErr) {
           console.warn('Grade card: semester window fetch failed, using current year:', semErr);
           volSemStart = `${new Date().getFullYear()}-01-01`;
