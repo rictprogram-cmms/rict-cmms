@@ -1429,8 +1429,11 @@ function MetaItem({ label, children }) {
 
 function AddChangelogModal({ onClose, onSaved, actions }) {
   const dialogRef = useDialogA11y(true, onClose)
+  // Type intentionally starts EMPTY so it must be chosen explicitly — a
+  // defaulted "Bug" let a feature ship as a patch bump when the dropdown was
+  // overlooked. Save stays disabled until a type is picked.
   const [form, setForm] = useState({
-    type: 'Bug',
+    type: '',
     title: '',
     description: '',
     versionMode: 'auto', // 'auto' | 'major' | 'none'
@@ -1454,7 +1457,7 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
 
   const handleSave = async () => {
-    if (!form.title.trim()) return
+    if (!form.type || !form.title.trim()) return
     const result = await actions.addManualChangelogEntry({
       type: form.type,
       title: form.title.trim(),
@@ -1469,7 +1472,9 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
 
   // Helper text shown beneath the type dropdown explains version impact.
   let versionHelper
-  if (form.versionMode === 'none') {
+  if (!form.type) {
+    versionHelper = 'Select a type — it decides whether the version bumps as a patch (Bug) or minor (Feature Request)'
+  } else if (form.versionMode === 'none') {
     versionHelper = 'Will be logged under the current version (no bump)'
   } else if (form.versionMode === 'major') {
     versionHelper = 'Will bump the MAJOR version (e.g. 3.3.3 → 4.0.0)'
@@ -1531,7 +1536,11 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
               value={form.type}
               onChange={e => set('type', e.target.value)}
               className="input text-sm"
+              required
+              aria-required="true"
+              aria-invalid={!form.type}
             >
+              <option value="" disabled>Select a type…</option>
               {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
             <p className="text-[11px] text-surface-500 mt-1" aria-live="polite">
@@ -1644,7 +1653,8 @@ function AddChangelogModal({ onClose, onSaved, actions }) {
           </button>
           <button
             onClick={handleSave}
-            disabled={actions.saving || !form.title.trim()}
+            disabled={actions.saving || !form.type || !form.title.trim()}
+            title={!form.type ? 'Select a type first' : undefined}
             className={`px-4 py-2 min-h-[44px] rounded-lg text-sm font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-1 disabled:opacity-40 flex items-center gap-1.5 ${
               form.versionMode === 'major'
                 ? 'bg-amber-600 hover:bg-amber-700 focus:ring-amber-500'
