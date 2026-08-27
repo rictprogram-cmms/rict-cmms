@@ -186,6 +186,16 @@ const SETTING_META = {
       effect: 'Closed days are hidden from signup/scheduling grids; tracker weeks run Monday through the last open day; WOC Ratio counts only open days as school days. Sun=0, Mon=1, …, Sat=6. Updated each semester as the lab schedule changes.',
     },
   },
+  finals_required_hours: {
+    label: 'Finals Week — Required Hours per Class',
+    type: 'number', category: 'Lab Signup',
+    desc: 'Lab hours a student needs during finals week to take the exam.',
+    details: {
+      what: 'Flat weekly requirement that replaces the class\'s normal required hours during its finals week (finals_start–finals_end on the class).',
+      where: 'Lab Signup class tiles, Time Cards, Dashboard, Attendance Reports, and lab-signup notifications.',
+      effect: 'Default 2. Closed-day proration does not apply to finals week; approved-absence make-up hours still add on top.',
+    },
+  },
   lab_weeks_to_display: {
     label: 'Lab Signup — Weeks to Show',
     type: 'number', category: 'Lab Signup',

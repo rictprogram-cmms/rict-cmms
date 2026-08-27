@@ -25,6 +25,16 @@
  *                    (8 × 0.8) + 2 = 8.4, never (8 + 2) × 0.8.
  *   zero open days — a fully closed week computes to 0 required hours.
  *   rounding       — exact value, rounded to 2 decimals for display (6.4).
+ *   FINALS WEEK    — a week whose Monday is inside finals_start..finals_end
+ *                    requires a flat `finals_required_hours` (settings, default
+ *                    2) per class to sit the exam. Closures do NOT prorate it;
+ *                    make-up hours still add on top.
+ *   SPLIT WEEK     — finals starting mid-week (e.g. Thursday): the days before
+ *                    finals_start are regular lab days and prorate normally
+ *                    (Mon–Wed of a Mon–Fri schedule = 3/5), the finals days do
+ *                    not count as regular days, and the exam hours are added
+ *                    on top when SPLIT_WEEK_ADDS_EXAM_HOURS is true:
+ *                    8 × 3/5 + 2 = 6.8. Set it false for 4.8.
  *
  * This is a pure OVERLAY, exactly like useMakeupHours.js: nothing is written
  * to `classes`. Every consumer multiplies at compute time, so marking a day
@@ -40,6 +50,9 @@
  *   fetchClosedLabDays({ rangeStart, rangeEnd })        → Promise<{ closedDates:Set, reasons:{} }>
  *   fetchClosureOverlay({ rangeStart, rangeEnd })       → Promise<ClosureOverlay>
  *   fetchWeekProration({ mondayKey, classStart, classEnd }) → Promise<ProrationInfo>
+ *   isFinalsWeek(mondayKey, cls)                        → boolean (matches buildClassWeeks)
+ *   weekBaseRequirement(overlay, { baseHours, mondayKey, cls, isFinals }) → WeekRequirement
+ *   fetchWeekRequirement({ baseHours, mondayKey, cls })  → Promise<WeekRequirement>
  *   useClosureOverlay({ rangeStart, rangeEnd, enabled }) React hook (realtime)
  *
  * Conventions honored
@@ -108,11 +121,14 @@ export function labDaysOfWeek(mondayKey, visibleDays = getCachedLabDays()) {
  * @property {boolean}  adjusted    true when factor < 1
  * @property {string[]} closedDates 'YYYY-MM-DD' dates marked Closed this week
  * @property {string[]} outOfRangeDates 'YYYY-MM-DD' dates outside the class window
+ * @property {number}   finalsDays  scheduled days on/after finals_start (not regular lab days)
+ * @property {string[]} finalsDates
  */
 
 const FULL_WEEK = Object.freeze({
   scheduled: 0, open: 0, closed: 0, outOfRange: 0,
   factor: 1, adjusted: false, closedDates: [], outOfRangeDates: [],
+  finalsDays: 0, finalsDates: [],
 })
 
 /**
@@ -124,9 +140,10 @@ const FULL_WEEK = Object.freeze({
  * @param {Set|string[]}    [p.closedDates] dates marked Closed (any range; only this week's are used)
  * @param {string}          [p.classStart]  class start_date — days before it are not-open
  * @param {string}          [p.classEnd]    class end_date   — days after it are not-open
+ * @param {string}          [p.finalsStart] class finals_start — days on/after it are finals days, not regular lab days
  * @returns {ProrationInfo}
  */
-export function prorationForWeek({ mondayKey, visibleDays, closedDates, classStart, classEnd } = {}) {
+export function prorationForWeek({ mondayKey, visibleDays, closedDates, classStart, classEnd, finalsStart } = {}) {
   const monday = mondayKeyOf(mondayKey)
   if (!monday) return { ...FULL_WEEK }
   const days = labDaysOfWeek(monday, visibleDays || getCachedLabDays())
@@ -135,13 +152,16 @@ export function prorationForWeek({ mondayKey, visibleDays, closedDates, classSta
   const closedSet = closedDates instanceof Set ? closedDates : new Set(closedDates || [])
   const start = classStart ? String(classStart).substring(0, 10) : null
   const end = classEnd ? String(classEnd).substring(0, 10) : null
+  const fStart = finalsStart ? String(finalsStart).substring(0, 10) : null
 
   const closedHere = []
   const outOfRangeHere = []
+  const finalsHere = []
   let open = 0
   for (const d of days) {
     if (closedSet.has(d)) { closedHere.push(d); continue }
     if ((start && d < start) || (end && d > end)) { outOfRangeHere.push(d); continue }
+    if (fStart && d >= fStart) { finalsHere.push(d); continue }
     open++
   }
 
@@ -156,6 +176,8 @@ export function prorationForWeek({ mondayKey, visibleDays, closedDates, classSta
     adjusted: factor < 1,
     closedDates: closedHere,
     outOfRangeDates: outOfRangeHere,
+    finalsDays: finalsHere.length,
+    finalsDates: finalsHere,
   }
 }
 
@@ -182,7 +204,101 @@ export function formatProrationPercent(info) {
   return `${Math.round(f * 100)}%`
 }
 
+// ─── Finals week ──────────────────────────────────────────────────────────────
+
+export const DEFAULT_FINALS_REQUIRED_HOURS = 2
+
+/**
+ * When finals start mid-week, add the exam hours on top of the prorated
+ * regular hours for that split week (8 × 3/5 + 2 = 6.8). false → 4.8 only.
+ */
+export const SPLIT_WEEK_ADDS_EXAM_HOURS = true
+
+/**
+ * True when the Monday-anchored week is a finals week for the class. Same
+ * test as buildClassWeeks(): the week's Monday falls inside
+ * [finals_start, finals_end]. Accepts snake_case (DB row) or camelCase.
+ */
+export function isFinalsWeek(mondayKey, cls) {
+  const monday = mondayKeyOf(mondayKey)
+  if (!monday || !cls) return false
+  const fs = cls.finals_start || cls.finalsStart
+  const fe = cls.finals_end || cls.finalsEnd
+  if (!fs || !fe) return false
+  return monday >= String(fs).substring(0, 10) && monday <= String(fe).substring(0, 10)
+}
+
+/**
+ * @typedef {Object} WeekRequirement
+ * @property {number}        hours         base requirement for the week (before make-up)
+ * @property {number}        nominalHours  classes.required_hours
+ * @property {boolean}       isFinals      finals hours applied (full or split week)
+ * @property {boolean}       finalsSplit   finals started mid-week; regular days prorated
+ * @property {number}        examHours     finals hours included in `hours` (0 if none)
+ * @property {ProrationInfo} closure       proration used (FULL_WEEK on full finals weeks)
+ * @property {string}        closureLabel  '' when not adjusted
+ */
+
+/**
+ * Base weekly requirement with both policies applied, in order:
+ *   finals week → flat finals hours (no closure proration)
+ *   otherwise   → required_hours × closure factor
+ * Make-up hours are added by the caller AFTER this.
+ *
+ * @param {ClosureOverlay} overlay
+ * @param {Object}  p
+ * @param {number}  p.baseHours   classes.required_hours
+ * @param {string}  p.mondayKey   week start (any date in the week works)
+ * @param {Object}  [p.cls]       class row (start/end/finals dates)
+ * @param {boolean} [p.isFinals]  pass when already known (buildClassWeeks); else derived from cls
+ */
+export function weekBaseRequirement(overlay, { baseHours, mondayKey, cls, isFinals } = {}) {
+  const nominal = Number(baseHours) || 0
+  const examHours = Math.round((Number(overlay?.finalsHours ?? DEFAULT_FINALS_REQUIRED_HOURS) || 0) * 100) / 100
+  const finals = typeof isFinals === 'boolean' ? isFinals : isFinalsWeek(mondayKey, cls)
+
+  // Full finals week (Monday inside finals window): flat exam hours
+  if (finals) {
+    return { hours: examHours, nominalHours: nominal, isFinals: true, finalsSplit: false, examHours, closure: { ...FULL_WEEK }, closureLabel: '' }
+  }
+
+  const classStart = cls?.start_date || cls?.startDate
+  const classEnd = cls?.end_date || cls?.endDate
+  const finalsStart = cls?.finals_start || cls?.finalsStart
+  const closure = overlay.forWeek(mondayKey, classStart, classEnd, finalsStart)
+
+  // Split week: finals begin mid-week. Regular days prorate; exam hours add on top.
+  if (closure.finalsDays > 0) {
+    const regular = prorateHours(nominal, closure)
+    const exam = SPLIT_WEEK_ADDS_EXAM_HOURS ? examHours : 0
+    return {
+      hours: Math.round((regular + exam) * 100) / 100,
+      nominalHours: nominal, isFinals: true, finalsSplit: true, examHours: exam,
+      closure, closureLabel: describeProration(closure),
+    }
+  }
+
+  return { hours: prorateHours(nominal, closure), nominalHours: nominal, isFinals: false, finalsSplit: false, examHours: 0, closure, closureLabel: describeProration(closure) }
+}
+
 // ─── Data access ──────────────────────────────────────────────────────────────
+
+/** Read `finals_required_hours` from settings (default 2; never throws). */
+export async function fetchFinalsRequiredHours() {
+  try {
+    const { data, error } = await supabase
+      .from('settings')
+      .select('setting_value')
+      .eq('setting_key', 'finals_required_hours')
+      .maybeSingle()
+    if (error) throw error
+    const n = parseFloat(data?.setting_value)
+    return isNaN(n) || n < 0 ? DEFAULT_FINALS_REQUIRED_HOURS : n
+  } catch (err) {
+    console.error('Error loading finals_required_hours:', err?.message || err)
+    return DEFAULT_FINALS_REQUIRED_HOURS
+  }
+}
 
 /**
  * Fetch every Closed lab_calendar day in [rangeStart, rangeEnd] (date-only
@@ -226,7 +342,7 @@ export async function fetchClosedLabDays({ rangeStart, rangeEnd } = {}) {
  * whole weeks so the first/last week are never partially loaded.
  */
 export async function fetchClosureOverlay({ rangeStart, rangeEnd } = {}) {
-  const visibleDays = await fetchLabVisibleDays()
+  const [visibleDays, finalsHours] = await Promise.all([fetchLabVisibleDays(), fetchFinalsRequiredHours()])
 
   // Pad to whole Monday-anchored weeks
   let padStart = rangeStart ? mondayKeyOf(rangeStart) : undefined
@@ -250,11 +366,11 @@ export async function fetchClosureOverlay({ rangeStart, rangeEnd } = {}) {
     console.error('fetchClosureOverlay failed:', err?.message || err)
   }
 
-  return buildClosureOverlay({ closedDates, reasons, visibleDays })
+  return buildClosureOverlay({ closedDates, reasons, visibleDays, finalsHours })
 }
 
 /** Build an overlay from data already in hand (e.g. lab-signup week data). */
-export function buildClosureOverlay({ closedDates, reasons = {}, visibleDays } = {}) {
+export function buildClosureOverlay({ closedDates, reasons = {}, visibleDays, finalsHours = DEFAULT_FINALS_REQUIRED_HOURS } = {}) {
   const set = closedDates instanceof Set ? closedDates : new Set(closedDates || [])
   const days = visibleDays && visibleDays.length > 0 ? visibleDays : getCachedLabDays()
   const cache = new Map()
@@ -262,17 +378,27 @@ export function buildClosureOverlay({ closedDates, reasons = {}, visibleDays } =
     closedDates: set,
     reasons,
     visibleDays: days,
-    forWeek(mondayKey, classStart, classEnd) {
-      const key = `${mondayKey}|${classStart || ''}|${classEnd || ''}`
+    finalsHours,
+    forWeek(mondayKey, classStart, classEnd, finalsStart) {
+      const key = `${mondayKey}|${classStart || ''}|${classEnd || ''}|${finalsStart || ''}`
       if (cache.has(key)) return cache.get(key)
-      const info = prorationForWeek({ mondayKey, visibleDays: days, closedDates: set, classStart, classEnd })
+      const info = prorationForWeek({ mondayKey, visibleDays: days, closedDates: set, classStart, classEnd, finalsStart })
       cache.set(key, info)
       return info
     },
   }
 }
 
-/** One-shot proration for a single week (used by the notification bell). */
+/** One-shot base requirement for a single week (used by the notification bell). */
+export async function fetchWeekRequirement({ baseHours, mondayKey, cls } = {}) {
+  const monday = mondayKeyOf(mondayKey)
+  const overlay = monday
+    ? await fetchClosureOverlay({ rangeStart: monday, rangeEnd: monday })
+    : buildClosureOverlay({ closedDates: new Set(), finalsHours: await fetchFinalsRequiredHours() })
+  return weekBaseRequirement(overlay, { baseHours, mondayKey: monday, cls })
+}
+
+/** One-shot proration for a single week. */
 export async function fetchWeekProration({ mondayKey, classStart, classEnd } = {}) {
   const monday = mondayKeyOf(mondayKey)
   if (!monday) return { ...FULL_WEEK }
@@ -318,6 +444,7 @@ export function useClosureOverlay({ rangeStart, rangeEnd, enabled = true } = {})
     return subscribeWithReconnect('closure-overlay', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.finals_required_hours' }, refresh)
     )
   }, [enabled, refresh])
 

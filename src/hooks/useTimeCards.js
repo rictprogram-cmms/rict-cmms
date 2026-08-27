@@ -8,7 +8,7 @@ import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
 import { fetchLabVisibleDays, weekEndOffsetFromDays } from '@/hooks/useLabDays'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
-import { fetchClosureOverlay, prorateHours, describeProration, mondayKeyOf } from '@/lib/closureProration'
+import { fetchClosureOverlay, weekBaseRequirement, mondayKeyOf } from '@/lib/closureProration'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -132,11 +132,14 @@ function makeupHoursInRange(overlay, email, courseId, classId, rangeStart, range
  * a multi-week range keeps the nominal per-week number (unchanged behavior).
  * Returns the ProrationInfo (factor 1 when not applicable).
  */
-function periodProration(closureOverlay, startDate, endDate, classStart, classEnd) {
+function periodRequirement(closureOverlay, startDate, endDate, cls, baseHours) {
   const m1 = mondayKeyOf(startDate)
   const m2 = mondayKeyOf(endDate)
-  if (!m1 || !m2 || m1 !== m2) return closureOverlay.forWeek('', null, null)
-  return closureOverlay.forWeek(m1, classStart, classEnd)
+  const single = m1 && m2 && m1 === m2
+  // Multi-week range: nominal hours, no closure/finals adjustment
+  return weekBaseRequirement(closureOverlay, {
+    baseHours, mondayKey: single ? m1 : '', cls: single ? cls : null, isFinals: single ? undefined : false,
+  })
 }
 
 /** Overlay range spanning every class in the list (falls back to the period). */
@@ -470,9 +473,13 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       // Make-up hours owed this week (approved absence the week before) are
       // added to the base requirement — matches the Lab Signup tile.
       const mu = makeupHoursInRange(makeupOverlay, userEmail, cfg?.course_id || courseId, cfg?.class_id, wkStartStr, wkEndStr)
-      // Closure proration: prorate the BASE first, then add make-up hours.
-      const closure = closureOverlay.forWeek(wkStartStr, cfg?.start_date, cfg?.end_date)
-      const wkBaseRequired = prorateHours(data.requiredHoursPerWeek || 0, closure)
+      // Base requirement: finals week = flat finals hours; otherwise prorated
+      // for Closed lab days. Make-up hours are added AFTER either rule.
+      const req = weekBaseRequirement(closureOverlay, {
+        baseHours: data.requiredHoursPerWeek || 0, mondayKey: wkStartStr, cls: cfg, isFinals: !!wk.isFinals,
+      })
+      const closure = req.closure
+      const wkBaseRequired = req.hours
       const wkRequired = wkBaseRequired + mu.hours
       let wkBase = 100
       if (!wkClosed && wkRequired > 0 && weekHours < wkRequired) {
@@ -486,10 +493,13 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         isFinals: wk.isFinals, entries: weekEntries,
         hours: Math.round(weekHours * 100) / 100,
         requiredHours: wkRequired,                       // prorated base + make-up
-        baseRequiredHours: wkBaseRequired,               // after closure proration
+        baseRequiredHours: wkBaseRequired,               // after finals / closure rules
         nominalRequiredHours: data.requiredHoursPerWeek, // classes.required_hours
+        finalsRequirement: req.isFinals,                 // finals hours applied (full or split week)
+        finalsSplit: req.finalsSplit,                    // finals started mid-week
+        examHours: req.examHours,                        // exam hours included in requiredHours
         closure,                                         // ProrationInfo
-        closureLabel: describeProration(closure),        // '' when not adjusted
+        closureLabel: req.closureLabel,                  // '' when not adjusted
         makeupHours: mu.hours,
         makeupRequestIds: mu.requestIds,
         metHours: weekHours >= wkRequired,
@@ -1113,10 +1123,12 @@ export function useTimeCardData() {
 
         const mu = makeupHoursInRange(makeupOverlay, userEmail, c.course_id, c.class_id, startDate, endDate)
         const nominalReq = parseFloat(c.required_hours) || 0
-        // Prorate the base for Closed lab days (single-week periods only), then add make-up
-        const proration = periodProration(closureOverlay, startDate, endDate, c.start_date, c.end_date)
-        const baseReq = prorateHours(nominalReq, proration)
-        const closureLabel = describeProration(proration)
+        // Finals week = flat finals hours; otherwise prorate the base for Closed
+        // lab days (single-week periods only). Make-up is added after.
+        const req = periodRequirement(closureOverlay, startDate, endDate, c, nominalReq)
+        const proration = req.closure
+        const baseReq = req.hours
+        const closureLabel = req.closureLabel
 
         if (isEnrolled && isInRange) {
           // Class was running during this period — always show tile
@@ -1125,6 +1137,9 @@ export function useTimeCardData() {
             requiredHours: baseReq + mu.hours,
             baseRequiredHours: baseReq,
             nominalRequiredHours: nominalReq,
+            finalsRequirement: req.isFinals,
+            finalsSplit: req.finalsSplit,
+            examHours: req.examHours,
             closure: proration,
             closureLabel,
             makeupHours: mu.hours,
@@ -1141,6 +1156,9 @@ export function useTimeCardData() {
             requiredHours: baseReq + mu.hours,
             baseRequiredHours: baseReq,
             nominalRequiredHours: nominalReq,
+            finalsRequirement: req.isFinals,
+            finalsSplit: req.finalsSplit,
+            examHours: req.examHours,
             closure: proration,
             closureLabel,
             makeupHours: mu.hours,
@@ -1206,8 +1224,10 @@ export function useTimeCardData() {
           if (!(wkEnd >= startDate && wkStart <= endDate)) return
           // Closure-prorated base for this class week (make-up hours are
           // handled by the per-class tiles; the period score uses the base).
-          const wkClosure = closureOverlay.forWeek(wkStart, c.start_date, c.end_date)
-          requiredHoursByMonday[wkStart] = (requiredHoursByMonday[wkStart] || 0) + prorateHours(parseFloat(c.required_hours) || 0, wkClosure)
+          const wkReq = weekBaseRequirement(closureOverlay, {
+            baseHours: parseFloat(c.required_hours) || 0, mondayKey: wkStart, cls: c, isFinals: !!wk.isFinals,
+          })
+          requiredHoursByMonday[wkStart] = (requiredHoursByMonday[wkStart] || 0) + wkReq.hours
         })
       })
 
@@ -1418,9 +1438,13 @@ export function useClassWeeklyReport() {
       // Closure proration for the period (single-week periods only) — prorate
       // the base first, then add each student's make-up hours below.
       const closureOverlay = await fetchClosureOverlay({ rangeStart: startDate, rangeEnd: endDate })
-      const closure = periodProration(closureOverlay, startDate, endDate, classData?.start_date, classData?.end_date)
-      const requiredHours = prorateHours(nominalRequiredHours, closure)
-      const closureLabel = describeProration(closure)
+      const periodReq = periodRequirement(closureOverlay, startDate, endDate, classData, nominalRequiredHours)
+      const closure = periodReq.closure
+      const requiredHours = periodReq.hours
+      const closureLabel = periodReq.closureLabel
+      const finalsRequirement = periodReq.isFinals
+      const finalsSplit = periodReq.finalsSplit
+      const examHours = periodReq.examHours
 
       const allUsers = mustData(await supabase
         .from('profiles')
@@ -1595,6 +1619,9 @@ export function useClassWeeklyReport() {
           requiredHours: requiredHours + userMakeup.hours,     // prorated base + make-up
           baseRequiredHours: requiredHours,
           nominalRequiredHours,
+          finalsRequirement,
+          finalsSplit,
+          examHours,
           closure,
           closureLabel,
           makeupHours: userMakeup.hours,

@@ -13,7 +13,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } 
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
-import { fetchWeekProration, prorateHours, describeProration } from '@/lib/closureProration';
+import { fetchWeekRequirement } from '@/lib/closureProration';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
@@ -498,14 +498,14 @@ export default function NotificationBell() {
               .lte('date', wEnd.toISOString()), 'lab_signup.select');
             weekSignupCount = (signupRows || []).length;
             const classRow = mustData(await supabase
-              .from('classes').select('required_hours, start_date, end_date')
+              .from('classes').select('required_hours, start_date, end_date, finals_start, finals_end')
               .eq('course_id', courseId).eq('status', 'Active').maybeSingle(), 'classes.select');
-            // Closed lab days prorate the week's requirement (program policy)
-            const closure = await fetchWeekProration({
-              mondayKey: weekStartStr, classStart: classRow?.start_date, classEnd: classRow?.end_date,
+            // Finals week = flat finals hours; otherwise Closed lab days prorate (program policy)
+            const req = await fetchWeekRequirement({
+              baseHours: classRow?.required_hours || 0, mondayKey: weekStartStr, cls: classRow,
             });
-            requiredHours = prorateHours(classRow?.required_hours || 0, closure);
-            closureLabel = describeProration(closure);
+            requiredHours = req.hours;
+            closureLabel = req.finalsSplit ? `finals start mid-week (${req.closureLabel} + ${req.examHours}h exam)` : req.isFinals ? 'finals week' : req.closureLabel;
           }
         } catch {}
 

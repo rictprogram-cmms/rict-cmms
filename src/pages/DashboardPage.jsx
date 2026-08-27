@@ -850,7 +850,9 @@ function buildWeekReason(wk) {
       // requiredHours already includes any make-up hours from an approved absence
       // and is prorated for Closed lab days (closureLabel = "4 of 5 lab days")
       const mu = wk.makeupHours > 0 ? ` (incl. ${formatHoursMin(wk.makeupHours)} make-up)` : '';
-      const cl = wk.closureLabel ? ` (adjusted: ${wk.closureLabel})` : '';
+      const cl = wk.finalsSplit
+        ? ` (finals start mid-week: ${wk.closureLabel} + ${formatHoursMin(wk.examHours || 0)} exam)`
+        : wk.finalsRequirement ? ' (finals week)' : wk.closureLabel ? ` (adjusted: ${wk.closureLabel})` : '';
       return `${formatHoursMin(wk.hours || 0)} of ${formatHoursMin(wk.requiredHours)}${cl}${mu}`;
     }
     return wk.isFinals ? 'Finals week' : '—';

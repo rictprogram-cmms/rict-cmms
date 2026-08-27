@@ -601,7 +601,11 @@ function ClassReportPanel() {
                     >
                       <div>Wk {w.weekNumber}</div>
                       <div className="text-[10px] text-surface-400 font-normal">{formatDateShort(w.startDate)}</div>
-                      {w.isFinals && <div className="text-[9px] text-amber-600 font-normal">Finals</div>}
+                      {(w.isFinals || w.finalsRequirement) && (
+                        <div className="text-[9px] text-amber-600 font-normal">
+                          Finals{w.finalsSplit ? ' (mid-week)' : ''}{w.finalsRequirement ? ` · ${w.requiredHours}h` : ''}
+                        </div>
+                      )}
                       {w.closureLabel && (
                         <div className="text-[9px] text-sky-700 font-normal">
                           {w.requiredHours}h<span className="sr-only"> required, adjusted: {w.closureLabel}</span>
@@ -1019,6 +1023,11 @@ function StudentReportPanel() {
                                 </td>
                                 <td className="text-center px-3 py-1.5 border-b border-surface-100 text-xs text-surface-400 tabular-nums">
                                   {cr.requiredPerWeek > 0 ? `${wkReq}h` : '—'}
+                                  {w.finalsRequirement && (
+                                    <span className="block text-[9px] text-amber-700">
+                                      {w.finalsSplit ? `finals mid-week (+${w.examHours}h exam)` : 'finals week'}
+                                    </span>
+                                  )}
                                   {w.closureLabel && (
                                     <span className="block text-[9px] text-sky-700" title={`Adjusted for closures: ${w.closureLabel}`}>
                                       {w.closureLabel}

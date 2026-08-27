@@ -889,12 +889,17 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
         const cutoff = new Date()
         cutoff.setDate(cutoff.getDate() + SIGNUP_LEAD_DAYS)
         const cutoffStr = formatDateKey(cutoff)
+        // Finished classes drop out: end_date must be on/after the first
+        // displayed week (still Active in the DB, but nothing left to sign up
+        // for). Two .or() filters are ANDed by PostgREST.
+        const firstWeekStr = formatDateKey(firstWeek)
         const classData = mustData(await supabase
           .from('classes')
-          .select('class_id, course_id, course_name, required_hours, start_date, end_date')
+          .select('class_id, course_id, course_name, required_hours, start_date, end_date, finals_start, finals_end')
           .in('course_id', userClasses)
           .eq('status', 'Active')
-          .or(`start_date.is.null,start_date.lte.${cutoffStr}`), 'classes')
+          .or(`start_date.is.null,start_date.lte.${cutoffStr}`)
+          .or(`end_date.is.null,end_date.gte.${firstWeekStr},finals_end.gte.${firstWeekStr}`), 'classes')
 
         classes = (classData || []).map(c => ({
           classId: c.class_id,
@@ -905,6 +910,8 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
           // (see src/lib/closureProration.js)
           startDate: c.start_date ? String(c.start_date).substring(0, 10) : null,
           endDate: c.end_date ? String(c.end_date).substring(0, 10) : null,
+          finalsStart: c.finals_start ? String(c.finals_start).substring(0, 10) : null,
+          finalsEnd: c.finals_end ? String(c.finals_end).substring(0, 10) : null,
         }))
       }
 

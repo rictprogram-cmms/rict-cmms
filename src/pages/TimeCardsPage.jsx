@@ -103,7 +103,22 @@ function MakeupBadge({ hours, className = '' }) {
  * partial class week) reduced this week's requirement, e.g. "4/5 days".
  * Visible text (not tooltip-only) so screen readers announce it.
  */
-function ClosureBadge({ closure, nominalHours, className = '' }) {
+function ClosureBadge({ closure, nominalHours, finals = false, finalsHours, finalsSplit = false, examHours, className = '' }) {
+  if (finals) {
+    const fh = Number(finalsHours) || 0
+    const detail = finalsSplit
+      ? `Finals start mid-week — ${closure?.open ?? 0} of ${closure?.scheduled ?? 0} regular lab days prorated, plus ${formatHours(Number(examHours) || 0)} for the exam: ${formatHours(fh)} total${Number(nominalHours) > 0 ? ` (normally ${formatHours(nominalHours)})` : ''}`
+      : `Finals week — ${formatHours(fh)} required for the exam${Number(nominalHours) > 0 ? ` (normally ${formatHours(nominalHours)})` : ''}`
+    return (
+      <span
+        className={`inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold ${className}`}
+        title={detail}
+      >
+        Finals
+        <span className="sr-only">. {detail}</span>
+      </span>
+    )
+  }
   if (!closure?.adjusted) return null
   const pct = Math.round((closure.factor || 1) * 100)
   const why = closure.closed > 0 && closure.outOfRange > 0
@@ -1589,7 +1604,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                 {wk.requiredHours > 0 && (
                                   <span className="text-surface-400 font-normal ml-0.5">/{formatHours(wk.requiredHours)}</span>
                                 )}
-                                <ClosureBadge closure={wk.closure} nominalHours={wk.nominalRequiredHours} className="ml-1" />
+                                <ClosureBadge closure={wk.closure} nominalHours={wk.nominalRequiredHours} finals={wk.finalsRequirement} finalsHours={wk.baseRequiredHours} finalsSplit={wk.finalsSplit} examHours={wk.examHours} className="ml-1" />
                                 <MakeupBadge hours={wk.makeupHours} className="ml-1" />
                               </td>
                               {cr.requiredHoursPerWeek > 0 && (
@@ -1921,13 +1936,13 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   <div className="text-lg font-bold text-surface-900 mt-1">
                     {formatHours(data.hours)}
                     {data.requiredHours > 0 && <span className="text-xs font-normal text-surface-500 ml-1">/ {formatHours(data.requiredHours)} hrs</span>}
-                    <ClosureBadge closure={data.closure} nominalHours={data.nominalRequiredHours} className="ml-1 align-middle" />
+                    <ClosureBadge closure={data.closure} nominalHours={data.nominalRequiredHours} finals={data.finalsRequirement} finalsHours={data.baseRequiredHours} finalsSplit={data.finalsSplit} examHours={data.examHours} className="ml-1 align-middle" />
                     <MakeupBadge hours={data.makeupHours} className="ml-1 align-middle" />
                   </div>
                   {data.requiredHours > 0 && (
                     <div className="mt-2 h-1.5 bg-surface-200 rounded-full overflow-hidden" role="progressbar"
                       aria-valuenow={Math.min(Math.round(pct), 100)} aria-valuemin={0} aria-valuemax={100}
-                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours${data.closureLabel ? ` (adjusted for closures: ${data.closureLabel})` : ''}${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
+                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours${data.finalsRequirement ? ' (finals week requirement)' : ''}${data.closureLabel ? ` (adjusted for closures: ${data.closureLabel})` : ''}${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
                       <div className={`h-full rounded-full transition-all ${
                         tileGreen ? 'bg-green-500' : isBehind ? 'bg-amber-400' : 'bg-brand-500'
                       }`} style={{ width: `${weekClosed ? 100 : Math.min(pct, 100)}%` }} />
@@ -2137,7 +2152,7 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                   <td className="px-3 py-2.5 text-right font-semibold text-surface-900">{formatHours(s.totalHours)}</td>
                   <td className="px-3 py-2.5 text-right text-surface-500">
                     {formatHours(s.requiredHours)}
-                    <ClosureBadge closure={s.closure} nominalHours={s.nominalRequiredHours} className="ml-1" />
+                    <ClosureBadge closure={s.closure} nominalHours={s.nominalRequiredHours} finals={s.finalsRequirement} finalsHours={s.baseRequiredHours} finalsSplit={s.finalsSplit} examHours={s.examHours} className="ml-1" />
                     <MakeupBadge hours={s.makeupHours} className="ml-1" />
                   </td>
                   <td className="px-3 py-2.5">

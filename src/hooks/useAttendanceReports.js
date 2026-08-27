@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
-import { fetchClosureOverlay, prorateHours, describeProration } from '@/lib/closureProration'
+import { fetchClosureOverlay, weekBaseRequirement } from '@/lib/closureProration'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,21 +33,26 @@ function toSafeDateStr(d) {
 }
 
 /**
- * Attach the closure-prorated requirement to each week:
- *   w.requiredHours  — required_hours × (open lab days / scheduled lab days)
- *   w.closure        — ProrationInfo (see src/lib/closureProration.js)
- *   w.closureLabel   — "4 of 5 lab days" or '' when not adjusted
+ * Attach the policy-adjusted requirement to each week:
+ *   w.requiredHours      — finals week: flat finals hours; else
+ *                          required_hours × (open lab days / scheduled lab days)
+ *   w.finalsRequirement  — true when the flat finals rule applied
+ *   w.closure            — ProrationInfo (see src/lib/closureProration.js)
+ *   w.closureLabel       — "4 of 5 lab days" or '' when not adjusted
  * Program policy: Closed lab days reduce that week's requirement; first/last
  * partial class weeks are prorated the same way. Returns a new array.
  */
 function attachWeekRequirements(weeks, requiredPerWeek, overlay, cls) {
   return (weeks || []).map(w => {
-    const closure = overlay.forWeek(w.startDate, cls?.start_date, cls?.end_date)
+    const req = weekBaseRequirement(overlay, { baseHours: requiredPerWeek, mondayKey: w.startDate, cls, isFinals: !!w.isFinals })
     return {
       ...w,
-      requiredHours: prorateHours(requiredPerWeek, closure),
-      closure,
-      closureLabel: describeProration(closure),
+      requiredHours: req.hours,
+      finalsRequirement: req.isFinals,
+      finalsSplit: req.finalsSplit,
+      examHours: req.examHours,
+      closure: req.closure,
+      closureLabel: req.closureLabel,
     }
   })
 }
@@ -564,7 +569,7 @@ export function buildClassReportExportData(report) {
   const totalRequired = sumRequiredHours(weeks)
   rows.push([
     'Required Hours',
-    ...weeks.map(w => w.closureLabel ? `${w.requiredHours} (${w.closureLabel})` : (w.requiredHours ?? requiredHoursPerWeek)),
+    ...weeks.map(w => w.finalsSplit ? `${w.requiredHours} (finals start mid-week; ${w.closureLabel} + ${w.examHours}h exam)` : w.finalsRequirement ? `${w.requiredHours} (finals)` : w.closureLabel ? `${w.requiredHours} (${w.closureLabel})` : (w.requiredHours ?? requiredHoursPerWeek)),
     totalRequired,
     '',
   ])
@@ -621,7 +626,7 @@ export function buildStudentReportExportData(report) {
         `${w.startDate} – ${w.endDate}`,
         hrs,
         req,
-        w.closureLabel || '',
+        w.finalsSplit ? `Finals start mid-week (${w.closureLabel} + ${w.examHours}h exam)` : w.finalsRequirement ? 'Finals week' : (w.closureLabel || ''),
         `${pct}%`,
       ])
     })

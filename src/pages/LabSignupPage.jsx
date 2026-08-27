@@ -9,7 +9,7 @@ import {
   timeToMinutes, minutesToTimeStr, findOverlappingClosure,
 } from '@/hooks/useLabSignup'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
-import { prorationForWeek, prorateHours, describeProration, useClosureOverlay, mondayKeyOf } from '@/lib/closureProration'
+import { prorationForWeek, prorateHours, useClosureOverlay, mondayKeyOf, buildClosureOverlay, weekBaseRequirement, fetchFinalsRequiredHours, DEFAULT_FINALS_REQUIRED_HOURS } from '@/lib/closureProration'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
@@ -356,11 +356,17 @@ function WeeklySignupTab() {
     return week ? (makeup?.[week.weekStart]?.[courseId]?.hours || 0) : 0
   }, [weeks, makeup])
 
-  // ── Closure proration (program policy) ──
-  // Closed lab days reduce the week's requirement: required × (open / scheduled).
-  // Computed from the week's own day data (already loaded for the grid), so a
-  // day marked Closed on the Lab Calendar re-prorates here on the next refresh.
-  const getWeekClosure = useCallback((weekIdx, cls) => {
+  // ── Finals week flat requirement (settings: finals_required_hours) ──
+  const [finalsHours, setFinalsHours] = useState(DEFAULT_FINALS_REQUIRED_HOURS)
+  useEffect(() => { fetchFinalsRequiredHours().then(setFinalsHours) }, [])
+
+  // ── Base weekly requirement (program policy) ──
+  // Finals week → flat exam hours; finals starting mid-week → regular days
+  // prorated + exam hours; otherwise required × (open / scheduled) for Closed
+  // lab days. Computed from the week's own day data (already loaded for the
+  // grid), so a day marked Closed on the Lab Calendar re-prorates on refresh.
+  // Make-up hours are added by the tile AFTER this.
+  const getWeekRequirement = useCallback((weekIdx, cls) => {
     const week = weeks[weekIdx]
     if (!week) return null
     const closedDates = week.days.filter(d => d.hasEntry && d.isClosed).map(d => d.date)
@@ -368,14 +374,9 @@ function WeeklySignupTab() {
     // Monday-anchored app-wide, so use the Monday inside this grid week.
     const monday = new Date(week.weekStart + 'T00:00:00')
     if (monday.getDay() === 0) monday.setDate(monday.getDate() + 1)
-    return prorationForWeek({
-      mondayKey: formatDateKey(monday),
-      visibleDays: labSettings.visibleDays,
-      closedDates,
-      classStart: cls?.startDate,
-      classEnd: cls?.endDate,
-    })
-  }, [weeks, labSettings.visibleDays])
+    const overlay = buildClosureOverlay({ closedDates, visibleDays: labSettings.visibleDays, finalsHours })
+    return weekBaseRequirement(overlay, { baseHours: cls?.requiredHours, mondayKey: formatDateKey(monday), cls })
+  }, [weeks, labSettings.visibleDays, finalsHours])
 
   // ── Get all week selections (new) across all classes for a specific week ──
   const getWeekAllNewSelections = useCallback((weekIdx) => {
@@ -618,23 +619,36 @@ function WeeklySignupTab() {
             {!isInstructor && classes.length > 0 && (
               <div className="px-4 py-3 border-b border-surface-100">
                 <div className="flex gap-2 overflow-x-auto">
-                  {classes.map(cls => {
+                  {classes.filter(cls => {
+                    // Hide a class from weeks that fall entirely AFTER it has
+                    // ended (end_date / finals_end). Weeks BEFORE start_date
+                    // stay visible so the SIGNUP_LEAD_DAYS early window works.
+                    const lastDay = [cls.endDate, cls.finalsEnd].filter(Boolean).sort().pop()
+                    const firstGridDay = week.days?.[0]?.date
+                    return !(lastDay && firstGridDay && firstGridDay > lastDay)
+                  }).map(cls => {
                     const progress = getWeekProgress(wIdx, cls.courseId)
                     const muHours = getWeekMakeupHours(wIdx, cls.courseId)
-                    // Prorate the base for closed lab days FIRST, then add make-up
-                    const closure = getWeekClosure(wIdx, cls)
-                    const baseRequired = prorateHours(cls.requiredHours, closure)
+                    // Finals / closure rules first, then add make-up
+                    const req = getWeekRequirement(wIdx, cls)
+                    const isFinals = !!req?.isFinals
+                    const closure = req?.closure
+                    const baseRequired = req?.hours ?? cls.requiredHours
                     const required = baseRequired + muHours
-                    const closureLabel = describeProration(closure)
+                    const closureLabel = req?.closureLabel || ''
                     const isActive = activeClassId === cls.courseId
                     const isComplete = required > 0 && progress >= required
                     const muStatus = muHours > 0 ? weekMuStatus?.[cls.courseId] : null
                     const muLabel = muHours > 0
                       ? ` Includes ${muHours} make-up hour${muHours === 1 ? '' : 's'} from an approved absence — schedule on ${(muStatus?.windowDays || []).map(d => formatShortDay(d)).join(' or ')}.`
                       : ''
-                    const clLabel = closureLabel
-                      ? ` Adjusted for closures: ${closureLabel} (${Math.round(closure.factor * 100)}% of ${cls.requiredHours} hours).`
-                      : ''
+                    const clLabel = req?.finalsSplit
+                      ? ` Finals start mid-week: ${closureLabel} prorated plus ${req.examHours} exam hour${req.examHours === 1 ? '' : 's'}.`
+                      : isFinals
+                        ? ` Finals week: ${finalsHours} hour${finalsHours === 1 ? '' : 's'} required for the exam.`
+                        : closureLabel
+                        ? ` Adjusted for closures: ${closureLabel} (${Math.round(closure.factor * 100)}% of ${cls.requiredHours} hours).`
+                        : ''
 
                     return (
                       <button
@@ -674,6 +688,15 @@ function WeeklySignupTab() {
                               {progress}/{required}
                             </span>
                           </div>
+                        )}
+                        {/* Finals badge (flat exam requirement this week) */}
+                        {isFinals && (
+                          <span
+                            className="mt-1 inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+                            aria-hidden="true"
+                          >
+                            <ClipboardList size={9} aria-hidden="true" /> Finals{req?.finalsSplit ? ` · +${req.examHours}h` : ` · ${finalsHours}h`}
+                          </span>
                         )}
                         {/* Closure badge (closed lab days reduced this week's requirement) */}
                         {closureLabel && (
