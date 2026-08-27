@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
+import { fetchClosureOverlay, prorateHours, describeProration } from '@/lib/closureProration'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -29,6 +30,31 @@ function toSafeDateStr(d) {
   const mo = String(d.getMonth() + 1).padStart(2, '0')
   const dy = String(d.getDate()).padStart(2, '0')
   return `${yr}-${mo}-${dy}`
+}
+
+/**
+ * Attach the closure-prorated requirement to each week:
+ *   w.requiredHours  — required_hours × (open lab days / scheduled lab days)
+ *   w.closure        — ProrationInfo (see src/lib/closureProration.js)
+ *   w.closureLabel   — "4 of 5 lab days" or '' when not adjusted
+ * Program policy: Closed lab days reduce that week's requirement; first/last
+ * partial class weeks are prorated the same way. Returns a new array.
+ */
+function attachWeekRequirements(weeks, requiredPerWeek, overlay, cls) {
+  return (weeks || []).map(w => {
+    const closure = overlay.forWeek(w.startDate, cls?.start_date, cls?.end_date)
+    return {
+      ...w,
+      requiredHours: prorateHours(requiredPerWeek, closure),
+      closure,
+      closureLabel: describeProration(closure),
+    }
+  })
+}
+
+/** Sum of per-week (prorated) requirements. */
+export function sumRequiredHours(weeks) {
+  return Math.round((weeks || []).reduce((s, w) => s + (Number(w.requiredHours) || 0), 0) * 100) / 100
 }
 
 /**
@@ -221,8 +247,13 @@ export function useClassAttendanceReport() {
       const clsId = classData.class_id
       const requiredHoursPerWeek = parseFloat(classData.required_hours) || 0
 
-      // 2. Build weeks from class date range
-      const weeks = buildWeeksFromClass(classData)
+      // 2. Build weeks from class date range, then attach the
+      //    closure-prorated requirement to each week
+      const closureOverlay = await fetchClosureOverlay({
+        rangeStart: classData.start_date?.split('T')[0],
+        rangeEnd: classData.end_date?.split('T')[0],
+      })
+      const weeks = attachWeekRequirements(buildWeeksFromClass(classData), requiredHoursPerWeek, closureOverlay, classData)
 
       // 3. Determine effective date range
       // If user specified a range, use it; otherwise use class dates
@@ -233,6 +264,7 @@ export function useClassAttendanceReport() {
       const filteredWeeks = weeks.filter(w =>
         w.endDate >= effectiveStart && w.startDate <= effectiveEnd
       )
+      const totalRequiredHours = sumRequiredHours(filteredWeeks)
 
       // 4. Find enrolled students
       const allUsers = mustData(await supabase
@@ -309,6 +341,7 @@ export function useClassAttendanceReport() {
         classInfo: classData,
         courseId,
         requiredHoursPerWeek,
+        totalRequiredHours,      // sum of per-week prorated requirements
         weeks: filteredWeeks,
         students: studentData,
         averages,
@@ -390,12 +423,22 @@ export function useStudentAttendanceReport() {
         classesData = data || []
       }
 
+      // 4b. Closure proration overlay spanning every class in the report
+      let spanStart = null, spanEnd = null
+      classesData.forEach(c => {
+        const st = c.start_date ? String(c.start_date).substring(0, 10) : null
+        const en = c.end_date ? String(c.end_date).substring(0, 10) : null
+        if (st && (!spanStart || st < spanStart)) spanStart = st
+        if (en && (!spanEnd || en > spanEnd)) spanEnd = en
+      })
+      const closureOverlay = await fetchClosureOverlay({ rangeStart: spanStart, rangeEnd: spanEnd })
+
       // 5. Build per-class reports
       const classReports = classesData.map(cls => {
         const courseId = cls.course_id
         const clsId = cls.class_id
         const requiredPerWeek = parseFloat(cls.required_hours) || 0
-        const weeks = buildWeeksFromClass(cls)
+        const weeks = attachWeekRequirements(buildWeeksFromClass(cls), requiredPerWeek, closureOverlay, cls)
 
         // Filter entries for this class
         const classEntries = tcRecords.filter(r =>
@@ -427,6 +470,7 @@ export function useStudentAttendanceReport() {
           semester: cls.semester || '',
           status: cls.status,
           requiredPerWeek,
+          totalRequired: sumRequiredHours(weeks),   // prorated sum
           weeks,
           weekHours,
           total: Math.round(total * 100) / 100,
@@ -508,16 +552,25 @@ export function buildClassReportExportData(report) {
 
   // Title row
   rows.push([`Class Attendance Report: ${classInfo.course_id} – ${classInfo.course_name || ''}`])
-  rows.push([`Semester: ${classInfo.semester || 'N/A'}`, `Required Hours/Week: ${requiredHoursPerWeek}`])
+  rows.push([`Semester: ${classInfo.semester || 'N/A'}`, `Required Hours/Week: ${requiredHoursPerWeek}`, 'Weeks with closed lab days are prorated (open days / scheduled days)'])
   rows.push([]) // blank row
 
   // Header row
   const header = ['Student', ...weeks.map(w => `Wk ${w.weekNumber} (${w.startDate})`), 'Total', '% of Required']
   rows.push(header)
 
+  // Required-hours row (per week, prorated for closures) so exported
+  // percentages can be reproduced from the sheet
+  const totalRequired = sumRequiredHours(weeks)
+  rows.push([
+    'Required Hours',
+    ...weeks.map(w => w.closureLabel ? `${w.requiredHours} (${w.closureLabel})` : (w.requiredHours ?? requiredHoursPerWeek)),
+    totalRequired,
+    '',
+  ])
+
   // Student rows
   students.forEach(st => {
-    const totalRequired = requiredHoursPerWeek * weeks.length
     const pctMet = totalRequired > 0 ? Math.round((st.total / totalRequired) * 100) : 0
     const row = [
       st.name,
@@ -554,25 +607,28 @@ export function buildStudentReportExportData(report) {
 
   classReports.forEach(cr => {
     rows.push([`${cr.courseId} – ${cr.courseName}`, `Semester: ${cr.semester}`, `Status: ${cr.status}`])
-    rows.push([`Required Hours/Week: ${cr.requiredPerWeek}`])
+    rows.push([`Required Hours/Week: ${cr.requiredPerWeek}`, 'Weeks with closed lab days are prorated (open days / scheduled days)'])
 
-    const header = ['Week', 'Date Range', 'Hours', '% of Required']
+    const header = ['Week', 'Date Range', 'Hours', 'Required', 'Adjustment', '% of Required']
     rows.push(header)
 
     cr.weeks.forEach(w => {
       const hrs = cr.weekHours[w.weekNumber] || 0
-      const pct = cr.requiredPerWeek > 0 ? Math.round((hrs / cr.requiredPerWeek) * 100) : 0
+      const req = w.requiredHours ?? cr.requiredPerWeek
+      const pct = req > 0 ? Math.round((hrs / req) * 100) : 0
       rows.push([
         `Week ${w.weekNumber}`,
         `${w.startDate} – ${w.endDate}`,
         hrs,
+        req,
+        w.closureLabel || '',
         `${pct}%`,
       ])
     })
 
-    const totalRequired = cr.requiredPerWeek * cr.weeks.length
+    const totalRequired = sumRequiredHours(cr.weeks)
     const totalPct = totalRequired > 0 ? Math.round((cr.total / totalRequired) * 100) : 0
-    rows.push(['Total', '', cr.total, `${totalPct}%`])
+    rows.push(['Total', '', cr.total, totalRequired, '', `${totalPct}%`])
     rows.push([]) // blank row between classes
   })
 

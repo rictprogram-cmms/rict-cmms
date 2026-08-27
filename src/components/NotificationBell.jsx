@@ -13,6 +13,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } 
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
+import { fetchWeekProration, prorateHours, describeProration } from '@/lib/closureProration';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
@@ -479,6 +480,7 @@ export default function NotificationBell() {
         // ── Week progress: student's confirmed signups this week for this class ──
         let weekSignupCount = 0;
         let requiredHours = 0;
+        let closureLabel = '';
         try {
           const courseId = r.course_id || r.class_id || '';
           const weekStartStr = (r.week_start || '').substring(0, 10);
@@ -496,9 +498,14 @@ export default function NotificationBell() {
               .lte('date', wEnd.toISOString()), 'lab_signup.select');
             weekSignupCount = (signupRows || []).length;
             const classRow = mustData(await supabase
-              .from('classes').select('required_hours')
+              .from('classes').select('required_hours, start_date, end_date')
               .eq('course_id', courseId).eq('status', 'Active').maybeSingle(), 'classes.select');
-            requiredHours = classRow?.required_hours || 0;
+            // Closed lab days prorate the week's requirement (program policy)
+            const closure = await fetchWeekProration({
+              mondayKey: weekStartStr, classStart: classRow?.start_date, classEnd: classRow?.end_date,
+            });
+            requiredHours = prorateHours(classRow?.required_hours || 0, closure);
+            closureLabel = describeProration(closure);
           }
         } catch {}
 
@@ -521,6 +528,7 @@ export default function NotificationBell() {
             // week progress
             weekSignupCount,
             requiredHours,
+            closureLabel,
           }
         });
       }
@@ -1693,7 +1701,8 @@ export default function NotificationBell() {
                           color: item.labDetail.weekSignupCount >= item.labDetail.requiredHours ? '#2f9e44' : '#c92a2a',
                         }}>
                           {item.labDetail.weekSignupCount}/{item.labDetail.requiredHours} hr{item.labDetail.requiredHours !== 1 ? 's' : ''}
-                          {item.labDetail.weekSignupCount >= item.labDetail.requiredHours ? ' ✓' : ` (${item.labDetail.requiredHours - item.labDetail.weekSignupCount} short)`}
+                          {item.labDetail.weekSignupCount >= item.labDetail.requiredHours ? ' ✓' : ` (${Math.round((item.labDetail.requiredHours - item.labDetail.weekSignupCount) * 100) / 100} short)`}
+                          {item.labDetail.closureLabel ? ` · adjusted: ${item.labDetail.closureLabel}` : ''}
                         </span>
                       </div>
                     )}
@@ -1997,7 +2006,8 @@ export default function NotificationBell() {
                   {detail.requiredHours > 0 && (
                     <span style={{ marginLeft: 10, fontWeight: 600, color: detail.weekSignupCount >= detail.requiredHours ? '#2f9e44' : '#c92a2a' }}>
                       · {detail.weekSignupCount}/{detail.requiredHours} hr{detail.requiredHours !== 1 ? 's' : ''} this week
-                      {detail.weekSignupCount >= detail.requiredHours ? ' ✓' : ` (${detail.requiredHours - detail.weekSignupCount} short)`}
+                      {detail.weekSignupCount >= detail.requiredHours ? ' ✓' : ` (${Math.round((detail.requiredHours - detail.weekSignupCount) * 100) / 100} short)`}
+                      {detail.closureLabel ? ` · adjusted: ${detail.closureLabel}` : ''}
                     </span>
                   )}
                 </p>

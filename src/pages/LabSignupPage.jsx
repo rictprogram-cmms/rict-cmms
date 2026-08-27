@@ -9,6 +9,7 @@ import {
   timeToMinutes, minutesToTimeStr, findOverlappingClosure,
 } from '@/hooks/useLabSignup'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
+import { prorationForWeek, prorateHours, describeProration, useClosureOverlay, mondayKeyOf } from '@/lib/closureProration'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
@@ -355,6 +356,27 @@ function WeeklySignupTab() {
     return week ? (makeup?.[week.weekStart]?.[courseId]?.hours || 0) : 0
   }, [weeks, makeup])
 
+  // ── Closure proration (program policy) ──
+  // Closed lab days reduce the week's requirement: required × (open / scheduled).
+  // Computed from the week's own day data (already loaded for the grid), so a
+  // day marked Closed on the Lab Calendar re-prorates here on the next refresh.
+  const getWeekClosure = useCallback((weekIdx, cls) => {
+    const week = weeks[weekIdx]
+    if (!week) return null
+    const closedDates = week.days.filter(d => d.hasEntry && d.isClosed).map(d => d.date)
+    // The signup grid anchors weeks on SUNDAY (week.weekStart); proration is
+    // Monday-anchored app-wide, so use the Monday inside this grid week.
+    const monday = new Date(week.weekStart + 'T00:00:00')
+    if (monday.getDay() === 0) monday.setDate(monday.getDate() + 1)
+    return prorationForWeek({
+      mondayKey: formatDateKey(monday),
+      visibleDays: labSettings.visibleDays,
+      closedDates,
+      classStart: cls?.startDate,
+      classEnd: cls?.endDate,
+    })
+  }, [weeks, labSettings.visibleDays])
+
   // ── Get all week selections (new) across all classes for a specific week ──
   const getWeekAllNewSelections = useCallback((weekIdx) => {
     const week = weeks[weekIdx]
@@ -599,12 +621,19 @@ function WeeklySignupTab() {
                   {classes.map(cls => {
                     const progress = getWeekProgress(wIdx, cls.courseId)
                     const muHours = getWeekMakeupHours(wIdx, cls.courseId)
-                    const required = cls.requiredHours + muHours
+                    // Prorate the base for closed lab days FIRST, then add make-up
+                    const closure = getWeekClosure(wIdx, cls)
+                    const baseRequired = prorateHours(cls.requiredHours, closure)
+                    const required = baseRequired + muHours
+                    const closureLabel = describeProration(closure)
                     const isActive = activeClassId === cls.courseId
                     const isComplete = required > 0 && progress >= required
                     const muStatus = muHours > 0 ? weekMuStatus?.[cls.courseId] : null
                     const muLabel = muHours > 0
                       ? ` Includes ${muHours} make-up hour${muHours === 1 ? '' : 's'} from an approved absence — schedule on ${(muStatus?.windowDays || []).map(d => formatShortDay(d)).join(' or ')}.`
+                      : ''
+                    const clLabel = closureLabel
+                      ? ` Adjusted for closures: ${closureLabel} (${Math.round(closure.factor * 100)}% of ${cls.requiredHours} hours).`
                       : ''
 
                     return (
@@ -612,8 +641,8 @@ function WeeklySignupTab() {
                         key={cls.courseId}
                         onClick={() => setActiveClassId(cls.courseId)}
                         aria-pressed={isActive}
-                        aria-label={`${cls.courseId} ${cls.courseName}: ${progress} of ${required} hours.${muLabel}`}
-                        title={muHours > 0 ? muLabel.trim() : undefined}
+                        aria-label={`${cls.courseId} ${cls.courseName}: ${progress} of ${required} hours.${clLabel}${muLabel}`}
+                        title={(clLabel + muLabel).trim() || undefined}
                         className={`flex flex-col items-start gap-0.5 px-3 py-2.5 min-h-[44px] rounded-lg text-left border-2 transition-all min-w-[140px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
                           isActive
                             ? 'border-brand-500 bg-brand-50 shadow-sm'
@@ -645,6 +674,15 @@ function WeeklySignupTab() {
                               {progress}/{required}
                             </span>
                           </div>
+                        )}
+                        {/* Closure badge (closed lab days reduced this week's requirement) */}
+                        {closureLabel && (
+                          <span
+                            className="mt-1 inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded bg-sky-100 text-sky-800"
+                            aria-hidden="true"
+                          >
+                            <Ban size={9} aria-hidden="true" /> {closure.open}/{closure.scheduled} days
+                          </span>
                         )}
                         {/* Make-up badge (approved absence hours added to this week) */}
                         {muHours > 0 && (
@@ -1519,6 +1557,9 @@ function LabCalendarTab() {
                 <input type="text" value={editingDay.notes} onChange={e => setEditingDay(d => ({ ...d, notes: e.target.value }))}
                   placeholder="e.g. Holiday" className="mt-1 w-full px-3 py-2 border border-surface-200 rounded-lg text-sm" />
               </label>
+
+              {/* Closure impact on required hours (program policy) */}
+              <ClosureImpactNote date={editingDay.date} pendingStatus={editingDay.status} />
             </div>
             <div className="px-4 py-3 border-t border-surface-200 flex justify-between flex-shrink-0">
               <button onClick={handleDelete} disabled={saving}
@@ -1549,6 +1590,57 @@ function LabCalendarTab() {
           onConfirm={handleConfirmConflict}
         />
       )}
+    </div>
+  )
+}
+
+// ─── Closure Impact Note (Lab Calendar edit modal) ──────────────────────────
+//
+// Shows instructors what marking a day Closed does to that week's required
+// lab hours: required × (open lab days / scheduled lab days). Reads the
+// week's other closures live (they may sit in an adjacent month, outside the
+// calendar grid's fetch) and overlays the status being edited before save.
+// role="status" so screen readers announce the change when toggling.
+
+function ClosureImpactNote({ date, pendingStatus }) {
+  const monday = mondayKeyOf(date)
+  const { overlay, loading } = useClosureOverlay({ rangeStart: monday, rangeEnd: monday, enabled: !!monday })
+  if (!monday) return null
+
+  const closed = new Set(overlay.closedDates)
+  if (pendingStatus === 'Closed') closed.add(date)
+  else closed.delete(date)
+  const info = prorationForWeek({ mondayKey: monday, visibleDays: overlay.visibleDays, closedDates: closed })
+  const pct = Math.round(info.factor * 100)
+  const thisDayCounts = overlay.visibleDays.includes(new Date(date + 'T00:00:00').getDay())
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`rounded-lg border px-3 py-2 text-xs ${
+        info.adjusted ? 'border-sky-200 bg-sky-50 text-sky-900' : 'border-surface-200 bg-surface-50 text-surface-600'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <Info size={14} aria-hidden="true" className="mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="font-semibold">Required hours this week: {pct}%</div>
+          {loading ? (
+            <div>Checking this week's closures…</div>
+          ) : !thisDayCounts ? (
+            <div>This day is not a scheduled lab day, so closing it does not change required hours.</div>
+          ) : info.adjusted ? (
+            <div>
+              {info.open} of {info.scheduled} lab days open
+              {info.closed > 1 ? ` (${info.closed} closed days this week)` : ''}.
+              Example: an 8-hour requirement becomes {prorateHours(8, info)} hours. Applies automatically on save.
+            </div>
+          ) : (
+            <div>All {info.scheduled} scheduled lab days are open — no adjustment.</div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

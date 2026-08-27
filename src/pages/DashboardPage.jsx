@@ -848,8 +848,10 @@ function buildWeekReason(wk) {
     if (wk.metHours || wk.requiredHoursMet) return 'Hours met';
     if (wk.requiredHours > 0 && (wk.hours || 0) < wk.requiredHours) {
       // requiredHours already includes any make-up hours from an approved absence
+      // and is prorated for Closed lab days (closureLabel = "4 of 5 lab days")
       const mu = wk.makeupHours > 0 ? ` (incl. ${formatHoursMin(wk.makeupHours)} make-up)` : '';
-      return `${formatHoursMin(wk.hours || 0)} of ${formatHoursMin(wk.requiredHours)}${mu}`;
+      const cl = wk.closureLabel ? ` (adjusted: ${wk.closureLabel})` : '';
+      return `${formatHoursMin(wk.hours || 0)} of ${formatHoursMin(wk.requiredHours)}${cl}${mu}`;
     }
     return wk.isFinals ? 'Finals week' : '—';
   }

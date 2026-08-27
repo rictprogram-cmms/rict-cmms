@@ -891,7 +891,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
         const cutoffStr = formatDateKey(cutoff)
         const classData = mustData(await supabase
           .from('classes')
-          .select('class_id, course_id, course_name, required_hours')
+          .select('class_id, course_id, course_name, required_hours, start_date, end_date')
           .in('course_id', userClasses)
           .eq('status', 'Active')
           .or(`start_date.is.null,start_date.lte.${cutoffStr}`), 'classes')
@@ -901,6 +901,10 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
           courseId: c.course_id,
           courseName: c.course_name || '',
           requiredHours: c.required_hours || 0,
+          // Class window — first/last partial weeks prorate the requirement
+          // (see src/lib/closureProration.js)
+          startDate: c.start_date ? String(c.start_date).substring(0, 10) : null,
+          endDate: c.end_date ? String(c.end_date).substring(0, 10) : null,
         }))
       }
 

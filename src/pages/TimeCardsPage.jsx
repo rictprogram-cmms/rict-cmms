@@ -98,6 +98,32 @@ function MakeupBadge({ hours, className = '' }) {
   )
 }
 
+/**
+ * Closure-adjusted badge — shown when a Closed lab day (or a first/last
+ * partial class week) reduced this week's requirement, e.g. "4/5 days".
+ * Visible text (not tooltip-only) so screen readers announce it.
+ */
+function ClosureBadge({ closure, nominalHours, className = '' }) {
+  if (!closure?.adjusted) return null
+  const pct = Math.round((closure.factor || 1) * 100)
+  const why = closure.closed > 0 && closure.outOfRange > 0
+    ? `${closure.closed} closed day${closure.closed === 1 ? '' : 's'} and ${closure.outOfRange} day${closure.outOfRange === 1 ? '' : 's'} outside the class dates`
+    : closure.closed > 0
+      ? `${closure.closed} closed day${closure.closed === 1 ? '' : 's'}`
+      : `${closure.outOfRange} day${closure.outOfRange === 1 ? '' : 's'} outside the class dates`
+  const nominal = Number(nominalHours) || 0
+  const detail = `Adjusted to ${pct}% — ${closure.open} of ${closure.scheduled} lab days (${why})${nominal > 0 ? `, from ${formatHours(nominal)}` : ''}`
+  return (
+    <span
+      className={`inline-flex items-center px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 text-[10px] font-semibold ${className}`}
+      title={detail}
+    >
+      {closure.open}/{closure.scheduled} days
+      <span className="sr-only">. {detail}</span>
+    </span>
+  )
+}
+
 function formatHours(h) {
   const totalMins = Math.round((Number(h) || 0) * 60)
   if (totalMins <= 0) return '0h'
@@ -109,8 +135,10 @@ function formatHours(h) {
 }
 
 function formatDateRange(start, end) {
-  const s = new Date(start)
-  const e = new Date(end)
+  // Date-only strings parse as UTC midnight in new Date(); append T00:00:00
+  // so the header shows the selected local dates (was one day early).
+  const s = new Date(start + 'T00:00:00')
+  const e = new Date(end + 'T00:00:00')
   const opts = { month: 'short', day: 'numeric' }
   return `${s.toLocaleDateString('en-US', opts)} – ${e.toLocaleDateString('en-US', { ...opts, year: 'numeric' })}`
 }
@@ -123,7 +151,8 @@ function formatDateLong(dateStr) {
 
 function formatDateShort(dateStr) {
   if (!dateStr) return ''
-  const d = new Date(dateStr)
+  const s = String(dateStr)
+  const d = new Date(s.length === 10 ? s + 'T00:00:00' : s)
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
@@ -1430,6 +1459,10 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                 {cr.requiredHoursPerWeek > 0 && (
                   <p className="text-[10px] text-surface-400">
                     {formatHours(cr.requiredHoursPerWeek)} hrs/week × {cr.weeklyBreakdown.length} weeks
+                    {(() => {
+                      const adj = cr.weeklyBreakdown.filter(w => w.closure?.adjusted).length
+                      return adj > 0 ? ` · ${adj} week${adj === 1 ? '' : 's'} adjusted for closures` : ''
+                    })()}
                   </p>
                 )}
                 {cr.totalRequiredHours > 0 && (
@@ -1556,6 +1589,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                 {wk.requiredHours > 0 && (
                                   <span className="text-surface-400 font-normal ml-0.5">/{formatHours(wk.requiredHours)}</span>
                                 )}
+                                <ClosureBadge closure={wk.closure} nominalHours={wk.nominalRequiredHours} className="ml-1" />
                                 <MakeupBadge hours={wk.makeupHours} className="ml-1" />
                               </td>
                               {cr.requiredHoursPerWeek > 0 && (
@@ -1887,12 +1921,13 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   <div className="text-lg font-bold text-surface-900 mt-1">
                     {formatHours(data.hours)}
                     {data.requiredHours > 0 && <span className="text-xs font-normal text-surface-500 ml-1">/ {formatHours(data.requiredHours)} hrs</span>}
+                    <ClosureBadge closure={data.closure} nominalHours={data.nominalRequiredHours} className="ml-1 align-middle" />
                     <MakeupBadge hours={data.makeupHours} className="ml-1 align-middle" />
                   </div>
                   {data.requiredHours > 0 && (
                     <div className="mt-2 h-1.5 bg-surface-200 rounded-full overflow-hidden" role="progressbar"
                       aria-valuenow={Math.min(Math.round(pct), 100)} aria-valuemin={0} aria-valuemax={100}
-                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
+                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours${data.closureLabel ? ` (adjusted for closures: ${data.closureLabel})` : ''}${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
                       <div className={`h-full rounded-full transition-all ${
                         tileGreen ? 'bg-green-500' : isBehind ? 'bg-amber-400' : 'bg-brand-500'
                       }`} style={{ width: `${weekClosed ? 100 : Math.min(pct, 100)}%` }} />
@@ -2102,6 +2137,7 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                   <td className="px-3 py-2.5 text-right font-semibold text-surface-900">{formatHours(s.totalHours)}</td>
                   <td className="px-3 py-2.5 text-right text-surface-500">
                     {formatHours(s.requiredHours)}
+                    <ClosureBadge closure={s.closure} nominalHours={s.nominalRequiredHours} className="ml-1" />
                     <MakeupBadge hours={s.makeupHours} className="ml-1" />
                   </td>
                   <td className="px-3 py-2.5">

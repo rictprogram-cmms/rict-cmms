@@ -8,6 +8,7 @@ import { buildClassWeeks } from '@/hooks/useWeeklyLabs'
 import { fetchLabVisibleDays, weekEndOffsetFromDays } from '@/hooks/useLabDays'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
+import { fetchClosureOverlay, prorateHours, describeProration, mondayKeyOf } from '@/lib/closureProration'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -25,8 +26,12 @@ function getWeekRange(date = new Date()) {
   return { start, end }
 }
 
+// Local calendar date as 'YYYY-MM-DD'. Must NOT use toISOString(): that is
+// real UTC, so Sunday 11:59 PM Central became Monday and every "This Week"
+// range ran Mon → next Mon (8 days), pulling the following week's classes
+// and entries into the period (fake-UTC convention, TIMESTAMP_CONVENTIONS.md).
 function toDateStr(d) {
-  return d.toISOString().split('T')[0]
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** Round decimal hours to the nearest minute */
@@ -120,6 +125,32 @@ function makeupHoursInRange(overlay, email, courseId, classId, rangeStart, range
   return out
 }
 
+/**
+ * Closure proration for a viewing period (Time Cards tile / Class Weekly
+ * Report). Those views quote a single per-week requirement, so proration is
+ * applied only when the whole period sits inside ONE Monday-anchored week;
+ * a multi-week range keeps the nominal per-week number (unchanged behavior).
+ * Returns the ProrationInfo (factor 1 when not applicable).
+ */
+function periodProration(closureOverlay, startDate, endDate, classStart, classEnd) {
+  const m1 = mondayKeyOf(startDate)
+  const m2 = mondayKeyOf(endDate)
+  if (!m1 || !m2 || m1 !== m2) return closureOverlay.forWeek('', null, null)
+  return closureOverlay.forWeek(m1, classStart, classEnd)
+}
+
+/** Overlay range spanning every class in the list (falls back to the period). */
+function classesSpan(classes, fallbackStart, fallbackEnd) {
+  let lo = null, hi = null
+  ;(classes || []).forEach(c => {
+    const s = c.start_date ? String(c.start_date).substring(0, 10) : null
+    const e = c.end_date ? String(c.end_date).substring(0, 10) : null
+    if (s && (!lo || s < lo)) lo = s
+    if (e && (!hi || e > hi)) hi = e
+  })
+  return { rangeStart: lo || fallbackStart, rangeEnd: hi || fallbackEnd }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // REPORT GENERATION — single source of truth for per-user attendance reports.
 //
@@ -185,6 +216,11 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       makeupOverlay = await fetchMakeupOverlay({ emails: [userEmail], rangeStart: reportStart, rangeEnd: reportEnd })
     } catch {}
   }
+
+  // 2c. Closure proration overlay (Closed lab days reduce that week's
+  // requirement). Cover the full run of every enrolled class so the
+  // week-by-week breakdown is correct for weeks outside the report window too.
+  const closureOverlay = await fetchClosureOverlay(classesSpan(enrolledClasses, reportStart, reportEnd))
 
   // 3. Fetch weekly_lab_tracker
   let labTrackerData = []
@@ -434,7 +470,10 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       // Make-up hours owed this week (approved absence the week before) are
       // added to the base requirement — matches the Lab Signup tile.
       const mu = makeupHoursInRange(makeupOverlay, userEmail, cfg?.course_id || courseId, cfg?.class_id, wkStartStr, wkEndStr)
-      const wkRequired = (data.requiredHoursPerWeek || 0) + mu.hours
+      // Closure proration: prorate the BASE first, then add make-up hours.
+      const closure = closureOverlay.forWeek(wkStartStr, cfg?.start_date, cfg?.end_date)
+      const wkBaseRequired = prorateHours(data.requiredHoursPerWeek || 0, closure)
+      const wkRequired = wkBaseRequired + mu.hours
       let wkBase = 100
       if (!wkClosed && wkRequired > 0 && weekHours < wkRequired) {
         wkBase = Math.min(100, Math.round((weekHours / wkRequired) * 100))
@@ -446,8 +485,11 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         startDate: wkStartStr, endDate: wkEndStr,
         isFinals: wk.isFinals, entries: weekEntries,
         hours: Math.round(weekHours * 100) / 100,
-        requiredHours: wkRequired,                       // base + make-up
-        baseRequiredHours: data.requiredHoursPerWeek,
+        requiredHours: wkRequired,                       // prorated base + make-up
+        baseRequiredHours: wkBaseRequired,               // after closure proration
+        nominalRequiredHours: data.requiredHoursPerWeek, // classes.required_hours
+        closure,                                         // ProrationInfo
+        closureLabel: describeProration(closure),        // '' when not adjusted
         makeupHours: mu.hours,
         makeupRequestIds: mu.requestIds,
         metHours: weekHours >= wkRequired,
@@ -941,6 +983,10 @@ export function useTimeCardData() {
         } catch {}
       }
 
+      // Closure proration overlay for this period (Closed lab days reduce
+      // that week's requirement; first/last partial class weeks too).
+      const closureOverlay = await fetchClosureOverlay({ rangeStart: startDate, rangeEnd: endDate })
+
       // Build the final classHrs map using date-range awareness:
       //   - Enrolled class whose date window overlaps the selected range: always show
       //     (even 0 hrs — student is expected to be attending)
@@ -1066,7 +1112,11 @@ export function useTimeCardData() {
         const closure = weekClosedByCourse[key] || { allDone: false, requiredHoursMet: false }
 
         const mu = makeupHoursInRange(makeupOverlay, userEmail, c.course_id, c.class_id, startDate, endDate)
-        const baseReq = parseFloat(c.required_hours) || 0
+        const nominalReq = parseFloat(c.required_hours) || 0
+        // Prorate the base for Closed lab days (single-week periods only), then add make-up
+        const proration = periodProration(closureOverlay, startDate, endDate, c.start_date, c.end_date)
+        const baseReq = prorateHours(nominalReq, proration)
+        const closureLabel = describeProration(proration)
 
         if (isEnrolled && isInRange) {
           // Class was running during this period — always show tile
@@ -1074,6 +1124,9 @@ export function useTimeCardData() {
             hours: classHrsFromEntries[key]?.hours || 0,
             requiredHours: baseReq + mu.hours,
             baseRequiredHours: baseReq,
+            nominalRequiredHours: nominalReq,
+            closure: proration,
+            closureLabel,
             makeupHours: mu.hours,
             makeupRequestIds: mu.requestIds,
             courseName: c.course_name || '',
@@ -1087,6 +1140,9 @@ export function useTimeCardData() {
             hours: classHrsFromEntries[key].hours,
             requiredHours: baseReq + mu.hours,
             baseRequiredHours: baseReq,
+            nominalRequiredHours: nominalReq,
+            closure: proration,
+            closureLabel,
             makeupHours: mu.hours,
             makeupRequestIds: mu.requestIds,
             courseName: c.course_name || '',
@@ -1148,7 +1204,10 @@ export function useTimeCardData() {
           if (!wkStart || !wkEnd) return
           // Only count weeks that overlap the viewing period
           if (!(wkEnd >= startDate && wkStart <= endDate)) return
-          requiredHoursByMonday[wkStart] = (requiredHoursByMonday[wkStart] || 0) + (parseFloat(c.required_hours) || 0)
+          // Closure-prorated base for this class week (make-up hours are
+          // handled by the per-class tiles; the period score uses the base).
+          const wkClosure = closureOverlay.forWeek(wkStart, c.start_date, c.end_date)
+          requiredHoursByMonday[wkStart] = (requiredHoursByMonday[wkStart] || 0) + prorateHours(parseFloat(c.required_hours) || 0, wkClosure)
         })
       })
 
@@ -1313,6 +1372,13 @@ export function useTimeCardData() {
           fetchTimeCard(userId, startDate, endDate)
         }
       })
+      // Lab Calendar closures prorate the week's required hours
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => {
+        if (lastFetchParamsRef.current) {
+          const { userId, startDate, endDate } = lastFetchParamsRef.current
+          fetchTimeCard(userId, startDate, endDate)
+        }
+      })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [fetchTimeCard])
@@ -1346,8 +1412,15 @@ export function useClassWeeklyReport() {
         .maybeSingle(), 'classes.select')
 
       setClassInfo(classData)
-      const requiredHours = parseFloat(classData?.required_hours) || 0
+      const nominalRequiredHours = parseFloat(classData?.required_hours) || 0
       const classId = classData?.class_id || courseId
+
+      // Closure proration for the period (single-week periods only) — prorate
+      // the base first, then add each student's make-up hours below.
+      const closureOverlay = await fetchClosureOverlay({ rangeStart: startDate, rangeEnd: endDate })
+      const closure = periodProration(closureOverlay, startDate, endDate, classData?.start_date, classData?.end_date)
+      const requiredHours = prorateHours(nominalRequiredHours, closure)
+      const closureLabel = describeProration(closure)
 
       const allUsers = mustData(await supabase
         .from('profiles')
@@ -1519,8 +1592,11 @@ export function useClassWeeklyReport() {
           fullName: `${u.first_name} ${u.last_name}`,
           role: u.role,
           totalHours: roundToMinute(totalHours),
-          requiredHours: requiredHours + userMakeup.hours,     // base + make-up
+          requiredHours: requiredHours + userMakeup.hours,     // prorated base + make-up
           baseRequiredHours: requiredHours,
+          nominalRequiredHours,
+          closure,
+          closureLabel,
           makeupHours: userMakeup.hours,
           metRequirement: totalHours >= requiredHours + userMakeup.hours,
           entryCount: userRecords.length,
@@ -1545,6 +1621,13 @@ export function useClassWeeklyReport() {
     const channel = supabase
       .channel('class-weekly-report-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => {
+        if (lastFetchParamsRef.current) {
+          const { courseId, startDate, endDate } = lastFetchParamsRef.current
+          fetchReport(courseId, startDate, endDate)
+        }
+      })
+      // Lab Calendar closures prorate the week's required hours
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => {
         if (lastFetchParamsRef.current) {
           const { courseId, startDate, endDate } = lastFetchParamsRef.current
           fetchReport(courseId, startDate, endDate)

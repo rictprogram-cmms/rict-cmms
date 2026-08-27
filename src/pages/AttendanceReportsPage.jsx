@@ -41,6 +41,7 @@ import {
   downloadBlob,
   buildClassReportExportData,
   buildStudentReportExportData,
+  sumRequiredHours,
 } from '@/hooks/useAttendanceReports'
 import {
   Loader2, Users, User, BarChart3, Download, Printer,
@@ -99,6 +100,11 @@ function heatMapStyle(hours, required) {
  * Inline sparkline SVG — mini bar chart showing hours per week.
  * Each bar is proportional to the max hour value across weeks.
  */
+/** Per-week requirement — prorated for Closed lab days when the hook attached it. */
+function weekRequired(w, fallback) {
+  return typeof w?.requiredHours === 'number' ? w.requiredHours : (Number(fallback) || 0)
+}
+
 function Sparkline({ weekHours, weeks, required }) {
   if (!weeks || weeks.length === 0) return null
   const values = weeks.map(w => weekHours[w.weekNumber] || 0)
@@ -127,7 +133,8 @@ function Sparkline({ weekHours, weeks, required }) {
       )}
       {values.map((v, i) => {
         const h = Math.max((v / max) * svgH, v > 0 ? 1 : 0)
-        const pct = required > 0 ? v / required : 1
+        const wkReq = weekRequired(weeks[i], required)
+        const pct = wkReq > 0 ? v / wkReq : 1
         let fill = '#3b82f6'
         if (v === 0) fill = '#ef4444'
         else if (pct < 0.5) fill = '#ef4444'
@@ -511,6 +518,10 @@ function ClassReportPanel() {
                 </h2>
                 <p className="text-sm text-surface-500">
                   {report.classInfo.semester || ''} · {report.students.length} student{report.students.length !== 1 ? 's' : ''} · {report.weeks.length} week{report.weeks.length !== 1 ? 's' : ''} · Required: {report.requiredHoursPerWeek}h/wk
+                  {(() => {
+                    const adj = report.weeks.filter(w => w.closure?.adjusted).length
+                    return adj > 0 ? ` · ${adj} week${adj === 1 ? '' : 's'} adjusted for closures` : ''
+                  })()}
                 </p>
               </div>
               <div className="flex gap-2 no-print">
@@ -586,11 +597,16 @@ function ClassReportPanel() {
                       key={w.weekNumber}
                       scope="col"
                       className="text-center px-2 py-2.5 font-medium text-surface-600 border-b border-surface-200 whitespace-nowrap text-xs"
-                      title={`Week ${w.weekNumber}: ${w.startDate} – ${w.endDate}${w.isFinals ? ' (Finals)' : ''}`}
+                      title={`Week ${w.weekNumber}: ${w.startDate} – ${w.endDate}${w.isFinals ? ' (Finals)' : ''}${w.closureLabel ? ` — required ${w.requiredHours}h (${w.closureLabel})` : ''}`}
                     >
                       <div>Wk {w.weekNumber}</div>
                       <div className="text-[10px] text-surface-400 font-normal">{formatDateShort(w.startDate)}</div>
                       {w.isFinals && <div className="text-[9px] text-amber-600 font-normal">Finals</div>}
+                      {w.closureLabel && (
+                        <div className="text-[9px] text-sky-700 font-normal">
+                          {w.requiredHours}h<span className="sr-only"> required, adjusted: {w.closureLabel}</span>
+                        </div>
+                      )}
                     </th>
                   ))}
                   <th scope="col" className="text-center px-3 py-2.5 font-semibold text-surface-700 border-b border-surface-200 whitespace-nowrap">
@@ -610,7 +626,7 @@ function ClassReportPanel() {
                   </tr>
                 )}
                 {filteredStudents.map((st, idx) => {
-                  const totalRequired = report.requiredHoursPerWeek * report.weeks.length
+                  const totalRequired = sumRequiredHours(report.weeks)
                   const pctMet = totalRequired > 0 ? Math.round((st.total / totalRequired) * 100) : null
 
                   return (
@@ -627,13 +643,14 @@ function ClassReportPanel() {
                       </td>
                       {report.weeks.map(w => {
                         const hrs = st.weeks[w.weekNumber] || 0
-                        const style = heatMapStyle(hrs, report.requiredHoursPerWeek)
+                        const wkReq = weekRequired(w, report.requiredHoursPerWeek)
+                        const style = heatMapStyle(hrs, wkReq)
                         return (
                           <td
                             key={w.weekNumber}
                             className="text-center px-2 py-2 border-b border-surface-100 tabular-nums text-xs font-medium"
                             style={{ background: style.bg, color: style.text }}
-                            title={`${st.name} — Week ${w.weekNumber}: ${formatHours(hrs)}${report.requiredHoursPerWeek ? ` / ${report.requiredHoursPerWeek}h required` : ''}`}
+                            title={`${st.name} — Week ${w.weekNumber}: ${formatHours(hrs)}${wkReq ? ` / ${wkReq}h required${w.closureLabel ? ` (${w.closureLabel})` : ''}` : ''}`}
                           >
                             {style.marker && (
                               <span className="sr-only">{style.marker === '✗' ? 'Zero hours' : style.marker === '✓' ? 'Met requirement' : 'Below target'} </span>
@@ -666,7 +683,7 @@ function ClassReportPanel() {
                     <td className="border-t-2 border-surface-300" />
                     {report.weeks.map(w => {
                       const avg = filteredAverages[w.weekNumber] || 0
-                      const style = heatMapStyle(avg, report.requiredHoursPerWeek)
+                      const style = heatMapStyle(avg, weekRequired(w, report.requiredHoursPerWeek))
                       return (
                         <td
                           key={w.weekNumber}
@@ -898,7 +915,7 @@ function StudentReportPanel() {
 
           {report.classReports.map((cr, idx) => {
             const isExpanded = expandedClasses[cr.courseId] ?? true // default expanded
-            const totalRequired = cr.requiredPerWeek * cr.weeks.length
+            const totalRequired = sumRequiredHours(cr.weeks)
             const totalPct = totalRequired > 0 ? Math.round((cr.total / totalRequired) * 100) : null
             const pctColor = totalPct === null ? 'text-surface-500'
               : totalPct >= 100 ? 'text-green-600'
@@ -946,6 +963,10 @@ function StudentReportPanel() {
                     <p className="text-xs text-surface-500 mb-2 mt-2">
                       {cr.semester} · Required: {cr.requiredPerWeek}h/wk · {cr.weeks.length} week{cr.weeks.length !== 1 ? 's' : ''}
                       {totalRequired > 0 && ` · Total required: ${formatHours(totalRequired)}`}
+                      {(() => {
+                        const adj = cr.weeks.filter(w => w.closure?.adjusted).length
+                        return adj > 0 ? ` · ${adj} week${adj === 1 ? '' : 's'} adjusted for closures` : ''
+                      })()}
                     </p>
 
                     <div className="overflow-x-auto">
@@ -966,8 +987,9 @@ function StudentReportPanel() {
                         <tbody>
                           {cr.weeks.map((w, wIdx) => {
                             const hrs = cr.weekHours[w.weekNumber] || 0
-                            const pct = cr.requiredPerWeek > 0 ? Math.round((hrs / cr.requiredPerWeek) * 100) : null
-                            const style = heatMapStyle(hrs, cr.requiredPerWeek)
+                            const wkReq = weekRequired(w, cr.requiredPerWeek)
+                            const pct = wkReq > 0 ? Math.round((hrs / wkReq) * 100) : null
+                            const style = heatMapStyle(hrs, wkReq)
                             const pctCellColor = pct === null ? 'text-surface-500'
                               : pct >= 100 ? 'text-green-600'
                               : pct >= 75 ? 'text-blue-600'
@@ -996,13 +1018,18 @@ function StudentReportPanel() {
                                   {style.marker && <span className="sr-only">{style.marker === '✗' ? ' Zero hours' : style.marker === '✓' ? ' Met requirement' : ' Below target'}</span>}
                                 </td>
                                 <td className="text-center px-3 py-1.5 border-b border-surface-100 text-xs text-surface-400 tabular-nums">
-                                  {cr.requiredPerWeek > 0 ? `${cr.requiredPerWeek}h` : '—'}
+                                  {cr.requiredPerWeek > 0 ? `${wkReq}h` : '—'}
+                                  {w.closureLabel && (
+                                    <span className="block text-[9px] text-sky-700" title={`Adjusted for closures: ${w.closureLabel}`}>
+                                      {w.closureLabel}
+                                    </span>
+                                  )}
                                 </td>
                                 <td className={`text-center px-3 py-1.5 border-b border-surface-100 font-semibold text-xs tabular-nums ${pctCellColor}`}>
                                   {pct !== null ? `${pct}%` : '—'}
                                 </td>
                                 <td className="text-center px-3 py-1.5 border-b border-surface-100 text-xs">
-                                  {hrs === 0 && cr.requiredPerWeek > 0 ? (
+                                  {hrs === 0 && wkReq > 0 ? (
                                     <span className="inline-flex items-center gap-1 text-red-600">
                                       <AlertTriangle size={12} aria-hidden="true" />
                                       <span>Missing</span>
