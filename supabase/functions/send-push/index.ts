@@ -28,6 +28,20 @@
  *   VAPID_PRIVATE_KEY  — your VAPID private key (base64url)
  *   VAPID_SUBJECT      — mailto: or https: contact (e.g. mailto:rictprogram@gmail.com)
  *
+ * ── Authentication ──────────────────────────────────────────────────────────
+ * Dashboard setting "Verify JWT with legacy secret" must be OFF for this
+ * function (same as set-temp-password). That gateway check only accepts
+ * HS256 tokens signed with the legacy JWT secret, so browser sessions are
+ * rejected with 401 before the function runs. We verify callers here instead:
+ *
+ *   • Webhook calls (body.table present): the Authorization bearer (or apikey
+ *     header) must be this project's service-role or anon key — the keys the
+ *     Database Webhooks are configured with.
+ *   • Direct calls (test push, in-app sends): the bearer must be a valid user
+ *     session (auth.getUser), and that user's profiles.role must be
+ *     Instructor or Super Admin. A service-role bearer is also accepted for
+ *     server-to-server use.
+ *
  * File: supabase/functions/send-push/index.ts
  */
 
@@ -39,6 +53,34 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// ── PROJECT KEYS (auto-provided to every Edge Function) ───────────────────────
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+const ALLOWED_DIRECT_ROLES = ['Instructor', 'Super Admin'];
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+/** Bearer token from the Authorization header, or '' if absent. */
+function bearerToken(req: Request): string {
+  const h = req.headers.get('Authorization') ?? '';
+  return h.replace(/^Bearer\s+/i, '').trim();
+}
+
+/** True when the request carries one of this project's own API keys. */
+function hasProjectKey(req: Request): boolean {
+  const candidates = [bearerToken(req), (req.headers.get('apikey') ?? '').trim()];
+  return candidates.some(
+    (k) => k.length > 0 && (k === SUPABASE_SERVICE_ROLE_KEY || k === SUPABASE_ANON_KEY)
+  );
+}
 
 // ── VAPID CONFIG ──────────────────────────────────────────────────────────────
 const VAPID_PUBLIC_KEY = Deno.env.get('VAPID_PUBLIC_KEY') ?? '';
@@ -192,11 +234,8 @@ serve(async (req: Request) => {
   }
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-
     // Use service role — bypass RLS to read push_subscriptions
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     // Parse incoming webhook or direct invocation body
     let body: Record<string, unknown> = {};
@@ -212,6 +251,40 @@ serve(async (req: Request) => {
     // ── Determine notification type and record ────────────────────────────────
     // When called via Database Webhook:  { type: 'INSERT', table: 'access_requests', record: { ... } }
     // When called directly from app:     { type: 'access', title: '...', body: '...', url: '...' }
+
+    // ── Authenticate the caller ───────────────────────────────────────────────
+    const isWebhookCall = !!body.table;
+    const bearer = bearerToken(req);
+
+    if (isWebhookCall) {
+      // Database Webhooks send the project key. Nothing else may use this path.
+      if (!hasProjectKey(req)) {
+        return jsonResponse({ error: 'Unauthorized: webhook calls require the project key' }, 401);
+      }
+    } else if (bearer !== SUPABASE_SERVICE_ROLE_KEY) {
+      // Direct call — must be a signed-in Instructor / Super Admin.
+      if (!bearer) {
+        return jsonResponse({ error: 'Missing Authorization header' }, 401);
+      }
+      const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        global: { headers: { Authorization: `Bearer ${bearer}` } },
+      });
+      const { data: { user: callerUser }, error: callerErr } = await callerClient.auth.getUser();
+      if (callerErr || !callerUser?.email) {
+        return jsonResponse({ error: 'Invalid or expired session' }, 401);
+      }
+      const { data: callerProfile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('email', callerUser.email)
+        .maybeSingle();
+      if (profileErr || !callerProfile) {
+        return jsonResponse({ error: 'Could not verify caller profile' }, 403);
+      }
+      if (!ALLOWED_DIRECT_ROLES.includes(String(callerProfile.role))) {
+        return jsonResponse({ error: 'Forbidden: only instructors can send push notifications' }, 403);
+      }
+    }
 
     let notifType: string;
     let record: Record<string, unknown>;
