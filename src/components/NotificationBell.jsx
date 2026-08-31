@@ -159,7 +159,19 @@ export default function NotificationBell() {
       const { data, error } = await supabase.functions.invoke('send-push', {
         body: { type: 'test' },
       });
-      if (error) throw error;
+      if (error) {
+        // supabase-js only says "non-2xx status code". The real reason is in
+        // the Response it attaches as error.context — surface status + body
+        // so the toast is actionable (e.g. "400 — Missing required fields"
+        // means the Edge Function hasn't been redeployed yet).
+        let detail = error.message || 'request failed';
+        const status = error?.context?.status;
+        try {
+          const j = await error.context?.clone?.().json();
+          if (j?.error) detail = j.error + (j.details ? ` (${j.details})` : '');
+        } catch { /* body not JSON — keep supabase-js message */ }
+        throw new Error(status ? `${status} — ${detail}` : detail);
+      }
       if (data?.error) throw new Error(data.error);
       const sent = Number(data?.sent ?? 0);
       const expired = Number(data?.expired ?? 0);
