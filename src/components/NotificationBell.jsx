@@ -25,8 +25,13 @@ import '@/styles/notification-bell.css';
 const REMINDER_INTERVAL = 60000; // Ding every 60 seconds while notifications are pending
 
 export default function NotificationBell() {
-  const { user, profile } = useAuth();
+  const { user, profile, isSuperAdmin } = useAuth();
   const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
+  // "Send test push" is a diagnostic — super admin only. isSuperAdmin is the
+  // real (non-emulated) account from AuthContext, so it stays available while
+  // emulating; the role check covers anyone else who holds Super Admin.
+  const canTestPush = isSuperAdmin || profile?.role === 'Super Admin';
+  const [testPushSending, setTestPushSending] = useState(false);
   // Items are kept per-table so realtime events on a single table only re-fetch
   // and update that one slice — instead of re-running 8+ queries on every event.
   // The derived `items` array preserves the original render order.
@@ -137,10 +142,48 @@ export default function NotificationBell() {
   const uName = () => profile ? `${profile.first_name} ${profile.last_name?.charAt(0)}.` : '';
   const fullName = () => profile ? `${profile.first_name} ${profile.last_name}` : '';
 
-  const showToast = useCallback((msg, type = 'info') => {
+  const showToast = useCallback((msg, type = 'info', duration = 3500) => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
+    setTimeout(() => setToast(null), duration);
   }, []);
+
+  // ── Send test push (super admin diagnostic) ──────────────────────────────
+  // Invokes send-push directly (same function the DB webhooks call) and
+  // reports what the push services accepted. "Sent" means FCM/APNs took the
+  // message — if a phone still stays silent, the block is on the phone
+  // (OS-level notification setting, battery restriction), not in the app.
+  const sendTestPush = useCallback(async () => {
+    if (testPushSending) return;
+    setTestPushSending(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('send-push', {
+        body: { type: 'test' },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      const sent = Number(data?.sent ?? 0);
+      const expired = Number(data?.expired ?? 0);
+      const failed = Number(data?.failed ?? 0);
+      const total = Number(data?.total ?? 0);
+      if (total === 0) {
+        showToast('Test push: no devices subscribed', 'info', 6000);
+      } else {
+        const hint = sent > 0 && failed === 0
+          ? ' If a phone stays silent, check its notification settings.'
+          : '';
+        showToast(
+          `Test push — Sent ${sent} · Expired ${expired} · Failed ${failed}.${hint}`,
+          failed > 0 ? 'error' : 'success',
+          7000
+        );
+      }
+    } catch (e) {
+      console.error('[NotificationBell] Test push failed:', e);
+      showToast(`Test push failed: ${e?.message || 'unknown error'}`, 'error', 6000);
+    } finally {
+      setTestPushSending(false);
+    }
+  }, [testPushSending, showToast]);
 
   // Close panel on outside click
   useEffect(() => {
@@ -1625,6 +1668,31 @@ export default function NotificationBell() {
                       : '#adb5bd',
                   }}>
                     {pushStatus === 'subscribed' ? 'phone_android' : pushStatus === 'blocked' ? 'phone_disabled' : 'phone_android'}
+                  </span>
+                </button>
+              )}
+              {/* Send test push — super admin diagnostic. Pushes to every
+                  subscribed instructor device via send-push and reports the
+                  sent/expired/failed counts in the live-region toast. */}
+              {canTestPush && (
+                <button
+                  type="button"
+                  onClick={sendTestPush}
+                  disabled={testPushSending}
+                  aria-busy={testPushSending}
+                  aria-label={testPushSending ? 'Sending test push notification' : 'Send test push notification to all subscribed devices'}
+                  title={testPushSending ? 'Sending…' : 'Send test push to all subscribed devices'}
+                  style={{ minHeight: 44, minWidth: 44,
+                    background: 'none', border: 'none', cursor: testPushSending ? 'wait' : 'pointer',
+                    padding: '4px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background 0.2s',
+                  }}
+                >
+                  <span className="material-icons" aria-hidden="true" style={{
+                    fontSize: '1.2rem',
+                    color: testPushSending ? '#fab005' : '#228be6',
+                  }}>
+                    {testPushSending ? 'hourglass_top' : 'send'}
                   </span>
                 </button>
               )}

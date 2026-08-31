@@ -74,19 +74,34 @@ self.addEventListener('message', (event) => {
  *   tag: "wo-request",             // collapses duplicate notifications
  *   icon: "/icons/icon-192.png",
  *   badge: "/icons/badge-72.png",
- *   type: "wo" | "access" | "time" | "lab" | "help" | "announcement"
+ *   type: "wo" | "access" | "time" | "lab" | "help" | "announcement" | "test"
  * }
+ *
+ * We ALWAYS call showNotification() — even for an empty or unparseable
+ * payload. A push that arrives without a visible notification is counted as
+ * a "silent push"; browsers show "This site has been updated in the
+ * background" and can eventually revoke the subscription.
  */
 self.addEventListener('push', (event) => {
-  if (!event.data) return;
-
-  let payload;
-  try {
-    payload = event.data.json();
-  } catch {
+  let payload = null;
+  if (event.data) {
+    try {
+      payload = event.data.json();
+    } catch {
+      let text = '';
+      try { text = event.data.text(); } catch { /* ignore */ }
+      payload = {
+        title: 'RICT CMMS',
+        body: text || 'You have a new notification',
+        url: '/dashboard',
+        tag: 'rict-general',
+      };
+    }
+  }
+  if (!payload || typeof payload !== 'object') {
     payload = {
       title: 'RICT CMMS',
-      body: event.data.text() || 'You have a new notification',
+      body: 'You have a new notification',
       url: '/dashboard',
       tag: 'rict-general',
     };
@@ -125,6 +140,10 @@ self.addEventListener('push', (event) => {
 
 function buildActions(type) {
   switch (type) {
+    case 'test':
+      return [
+        { action: 'dismiss', title: '✕ Dismiss' },
+      ];
     case 'help':
       return [
         { action: 'view', title: '📋 View' },

@@ -17,6 +17,11 @@
  *
  *   - Can also be called directly from your app:
  *       supabase.functions.invoke('send-push', { body: { type, title, body, url } })
+ *     Optional on direct calls:
+ *       recipient_email — send only to that user's devices (default: all
+ *                         Instructor + Super Admin subscribers)
+ *     The Notification Bell's "Send test push" (super admin only) uses this
+ *     path with type: 'test' and reports the sent/expired/failed counts.
  *
  * Required Supabase Secrets (set in Supabase Dashboard → Edge Functions → Secrets):
  *   VAPID_PUBLIC_KEY   — your VAPID public key (base64url)
@@ -146,6 +151,16 @@ function buildNotificationPayload(type: string, record: Record<string, unknown>)
         type,
       };
     }
+    case 'test': {
+      return {
+        ...base,
+        title: '🔔 RICT CMMS Test Push',
+        body: 'Push notifications are working on this device.',
+        url: '/dashboard',
+        tag: `test-${Date.now()}`,
+        type,
+      };
+    }
     case 'announcement': {
       return {
         ...base,
@@ -201,6 +216,8 @@ serve(async (req: Request) => {
     let notifType: string;
     let record: Record<string, unknown>;
     let overridePayload: NotificationPayload | null = null;
+    // Direct-invocation only: restrict delivery to one user's devices.
+    let directRecipient: string | null = null;
 
     if (body.table) {
       // ── Database Webhook ──────────────────────────────────────────────────
@@ -231,19 +248,25 @@ serve(async (req: Request) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-    } else if (body.type && body.title) {
+    } else if (body.type && (body.title || body.type === 'test')) {
       // ── Direct invocation with explicit payload ───────────────────────────
       notifType = String(body.type);
       record = {};
-      overridePayload = {
-        title: String(body.title),
-        body: String(body.body ?? ''),
-        url: String(body.url ?? '/dashboard'),
-        tag: String(body.tag ?? 'rict-direct'),
-        type: notifType,
-        icon: '/icons/icon-192.png',
-        badge: '/icons/badge-72.png',
-      };
+      if (body.recipient_email) {
+        directRecipient = String(body.recipient_email).toLowerCase();
+      }
+      // 'test' without a title falls through to the built-in test template.
+      if (body.title) {
+        overridePayload = {
+          title: String(body.title),
+          body: String(body.body ?? ''),
+          url: String(body.url ?? '/dashboard'),
+          tag: String(body.tag ?? 'rict-direct'),
+          type: notifType,
+          icon: '/icons/icon-192.png',
+          badge: '/icons/badge-72.png',
+        };
+      }
     } else {
       return new Response(JSON.stringify({ error: 'Missing required fields: table or type+title' }), {
         status: 400,
@@ -258,7 +281,9 @@ serve(async (req: Request) => {
     // For everything else: push to all instructor + super admin subscribers
     let subsQuery = supabase.from('push_subscriptions').select('*');
 
-    if (notifType === 'announcement' && record.recipient_email) {
+    if (directRecipient) {
+      subsQuery = subsQuery.eq('user_email', directRecipient);
+    } else if (notifType === 'announcement' && record.recipient_email) {
       // Lowercase both sides defensively. The frontend (usePushNotifications.js
       // saveSubscriptionToSupabase) and AnnouncementsPage already normalize, but if
       // any row was inserted before the normalization fix, this prevents a silent miss.
@@ -298,7 +323,14 @@ serve(async (req: Request) => {
           await webpush.sendNotification(
             pushSubscription,
             JSON.stringify(notification),
-            { TTL: 86400 } // Cache push for 24 hours if device is offline
+            {
+              TTL: 86400,      // Push service holds the message up to 24h if the device is offline
+              // 'high' asks FCM/APNs to wake the device immediately. The default
+              // ('normal') lets Android Doze / battery optimization defer delivery
+              // until the phone wakes or the app is foregrounded — which looks
+              // like "notifications only arrive when the app is open".
+              urgency: 'high',
+            }
           );
           return { email: sub.user_email, status: 'sent' };
         } catch (err: unknown) {

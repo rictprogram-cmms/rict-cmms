@@ -11,6 +11,8 @@
   color: #fff; z-index: 6000; font-size: 0.9rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   animation: nbIn 0.3s ease;
+  /* Keep longer messages (e.g. test-push results) on screen on phones */
+  max-width: calc(100vw - 40px); line-height: 1.4;
 }
 .nbell-toast-success { background: #40c057; }
 .nbell-toast-error   { background: #fa5252; }
