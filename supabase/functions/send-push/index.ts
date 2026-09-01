@@ -14,6 +14,12 @@
  *       • temp_access_requests  → type: "temp"
  *       • help_requests         → type: "help"
  *       • announcements         → type: "announcement" (recipient-specific)
+ *       • network_change_requests → type: "netchg"
+ *       • absence_requests      → type: "absence"
+ *       • asset_checkouts (status=pending_acknowledgment)
+ *                               → type: "checkout" (recipient-specific)
+ *     The triggers are version-controlled in
+ *       supabase/migrations/20260901_push_webhook_triggers.sql
  *
  *   - Can also be called directly from your app:
  *       supabase.functions.invoke('send-push', { body: { type, title, body, url } })
@@ -27,6 +33,10 @@
  *   VAPID_PUBLIC_KEY   — your VAPID public key (base64url)
  *   VAPID_PRIVATE_KEY  — your VAPID private key (base64url)
  *   VAPID_SUBJECT      — mailto: or https: contact (e.g. mailto:rictprogram@gmail.com)
+ *   WEBHOOK_SECRET     — random string; the DB webhook triggers send it in the
+ *                        x-webhook-secret header. Only lets a caller *send a
+ *                        push* — it grants no database access, unlike the
+ *                        service-role key.
  *
  * ── Authentication ──────────────────────────────────────────────────────────
  * Dashboard setting "Verify JWT with legacy secret" must be OFF for this
@@ -34,9 +44,12 @@
  * HS256 tokens signed with the legacy JWT secret, so browser sessions are
  * rejected with 401 before the function runs. We verify callers here instead:
  *
- *   • Webhook calls (body.table present): the Authorization bearer (or apikey
- *     header) must be this project's service-role or anon key — the keys the
- *     Database Webhooks are configured with.
+ *   • Webhook calls (body.table present): the x-webhook-secret header must
+ *     match WEBHOOK_SECRET. As a fallback, the Authorization bearer (or apikey
+ *     header) may be this project's legacy service-role or anon key.
+ *     (2026-09-01: production triggers were sending a key that no longer
+ *     matched either env value → every webhook got 401 and no push went out
+ *     except the manual test. The dedicated secret is immune to key rotation.)
  *   • Direct calls (test push, in-app sends): the bearer must be a valid user
  *     session (auth.getUser), and that user's profiles.role must be
  *     Instructor or Super Admin. A service-role bearer is also accepted for
@@ -59,6 +72,8 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
+const WEBHOOK_SECRET = Deno.env.get('WEBHOOK_SECRET') ?? '';
+
 const ALLOWED_DIRECT_ROLES = ['Instructor', 'Super Admin'];
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -80,6 +95,20 @@ function hasProjectKey(req: Request): boolean {
   return candidates.some(
     (k) => k.length > 0 && (k === SUPABASE_SERVICE_ROLE_KEY || k === SUPABASE_ANON_KEY)
   );
+}
+
+/** Constant-time string compare so a secret can't be guessed byte-by-byte. */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** True when the request carries the dedicated webhook secret. */
+function hasWebhookSecret(req: Request): boolean {
+  const provided = (req.headers.get('x-webhook-secret') ?? '').trim();
+  return WEBHOOK_SECRET.length > 0 && provided.length > 0 && safeEqual(provided, WEBHOOK_SECRET);
 }
 
 // ── VAPID CONFIG ──────────────────────────────────────────────────────────────
@@ -203,6 +232,44 @@ function buildNotificationPayload(type: string, record: Record<string, unknown>)
         type,
       };
     }
+    case 'netchg': {
+      const who = String(record.submitted_by_name ?? record.submitted_by ?? 'Someone');
+      const ct = String(record.change_type ?? '');
+      const action = ct === 'add' ? 'Add' : ct === 'delete' ? 'Delete' : ct === 'edit' ? 'Edit' : 'Change';
+      return {
+        ...base,
+        title: '🌐 Network Change Request',
+        body: `${who}: ${action} ${record.ip_address ?? 'device'}`,
+        url: '/network-map',
+        tag: `netchg-${record.request_id}`,
+        type,
+      };
+    }
+    case 'absence': {
+      const name = String(record.user_name ?? record.user_email ?? 'Someone');
+      const cls = record.course_id ?? record.class_id;
+      const course = cls ? ` (${cls})` : '';
+      const hrs = record.hours_missed ? ` — ${record.hours_missed}h` : '';
+      return {
+        ...base,
+        title: '🗓 Absence Request',
+        body: `${name}${course}: ${record.absence_date ?? ''}${hrs}`,
+        url: '/absence-requests',
+        tag: `absence-${record.request_id}`,
+        type,
+      };
+    }
+    case 'checkout': {
+      const item = String(record.asset_name ?? record.asset_id ?? 'an item');
+      return {
+        ...base,
+        title: '✍️ Equipment Issued — Signature Needed',
+        body: `${item} was issued to you. Open the app to sign for it.`,
+        url: '/dashboard',
+        tag: `checkout-${record.checkout_id}`,
+        type,
+      };
+    }
     case 'announcement': {
       return {
         ...base,
@@ -257,9 +324,16 @@ serve(async (req: Request) => {
     const bearer = bearerToken(req);
 
     if (isWebhookCall) {
-      // Database Webhooks send the project key. Nothing else may use this path.
-      if (!hasProjectKey(req)) {
-        return jsonResponse({ error: 'Unauthorized: webhook calls require the project key' }, 401);
+      // Database Webhook triggers send x-webhook-secret (preferred) or the
+      // legacy project key (fallback). Nothing else may use this path.
+      if (!hasWebhookSecret(req) && !hasProjectKey(req)) {
+        console.warn(
+          `[send-push] Webhook rejected for table=${String(body.table)}: ` +
+          `secretHeader=${req.headers.has('x-webhook-secret')} ` +
+          `authHeader=${req.headers.has('Authorization')} ` +
+          `secretConfigured=${WEBHOOK_SECRET.length > 0}`
+        );
+        return jsonResponse({ error: 'Unauthorized: webhook calls require x-webhook-secret or the project key' }, 401);
       }
     } else if (bearer !== SUPABASE_SERVICE_ROLE_KEY) {
       // Direct call — must be a signed-in Instructor / Super Admin.
@@ -303,6 +377,9 @@ serve(async (req: Request) => {
         temp_access_requests: 'temp',
         help_requests: 'help',
         announcements: 'announcement',
+        network_change_requests: 'netchg',
+        absence_requests: 'absence',
+        asset_checkouts: 'checkout',
       };
 
       notifType = tableToType[String(body.table)] ?? 'general';
@@ -320,6 +397,22 @@ serve(async (req: Request) => {
         return new Response(JSON.stringify({ skipped: 'Not a new announcement' }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+      }
+
+      // Network / absence requests: only Pending rows need review
+      if ((notifType === 'netchg' || notifType === 'absence') && record.status !== 'Pending') {
+        return jsonResponse({ skipped: `Not a pending ${notifType} request` });
+      }
+
+      // Asset checkouts: only a pooled issue awaiting the student's signature.
+      // Regular checked_out rows are the instructor's own action — no push.
+      if (notifType === 'checkout') {
+        if (record.status !== 'pending_acknowledgment') {
+          return jsonResponse({ skipped: 'Not a pending acknowledgment' });
+        }
+        if (!record.user_email) {
+          return jsonResponse({ skipped: 'Checkout has no recipient' });
+        }
       }
     } else if (body.type && (body.title || body.type === 'test')) {
       // ── Direct invocation with explicit payload ───────────────────────────
@@ -350,7 +443,7 @@ serve(async (req: Request) => {
     const notification = overridePayload ?? buildNotificationPayload(notifType, record);
 
     // ── Fetch target subscriptions ────────────────────────────────────────────
-    // For announcements: only push to the specific recipient
+    // For announcements / checkouts: only push to the specific recipient
     // For everything else: push to all instructor + super admin subscribers
     let subsQuery = supabase.from('push_subscriptions').select('*');
 
@@ -361,6 +454,11 @@ serve(async (req: Request) => {
       // saveSubscriptionToSupabase) and AnnouncementsPage already normalize, but if
       // any row was inserted before the normalization fix, this prevents a silent miss.
       subsQuery = subsQuery.eq('user_email', String(record.recipient_email).toLowerCase());
+    } else if (notifType === 'checkout') {
+      // Recipient-specific: the student who has to sign. Today only
+      // instructors can subscribe (usePushNotifications gates on role), so
+      // this delivers only once students are allowed to subscribe.
+      subsQuery = subsQuery.eq('user_email', String(record.user_email).toLowerCase());
     } else {
       subsQuery = subsQuery.in('role', ['Instructor', 'Super Admin']);
     }
