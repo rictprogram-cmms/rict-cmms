@@ -31,6 +31,8 @@ import RejectionModal from '@/components/RejectionModal';
 import StatusSelect from '@/components/StatusSelect';
 import WorkOrderDetailModal from '@/components/WorkOrderDetailModal';
 import { useRejectionNotification } from '@/hooks/useRejectionNotification';
+import { useWORequestStatusEmail, buildWODescriptionFromRequest, formatRequestLocation } from '@/hooks/useWORequestStatusEmail';
+import { useLocation } from 'react-router-dom';
 
 // Accessible sortable column header.
 // The <th> keeps aria-sort (the implicit columnheader role is correct), and the
@@ -162,6 +164,12 @@ export default function WorkOrdersPage() {
   // Rejection modal
   const [rejectTarget, setRejectTarget] = useState(null);
   const { sendRejectionNotification } = useRejectionNotification();
+
+  // Requester status emails (public-form requests): approved → WO, WO closed
+  const { sendApprovedEmail, sendClosedEmail } = useWORequestStatusEmail();
+
+  // Deep link from the notification bell: navigate('/work-orders', { state: { view: 'requests' } })
+  const routerLocation = useLocation();
 
   // Page-level assignee tooltip state — rendered outside .card so overflow:hidden can't clip it
   const [assigneeTooltip, setAssigneeTooltip] = useState(null); // { x, y, goDown, names }
@@ -694,6 +702,11 @@ export default function WorkOrdersPage() {
     loadWorkOrders('open');
     loadRequests();
   }, [user?.id, profile?.role]);
+
+  // Open on the Requests tab when sent here from the bell's "Review" button
+  useEffect(() => {
+    if (routerLocation.state?.view === 'requests') setCurrentView('requests');
+  }, [routerLocation.state]);
 
   // Silent refresh when browser tab regains focus
   useEffect(() => {
@@ -1745,6 +1758,13 @@ export default function WorkOrdersPage() {
       setShowCloseModal(false);
       closeViewModal();
       loadWorkOrders('open');
+
+      // Tell the original requester, if this WO came from a request (non-fatal)
+      if (currentWO.request_id) {
+        const closedLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const emailed = await sendClosedEmail({ wo: currentWO, closedDate: closedLocal, closingNotes: closeNotes.trim() });
+        if (!emailed) showToast('Work order closed, but the completion email to the requester could not be sent.', 'error');
+      }
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
     setLoading(false);
   };
@@ -1845,9 +1865,14 @@ export default function WorkOrdersPage() {
         if (u) assignedTo = `${u.first_name} ${u.last_name}`;
       }
 
+      // Public-form requests carry where / what / who in separate fields —
+      // fold them into the WO description so the student sees them on the WO.
+      // Legacy / internal requests come through unchanged.
+      const woDescription = buildWODescriptionFromRequest(currentRequest);
+
       const { data: woRows2, error: woErr2 } = await supabase.from('work_orders').insert([{
         wo_id: woId,
-        description: currentRequest.description,
+        description: woDescription,
         priority: approveForm.priority,
         status: 'Open',
         asset_id: currentRequest.asset_id || null,
@@ -1894,6 +1919,12 @@ export default function WorkOrdersPage() {
       setShowApproveModal(false);
       loadRequests();
       loadWorkOrders('open');
+
+      // Tell the requester (non-fatal — the WO already exists)
+      if (currentRequest.email) {
+        const emailed = await sendApprovedEmail({ request: currentRequest, woId, assignedTo });
+        if (!emailed) showToast(`WO created, but the approval email to ${currentRequest.email} could not be sent.`, 'error');
+      }
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
     setLoading(false);
   };
@@ -2340,18 +2371,29 @@ export default function WorkOrdersPage() {
           </div>
           <div className="table-container">
             <table className="data-table">
-              <thead><tr><th scope="col">Request ID</th><th scope="col">From</th><th scope="col">Asset</th><th scope="col">Priority</th><th scope="col">Description</th><th scope="col">Date</th><th scope="col">Actions</th></tr></thead>
+              <thead><tr><th scope="col">Request ID</th><th scope="col">From</th><th scope="col">Where</th><th scope="col">Equipment</th><th scope="col">Priority</th><th scope="col">Description</th><th scope="col">Date</th><th scope="col">Actions</th></tr></thead>
               <tbody>
                 {requestsData.length === 0 ? (
-                  <tr><td colSpan="7" className="loading-cell">No pending requests</td></tr>
+                  <tr><td colSpan="8" className="loading-cell">No pending requests</td></tr>
                 ) : requestsData.map(req => (
                   <tr key={req.request_id}>
                     <td className="wo-id">{req.request_id}</td>
-                    <td>{req.name || req.email || '-'}</td>
-                    <td>{req.asset_name || '-'}</td>
+                    <td>
+                      {req.name || req.email || '-'}
+                      {req.name && (req.email || req.phone) && (
+                        <div className="text-[11px] text-surface-500">{[req.email, req.phone].filter(Boolean).join(' · ')}</div>
+                      )}
+                    </td>
+                    <td>{formatRequestLocation(req) || '-'}</td>
+                    <td>
+                      {req.asset_name || '-'}
+                      {!req.asset_id && req.equipment_description && (
+                        <div className="text-[11px] text-surface-500">Not in asset list</div>
+                      )}
+                    </td>
                     <td><span className={`priority-badge ${(req.priority || 'medium').toLowerCase()}`}>{req.priority || 'Medium'}</span></td>
                     <td className="wo-desc">{req.description}</td>
-                    <td>{formatDate(req.created_at)}</td>
+                    <td>{formatDate(req.created_at || req.request_date)}</td>
                     <td>
                       {hasPerm('create_wo') && (
                         <>
@@ -2640,7 +2682,17 @@ export default function WorkOrdersPage() {
           >
             <div className="modal-header"><h3 id="wo-approve-modal-title">Approve Request</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowApproveModal(false)}>&times;</button></div>
             <div className="modal-body">
-              <p><strong>From:</strong> {currentRequest.name || currentRequest.email}</p>
+              <p><strong>From:</strong> {currentRequest.name || currentRequest.email}
+                {currentRequest.name && (currentRequest.email || currentRequest.phone) && (
+                  <span className="text-surface-500"> ({[currentRequest.email, currentRequest.phone].filter(Boolean).join(', ')})</span>
+                )}
+              </p>
+              {formatRequestLocation(currentRequest) && (
+                <p><strong>Where:</strong> {formatRequestLocation(currentRequest)}</p>
+              )}
+              {currentRequest.asset_name && (
+                <p><strong>Equipment:</strong> {currentRequest.asset_name}{!currentRequest.asset_id && currentRequest.equipment_description ? ' (not in asset list)' : ''}</p>
+              )}
               <p><strong>Description:</strong> {currentRequest.description}</p>
               <div className="form-group" style={{ marginTop: 16 }}>
                 <label htmlFor="wo-fld-priority-11" className="form-label">Priority</label>

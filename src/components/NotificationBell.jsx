@@ -308,7 +308,7 @@ export default function NotificationBell() {
     try {
       const { data, error } = await supabase.from('work_order_requests').select('*').eq('status', 'Pending').order('request_date', { ascending: false });
       if (error) console.warn('NotifBell: work_order_requests error:', error.message);
-      (data || []).forEach(r => _items.push({ id: `wo-${r.request_id}`, type: 'wo', icon: 'assignment', color: '#228be6', title: r.description || 'Work Order Request', subtitle: `${r.created_by || 'Unknown'} — ${r.priority || 'Medium'}`, date: r.request_date, raw: r }));
+      (data || []).forEach(r => _items.push({ id: `wo-${r.request_id}`, type: 'wo', icon: 'assignment', color: '#228be6', title: r.description || 'Work Order Request', subtitle: `${r.name || r.created_by || 'Unknown'}${[r.department, r.location].filter(Boolean).length ? ' — ' + [r.department, r.location].filter(Boolean).join(' – ') : ''} — ${r.priority || 'Medium'}`, date: r.request_date, raw: r }));
     } catch (e) { console.warn('NotifBell: work_order_requests exception:', e.message); }
     setItemsByTable(prev => ({ ...prev, wo: _items }));
   }, [profile?.email, isInstructor]);
@@ -1082,17 +1082,14 @@ export default function NotificationBell() {
     setActionLoading(null);
   };
 
-  // WO Requests
-  const approveWO = async (item) => {
-    setActionLoading(item.id);
-    try {
-      const req = item.raw;
-      const woId = `WO-${Date.now()}`;
-      await supabase.from('work_orders').insert([{ wo_id: woId, description: req.description, priority: req.priority || 'Medium', status: 'Open', asset_id: req.asset_id, asset_name: req.asset_name || '', created_at: new Date().toISOString(), created_by: fullName(), last_updated: new Date().toISOString(), last_updated_by: fullName() }]);
-      await supabase.from('work_order_requests').update({ status: 'Approved', processed_by: fullName(), processed_date: new Date().toISOString() }).eq('request_id', req.request_id);
-      showToast(`WO ${woId} created!`, 'success'); fetchNotifications();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
-    setActionLoading(null);
+  // WO Requests — Approve lives on the Work Orders → Requests tab (assign,
+  // priority, WO description built from the request, requester email). The
+  // old inline approve here used a `WO-${Date.now()}` id (the dashed-timestamp
+  // format that broke work logs) and never linked request_id, so it was
+  // replaced with a review link. Reject stays here.
+  const reviewWO = () => {
+    setOpen(false);
+    navigate('/work-orders', { state: { view: 'requests' } });
   };
   const rejectWO = async (item) => {
     setActionLoading(item.id);
@@ -1602,7 +1599,7 @@ export default function NotificationBell() {
     const disabled = actionLoading === item.id;
     switch (item.type) {
       case 'access': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveAccess(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectAccess(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
-      case 'wo': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveWO(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectWO(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
+      case 'wo': return (<><button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#228be6' }} disabled={disabled} onClick={() => reviewWO(item)} aria-label={`Review work order request ${item.raw?.request_id || ''} on the Work Orders page`}><span className="material-icons" aria-hidden="true">assignment</span>Review &amp; Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectWO(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
       case 'parts': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveOrder(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => rejectOrder(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
       case 'time': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveTime(item)}><span className="material-icons" aria-hidden="true">check</span>Approve</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);
       case 'time_edit': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => approveTimeEdit(item)}><span className="material-icons" aria-hidden="true">check</span>Approve Edit</button><button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => openRejectTime(item)}><span className="material-icons" aria-hidden="true">close</span>Reject</button></>);

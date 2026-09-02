@@ -104,6 +104,7 @@ const AssetScanPage = lazyPage(() => import('@/pages/AssetScanPage'))
 
 // Public pages (no auth required — QR / password flows)
 const OrderReceivePage = lazyPage(() => import('@/pages/OrderReceivePage'))
+const PublicWORequestPage = lazyPage(() => import('@/pages/PublicWORequestPage'))
 const ResetPasswordPage = lazyPage(() => import('@/pages/ResetPasswordPage'))
 const ChangePasswordPage = lazyPage(() => import('@/pages/ChangePasswordPage'))
 
@@ -427,6 +428,8 @@ function AppRoutes() {
           <Route path="/reset-password" element={<StandaloneBoundary><Lazy><ResetPasswordPage /></Lazy></StandaloneBoundary>} />
           <Route path="/change-password" element={<StandaloneBoundary><Lazy><ChangePasswordPage /></Lazy></StandaloneBoundary>} />
           <Route path="/lab-status" element={<StandaloneBoundary kiosk><LabStatusPage /></StandaloneBoundary>} />
+          {/* Public intake form for other departments — no auth; all validation lives in the submit_public_wo_request RPC */}
+          <Route path="/request-work-order" element={<StandaloneBoundary><Lazy><PublicWORequestPage /></Lazy></StandaloneBoundary>} />
 
           {/* Protected standalone pages (auth required, no sidebar) */}
           <Route
