@@ -23,7 +23,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { generateSafeAssetId } from '@/lib/generateSafeAssetId'
-import { NETWORK_CONFIG } from '@/lib/networkConfig'
+import { findSegmentForIp, subnetMaskForIp, gatewayForIp } from '@/lib/networkConfig'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import {
@@ -1391,14 +1391,21 @@ export default function AssetsPage() {
                             <div>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>IP Address</div>
                               <div style={{ fontFamily: 'monospace', fontWeight: 600, color: '#0f172a', marginTop: 2 }}>{nd.ip_address}</div>
+                              {/* IT-managed segments (wireless AP) get a text tag so the
+                                  different mask/gateway below is not a surprise. */}
+                              {findSegmentForIp(nd.ip_address)?.isManaged && (
+                                <div style={{ fontSize: '0.7rem', color: '#0369a1', marginTop: 2 }}>
+                                  {findSegmentForIp(nd.ip_address).label} (IT-managed)
+                                </div>
+                              )}
                             </div>
                             <div>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Subnet Mask</div>
-                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{NETWORK_CONFIG.subnetMask}</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{subnetMaskForIp(nd.ip_address)}</div>
                             </div>
                             <div>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Gateway</div>
-                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{NETWORK_CONFIG.gateway}</div>
+                              <div style={{ fontFamily: 'monospace', color: '#0f172a', marginTop: 2 }}>{gatewayForIp(nd.ip_address)}</div>
                             </div>
                             <div>
                               <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.04em' }}>MAC Address</div>

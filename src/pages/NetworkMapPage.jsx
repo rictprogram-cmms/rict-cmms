@@ -4,15 +4,26 @@
  * Single source of truth for reserved IPs on the 10.171.192.0/22 network.
  * Replaces the Excel spreadsheet previously kept by the instructor.
  *
+ * Two kinds of address block are shown (see src/lib/networkConfig.js):
+ *   • Wired subnets — program-assigned; full 1–254 grid with "Available" rows.
+ *   • IT-managed segments (wireless AP) — IT assigns each address; the map
+ *     lists only recorded devices plus the gateway, never prints them, and
+ *     add/edit/delete is gated by `manage_it_segments` instead of the
+ *     normal add/edit/delete permissions.
+ *
  * Permissions (feature on page 'Network Map'):
- *   view_page       — everyone (default)
- *   suggest_changes — student / work_study / instructor
- *   edit_devices    — instructor
- *   add_devices     — instructor
- *   delete_devices  — instructor
- *   approve_changes — instructor
- *   print_map       — everyone
- *   export_data     — work_study / instructor
+ *   view_page          — everyone (default)
+ *   suggest_changes    — student / work_study / instructor
+ *   edit_devices       — instructor
+ *   add_devices        — instructor
+ *   delete_devices     — instructor
+ *   approve_changes    — instructor
+ *   print_map          — everyone
+ *   export_data        — work_study / instructor
+ *   manage_it_segments — instructor (add/edit/delete on IT-managed segments)
+ *
+ * Deep link: /network-map?focus=<ip> selects the right tab and searches for
+ * that address (used by the Assets page "Open" button).
  *
  * WCAG 2.1 AA: semantic table, keyboard focus, aria labels on icon buttons,
  * high-contrast "Do Not Use" rows with non-color indicators, live regions
@@ -23,20 +34,21 @@
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { mustData } from '@/lib/supabaseData'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useNetworkMap } from '@/hooks/useNetworkMap'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
 import RejectionModal from '@/components/RejectionModal'
 import {
-  NETWORK_CONFIG, buildIp, isDoNotUseIp, isValidMac, normaliseMac,
+  NETWORK_CONFIG, ALL_SEGMENTS, getSegment, findSegmentForIp, isManagedSegmentId,
+  buildIp, isDoNotUseIp, isGatewayIp, isValidMac, normaliseMac,
 } from '@/lib/networkConfig'
 import {
   Network, Search, Printer, Download, Plus, Edit3, Trash2, Send, X,
   CheckCircle2, XCircle, AlertTriangle, Inbox, Info, Loader2, Lock,
   ChevronDown, ChevronRight, FileSpreadsheet, ClipboardList, Clock,
-  History, Filter, Link2, ExternalLink,
+  History, Filter, Link2, ExternalLink, Wifi,
 } from 'lucide-react'
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -73,12 +85,48 @@ function statusBadge(isReserved, isGateway, hasDevice) {
   return { bg: '#e5e7eb', color: '#6b7280', label: 'Available', icon: null }
 }
 
+/**
+ * Build the table rows for one subnet/segment.
+ *
+ *   Wired subnet     → every octet 1..254 gets a row so available IPs are
+ *                      visible to everyone.
+ *   IT-managed seg.  → only recorded devices plus the segment gateway. There
+ *                      are no "Available" rows because IT, not the program,
+ *                      decides which addresses exist.
+ */
+function buildSegmentRows(segment, deviceByIp, pendingByDevice, devicesBySubnet) {
+  if (!segment) return []
+  const rows = []
+  const makeRow = (octet) => {
+    const ip = `${segment.prefix}${octet}`
+    const device = deviceByIp.get(ip) || null
+    const pending = pendingByDevice.get(device?.device_id || ip) || []
+    const doNotUse = isDoNotUseIp(ip)
+    return {
+      ip, octet, device, pending,
+      subnetId: segment.id,
+      isReserved: (device?.is_reserved) || doNotUse,
+      isGateway: isGatewayIp(ip),
+    }
+  }
+  if (segment.isManaged) {
+    const octets = new Set((devicesBySubnet[segment.id] || []).map(d => d.last_octet))
+    const gwOctet = parseInt((segment.gateway || '').split('.')[3], 10)
+    if (!isNaN(gwOctet)) octets.add(gwOctet)
+    Array.from(octets).sort((a, b) => a - b).forEach(o => rows.push(makeRow(o)))
+    return rows
+  }
+  for (let octet = 1; octet <= 254; octet++) rows.push(makeRow(octet))
+  return rows
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Main page
 // ═══════════════════════════════════════════════════════════════════════════
 
 export default function NetworkMapPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { profile } = useAuth()
   const { hasPerm, permsLoading } = usePermissions('Network Map')
   const { sendRejectionNotification } = useRejectionNotification()
@@ -114,53 +162,49 @@ export default function NetworkMapPage() {
   const canApprove = hasPerm('approve_changes')
   const canPrint = hasPerm('print_map')
   const canExport = hasPerm('export_data')
+  // IT-managed segments (wireless AP): add/edit/delete is a separate,
+  // instructor-only permission because the addresses come from IT.
+  const canManageIt = hasPerm('manage_it_segments')
 
   const showToast = useCallback((msg, type = 'info') => {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 3200)
   }, [])
 
-  // ── Build the rendered row list for the active subnet ─────────────────
-  // Every octet 1..254 gets a row so available IPs are visible to everyone.
-  const activeSubnet = NETWORK_CONFIG.subnets.find(s => s.id === activeTab)
-  const subnetRows = useMemo(() => {
-    if (!activeSubnet) return []
-    const rows = []
-    for (let octet = 1; octet <= 254; octet++) {
-      const ip = `${activeSubnet.prefix}${octet}`
-      const device = deviceByIp.get(ip) || null
-      const pending = pendingByDevice.get(device?.device_id || ip) || []
-      const doNotUse = isDoNotUseIp(ip)
-      rows.push({
-        ip, octet, device, pending,
-        subnetId: activeSubnet.id,
-        isReserved: (device?.is_reserved) || doNotUse,
-        isGateway: ip === NETWORK_CONFIG.gateway,
-      })
-    }
-    return rows
-  }, [activeSubnet, deviceByIp, pendingByDevice])
+  // ── Deep link: /network-map?focus=<ip> ────────────────────────────────
+  // Select the tab that owns the IP and pre-fill the search so the row is
+  // the first thing on screen. Runs once on mount.
+  const focusAppliedRef = useRef(false)
+  useEffect(() => {
+    if (focusAppliedRef.current) return
+    const focusIp = (searchParams.get('focus') || '').trim()
+    if (!focusIp) return
+    focusAppliedRef.current = true
+    const seg = findSegmentForIp(focusIp)
+    if (seg) setActiveTab(seg.id)
+    setSearch(focusIp)
+  }, [searchParams])
+
+  // ── Build the rendered row list for the active subnet/segment ─────────
+  // Wired subnets get every octet 1..254; IT-managed segments list only the
+  // devices IT has assigned (see buildSegmentRows).
+  const activeSubnet = getSegment(activeTab)
+  const isManagedTab = !!activeSubnet?.isManaged
+  const subnetRows = useMemo(
+    () => buildSegmentRows(activeSubnet, deviceByIp, pendingByDevice, devicesBySubnet),
+    [activeSubnet, deviceByIp, pendingByDevice, devicesBySubnet]
+  )
 
   // ── Build the cross-subnet row list (used during search) ─────────────
-  // 3 × 254 = 762 rows. Memoized so it only rebuilds when devices change.
+  // 3 × 254 wired rows + every managed-segment device. Memoized so it only
+  // rebuilds when devices change.
   const allSubnetRows = useMemo(() => {
     const rows = []
-    NETWORK_CONFIG.subnets.forEach(s => {
-      for (let octet = 1; octet <= 254; octet++) {
-        const ip = `${s.prefix}${octet}`
-        const device = deviceByIp.get(ip) || null
-        const pending = pendingByDevice.get(device?.device_id || ip) || []
-        const doNotUse = isDoNotUseIp(ip)
-        rows.push({
-          ip, octet, device, pending,
-          subnetId: s.id,
-          isReserved: (device?.is_reserved) || doNotUse,
-          isGateway: ip === NETWORK_CONFIG.gateway,
-        })
-      }
+    ALL_SEGMENTS.forEach(s => {
+      rows.push(...buildSegmentRows(s, deviceByIp, pendingByDevice, devicesBySubnet))
     })
     return rows
-  }, [deviceByIp, pendingByDevice])
+  }, [deviceByIp, pendingByDevice, devicesBySubnet])
 
   const isSearching = search.trim().length > 0
 
@@ -221,7 +265,7 @@ export default function NetworkMapPage() {
   const matchCountsBySubnet = useMemo(() => {
     if (!isSearching) return null
     const counts = {}
-    NETWORK_CONFIG.subnets.forEach(s => { counts[s.id] = 0 })
+    ALL_SEGMENTS.forEach(s => { counts[s.id] = 0 })
     filteredRows.forEach(r => { counts[r.subnetId] = (counts[r.subnetId] || 0) + 1 })
     return counts
   }, [isSearching, filteredRows])
@@ -249,6 +293,14 @@ export default function NetworkMapPage() {
       }
     })
   }, [deviceByIp])
+
+  // ── IT-managed segment summaries (device count only — no "available") ─
+  const segmentSummaries = useMemo(() => {
+    return ALL_SEGMENTS.filter(s => s.isManaged).map(s => ({
+      ...s,
+      deviceCount: (devicesBySubnet[s.id] || []).filter(d => !isGatewayIp(d.ip_address)).length,
+    }))
+  }, [devicesBySubnet])
 
   // ── Pending requests filtered for "My Requests" vs All ──────────────
   const visiblePending = useMemo(() => {
@@ -379,13 +431,42 @@ export default function NetworkMapPage() {
         ]
         XLSX.utils.book_append_sheet(wb, ws, subnet.shortLabel.replace(/[^\w.]/g, '_'))
       })
+      // IT-managed segments: one sheet each, recorded devices only (no
+      // empty rows — the program does not own this address space).
+      ALL_SEGMENTS.filter(s => s.isManaged).forEach(segment => {
+        const rows = []
+        rows.push(['Device', 'MAC Address', 'Profinet Name', 'IP Address', 'Location', 'Notes', 'Status', 'Linked Asset'])
+        const list = [...(devicesBySubnet[segment.id] || [])]
+          .sort((a, b) => (a.last_octet || 0) - (b.last_octet || 0))
+        list.forEach(d => {
+          const status = (d.is_reserved || isDoNotUseIp(d.ip_address)) ? 'Do Not Use'
+                       : isGatewayIp(d.ip_address) ? 'Gateway' : 'Assigned'
+          rows.push([
+            effectiveDeviceName(d) || '',
+            d.mac_address || '',
+            d.profinet_name || '',
+            d.ip_address,
+            d.location || '',
+            d.notes || '',
+            status,
+            d.asset_id || '',
+          ])
+        })
+        rows.push([])
+        rows.push([`${segment.label} · ${segment.name} · Mask ${segment.subnetMask} · Gateway ${segment.gateway} · Managed by ${segment.managedBy}`])
+        const ws = XLSX.utils.aoa_to_sheet(rows)
+        ws['!cols'] = [
+          { wch: 40 }, { wch: 20 }, { wch: 24 }, { wch: 16 }, { wch: 20 }, { wch: 40 }, { wch: 12 }, { wch: 12 },
+        ]
+        XLSX.utils.book_append_sheet(wb, ws, segment.shortLabel.replace(/[^\w.]/g, '_'))
+      })
       const stamp = new Date().toISOString().substring(0, 10)
       XLSX.writeFile(wb, `RICT_Network_Map_${stamp}.xlsx`)
       showToast('Network map exported', 'success')
     } catch (e) {
       showToast(`Export failed: ${e.message}`, 'error')
     }
-  }, [devicesBySubnet, showToast])
+  }, [devicesBySubnet, effectiveDeviceName, showToast])
 
   // ── Guards ────────────────────────────────────────────────────────────
   if (permsLoading) return <LoadingState label="Loading permissions…" />
@@ -464,7 +545,7 @@ export default function NetworkMapPage() {
               <FileSpreadsheet size={14} aria-hidden="true" /> Export
             </button>
           )}
-          {canAdd && (
+          {(isManagedTab ? canManageIt : canAdd) && (
             <button
               onClick={() => setAddTarget({ subnet: activeTab })}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg
@@ -478,7 +559,7 @@ export default function NetworkMapPage() {
       </div>
 
       {/* ── Summary Cards ── */}
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-5" role="region" aria-label="Subnet usage">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" role="region" aria-label="Subnet usage">
         <InfoCard
           title="DHCP Pool"
           subtitle={NETWORK_CONFIG.dhcpPool.label}
@@ -490,6 +571,14 @@ export default function NetworkMapPage() {
           <SubnetCard
             key={s.id}
             subnet={s}
+            active={activeTab === s.id}
+            onClick={() => setActiveTab(s.id)}
+          />
+        ))}
+        {segmentSummaries.map(s => (
+          <SegmentCard
+            key={s.id}
+            segment={s}
             active={activeTab === s.id}
             onClick={() => setActiveTab(s.id)}
           />
@@ -511,11 +600,12 @@ export default function NetworkMapPage() {
         aria-label="Subnet selector"
         className="flex gap-1 bg-surface-100 rounded-xl p-1 overflow-x-auto"
       >
-        {NETWORK_CONFIG.subnets.map(s => {
+        {ALL_SEGMENTS.map(s => {
           const matchCount = matchCountsBySubnet?.[s.id]
           return (
             <button
               key={s.id}
+              id={`tab-${s.id}`}
               role="tab"
               aria-selected={activeTab === s.id && !isSearching}
               aria-controls={`panel-${s.id}`}
@@ -529,7 +619,8 @@ export default function NetworkMapPage() {
                   : 'text-surface-600 hover:text-surface-900'
               }`}
             >
-              {s.name}
+              {s.isManaged && <Wifi size={12} className="inline-block mr-1 -mt-0.5" aria-hidden="true" />}
+              {s.isManaged ? `${s.shortLabel} · ${s.name}` : s.name}
               {isSearching && matchCount !== undefined && (
                 <span
                   className="ml-1.5 inline-flex items-center justify-center min-w-[18px] px-1 py-0.5 rounded-full text-[10px] font-bold bg-brand-100 text-brand-700"
@@ -601,6 +692,8 @@ export default function NetworkMapPage() {
               Found <span className="font-semibold text-surface-700">{filteredRows.length}</span>{' '}
               {filteredRows.length === 1 ? 'match' : 'matches'} across all subnets
             </>
+          ) : isManagedTab ? (
+            <>Showing {filteredRows.length} {filteredRows.length === 1 ? 'entry' : 'entries'} · IT-assigned addresses only</>
           ) : (
             <>Showing {filteredRows.length} of 254 addresses</>
           )}
@@ -614,6 +707,26 @@ export default function NetworkMapPage() {
         aria-labelledby={`tab-${activeTab}`}
         className="bg-white rounded-xl border border-surface-200 overflow-hidden"
       >
+        {isManagedTab && !isSearching && (
+          <div
+            className="px-4 py-3 bg-sky-50 border-b border-sky-200 flex items-start gap-2"
+            role="note"
+            aria-label={`About the ${activeSubnet.label} segment`}
+          >
+            <Wifi size={16} className="text-sky-700 mt-0.5 flex-shrink-0" aria-hidden="true" />
+            <div className="text-xs text-sky-900">
+              <p className="font-semibold">
+                {activeSubnet.label} · {activeSubnet.name} · Mask {activeSubnet.subnetMask} · Gateway {activeSubnet.gateway}
+              </p>
+              <p className="mt-0.5">
+                Managed by {activeSubnet.managedBy}. {activeSubnet.description}
+                {canManageIt
+                  ? ' Use "Add Device" to record an address IT has issued.'
+                  : ' Addresses are recorded by instructors once IT issues them.'}
+              </p>
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm" aria-label={`Devices on ${activeSubnet?.name || ''}`}>
             <caption className="sr-only">
@@ -631,7 +744,11 @@ export default function NetworkMapPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map((r, idx) => (
+              {filteredRows.map((r, idx) => {
+                // IT-managed rows use the dedicated permission for edits and
+                // deletes; wired rows keep the standard ones.
+                const rowManaged = isManagedSegmentId(r.subnetId)
+                return (
                 <NetworkRow
                   key={r.ip}
                   row={r}
@@ -639,8 +756,8 @@ export default function NetworkMapPage() {
                   showSubnetTag={isSearching}
                   effectiveDeviceName={effectiveDeviceName}
                   assetById={assetById}
-                  canEdit={canEdit}
-                  canDelete={canDelete}
+                  canEdit={rowManaged ? canManageIt : canEdit}
+                  canDelete={rowManaged ? canManageIt : canDelete}
                   canSuggest={canSuggest}
                   onEdit={() => setEditTarget(r.device)}
                   onDelete={() => setDeleteTarget(r.device)}
@@ -650,11 +767,14 @@ export default function NetworkMapPage() {
                   onAdd={() => setAddTarget({ subnet: r.subnetId, octet: r.octet })}
                   onHistory={() => setHistoryTarget(r.device)}
                 />
-              ))}
+                )
+              })}
               {filteredRows.length === 0 && (
                 <tr>
                   <td colSpan={7} className="text-center py-10 text-surface-400 text-sm">
-                    No rows match your filters.
+                    {isManagedTab && !isSearching && filter === 'all'
+                      ? 'No devices recorded on this segment yet.'
+                      : 'No rows match your filters.'}
                   </td>
                 </tr>
               )}
@@ -843,6 +963,31 @@ function SubnetCard({ subnet, active, onClick }) {
   )
 }
 
+function SegmentCard({ segment, active, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`${segment.label}, ${segment.name}: ${segment.deviceCount} ${segment.deviceCount === 1 ? 'device' : 'devices'} recorded, managed by ${segment.managedBy}`}
+      className={`text-left rounded-xl border p-3 transition-all
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 min-h-[44px] ${
+        active
+          ? 'bg-sky-50 border-sky-300 shadow-sm'
+          : 'bg-white border-surface-200 hover:border-sky-200'
+      }`}
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-700 flex items-center gap-1">
+        <Wifi size={11} aria-hidden="true" /> {segment.shortLabel}
+      </p>
+      <p className="text-lg font-bold text-surface-900 mt-1">
+        {segment.deviceCount}<span className="text-xs font-normal text-surface-400"> {segment.deviceCount === 1 ? 'device' : 'devices'}</span>
+      </p>
+      <p className="text-[11px] text-surface-500 mt-1 font-mono">{segment.name}</p>
+      <p className="text-[11px] text-surface-500">IT-managed · IT assigns IPs</p>
+    </button>
+  )
+}
+
 function PendingCard({ count, onClick }) {
   return (
     <button
@@ -885,7 +1030,7 @@ function NetworkRow({
   // Short subnet label (e.g. ".193.0") when shown
   const subnetShort = useMemo(() => {
     if (!subnetId) return ''
-    const s = NETWORK_CONFIG.subnets.find(n => n.id === subnetId)
+    const s = getSegment(subnetId)
     return s?.shortLabel || subnetId
   }, [subnetId])
 
@@ -1445,7 +1590,8 @@ function AssetPicker({
 }
 
 function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, takenOctets, findDuplicateMac, activeAssets, linkedAssetIds, assetDeviceCounts, onCancel, onSubmit }) {
-  const subnet = NETWORK_CONFIG.subnets.find(s => s.id === subnetId)
+  const subnet = getSegment(subnetId)
+  const isManaged = !!subnet?.isManaged
   const [octet, setOctet] = useState(() => {
     if (fixedIp) return parseInt(fixedIp.split('.')[3], 10)
     if (initialOctet) return initialOctet
@@ -1476,8 +1622,11 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
     if (!ip) { setError('IP is required.'); return }
     if (macInvalid) { setError('MAC address is not in a valid format (XX-XX-XX-XX-XX-XX).'); return }
     if (mode === 'add') {
-      if (!octet) { setError('Please select a last octet.'); return }
-      if (takenOctets?.has(parseInt(octet, 10))) { setError('That IP is already assigned.'); return }
+      if (!octet) { setError(isManaged ? 'Enter the last octet of the address IT assigned.' : 'Please select a last octet.'); return }
+      const o = parseInt(octet, 10)
+      if (isNaN(o) || o < 1 || o > 254) { setError('Last octet must be between 1 and 254.'); return }
+      if (takenOctets?.has(o)) { setError(isManaged ? 'That IP is already recorded.' : 'That IP is already assigned.'); return }
+      if (isManaged && isDoNotUseIp(ip)) { setError(`${ip} is reserved on this segment (gateway) and cannot be assigned.`); return }
     }
     setSaving(true)
     try {
@@ -1505,9 +1654,11 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
 
   return (
     <ModalShell
-      title={mode === 'add' ? 'Add Network Device' : `Edit ${ip}`}
-      subtitle={mode === 'add' ? `Subnet ${subnet?.name || ''}` : 'Change device details'}
-      icon={mode === 'add' ? Plus : Edit3}
+      title={mode === 'add' ? (isManaged ? 'Record IT-Assigned Device' : 'Add Network Device') : `Edit ${ip}`}
+      subtitle={mode === 'add'
+        ? (isManaged ? `${subnet?.label || ''} · ${subnet?.name || ''} · managed by ${subnet?.managedBy || 'IT'}` : `Subnet ${subnet?.name || ''}`)
+        : 'Change device details'}
+      icon={mode === 'add' ? (isManaged ? Wifi : Plus) : Edit3}
       onClose={onCancel}
     >
       <div className="p-5 space-y-4">
@@ -1518,6 +1669,29 @@ function DeviceFormModal({ mode, initial, subnetId, fixedIp, initialOctet, taken
             <p className="font-mono text-sm bg-surface-50 border border-surface-200 rounded-lg px-3 py-2">
               {ip}
             </p>
+          ) : isManaged ? (
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-sm text-surface-600">{subnet?.prefix}</span>
+                <input
+                  id="nm-managed-octet"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={254}
+                  value={octet}
+                  onChange={(e) => setOctet(e.target.value ? parseInt(e.target.value, 10) : '')}
+                  className="w-28 px-3 py-2 text-sm font-mono border border-surface-200 rounded-lg
+                    focus:outline-none focus:ring-2 focus:ring-brand-500 min-h-[44px]"
+                  aria-label="Last octet of the IT-assigned address"
+                  aria-describedby="nm-managed-octet-help"
+                />
+              </div>
+              <p id="nm-managed-octet-help" className="text-[11px] text-surface-500 mt-1">
+                Enter the last number of the address {subnet?.managedBy || 'IT'} issued (for example, 3 for {subnet?.prefix}3).
+                {' '}Mask {subnet?.subnetMask} · Gateway {subnet?.gateway}.
+              </p>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <span className="font-mono text-sm text-surface-600">{subnet?.prefix}</span>

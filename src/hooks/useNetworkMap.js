@@ -15,10 +15,9 @@
 import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
-import { NETWORK_CONFIG, isDoNotUseIp, normaliseMac } from '@/lib/networkConfig'
-
-const GATEWAY_IP = NETWORK_CONFIG.gateway
+import { ALL_SEGMENTS, isDoNotUseIp, isGatewayIp, normaliseMac } from '@/lib/networkConfig'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -118,9 +117,9 @@ export function useNetworkMap() {
   useEffect(() => { fetchAll() }, [fetchAll])
 
   // ── Realtime subscription ───────────────────────────────────────────────
-  useEffect(() => {
-    const channel = supabase
-      .channel('network-map-sync')
+  // Uses subscribeWithReconnect so a dropped WebSocket rebuilds the channel
+  // with backoff instead of leaving realtime silently dead.
+  useEffect(() => subscribeWithReconnect('network-map-sync', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'network_devices' }, (payload) => {
         setDevices(prev => {
           if (payload.eventType === 'DELETE') {
@@ -174,14 +173,15 @@ export function useNetworkMap() {
           return next
         })
       })
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
-  }, [])
+  ), [])
 
   // ── Derived lookups ─────────────────────────────────────────────────────
+  // Keyed by subnet/segment id. Every configured block (wired subnets and
+  // IT-managed segments) gets an entry even when empty, so callers can index
+  // safely without null checks.
   const devicesBySubnet = useMemo(() => {
-    const map = { '10.171.193.0': [], '10.171.194.0': [], '10.171.195.0': [] }
+    const map = {}
+    ALL_SEGMENTS.forEach(s => { map[s.id] = [] })
     devices.forEach(d => {
       if (!map[d.subnet]) map[d.subnet] = []
       map[d.subnet].push(d)
@@ -379,7 +379,7 @@ export function useNetworkMap() {
       notes: input.notes?.trim() || null,
       asset_id: input.asset_id || null,
       is_reserved: !!input.is_reserved || isDoNotUseIp(ip),
-      is_dhcp_gateway: ip === GATEWAY_IP,
+      is_dhcp_gateway: isGatewayIp(ip),
       status: 'Active',
       created_at: now,
       created_by: actor,

@@ -188,6 +188,9 @@ const DEFAULT_PERMISSIONS = [
   ['P146', 'Network Map', 'print_map',       false, true,  true,  'Can print the Network Map'],
   ['P147', 'Network Map', 'export_data',     false, true,  true,  'Can export Network Map data'],
   ['P148', 'Network Map', 'manage_subnets',  false, false, true,  'Can manage subnet definitions (planned feature)'],
+  // P177: IT-managed segments (wireless AP). IT assigns these addresses, so
+  // recording them is instructor-only regardless of add/edit/delete_devices.
+  ['P177', 'Network Map', 'manage_it_segments', false, false, true, 'Can add, edit, and delete devices on IT-managed segments (e.g. the wireless access point)'],
 
   // Reports (Time Cards)
   ['P060', 'Reports', 'view_page', true, true, true, 'Can access Reports/Time Cards'],
