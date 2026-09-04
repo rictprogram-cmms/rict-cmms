@@ -488,8 +488,10 @@ export default function LabStatusPage() {
         supabase.from('help_requests').select('request_id, user_name, location, requested_at, status, acknowledged_at, acknowledged_by')
           .in('status', ['pending', 'acknowledged']).order('requested_at', { ascending: true }),
         supabase.from('profiles').select('email, time_clock_only').eq('time_clock_only', 'Yes'),
+        // 'Confirmed' only — matches Dashboard, TV Display, Time Cards and
+        // Weekly Labs so every roster/hours reader agrees on who counts.
         supabase.from('lab_signup').select('user_name, user_email, start_time, end_time, status')
-          .eq('date', todayStr).neq('status', 'Cancelled'),
+          .eq('date', todayStr).eq('status', 'Confirmed'),
         supabase.from('lab_calendar').select('closed_blocks').eq('date', todayStr + 'T12:00:00').maybeSingle(),
       ]);
 

@@ -27,6 +27,7 @@ import { createClient } from '@supabase/supabase-js'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
+import { mergeSignupSessions, pickSession, minutesToDate, nowMinutes } from '@/lib/labSessions'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -55,9 +56,11 @@ const WEATHER_DESC = {
 }
 
 // ── Utility ─────────────────────────────────────────────────────────
-function formatTimeTv(dateObj) {
-  if (!dateObj) return ''
-  const h = dateObj.getHours()
+// Compact TV label from minutes-since-midnight: 480 → '8am', 780 → '1pm'.
+// (Minutes are intentionally dropped — the TV roster only has room for the hour.)
+function formatTimeTv(min) {
+  if (min == null || !Number.isFinite(min)) return ''
+  const h = Math.floor(min / 60)
   const ampm = h >= 12 ? 'pm' : 'am'
   const disp = h % 12 || 12
   return `${disp}${ampm}`
@@ -491,7 +494,9 @@ export default function TVDisplayPage() {
           .from('lab_signup')
           .select('user_id, user_name, user_email, start_time, end_time, status')
           .eq('date', todayStr)
-          .neq('status', 'Cancelled'),
+          // 'Confirmed' only — matches Dashboard, Lab Status, Time Cards and
+          // Weekly Labs so every roster/hours reader agrees on who counts.
+          .eq('status', 'Confirmed'),
         supabase
           .from('help_requests')
           .select('*')
@@ -563,35 +568,19 @@ export default function TVDisplayPage() {
         const email = (row.user_email || '').toLowerCase()
         if (!email || tcoEmails.has(email)) return
         if (!signedUp[email]) {
-          signedUp[email] = { userName: row.user_name, timeBlocks: [] }
+          signedUp[email] = { userName: row.user_name, slots: [] }
         }
-        // Parse time strings (HH:mm:ss) into Date objects for today
-        const parseTime = t => {
-          if (!t) return null
-          const [hh, mm] = String(t).split(':')
-          const d = new Date(today)
-          d.setHours(parseInt(hh, 10), parseInt(mm || 0, 10), 0, 0)
-          return d
-        }
-        const start = parseTime(row.start_time)
-        const end = parseTime(row.end_time)
-        if (start && end) signedUp[email].timeBlocks.push({ start, end })
+        signedUp[email].slots.push(row)
       })
 
       // ---------- 5. Group time-blocks into sessions ----------
+      // Shared with DashboardPage / LabStatusPage (src/lib/labSessions.js)
+      // so all three displays merge slots identically.
       for (const email in signedUp) {
         const s = signedUp[email]
-        s.timeBlocks.sort((a, b) => a.start - b.start)
-        const sessions = []
-        let cur = null
-        s.timeBlocks.forEach(b => {
-          if (!cur) { cur = { start: b.start, end: b.end } }
-          else if (b.start.getTime() === cur.end.getTime()) { cur.end = b.end }
-          else { sessions.push(cur); cur = { start: b.start, end: b.end } }
-        })
-        if (cur) sessions.push(cur)
-        s.sessions = sessions
+        s.sessions = mergeSignupSessions(s.slots)
       }
+      const nowMin = nowMinutes(now)
 
       // ---------- 6. Build people list ----------
       const allPeople = {}
@@ -619,26 +608,22 @@ export default function TVDisplayPage() {
         let status = '', timeRange = ''
 
         // find current / next session
-        let curSession = null, nextSession = null
-        for (const sess of p.sessions) {
-          if (sess.start <= now && sess.end > now) curSession = sess
-          else if (sess.start > now && !nextSession) nextSession = sess
-        }
+        const { current: curSession, next: nextSession } = pickSession(p.sessions, nowMin)
 
         if (p.isLoggedIn) {
           if (p.isSignedUp && curSession) {
             status = 'good'
-            timeRange = 'Until ' + formatTimeTv(curSession.end)
+            timeRange = 'Until ' + formatTimeTv(curSession.endMin)
           } else {
             status = p.isSignedUp ? 'good' : 'unexpected'
           }
         } else if (p.isSignedUp) {
           if (curSession) {
             status = 'missing'
-            timeRange = formatTimeTv(curSession.start) + ' – ' + formatTimeTv(curSession.end)
+            timeRange = formatTimeTv(curSession.startMin) + ' – ' + formatTimeTv(curSession.endMin)
           } else if (nextSession) {
             status = 'expected'
-            timeRange = formatTimeTv(nextSession.start) + ' – ' + formatTimeTv(nextSession.end)
+            timeRange = formatTimeTv(nextSession.startMin) + ' – ' + formatTimeTv(nextSession.endMin)
           }
         }
         if (!status) continue
@@ -648,7 +633,7 @@ export default function TVDisplayPage() {
           status,
           timeRange,
           initials: (p.userName || '').split(' ').map(n => n.charAt(0)).join('').toUpperCase(),
-          earliestStart: p.sessions.length > 0 ? p.sessions[0].start.getTime() : null,
+          earliestStart: p.sessions.length > 0 ? minutesToDate(today, p.sessions[0].startMin).getTime() : null,
         })
       }
 
