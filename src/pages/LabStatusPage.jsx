@@ -33,6 +33,7 @@ import { mustData } from '@/lib/supabaseData';
 import { useVersionCheck } from '@/hooks/useVersionCheck';
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { shortName } from '@/lib/utils';
+import { mergeSignupSessions, pickSession, minutesToTime12, minutesToDate, nowMinutes } from '@/lib/labSessions';
 
 const SCROLL_THRESHOLD = 6;
 
@@ -81,15 +82,6 @@ function formatTimestamp12(ts) {
   const d = new Date(ts);
   let h = d.getUTCHours();
   const m = String(d.getUTCMinutes()).padStart(2, '0');
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  if (h === 0) h = 12; else if (h > 12) h -= 12;
-  return `${h}:${m} ${ampm}`;
-}
-
-function formatLocalTime(d) {
-  if (!d) return '';
-  let h = d.getHours();
-  const m = String(d.getMinutes()).padStart(2, '0');
   const ampm = h >= 12 ? 'PM' : 'AM';
   if (h === 0) h = 12; else if (h > 12) h -= 12;
   return `${h}:${m} ${ampm}`;
@@ -576,26 +568,20 @@ export default function LabStatusPage() {
         loggedIn[email] = { userName: row.user_name, courseId: row.course_id, entryType: row.entry_type, punchIn: row.punch_in };
       }
 
-      // Signup map with merged sessions
+      // Signup map with merged sessions (shared with DashboardPage via
+      // src/lib/labSessions.js so both pages agree on who is expected).
       const signedUp = {};
       for (const row of (signupData || [])) {
         const email = (row.user_email || '').toLowerCase();
         if (!email || tcoEmails.has(email)) continue;
-        if (!signedUp[email]) signedUp[email] = { userName: row.user_name, timeBlocks: [] };
-        const parseTime = t => { if (!t) return null; const [hh, mm] = String(t).split(':'); const d = new Date(today); d.setHours(parseInt(hh, 10), parseInt(mm || 0, 10), 0, 0); return d; };
-        const start = parseTime(row.start_time); const end = parseTime(row.end_time);
-        if (start && end) signedUp[email].timeBlocks.push({ start, end });
+        if (!signedUp[email]) signedUp[email] = { userName: row.user_name, slots: [] };
+        signedUp[email].slots.push(row);
       }
       for (const email in signedUp) {
-        const s = signedUp[email]; s.timeBlocks.sort((a, b) => a.start - b.start);
-        const sessions = []; let cur = null;
-        for (const b of s.timeBlocks) {
-          if (!cur) cur = { start: b.start, end: b.end };
-          else if (b.start.getTime() === cur.end.getTime()) cur.end = b.end;
-          else { sessions.push(cur); cur = { start: b.start, end: b.end }; }
-        }
-        if (cur) sessions.push(cur); s.sessions = sessions;
+        const s = signedUp[email];
+        s.sessions = mergeSignupSessions(s.slots);
       }
+      const nowMin = nowMinutes(now);
 
       // Merge
       const allPeople = {};
@@ -614,24 +600,20 @@ export default function LabStatusPage() {
       for (const email in allPeople) {
         const p = allPeople[email];
         let status = '', timeRange = '';
-        let curSession = null, nextSession = null;
-        for (const sess of p.sessions) {
-          if (sess.start <= now && sess.end > now) curSession = sess;
-          else if (sess.start > now && !nextSession) nextSession = sess;
-        }
+        const { current: curSession, next: nextSession } = pickSession(p.sessions, nowMin);
         const isWorkStudy = p.entryType === 'Work Study' || p.entryType === 'work_study';
 
         if (p.isLoggedIn) {
           if (isWorkStudy) { status = 'workstudy'; }
-          else if (p.isSignedUp) { status = 'good'; if (curSession) timeRange = 'Until ' + formatLocalTime(curSession.end); }
+          else if (p.isSignedUp) { status = 'good'; if (curSession) timeRange = 'Until ' + minutesToTime12(curSession.endMin); }
           else { status = 'walkin'; }
         } else if (p.isSignedUp) {
-          if (curSession) { status = 'missing'; timeRange = formatLocalTime(curSession.start) + ' – ' + formatLocalTime(curSession.end); }
-          else if (nextSession) { status = 'expected'; timeRange = formatLocalTime(nextSession.start) + ' – ' + formatLocalTime(nextSession.end); }
+          if (curSession) { status = 'missing'; timeRange = minutesToTime12(curSession.startMin) + ' – ' + minutesToTime12(curSession.endMin); }
+          else if (nextSession) { status = 'expected'; timeRange = minutesToTime12(nextSession.startMin) + ' – ' + minutesToTime12(nextSession.endMin); }
         }
         if (!status) continue;
         finalList.push({ email, userName: p.userName, courseId: p.courseId, status, timeRange, punchIn: p.punchIn,
-          earliestStart: p.sessions.length > 0 ? p.sessions[0].start.getTime() : null });
+          earliestStart: p.sessions.length > 0 ? minutesToDate(today, p.sessions[0].startMin).getTime() : null });
       }
 
       finalList.sort((a, b) => {

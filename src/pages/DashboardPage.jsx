@@ -24,6 +24,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { mustData } from '@/lib/supabaseData';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
+import { mergeSignupSessions, pickSession, hasRemainingSession, nowMinutes } from '@/lib/labSessions';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow';
@@ -1249,6 +1250,17 @@ function InstructorOverview({ navigate }) {
   const dateStr = useMemo(() => toLocalDateStr(selectedDate), [selectedDate]);
   const isToday = dateStr === toLocalDateStr(new Date());
 
+  // ── Minute tick ──
+  // Day View decides "current vs upcoming session" from the wall clock. The
+  // data only refetches on DB changes, so tick once a minute to keep someone
+  // who left their morning block and is due back later from going stale.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isToday) return undefined;
+    const id = setInterval(() => setNowTick(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, [isToday]);
+
   const goBack = () => { const d = new Date(selectedDate); d.setDate(d.getDate() - 1); setSelectedDate(d); };
   const goForward = () => { const d = new Date(selectedDate); d.setDate(d.getDate() + 1); setSelectedDate(d); };
   const goToday = () => setSelectedDate(new Date());
@@ -1434,6 +1446,10 @@ function InstructorOverview({ navigate }) {
   };
 
   // ── Build merged people list for day view ──
+  // Signup slots are merged into contiguous sessions (src/lib/labSessions.js)
+  // so a student with two separate blocks (8–11 AM and 12–2 PM) is handled
+  // correctly: punching out after the morning block does NOT mean they are
+  // done for the day. Lab Status uses the same helpers.
   const peopleList = useMemo(() => {
     const map = new Map();
 
@@ -1454,65 +1470,75 @@ function InstructorOverview({ navigate }) {
       map.get(key).clockEntries.push(c);
     });
 
-    let list = Array.from(map.values());
+    const nowMin = nowMinutes(new Date(nowTick));
 
-    // For today: hide people who have punched out — they're done for the day
-    if (isToday) {
-      list = list.filter(p => {
-        const hasPunchedOut = p.clockEntries.some(c => c.status === 'Punched Out');
-        const isStillIn = p.clockEntries.some(c => c.status === 'Punched In');
-        if (hasPunchedOut && !isStillIn) return false;
-        return true;
+    let list = Array.from(map.values()).map(p => {
+      const sessions = mergeSignupSessions(p.signupSlots);
+      const isPunchedIn = p.clockEntries.some(c => c.status === 'Punched In');
+      const hasPunchedOut = p.clockEntries.some(c => c.status === 'Punched Out');
+
+      // Minute-of-day of the latest punch-out (fake-UTC timestamps → getUTC*).
+      let lastPunchOutMin = null;
+      p.clockEntries.forEach(c => {
+        if (c.status !== 'Punched Out' || !c.punch_out) return;
+        const d = new Date(c.punch_out);
+        const m = d.getUTCHours() * 60 + d.getUTCMinutes();
+        if (lastPunchOutMin == null || m > lastPunchOutMin) lastPunchOutMin = m;
       });
-    }
 
-    // Sort: punched in first, then expected by start time, then recently departed
+      // Which session to show on the row. Today: the one in progress, else
+      // the next one up, else the last one (everything is over). Other days:
+      // the full first-start..last-end span, as before.
+      let displayStart = p.expectedStart;
+      let displayEnd = p.expectedEnd;
+      let isReturning = false; // left an earlier block, due back for a later one
+      let isDone = false;      // left and nothing remains today
+      if (isToday && sessions.length > 0) {
+        const { current, next, last } = pickSession(sessions, nowMin);
+        const show = current || next || last;
+        displayStart = show.start;
+        displayEnd = show.end;
+        const remaining = hasRemainingSession(sessions, nowMin, lastPunchOutMin);
+        isReturning = hasPunchedOut && !isPunchedIn && remaining;
+        isDone = hasPunchedOut && !isPunchedIn && !remaining;
+      } else if (isToday) {
+        isDone = hasPunchedOut && !isPunchedIn;
+      }
+
+      return { ...p, sessions, displayStart, displayEnd, isReturning, isDone };
+    });
+
+    // For today: hide people who have punched out and have no later block —
+    // they're done for the day. Someone due back for a later block stays.
+    if (isToday) list = list.filter(p => !p.isDone);
+
+    // Sort: punched in first, then expected (incl. returning) by start time,
+    // then recently departed
     list.sort((a, b) => {
       const aIn = a.clockEntries.some(c => c.status === 'Punched In');
       const bIn = b.clockEntries.some(c => c.status === 'Punched In');
       if (aIn && !bIn) return -1;
       if (!aIn && bIn) return 1;
-      const aOut = a.clockEntries.some(c => c.status === 'Punched Out');
-      const bOut = b.clockEntries.some(c => c.status === 'Punched Out');
+      const aOut = a.clockEntries.some(c => c.status === 'Punched Out') && !a.isReturning;
+      const bOut = b.clockEntries.some(c => c.status === 'Punched Out') && !b.isReturning;
       if (!aOut && bOut) return -1;
       if (aOut && !bOut) return 1;
-      if (a.expectedStart && b.expectedStart) return a.expectedStart.localeCompare(b.expectedStart);
-      if (a.expectedStart) return -1;
-      if (b.expectedStart) return 1;
+      if (a.displayStart && b.displayStart) return a.displayStart.localeCompare(b.displayStart);
+      if (a.displayStart) return -1;
+      if (b.displayStart) return 1;
       return 0;
     });
 
     return list;
-  }, [signups, clockEntries, isToday]);
+  }, [signups, clockEntries, isToday, nowTick]);
 
   // Tile counts
   const expectedCount = useMemo(() => {
-    // Count unique signed-up users who are still expected (not yet punched out).
-    // Mirrors the Day View filter: exclude anyone who has punched out and isn't still punched in.
-    const signupEmails = new Set();
-    (signups || []).forEach(s => { if (s.user_email) signupEmails.add(s.user_email.toLowerCase()); });
-
-    if (!isToday) return signupEmails.size; // For past/future dates, just count all signups
-
-    // For today, subtract people who have already left
-    const punchedOut = new Set();
-    const punchedIn = new Set();
-    (clockEntries || []).forEach(c => {
-      const email = (c.user_email || '').toLowerCase();
-      if (!email) return;
-      if (c.status === 'Punched Out') punchedOut.add(email);
-      if (c.status === 'Punched In') punchedIn.add(email);
-    });
-
-    let count = 0;
-    signupEmails.forEach(email => {
-      const hasPunchedOut = punchedOut.has(email);
-      const isStillIn = punchedIn.has(email);
-      if (hasPunchedOut && !isStillIn) return; // They've left, don't count
-      count++;
-    });
-    return count;
-  }, [signups, clockEntries, isToday]);
+    // Unique signed-up users still expected today. Derived from peopleList so
+    // the tile and the Day View can never disagree (peopleList already drops
+    // anyone who has left with no later block; past/future dates keep all).
+    return peopleList.filter(p => p.signupSlots.length > 0).length;
+  }, [peopleList]);
 
   const punchedInCount = useMemo(() => {
     const emails = new Set();
@@ -1729,6 +1755,8 @@ function InstructorOverview({ navigate }) {
                   const isPunchedIn = person.clockEntries.some(c => c.status === 'Punched In');
                   const hasLeft = person.clockEntries.some(c => c.status === 'Punched Out');
                   const hasSignup = person.signupSlots.length > 0;
+                  // Left an earlier block but due back for a later one — treat as Expected
+                  const isReturning = !!person.isReturning;
                   const isWorkStudyPunch = person.clockEntries.some(c => c.entry_type === 'Work Study');
                   const isPersonTCO = tcoEmails.has((person.user_email || '').toLowerCase());
                   const isWorkStudy = isWorkStudyPunch || isPersonTCO;
@@ -1738,7 +1766,7 @@ function InstructorOverview({ navigate }) {
 
                   let statusDot;
                   if (isPunchedIn) statusDot = '#40c057';
-                  else if (hasLeft) statusDot = '#868e96';
+                  else if (hasLeft && !isReturning) statusDot = '#868e96';
                   else statusDot = '#fab005';
 
                   return (
@@ -1749,18 +1777,18 @@ function InstructorOverview({ navigate }) {
                         {isWorkStudy && <span className="dash-badge-work-study">Work Study</span>}
                         {isWalkIn && <span className="dash-badge-walk-in">Walk-in</span>}
                         {isPunchedIn && <span className="dash-badge-in">In Lab</span>}
-                        {hasLeft && !isPunchedIn && <span className="dash-badge-left">Left</span>}
-                        {!isPunchedIn && !hasLeft && hasSignup && <span className="dash-badge-expected">Expected</span>}
+                        {hasLeft && !isPunchedIn && !isReturning && <span className="dash-badge-left">Left</span>}
+                        {!isPunchedIn && (!hasLeft || isReturning) && hasSignup && <span className="dash-badge-expected">Expected</span>}
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 4, marginLeft: 16, fontSize: '0.8rem', color: '#495057' }}>
                         {hasSignup && (
-                          <span>{formatTime12(person.expectedStart)} – {formatTime12(person.expectedEnd)}</span>
+                          <span>{formatTime12(person.displayStart)} – {formatTime12(person.displayEnd)}</span>
                         )}
                         {isPunchedIn && punchInTime && (
                           <span style={{ color: '#40c057' }}>In: {punchInTime}</span>
                         )}
-                        {isPunchedIn && hasSignup && person.expectedEnd && (
-                          <span style={{ color: '#fd7e14' }}>Leaving ~{formatTime12(person.expectedEnd)}</span>
+                        {isPunchedIn && hasSignup && person.displayEnd && (
+                          <span style={{ color: '#fd7e14' }}>Leaving ~{formatTime12(person.displayEnd)}</span>
                         )}
                         {hasLeft && !isPunchedIn && (
                           <span style={{ color: '#868e96' }}>Left: {formatTimestamp12(person.clockEntries.find(c => c.status === 'Punched Out')?.punch_out)}</span>
