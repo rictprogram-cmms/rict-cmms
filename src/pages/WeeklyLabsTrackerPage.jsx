@@ -248,7 +248,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
   const [loadingWOs, setLoadingWOs] = useState(true)
   const [weeklyReminders, setWeeklyReminders] = useState([])  // [{id, class_id, class_label, message}]
   const [acknowledgedIds, setAcknowledgedIds] = useState(() => new Set())
-  // Make-up hours owed THIS week from approved absences the week before:
+  // Make-up hours owed THIS week from approved requests (absence / late submission) the week before:
   //   [{ requestId, courseId, owed, logged, windowDays: ['YYYY-MM-DD', …], complete }]
   const [makeups, setMakeups] = useState([])
   // Ref-based guard to prevent double-fire from rapid badge swipe events
@@ -308,7 +308,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
       .catch(() => setWeeklyReminders([]))
   }, [isOpen, classes, studentEmail])
 
-  // Fetch make-up hours owed this week (approved absences → first two open lab
+  // Fetch make-up hours owed this week (approved requests → first two open lab
   // days). Uses the same SQL window helper the auto-complete trigger uses so
   // the modal and the trigger always agree on which days count.
   useEffect(() => {
@@ -692,7 +692,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
             )}
           </div>
 
-          {/* ── MAKE-UP HOURS (approved absences → this week) ── */}
+          {/* ── MAKE-UP HOURS (approved requests → this week) ── */}
           {hasMakeups && (
             <div
               className={`px-6 py-4 border-b ${makeupsOutstanding.length > 0 ? 'border-amber-200 bg-amber-50/30' : 'border-emerald-200 bg-emerald-50/30'}`}
@@ -705,7 +705,7 @@ function AllDoneModal({ isOpen, onClose, studentName, studentEmail, weekNumber, 
                 <RotateCcw size={16} className={makeupsOutstanding.length > 0 ? 'text-amber-600' : 'text-emerald-600'} aria-hidden="true" />
                 <h3 className={`text-sm font-semibold ${makeupsOutstanding.length > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>
                   Make-Up Hours
-                  <span className="font-normal opacity-70 ml-1">(approved absence last week)</span>
+                  <span className="font-normal opacity-70 ml-1">(approved request last week)</span>
                 </h3>
               </div>
               <div className="space-y-2">

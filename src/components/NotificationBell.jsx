@@ -753,10 +753,10 @@ export default function NotificationBell() {
     setItemsByTable(prev => ({ ...prev, netchg: _items }));
   }, [profile?.email, isInstructor]);
 
-  // ── INSTRUCTOR ONLY: Pending absence requests ──
-  // Mirrors fetchNetworkChanges: one bell item per Pending absence_requests row.
-  // Review (approve with deduction choice / reject) lives on the Absence Request
-  // page where the deduction modal is, so the bell action is view-only.
+  // ── INSTRUCTOR ONLY: Pending absence / late submission requests ──
+  // Mirrors fetchNetworkChanges: one bell item per Pending absence_requests row
+  // (both request types). Review (approve with deduction choice + due date /
+  // reject) lives on the Absence / Late Request page, so the bell action is view-only.
   const fetchAbsenceRequests = useCallback(async () => {
     if (!profile?.email || !isInstructor) {
       setItemsByTable(prev => ({ ...prev, absence: [] }));
@@ -766,7 +766,7 @@ export default function NotificationBell() {
     try {
       const data = mustData(await supabase
         .from('absence_requests')
-        .select('request_id, user_name, user_email, course_id, class_id, absence_date, hours_missed, submitted_by_email, submitted_by_name, created_at')
+        .select('request_id, request_type, assignment_name, user_name, user_email, course_id, class_id, absence_date, hours_missed, submitted_by_email, submitted_by_name, created_at')
         .eq('status', 'Pending')
         .order('created_at', { ascending: false })
         .limit(50), 'absence_requests.select');
@@ -785,13 +785,21 @@ export default function NotificationBell() {
         const createdLocal = cd && !isNaN(cd.getTime())
           ? new Date(cd.getUTCFullYear(), cd.getUTCMonth(), cd.getUTCDate(), cd.getUTCHours(), cd.getUTCMinutes(), cd.getUTCSeconds())
           : null;
+        // Late submissions share the table (request_type). Title/subtitle
+        // word themselves per type; the bell action is the same page either way.
+        const isLate = r.request_type === 'Late Submission';
+        const hrsLabel = isLate
+          ? (Number(r.hours_missed) > 0 ? r.hours_missed + 'h lab time requested' : 'no extra lab time')
+          : (r.hours_missed ? r.hours_missed + 'h missed' : 'Hours TBD');
         _items.push({
           id: `absence-${r.request_id}`,
           type: 'absence',
-          icon: 'event_busy',
+          icon: isLate ? 'assignment_late' : 'event_busy',
           color: '#f59f00',
-          title: `${r.user_name || r.user_email} — absence ${dateLabel}`,
-          subtitle: `${cls ? cls + '  •  ' : ''}${r.hours_missed ? r.hours_missed + 'h missed' : 'Hours TBD'}${isOnBehalf ? '  •  filed by ' + (r.submitted_by_name || 'instructor') : ''}`,
+          title: isLate
+            ? `${r.user_name || r.user_email} — late: ${r.assignment_name || 'assignment'} (${dateLabel})`
+            : `${r.user_name || r.user_email} — absence ${dateLabel}`,
+          subtitle: `${cls ? cls + '  •  ' : ''}${hrsLabel}${isOnBehalf ? '  •  filed by ' + (r.submitted_by_name || 'instructor') : ''}`,
           date: createdLocal || r.created_at,
           raw: r,
         });
@@ -1587,7 +1595,7 @@ export default function NotificationBell() {
     navigate('/network-map');
   };
 
-  // Navigate to the Absence Request page so the instructor can review pending
+  // Navigate to the Absence / Late Request page so the instructor can review pending
   // requests. Approve (deduction decision) / Reject live on that page, so this
   // is view-only — same pattern as viewNetworkChange.
   const viewAbsenceRequest = () => {
@@ -1612,7 +1620,7 @@ export default function NotificationBell() {
       case 'wo_assignment': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
       case 'help': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary min-h-[44px]" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       case 'netchg': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
-      case 'absence': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review absence request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
+      case 'absence': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review ${item.raw?.request_type === 'Late Submission' ? 'late submission' : 'absence'} request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence / Late Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
       case 'pending_ack': return (<button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => setAckModalTarget(item.raw)} aria-label={`Sign for asset ${item.raw?.asset_name || item.raw?.asset_id}`}><span className="material-icons" aria-hidden="true">verified_user</span>Sign Now</button>);
       default: return null;
     }

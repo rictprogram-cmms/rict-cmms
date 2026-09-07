@@ -83,7 +83,8 @@ function formatTime(val) {
 
 /**
  * Small "+N make-up" badge shown next to a required-hours figure when an
- * approved absence added hours to that week (see useMakeupHours.js).
+ * approved absence / late-submission request added hours to that week
+ * (see useMakeupHours.js).
  */
 function MakeupBadge({ hours, className = '' }) {
   const n = Number(hours) || 0
@@ -91,7 +92,7 @@ function MakeupBadge({ hours, className = '' }) {
   return (
     <span
       className={`inline-flex items-center px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 text-[10px] font-semibold ${className}`}
-      title={`Includes ${formatHours(n)} make-up hour${n === 1 ? '' : 's'} from an approved absence the previous week`}
+      title={`Includes ${formatHours(n)} make-up hour${n === 1 ? '' : 's'} from an approved request the previous week`}
     >
       +{formatHours(n)} make-up
     </span>

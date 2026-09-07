@@ -193,7 +193,7 @@ const SETTING_META = {
     details: {
       what: 'Flat weekly requirement that replaces the class\'s normal required hours during its finals week (finals_start–finals_end on the class).',
       where: 'Lab Signup class tiles, Time Cards, Dashboard, Attendance Reports, and lab-signup notifications.',
-      effect: 'Default 2. Closed-day proration does not apply to finals week; approved-absence make-up hours still add on top.',
+      effect: 'Default 2. Closed-day proration does not apply to finals week; approved-request make-up hours still add on top.',
     },
   },
   lab_weeks_to_display: {

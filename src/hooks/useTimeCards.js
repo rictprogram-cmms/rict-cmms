@@ -104,7 +104,7 @@ function toSafeDateStr(d) {
 }
 
 /**
- * Make-up hours (approved absences → following week) for one student + course
+ * Make-up hours (approved absence / late-submission requests → following week) for one student + course
  * whose make-up week Monday falls inside [rangeStart, rangeEnd] (date strings).
  * Class weeks can start on Sunday, so we match by "Monday within the week
  * range" rather than by an exact key. Returns { hours, requestIds }.
@@ -212,7 +212,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
     classActiveInRange(c, reportStart, reportEnd)
   )
 
-  // 2b. Make-up hours overlay (approved absences add to next week's requirement)
+  // 2b. Make-up hours overlay (approved requests add to next week's requirement)
   let makeupOverlay = { byKey: {}, requests: [] }
   if (userEmail) {
     try {
@@ -470,7 +470,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       const wkClosed = labStatus.allDone || labStatus.requiredHoursMet ||
         weekEntries.some(e => e.entry_type === 'All Done') ||
         hasUserAllDoneThisWeek
-      // Make-up hours owed this week (approved absence the week before) are
+      // Make-up hours owed this week (approved request the week before) are
       // added to the base requirement — matches the Lab Signup tile.
       const mu = makeupHoursInRange(makeupOverlay, userEmail, cfg?.course_id || courseId, cfg?.class_id, wkStartStr, wkEndStr)
       // Base requirement: finals week = flat finals hours; otherwise prorated
@@ -985,7 +985,7 @@ export function useTimeCardData() {
         classesData = data || []
       }
 
-      // Make-up hours for this period (approved absence the week before)
+      // Make-up hours for this period (approved request the week before)
       let makeupOverlay = { byKey: {}, requests: [] }
       if (userEmail) {
         try {
@@ -1385,7 +1385,7 @@ export function useTimeCardData() {
           fetchTimeCard(userId, startDate, endDate)
         }
       })
-      // Approved/changed absence requests move make-up hours between weeks
+      // Approved/changed absence / late-submission requests move make-up hours between weeks
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, () => {
         if (lastFetchParamsRef.current) {
           const { userId, startDate, endDate } = lastFetchParamsRef.current
@@ -1472,7 +1472,7 @@ export function useClassWeeklyReport() {
         tcRecords = data || []
       }
 
-      // Make-up hours owed this period, per student (approved absences)
+      // Make-up hours owed this period, per student (approved requests)
       const emails = enrolled.map(u => u.email).filter(Boolean)
       let makeupOverlay = { byKey: {}, requests: [] }
       if (emails.length > 0) {

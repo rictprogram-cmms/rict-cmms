@@ -1,7 +1,8 @@
 /**
  * RICT CMMS — Make-Up Hours overlay
  *
- * Approved absence requests add their `hours_missed` to the student's required
+ * Approved absence AND late-submission requests (one table, request_type)
+ * add their `hours_missed` to the student's required
  * lab hours for the FOLLOWING week (absence `week_start` + 7 days), for the
  * same course. Program policy: make-up hours are completed during the first
  * two lab days of that week (Section 4.3).
@@ -91,7 +92,7 @@ export function overlayKey(email, mondayKey, courseId) {
  */
 
 /**
- * Load approved absence requests and build the overlay.
+ * Load approved requests (both types; hours_missed > 0) and build the overlay.
  *
  * @param {Object}   p
  * @param {string[]} [p.emails]       limit to these student emails (omit = all)

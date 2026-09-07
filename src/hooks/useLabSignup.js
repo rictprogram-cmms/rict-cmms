@@ -860,7 +860,7 @@ export function useLabCalendarActions() {
 export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1, 2, 3, 4]) {
   const { profile } = useAuth()
   // makeup: { [weekStartKey]: { [courseId]: { hours, requests, windowDays } } }
-  //   — approved-absence make-up hours that add to a class's required hours
+  //   — approved-request (absence / late submission) make-up hours that add to a class's required hours
   //     for that week (see useMakeupHours.js). Students / Work Study only.
   const [data, setData] = useState({ weeks: [], hours: [], slots: {}, classes: [], makeup: {} })
   const [loading, setLoading] = useState(true)
@@ -958,7 +958,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
         .gte('date', firstWeek.toISOString())
         .lte('date', overallEnd.toISOString()), 'lab_signup')
 
-      // 3b. Make-up hours overlay (approved absences → next week's requirement)
+      // 3b. Make-up hours overlay (approved requests → next week's requirement)
       let makeupOverlay = { byKey: {}, requests: [] }
       if (classes.length > 0) {
         makeupOverlay = await fetchMakeupOverlay({
@@ -1139,7 +1139,7 @@ export function useLabSignupActions() {
    * and inserts all signups in one batch.
    *
    * @param {Object} [makeupTags]  { [slotKey]: absenceRequestId } — slots that
-   *   satisfy an approved absence make-up are saved with is_makeup = true and
+   *   satisfy an approved request's make-up are saved with is_makeup = true and
    *   makeup_request_id so Time Cards / the absence record can trace them.
    */
   const signUpBatchMultiClass = async (selectionsByClass, makeupTags = {}) => {

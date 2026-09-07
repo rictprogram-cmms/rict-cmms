@@ -313,7 +313,7 @@ function WeeklySignupTab() {
     return getExistingWeekSignups(weekIdx, courseId) + getNewWeekSelections(weekIdx, courseId)
   }, [getExistingWeekSignups, getNewWeekSelections])
 
-  // ── Make-up hours (approved absences → this week's requirement) ──
+  // ── Make-up hours (approved absence / late-submission requests → this week's requirement) ──
   // For a week, per class with make-up hours owed: which selections/signups on
   // the first two open lab days count as make-up, and whether the owed hours
   // are covered. Returns:
@@ -455,7 +455,7 @@ function WeeklySignupTab() {
   const executeSubmit = async (weekIdx) => {
     const weekNewSelections = getWeekAllNewSelections(weekIdx)
     const weekCancelIds = getWeekCancellations(weekIdx)
-    // Slots that satisfy an approved absence make-up → saved with is_makeup
+    // Slots that satisfy an approved request's make-up → saved with is_makeup
     const makeupTags = isInstructor ? {} : Object.values(getWeekMakeupStatus(weekIdx))
       .reduce((acc, v) => Object.assign(acc, v.tags), {})
 
@@ -640,7 +640,7 @@ function WeeklySignupTab() {
                     const isComplete = required > 0 && progress >= required
                     const muStatus = muHours > 0 ? weekMuStatus?.[cls.courseId] : null
                     const muLabel = muHours > 0
-                      ? ` Includes ${muHours} make-up hour${muHours === 1 ? '' : 's'} from an approved absence — schedule on ${(muStatus?.windowDays || []).map(d => formatShortDay(d)).join(' or ')}.`
+                      ? ` Includes ${muHours} make-up hour${muHours === 1 ? '' : 's'} from an approved absence or late-submission request — schedule on ${(muStatus?.windowDays || []).map(d => formatShortDay(d)).join(' or ')}.`
                       : ''
                     const clLabel = req?.finalsSplit
                       ? ` Finals start mid-week: ${closureLabel} prorated plus ${req.examHours} exam hour${req.examHours === 1 ? '' : 's'}.`
@@ -707,7 +707,7 @@ function WeeklySignupTab() {
                             <Ban size={9} aria-hidden="true" /> {closure.open}/{closure.scheduled} days
                           </span>
                         )}
-                        {/* Make-up badge (approved absence hours added to this week) */}
+                        {/* Make-up badge (approved request hours added to this week) */}
                         {muHours > 0 && (
                           <span
                             className={`mt-1 inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded ${
@@ -990,7 +990,7 @@ function WeeklySignupTab() {
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-4 h-4 rounded-sm bg-violet-500 flex items-center justify-center text-[6px] text-white font-bold">MU</span>
-          Make-up hour (approved absence)
+          Make-up hour (approved request)
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-4 h-4 rounded-sm bg-red-100 border-2 border-red-400" />
@@ -1204,7 +1204,7 @@ function MySignupsTab() {
                   {s.isMakeup && (
                     <span
                       className="ml-2 px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-semibold"
-                      title={s.makeupRequestId ? `Make-up hour for absence ${s.makeupRequestId}` : 'Make-up hour'}
+                      title={s.makeupRequestId ? `Make-up hour for request ${s.makeupRequestId}` : 'Make-up hour'}
                     >
                       Make-up{s.makeupRequestId ? ` · ${s.makeupRequestId}` : ''}
                     </span>
