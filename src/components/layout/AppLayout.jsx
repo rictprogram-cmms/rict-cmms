@@ -61,6 +61,7 @@ import {
 } from 'lucide-react'
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
+import { fetchSemesterEnd, formatSemesterEnd } from '@/lib/semesterEnd'
 
 // Sidebar navigation grouped by section
 // permPage maps to the `page` column in the permissions table for view_page check
@@ -438,39 +439,19 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
   const [expandedPages, setExpandedPages] = useState({})
   const [permSearch, setPermSearch] = useState('')
 
-  // Semester end date — for "Rest of Semester" duration option
+  // Semester end date — for "Rest of Semester" duration option (shared lib)
   const [semesterEndDate, setSemesterEndDate] = useState(null)
   const [semesterDaysLeft, setSemesterDaysLeft] = useState(null)
 
   useEffect(() => {
     let cancelled = false
-    async function loadSemesterEnd() {
-      try {
-        const todayStr = new Date().toISOString().substring(0, 10)
-        const data = mustData(await supabase
-          .from('classes')
-          .select('end_date')
-          .eq('status', 'Active')
-          .lte('start_date', todayStr)
-          .gte('end_date', todayStr)
-          .order('end_date', { ascending: false })
-          .limit(1), 'classes.select')
-        if (cancelled || !data?.length || !data[0].end_date) return
-        const endStr = data[0].end_date
-        // Parse as local date (append T00:00:00 to avoid UTC shift)
-        const end = new Date(endStr + 'T00:00:00')
-        const today = new Date()
-        today.setHours(0, 0, 0, 0)
-        const diffDays = Math.round((end - today) / (1000 * 60 * 60 * 24))
-        if (diffDays > 0) {
-          setSemesterEndDate(end)
-          setSemesterDaysLeft(diffDays)
-        }
-      } catch (e) {
-        console.error('Failed to load semester end date:', e)
-      }
-    }
-    loadSemesterEnd()
+    fetchSemesterEnd()
+      .then(sem => {
+        if (cancelled || !sem) return
+        setSemesterEndDate(sem.endDate)
+        setSemesterDaysLeft(sem.daysLeft)
+      })
+      .catch(e => console.error('Failed to load semester end date:', e))
     return () => { cancelled = true }
   }, [])
 
@@ -749,7 +730,7 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                 <option value={7}>1 week</option>
                 {semesterDaysLeft && (
                   <option value={semesterDaysLeft}>
-                    Rest of Semester ({semesterEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})
+                    Rest of Semester ({formatSemesterEnd(semesterEndDate)})
                   </option>
                 )}
               </select>
@@ -779,7 +760,7 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
                 <option value={7}>1 week</option>
                 {semesterDaysLeft && (
                   <option value={semesterDaysLeft}>
-                    Rest of Semester ({semesterEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})
+                    Rest of Semester ({formatSemesterEnd(semesterEndDate)})
                   </option>
                 )}
               </select>

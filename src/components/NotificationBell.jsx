@@ -17,12 +17,30 @@ import { fetchWeekRequirement } from '@/lib/closureProration';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
+import { fetchSemesterEnd, semesterEndExpiry, semesterInfoFromEndStr, localTodayStr } from '@/lib/semesterEnd';
 import { formatCountdown } from '@/hooks/useAssetCheckouts';
 import { generateSafeTcId } from '@/utils/generateSafeTcId';
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
 import '@/styles/notification-bell.css';
 
 const REMINDER_INTERVAL = 60000; // Ding every 60 seconds while notifications are pending
+
+/**
+ * Human label for a temp access request's requested duration.
+ * Anything longer than a week came from the student's "Rest of Semester"
+ * option, so show the calendar date instead of a raw day count.
+ */
+function tempDurationLabel(r) {
+  const days = Number(r?.days_requested) || 0;
+  if (days > 7 && r?.submitted_date) {
+    const end = new Date(r.submitted_date);
+    if (!Number.isNaN(end.getTime())) {
+      end.setDate(end.getDate() + days);
+      return `through ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+    }
+  }
+  return `for ${days} day${days !== 1 ? 's' : ''}`;
+}
 
 export default function NotificationBell() {
   const { user, profile, isSuperAdmin } = useAuth();
@@ -129,6 +147,12 @@ export default function NotificationBell() {
   const [tempModal, setTempModal] = useState(null);
   const [tempRole, setTempRole] = useState('Work Study');
   const [tempDays, setTempDays] = useState(3);
+  // Semester end ({ endDate, daysLeft, label } or null) — powers the "Rest of Semester" option
+  const [tempSemester, setTempSemester] = useState(null);
+  // 'days' = expire now + tempDays; 'semester' = end of semester day; 'custom' = end of tempCustomDate
+  const [tempDurationMode, setTempDurationMode] = useState('days');
+  // YYYY-MM-DD chosen by the instructor when tempDurationMode === 'custom'
+  const [tempCustomDate, setTempCustomDate] = useState('');
   // Permission-type temp access approval state
   const [tempApprovePerms, setTempApprovePerms] = useState({});
   // Reject reason modal
@@ -604,6 +628,7 @@ export default function NotificationBell() {
       (data || []).forEach(r => {
         const isPermType = r.request_type === 'permissions';
         const permCount = (r.requested_permissions || []).length;
+        const durationLabel = tempDurationLabel(r);
         _items.push({
           id: `temp-${r.request_id}`,
           type: isPermType ? 'temp_perm' : 'temp',
@@ -611,8 +636,8 @@ export default function NotificationBell() {
           color: isPermType ? '#7c3aed' : '#f59f00',
           title: r.user_name || r.user_email,
           subtitle: isPermType
-            ? `${permCount} permission${permCount !== 1 ? 's' : ''} for ${r.days_requested}d`
-            : `${r.user_current_role || r.current_role || ''} → ${r.requested_role} (${r.days_requested}d)`,
+            ? `${permCount} permission${permCount !== 1 ? 's' : ''} ${durationLabel}`
+            : `${r.user_current_role || r.current_role || ''} → ${r.requested_role} (${durationLabel})`,
           date: r.submitted_date,
           raw: r,
         });
@@ -1387,9 +1412,25 @@ export default function NotificationBell() {
 
   // Temp Access Requests
   const openApproveTempAccess = (item) => {
+    const requestedDays = item.raw.days_requested || 3;
     setTempModal(item);
     setTempRole(item.raw.requested_role || 'Work Study');
-    setTempDays(item.raw.days_requested || 3);
+    setTempDays(requestedDays);
+    setTempDurationMode('days');
+    setTempCustomDate('');
+    setTempSemester(null);
+    // Load the semester end so the instructor can approve through the end of
+    // the semester. If the student asked for longer than a week (i.e. picked
+    // "Rest of Semester"), pre-select that option once it arrives.
+    fetchSemesterEnd()
+      .then(sem => {
+        setTempSemester(sem);
+        if (sem && requestedDays > 7) {
+          setTempDays(sem.daysLeft);
+          setTempDurationMode('semester');
+        }
+      })
+      .catch(e => console.warn('NotifBell: semester end lookup failed:', e.message));
     // For permission-type: pre-select all requested permissions
     if (item.raw.request_type === 'permissions') {
       const permMap = {};
@@ -1399,40 +1440,142 @@ export default function NotificationBell() {
       setTempApprovePerms({});
     }
   };
+  // ── Temp access duration helpers ──
+  const TEMP_FIXED_DAYS = [1, 2, 3, 5, 7];
+  const TEMP_SEMESTER_VALUE = 'semester';
+
+  const TEMP_CUSTOM_VALUE = 'custom';
+
+  // Select value: 'semester' / 'custom' for those modes, otherwise the day count as a string.
+  const tempDurationValue = tempDurationMode === 'semester' ? TEMP_SEMESTER_VALUE
+    : tempDurationMode === 'custom' ? TEMP_CUSTOM_VALUE
+    : String(tempDays);
+
+  // Custom date bounds: tomorrow through semester end (or one year out during a break).
+  const tempCustomMin = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return localTodayStr(d); })();
+  const tempCustomMax = tempSemester
+    ? localTodayStr(tempSemester.endDate)
+    : (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return localTodayStr(d); })();
+  // Parsed custom date ({ endDate, daysLeft, label } or null when empty/past/today)
+  const tempCustomInfo = tempDurationMode === 'custom' ? semesterInfoFromEndStr(tempCustomDate) : null;
+  const tempCustomError = tempDurationMode !== 'custom' ? ''
+    : !tempCustomDate ? 'Choose an end date.'
+    : !tempCustomInfo ? 'End date must be after today.'
+    : tempCustomDate > tempCustomMax ? `End date cannot be after ${tempSemester ? `the semester end (${tempSemester.label})` : 'one year from today'}.`
+    : '';
+  const tempDurationInvalid = tempDurationMode === 'custom' && !!tempCustomError;
+
+  const handleTempDurationChange = (value) => {
+    if (value === TEMP_SEMESTER_VALUE && tempSemester) {
+      setTempDurationMode('semester');
+      setTempDays(tempSemester.daysLeft);
+      return;
+    }
+    if (value === TEMP_CUSTOM_VALUE) {
+      setTempDurationMode('custom');
+      return;
+    }
+    const n = parseInt(value, 10);
+    if (!Number.isNaN(n) && n > 0) {
+      setTempDurationMode('days');
+      setTempDays(n);
+    }
+  };
+
+  // Option list: fixed durations, then Rest of Semester (when in session), then an
+  // "As requested" fallback so the select never displays a value it does not hold
+  // (a controlled <select> with a value that matches no option silently shows the first option).
+  const renderTempDurationOptions = () => {
+    const opts = TEMP_FIXED_DAYS.map(d => (
+      <option key={d} value={String(d)}>{d === 7 ? '1 week' : `${d} day${d !== 1 ? 's' : ''}`}</option>
+    ));
+    if (tempSemester) {
+      opts.push(<option key={TEMP_SEMESTER_VALUE} value={TEMP_SEMESTER_VALUE}>Rest of Semester ({tempSemester.label})</option>);
+    }
+    opts.push(<option key={TEMP_CUSTOM_VALUE} value={TEMP_CUSTOM_VALUE}>Custom end date…</option>);
+    const currentIsFixed = TEMP_FIXED_DAYS.includes(tempDays);
+    if (tempDurationMode === 'days' && !currentIsFixed) {
+      opts.push(<option key={`custom-${tempDays}`} value={String(tempDays)}>As requested ({tempDays} days)</option>);
+    }
+    return opts;
+  };
+
+  // Date picker shown under the duration select when "Custom end date…" is chosen.
+  // idSuffix keeps ids unique between the permissions and role variants of the modal.
+  const renderTempCustomDate = (idSuffix) => {
+    if (tempDurationMode !== 'custom') return null;
+    const inputId = `nb-fld-custom-date-${idSuffix}`;
+    const hintId = `${inputId}-hint`;
+    const errId = `${inputId}-err`;
+    return (
+      <div style={{ marginTop: 8 }}>
+        <label htmlFor={inputId} className="nbell-label">Access ends on</label>
+        <input
+          id={inputId}
+          type="date"
+          className="nbell-select"
+          value={tempCustomDate}
+          min={tempCustomMin}
+          max={tempCustomMax}
+          required
+          aria-required="true"
+          aria-invalid={tempCustomError ? 'true' : 'false'}
+          aria-describedby={tempCustomError ? `${hintId} ${errId}` : hintId}
+          onChange={e => setTempCustomDate(e.target.value)}
+        />
+        <p id={hintId} style={{ fontSize: '0.75rem', color: '#868e96', margin: '4px 0 0' }}>
+          Access expires at 11:59 PM on this date{tempSemester ? ` (no later than ${tempSemester.label})` : ''}.
+          {tempCustomInfo && !tempCustomError ? ` That is ${tempCustomInfo.daysLeft} day${tempCustomInfo.daysLeft !== 1 ? 's' : ''} from today.` : ''}
+        </p>
+        <p id={errId} role="alert" aria-live="polite" style={{ fontSize: '0.78rem', color: '#c92a2a', margin: '4px 0 0', minHeight: tempCustomError ? undefined : 0 }}>
+          {tempCustomError}
+        </p>
+      </div>
+    );
+  };
+
   const confirmApproveTempAccess = async () => {
-    const item = tempModal; if (!item) return; setTempModal(null); setActionLoading(item.id);
+    const item = tempModal; if (!item) return;
+    if (tempDurationInvalid) { showToast(tempCustomError, 'error'); return; }
+    setTempModal(null); setActionLoading(item.id);
     try {
       const req = item.raw;
-      const expiry = new Date(); expiry.setDate(expiry.getDate() + tempDays);
+      // "Rest of Semester" and custom dates expire at 11:59:59 PM local on that
+      // day; fixed durations expire now + N days. expiry_date is true UTC (compared
+      // against new Date() by usePermissions/AppLayout), so toISOString() is correct here.
+      const useSemester = tempDurationMode === 'semester' && tempSemester?.endDate;
+      const useCustom = tempDurationMode === 'custom' && tempCustomInfo?.endDate;
+      const expiry = useSemester ? semesterEndExpiry(tempSemester.endDate)
+        : useCustom ? semesterEndExpiry(tempCustomInfo.endDate)
+        : (() => { const d = new Date(); d.setDate(d.getDate() + tempDays); return d; })();
+      const approvedDays = useCustom ? tempCustomInfo.daysLeft : tempDays;
+      const durationText = useSemester ? `through ${tempSemester.label}`
+        : useCustom ? `through ${tempCustomInfo.label}`
+        : `for ${tempDays} day${tempDays !== 1 ? 's' : ''}`;
       const isPermType = req.request_type === 'permissions';
+      const approvedPerms = isPermType
+        ? (req.requested_permissions || []).filter(p => tempApprovePerms[p.permission_id])
+        : null;
+
+      // One RPC, one transaction: marks the request Active and (role-type only)
+      // elevates profiles.role. Either both land or neither does. The function
+      // requires an instructor caller, refuses non-Pending requests, and derives
+      // reviewed_by from the caller's profile. See 20260908_approve_temp_access_rpc.sql.
+      const updated = mustData(await supabase.rpc('approve_temp_access_request', {
+        p_request_id: req.request_id,
+        p_approved_days: approvedDays,
+        p_expiry_date: expiry.toISOString(),
+        p_approved_role: isPermType ? null : tempRole,
+        p_approved_permissions: isPermType ? approvedPerms : null,
+      }), 'approve_temp_access_request');
+      if (!updated || updated.status !== 'Active') {
+        throw new Error('Approval did not go through — the request was not marked Active');
+      }
 
       if (isPermType) {
-        // Permission-type: store approved permissions, do NOT change user role
-        const approvedPerms = (req.requested_permissions || []).filter(p => tempApprovePerms[p.permission_id]);
-        await supabase.from('temp_access_requests').update({
-          status: 'Active',
-          approved_permissions: approvedPerms,
-          approved_days: tempDays,
-          reviewed_by: fullName(),
-          review_date: new Date().toISOString(),
-          expiry_date: expiry.toISOString()
-        }).eq('request_id', req.request_id);
-        showToast(`Granted ${approvedPerms.length} permission${approvedPerms.length !== 1 ? 's' : ''} to ${req.user_name} for ${tempDays} days!`, 'success');
+        showToast(`Granted ${approvedPerms.length} permission${approvedPerms.length !== 1 ? 's' : ''} to ${req.user_name} ${durationText}!`, 'success');
       } else {
-        // Role-type: existing behavior — change user role
-        await supabase.from('temp_access_requests').update({
-          status: 'Active',
-          approved_role: tempRole,
-          approved_days: tempDays,
-          reviewed_by: fullName(),
-          review_date: new Date().toISOString(),
-          expiry_date: expiry.toISOString()
-        }).eq('request_id', req.request_id);
-        // Elevate user role
-        if (req.user_email) {
-          await supabase.from('profiles').update({ role: tempRole }).eq('email', req.user_email);
-        }
-        showToast(`Approved ${req.user_name} as ${tempRole} for ${tempDays} days!`, 'success');
+        showToast(`Approved ${req.user_name} as ${tempRole} ${durationText}!`, 'success');
       }
       fetchNotifications();
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
@@ -1995,12 +2138,13 @@ export default function NotificationBell() {
             <div className="nbell-modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
               {tempModal.raw?.request_type === 'permissions' ? (
                 <>
-                  <p><strong>{tempModal.raw?.user_name}</strong> requests {(tempModal.raw?.requested_permissions || []).length} specific permission(s) for {tempModal.raw?.days_requested} days.</p>
+                  <p><strong>{tempModal.raw?.user_name}</strong> requests {(tempModal.raw?.requested_permissions || []).length} specific permission(s) {tempDurationLabel(tempModal.raw)}.</p>
                   {tempModal.raw?.reason && <p style={{ fontSize: '0.85rem', color: '#868e96', fontStyle: 'italic' }}>Reason: {tempModal.raw.reason}</p>}
-                  <label htmlFor="nb-fld-duration-days-1" className="nbell-label">Duration (days)</label>
-                  <select id="nb-fld-duration-days-1" className="nbell-select" value={tempDays} onChange={e => setTempDays(parseInt(e.target.value))}>
-                    <option value={1}>1 day</option><option value={2}>2 days</option><option value={3}>3 days</option><option value={5}>5 days</option><option value={7}>1 week</option>
+                  <label htmlFor="nb-fld-duration-days-1" className="nbell-label">Duration</label>
+                  <select id="nb-fld-duration-days-1" className="nbell-select" value={tempDurationValue} onChange={e => handleTempDurationChange(e.target.value)}>
+                    {renderTempDurationOptions()}
                   </select>
+                  {renderTempCustomDate('1')}
                   <label className="nbell-label">Permissions to Grant</label>
                   <p style={{ fontSize: '0.78rem', color: '#868e96', margin: '0 0 8px' }}>Uncheck any you don't want to approve.</p>
                   <div style={{ border: '1px solid #e9ecef', borderRadius: 8, overflow: 'hidden' }}>
@@ -2036,16 +2180,17 @@ export default function NotificationBell() {
                 </>
               ) : (
                 <>
-                  <p><strong>{tempModal.raw?.user_name}</strong> requests {tempModal.raw?.requested_role} access for {tempModal.raw?.days_requested} days.</p>
+                  <p><strong>{tempModal.raw?.user_name}</strong> requests {tempModal.raw?.requested_role} access {tempDurationLabel(tempModal.raw)}.</p>
                   {tempModal.raw?.reason && <p style={{ fontSize: '0.85rem', color: '#868e96', fontStyle: 'italic' }}>Reason: {tempModal.raw.reason}</p>}
                   <label htmlFor="nb-fld-approved-role-2" className="nbell-label">Approved Role</label>
                   <select id="nb-fld-approved-role-2" className="nbell-select" value={tempRole} onChange={e => setTempRole(e.target.value)}>
                     <option value="Work Study">Work Study</option><option value="Instructor">Instructor</option>
                   </select>
-                  <label htmlFor="nb-fld-duration-days-3" className="nbell-label">Duration (days)</label>
-                  <select id="nb-fld-duration-days-3" className="nbell-select" value={tempDays} onChange={e => setTempDays(parseInt(e.target.value))}>
-                    <option value={1}>1 day</option><option value={2}>2 days</option><option value={3}>3 days</option><option value={5}>5 days</option><option value={7}>1 week</option>
+                  <label htmlFor="nb-fld-duration-days-3" className="nbell-label">Duration</label>
+                  <select id="nb-fld-duration-days-3" className="nbell-select" value={tempDurationValue} onChange={e => handleTempDurationChange(e.target.value)}>
+                    {renderTempDurationOptions()}
                   </select>
+                  {renderTempCustomDate('3')}
                 </>
               )}
             </div>
@@ -2054,7 +2199,7 @@ export default function NotificationBell() {
               <button
                 className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
                 onClick={confirmApproveTempAccess}
-                disabled={tempModal.raw?.request_type === 'permissions' && Object.keys(tempApprovePerms).length === 0}
+                disabled={tempDurationInvalid || (tempModal.raw?.request_type === 'permissions' && Object.keys(tempApprovePerms).length === 0)}
               >
                 <span className="material-icons" aria-hidden="true">check</span>
                 {tempModal.raw?.request_type === 'permissions'
