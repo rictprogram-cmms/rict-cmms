@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry } from '@/lib/supabaseRetry'
@@ -610,13 +611,13 @@ export function useUsersForReports({ canViewAll = false } = {}) {
   useEffect(() => { fetch() }, [fetch])
 
   // Real-time: refresh when profiles change (new users, role changes, etc.)
+  // subscribeWithReconnect() rebuilds the channel after CHANNEL_ERROR/TIMED_OUT
+  // and appends a unique suffix so two mounts never collide on the name.
   useEffect(() => {
     if (!canViewAll) return
-    const channel = supabase
-      .channel('tc-users-changes')
+    return subscribeWithReconnect('tc-users-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    )
   }, [canViewAll, fetch])
 
   return { users, loading }
@@ -1363,10 +1364,11 @@ export function useTimeCardData() {
     }
   }, [])
 
-  // Real-time: refresh when time_clock or time_entry_requests change
-  useEffect(() => {
-    const channel = supabase
-      .channel('time-card-data-changes')
+  // Real-time: refresh when time_clock or time_entry_requests change.
+  // subscribeWithReconnect() rebuilds the channel after CHANNEL_ERROR/TIMED_OUT
+  // (raw .channel() could go silently dead after a Wi-Fi blip) and appends a
+  // unique suffix so two mounts never collide on the name.
+  useEffect(() => subscribeWithReconnect('time-card-data-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => {
         if (lastFetchParamsRef.current) {
           const { userId, startDate, endDate } = lastFetchParamsRef.current
@@ -1399,9 +1401,7 @@ export function useTimeCardData() {
           fetchTimeCard(userId, startDate, endDate)
         }
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [fetchTimeCard])
+  ), [fetchTimeCard])
 
   return {
     entries, classSummary, totalHours, loading,
@@ -1643,10 +1643,8 @@ export function useClassWeeklyReport() {
     }
   }, [])
 
-  // Real-time: refresh when time_clock changes
-  useEffect(() => {
-    const channel = supabase
-      .channel('class-weekly-report-changes')
+  // Real-time: refresh when time_clock changes (reconnect-safe, unique per mount)
+  useEffect(() => subscribeWithReconnect('class-weekly-report-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => {
         if (lastFetchParamsRef.current) {
           const { courseId, startDate, endDate } = lastFetchParamsRef.current
@@ -1660,9 +1658,7 @@ export function useClassWeeklyReport() {
           fetchReport(courseId, startDate, endDate)
         }
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
-  }, [fetchReport])
+  ), [fetchReport])
 
   return { students, classInfo, loading, fetchReport }
 }
@@ -2250,13 +2246,11 @@ export function usePendingTimeRequests({ enabled = false } = {}) {
   // Real-time: refresh when time_entry_requests change
   useEffect(() => {
     if (!enabled) return
-    const channel = supabase
-      .channel('pending-time-requests-rt')
+    return subscribeWithReconnect('pending-time-requests-rt', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => {
         fetchRequests()
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    )
   }, [enabled, fetchRequests])
 
   return { requests, loading, refresh: fetchRequests }

@@ -150,6 +150,57 @@ function formatHours(h) {
   return `${hrs}h ${mins}m`
 }
 
+// ── Live hours for open punches ──────────────────────────────────────────────
+// time_clock.total_hours is only written at punch-out, so an open entry
+// contributes 0h to the tiles/total until then. These helpers compute the
+// elapsed time client-side (display only — nothing is written to the DB).
+// punch_in uses the fake-UTC convention, so "now" is converted to the same
+// convention before subtracting (same math as punchOutEntry in useTimeCards).
+
+/** Fake-UTC date string (YYYY-MM-DD) of a stored punch timestamp */
+function punchDateStr(ts) {
+  if (!ts) return null
+  const d = new Date(ts)
+  if (isNaN(d)) return null
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+}
+
+/** Current local wall-clock time expressed in fake-UTC milliseconds */
+function nowFakeUtcMs(now = new Date()) {
+  return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(),
+    now.getHours(), now.getMinutes(), now.getSeconds())
+}
+
+/** Hours elapsed since punch_in (rounded to the minute, never negative) */
+function liveElapsedHours(punchIn, fakeUtcNow) {
+  const pi = new Date(punchIn).getTime()
+  if (isNaN(pi)) return 0
+  const hrs = (fakeUtcNow - pi) / 3600000
+  return hrs > 0 ? Math.round(hrs * 60) / 60 : 0
+}
+
+/**
+ * An entry counts as "live" only if it is still punched in AND the punch-in
+ * happened today. A forgotten punch-out from a prior day would otherwise
+ * accrue 20+ hours and flip a tile to Complete; those stay at 0h until an
+ * instructor punches them out.
+ */
+function isLiveEntry(e, todayStr) {
+  return e?.status === 'Punched In' && !e.punch_out && punchDateStr(e.punch_in) === todayStr
+}
+
+/** Small "live" indicator shown next to figures that include in-progress time */
+function LivePill({ className = '' }) {
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 align-middle ${className}`}
+      title="Includes time still in progress — updates every minute until punch-out">
+      <span className="w-1.5 h-1.5 rounded-full bg-green-500" aria-hidden="true" />
+      Live
+      <span className="sr-only"> — includes time still in progress, updates every minute</span>
+    </span>
+  )
+}
+
 function formatDateRange(start, end) {
   // Date-only strings parse as UTC midnight in new Date(); append T00:00:00
   // so the header shows the selected local dates (was one day early).
@@ -1847,6 +1898,43 @@ function ReportStatBox({ value, label, color, sub }) {
 function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary, pendingEdits, userName, dateRange, isInstructor, onEdit, onDelete, onRequestEdit, onPunchOut, saving }) {
   const as = attendanceSummary
 
+  // ── Live hours overlay ──
+  // Tick once a minute while any entry in view is still punched in today.
+  // Realtime refetch replaces the live figure with the stored total_hours
+  // the moment the student punches out.
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  const todayStr = toDateStr(new Date(nowMs))
+  const hasLive = useMemo(() => (entries || []).some(e => isLiveEntry(e, todayStr)), [entries, todayStr])
+  useEffect(() => {
+    if (!hasLive) return
+    setNowMs(Date.now())
+    const id = setInterval(() => setNowMs(Date.now()), 60000)
+    return () => clearInterval(id)
+  }, [hasLive])
+
+  const live = useMemo(() => {
+    const byRecord = {}
+    const byClass = {}
+    let total = 0
+    if (!hasLive) return { byRecord, byClass, total }
+    const fakeNow = nowFakeUtcMs(new Date(nowMs))
+    ;(entries || []).forEach(e => {
+      if (!isLiveEntry(e, todayStr)) return
+      const hrs = liveElapsedHours(e.punch_in, fakeNow)
+      if (hrs <= 0) return
+      byRecord[e.record_id] = hrs
+      total += hrs
+      // Mirror the hook: volunteer time counts toward the total but not a class tile
+      if (e.entry_type !== 'Volunteer') {
+        const cls = e.course_id || e.class_id || 'Unknown'
+        byClass[cls] = (byClass[cls] || 0) + hrs
+      }
+    })
+    return { byRecord, byClass, total }
+  }, [entries, hasLive, nowMs, todayStr])
+
+  const displayTotalHours = (Number(totalHours) || 0) + live.total
+
   return (
     <div>
       <div className="text-center mb-6 pb-4 border-b-2 border-surface-100">
@@ -1918,12 +2006,15 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
           <h4 className="text-sm font-semibold text-surface-700 mb-3">Weekly Hours by Class</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Object.entries(classSummary).map(([name, data]) => {
-              const pct = data.requiredHours > 0 ? (data.hours / data.requiredHours) * 100 : 100
+              // Stored hours + any in-progress time for today's open punch (display only)
+              const liveHrs = live.byClass[name] || 0
+              const shownHours = (Number(data.hours) || 0) + liveHrs
+              const pct = data.requiredHours > 0 ? (shownHours / data.requiredHours) * 100 : 100
               // Week closed by instructor (All Done swipe or required_hours_met flag) overrides
               // the "behind" state — student is signed off for the week regardless of hours.
               const weekClosed = !!(data.allDone || data.requiredHoursMet)
-              const isComplete = data.requiredHours > 0 && data.hours >= data.requiredHours
-              const isBehind = data.requiredHours > 0 && data.hours < data.requiredHours && !weekClosed
+              const isComplete = data.requiredHours > 0 && shownHours >= data.requiredHours
+              const isBehind = data.requiredHours > 0 && shownHours < data.requiredHours && !weekClosed
               const isWorkStudyTile = name === 'Work Study'
               const tileGreen = isWorkStudyTile || isComplete || weekClosed
               return (
@@ -1935,15 +2026,16 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   {isWorkStudyTile && <div className="text-xs text-green-600">Work Study Hours</div>}
                   {!isWorkStudyTile && data.courseName && <div className="text-xs text-surface-500">{data.courseName}</div>}
                   <div className="text-lg font-bold text-surface-900 mt-1">
-                    {formatHours(data.hours)}
+                    {formatHours(shownHours)}
                     {data.requiredHours > 0 && <span className="text-xs font-normal text-surface-500 ml-1">/ {formatHours(data.requiredHours)} hrs</span>}
+                    {liveHrs > 0 && <LivePill className="ml-1" />}
                     <ClosureBadge closure={data.closure} nominalHours={data.nominalRequiredHours} finals={data.finalsRequirement} finalsHours={data.baseRequiredHours} finalsSplit={data.finalsSplit} examHours={data.examHours} className="ml-1 align-middle" />
                     <MakeupBadge hours={data.makeupHours} className="ml-1 align-middle" />
                   </div>
                   {data.requiredHours > 0 && (
                     <div className="mt-2 h-1.5 bg-surface-200 rounded-full overflow-hidden" role="progressbar"
                       aria-valuenow={Math.min(Math.round(pct), 100)} aria-valuemin={0} aria-valuemax={100}
-                      aria-label={`${name} progress: ${formatHours(data.hours)} of ${formatHours(data.requiredHours)} hours${data.finalsRequirement ? ' (finals week requirement)' : ''}${data.closureLabel ? ` (adjusted for closures: ${data.closureLabel})` : ''}${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
+                      aria-label={`${name} progress: ${formatHours(shownHours)} of ${formatHours(data.requiredHours)} hours${liveHrs > 0 ? ' (includes time still in progress)' : ''}${data.finalsRequirement ? ' (finals week requirement)' : ''}${data.closureLabel ? ` (adjusted for closures: ${data.closureLabel})` : ''}${data.makeupHours > 0 ? ` (includes ${formatHours(data.makeupHours)} make-up)` : ''}`}>
                       <div className={`h-full rounded-full transition-all ${
                         tileGreen ? 'bg-green-500' : isBehind ? 'bg-amber-400' : 'bg-brand-500'
                       }`} style={{ width: `${weekClosed ? 100 : Math.min(pct, 100)}%` }} />
@@ -1956,7 +2048,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   )}
                   {isComplete && !weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} aria-hidden="true" /> Complete</div>}
                   {isComplete && weekClosed && <div className="flex items-center gap-1 mt-2 text-green-600 text-xs font-medium"><CheckCircle2 size={12} aria-hidden="true" /> Complete</div>}
-                  {isBehind && <div className="flex items-center gap-1 mt-2 text-amber-600 text-xs font-medium"><AlertTriangle size={12} aria-hidden="true" /> {formatHours(data.requiredHours - data.hours)} hrs behind</div>}
+                  {isBehind && <div className="flex items-center gap-1 mt-2 text-amber-600 text-xs font-medium"><AlertTriangle size={12} aria-hidden="true" /> {formatHours(data.requiredHours - shownHours)} hrs behind</div>}
                 </div>
               )
             })}
@@ -1964,10 +2056,13 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
         </div>
       )}
 
-      {/* Total Hours */}
+      {/* Total Hours (includes in-progress time for today's open punch) */}
       <div className="flex justify-end items-center py-4 border-t-2 border-b-2 border-surface-100 mb-6">
         <span className="text-sm text-surface-600 font-medium">Total Hours:</span>
-        <span className="text-2xl font-bold text-brand-600 ml-3">{formatHours(totalHours)}</span>
+        <span className="text-2xl font-bold text-brand-600 ml-3" aria-live="polite" aria-atomic="true">
+          {formatHours(displayTotalHours)}
+          {live.total > 0 && <LivePill className="ml-2" />}
+        </span>
       </div>
 
       {/* Entries Table */}
@@ -1997,6 +2092,10 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                 {entries.map((e, idx) => {
                   const f = e.flags || {}
                   const isStillIn = e.status === 'Punched In'
+                  // Open punch from today → hours accrue live. Open punch from a
+                  // prior day → likely a forgotten punch-out; flag it for instructors.
+                  const liveHrs = live.byRecord[e.record_id] || 0
+                  const isStaleOpen = isStillIn && !e.punch_out && punchDateStr(e.punch_in) !== todayStr
                   const isVolunteer = e.entry_type === 'Volunteer'
                   const isWorkStudy = e.entry_type === 'Work Study'
                   const isAllDone = e.entry_type === 'All Done'
@@ -2029,12 +2128,23 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                       </td>
                       <td className="px-3 py-2.5 text-surface-700 text-xs">{formatTime(e.punch_in)}</td>
                       <td className="px-3 py-2.5 text-xs">
-                        {isStillIn ? <span className="text-green-600 font-medium">Still In</span>
+                        {isStaleOpen ? (
+                          <span className="inline-flex items-center gap-1 text-amber-700 font-medium whitespace-nowrap"
+                            title="Punched in on a prior day and never punched out — hours are not counted until an instructor punches this entry out">
+                            <AlertTriangle size={11} aria-hidden="true" /> Still In — no punch-out
+                          </span>
+                        ) : isStillIn ? <span className="text-green-600 font-medium">Still In</span>
                         : f.isNoShow ? <span className="text-red-500 font-medium">—</span>
                         : <span className="text-surface-700">{formatTime(e.punch_out)}</span>}
                       </td>
                       <td className="px-3 py-2.5 text-surface-900 font-semibold text-xs text-right">
-                        {f.isNoShow ? '0h' : formatHours(e.total_hours)}
+                        {f.isNoShow ? '0h'
+                        : liveHrs > 0 ? (
+                          <span className="text-green-700 italic whitespace-nowrap" title="In progress — updates every minute until punch-out">
+                            {formatHours(liveHrs)}<span className="sr-only"> so far, still in progress</span>
+                          </span>
+                        )
+                        : formatHours(e.total_hours)}
                       </td>
                       <td className="px-3 py-2.5"><PunchStatusBadge status={e.status} /></td>
                       <td className="px-3 py-2.5">
