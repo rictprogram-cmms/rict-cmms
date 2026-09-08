@@ -99,7 +99,10 @@ function pad(n, width) {
  */
 export function fakeUtcToLocalDate(ts) {
   if (!ts) return null
-  const d = new Date(ts)
+  // Postgres returns '+00:00', but localToUtcIso()/datetimeLocalToFakeUtc()
+  // emit a bare '+00'. new Date() rejects the bare form (NaN), so normalize.
+  const normalized = typeof ts === 'string' ? ts.replace(/([+-]\d{2})$/, '$1:00') : ts
+  const d = new Date(normalized)
   if (isNaN(d.getTime())) return null
   return new Date(
     d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(),
@@ -124,10 +127,14 @@ export function toDatetimeLocalValue(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1, 2)}-${pad(d.getDate(), 2)}T${pad(d.getHours(), 2)}:${pad(d.getMinutes(), 2)}`
 }
 
-/** 'YYYY-MM-DDTHH:MM' (datetime-local) → fake-UTC 'YYYY-MM-DDTHH:MM:00+00'. */
+/**
+ * 'YYYY-MM-DDTHH:MM' (datetime-local) → fake-UTC 'YYYY-MM-DDTHH:MM:00+00:00'.
+ * Uses the full '+00:00' offset so the value round-trips through new Date()
+ * (a bare '+00' is NaN in every browser) before it is ever stored.
+ */
 export function datetimeLocalToFakeUtc(value) {
   if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return null
-  return `${value.substring(0, 16)}:00+00`
+  return `${value.substring(0, 16)}:00+00:00`
 }
 
 /**
