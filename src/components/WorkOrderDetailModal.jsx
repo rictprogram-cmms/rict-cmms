@@ -15,7 +15,7 @@ import React from 'react';
 import { supabase } from '@/lib/supabase';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 import StatusSelect from '@/components/StatusSelect';
-import { shortName } from '@/lib/utils';
+import { shortName, isPmWorkOrder } from '@/lib/utils';
 
 export default function WorkOrderDetailModal({
   // The work order being viewed
@@ -122,7 +122,7 @@ export default function WorkOrderDetailModal({
             )}
             {/* aria-labelledby points to this span so the dialog name is just the WO id, not the action button text */}
             <span id="wo-view-modal-title">Work Order: {wo.wo_id}</span>
-            {wo.is_pm === 'Yes' && (
+            {isPmWorkOrder(wo) && (
               <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 12, fontSize: '0.7rem', fontWeight: 600, background: '#e7f5ff', color: '#1864ab', verticalAlign: 'middle' }}>PM</span>
             )}
           </h3>
@@ -341,7 +341,7 @@ export default function WorkOrderDetailModal({
           </div>
 
           {/* PM Procedure Section (only for PM work orders with a procedure) */}
-          {wo.is_pm === 'Yes' && wo.pm_id && pmProcedureUrl && (
+          {isPmWorkOrder(wo) && pmProcedureUrl && (
             <div className="detail-section">
               <h4><span className="material-icons" aria-hidden="true">assignment</span>PM Procedure</h4>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', background: '#ebfaff', border: '1px solid #a5d8ff', borderRadius: 8 }}>
@@ -362,7 +362,7 @@ export default function WorkOrderDetailModal({
           )}
 
           {/* PM badge info for PM WOs without a procedure */}
-          {wo.is_pm === 'Yes' && wo.pm_id && !pmProcedureUrl && (
+          {isPmWorkOrder(wo) && !pmProcedureUrl && (
             <div className="detail-section">
               <h4><span className="material-icons" aria-hidden="true">assignment</span>PM Information</h4>
               <div style={{ padding: '10px 14px', background: '#f8f9fa', borderRadius: 8, border: '1px solid #e9ecef', fontSize: '0.85rem', color: '#495057' }}>
@@ -468,7 +468,7 @@ export default function WorkOrderDetailModal({
                   );
                 })}
               </ul>
-              {wo.is_pm === 'Yes' && wo.pm_id && (
+              {isPmWorkOrder(wo) && (
                 <div style={{ fontSize: '0.72rem', color: '#868e96', marginTop: 8 }}>
                   Some SOPs may have been carried forward from PM schedule <strong>{wo.pm_id}</strong>.
                 </div>

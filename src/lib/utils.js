@@ -141,3 +141,26 @@ export function isStudent(profile) {
 export function canManageWorkOrders(profile) {
   return profile?.role === 'Instructor' || profile?.role === 'Work Study'
 }
+
+/**
+ * PM work order check
+ *
+ * `work_orders.is_pm` has been written inconsistently over time: the PM
+ * generators write the string 'Yes', while the asset pages write boolean
+ * false. Postgres coerces both, so depending on the column's actual type a
+ * row can come back as true, 'Yes', 'true', 't', etc. Every place that
+ * decides "is this a PM work order?" must use this helper rather than a
+ * strict `=== 'Yes'` comparison — that strict check is what hid the PM
+ * Procedure card on generated work orders.
+ *
+ * Returns true only when a linked PM schedule is also present, because the
+ * procedure/SOP lookups are keyed on `pm_id`.
+ */
+export function isPmWorkOrder(wo) {
+  if (!wo) return false
+  const v = wo.is_pm
+  const flag = v === true
+    || (typeof v === 'string' && ['yes', 'y', 'true', 't', '1'].includes(v.trim().toLowerCase()))
+    || v === 1
+  return flag && !!wo.pm_id
+}

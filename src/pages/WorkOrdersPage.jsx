@@ -20,6 +20,7 @@
  */
 
 import { mustData, assertWrite } from '@/lib/supabaseData';
+import { isPmWorkOrder } from '@/lib/utils';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin';
@@ -624,7 +625,8 @@ export default function WorkOrdersPage() {
   const fetchPmProcedure = async (wo) => {
     setPmProcedureUrl(null);
     setPmProcedureName('');
-    if (wo?.is_pm === 'Yes' && wo?.pm_id) {
+    // isPmWorkOrder() tolerates boolean/text variants of is_pm — see src/lib/utils.js
+    if (isPmWorkOrder(wo)) {
       try {
         const pm = mustData(await supabase
           .from('pm_schedules')
