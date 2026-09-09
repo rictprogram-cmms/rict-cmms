@@ -35,6 +35,44 @@ function toDateStr(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// ─── Early-departure rule (shared by every scoring path) ──────────────────────
+// Only the day's LAST punch-out is ever evaluated as an early departure (mid-day
+// gaps such as lunch are ignored by the day-span logic). That last punch-out is
+// exempt when:
+//   • the day has an All Done swipe (instructor released the class), or
+//   • an instructor approved/excused it — time_clock.early_departure_approved_by
+//     is the single authoritative marker (kiosk permission flow, Time Cards
+//     "Excuse early departure" toggle, and the backfill of legacy notes), or
+//   • it is a "Taking a break — coming back" punch on TODAY's date — the
+//     student may still return. A break that remains the last punch-out on a
+//     past date is treated as a real early departure (guardrail).
+// Separately, once a user-week's required hours are met the penalty is
+// WAIVED (flag stays visible, score is not deducted). Late is never waived.
+
+/** Instructor approved / excused this early departure. */
+function isEarlyApproved(r) {
+  return !!(r && r.early_departure_approved_by)
+}
+
+/** Break punch-out on today's date — student may still come back, don't flag yet. */
+function isPendingBreak(r, dateStr) {
+  if (!r || !r.is_break_punch_out) return false
+  return dateStr === toDateStr(new Date())
+}
+
+/**
+ * Decide whether the day's last punch-out record should carry a Left Early flag.
+ * Returns { isEarly, earlyMinutes }.
+ */
+function evaluateEarlyDeparture({ span, daySignup, gracePeriod, lastRecord, dateStr }) {
+  if (!span || !daySignup) return { isEarly: false, earlyMinutes: 0 }
+  if (span.hasAllDone || span.hasStillIn) return { isEarly: false, earlyMinutes: 0 }
+  if (!(span.lastPunchOut > 0) || !span.lastRecordId || !(daySignup.endMin > 0)) return { isEarly: false, earlyMinutes: 0 }
+  if (isEarlyApproved(lastRecord) || isPendingBreak(lastRecord, dateStr)) return { isEarly: false, earlyMinutes: 0 }
+  const earlyBy = daySignup.endMin - span.lastPunchOut
+  return earlyBy > gracePeriod ? { isEarly: true, earlyMinutes: earlyBy } : { isEarly: false, earlyMinutes: 0 }
+}
+
 /** Round decimal hours to the nearest minute */
 function roundToMinute(h) {
   return Math.round((h || 0) * 60) / 60
@@ -254,6 +292,8 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
   })
 
   // 5. Pre-compute daily attendance spans (across all class entries on same day)
+  const recordById = {}
+  records.forEach(r => { recordById[r.record_id] = r })
   const daySpans = {}
   records.forEach(r => {
     if (r.status === 'No Show' || r.entry_type === 'Volunteer') return
@@ -296,9 +336,9 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
     }
 
     if (!span.hasAllDone && !span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
-      const earlyBy = daySignup.endMin - span.lastPunchOut
-      dayEarlyInfo[date] = { isEarly: earlyBy > gracePeriod, earlyMinutes: earlyBy > gracePeriod ? earlyBy : 0 }
-      if (earlyBy > gracePeriod) earlyFlagRecords.add(span.lastRecordId)
+      const ev = evaluateEarlyDeparture({ span, daySignup, gracePeriod, lastRecord: recordById[span.lastRecordId], dateStr: date })
+      dayEarlyInfo[date] = { isEarly: ev.isEarly, earlyMinutes: ev.earlyMinutes }
+      if (ev.isEarly) earlyFlagRecords.add(span.lastRecordId)
     }
   })
 
@@ -311,7 +351,8 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
 
     const flags = {
       isLate: false, lateMinutes: 0,
-      isEarlyDeparture: false, earlyMinutes: 0,
+      isEarlyDeparture: false, earlyMinutes: 0, isEarlyWaived: false,
+      isEarlyApproved: !!r.early_departure_approved_by, isBreak: !!r.is_break_punch_out,
       isWalkIn: false, isNoShow: false, isOnTime: false,
       isWrongClass: false, wrongClassExpected: null,
       scheduledStart: null, scheduledEnd: null,
@@ -380,6 +421,42 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
     const d = extractDateFromTimestamp(r.punch_in)
     if (d) userAllDoneDates.add(d)
   })
+
+  // 5b. User-week totals for the Left Early waiver (decision: user-week, not
+  // class-week). Keyed by Monday-of-week: required = sum of every enrolled
+  // class's closure-prorated base for that week; hours = all non-volunteer
+  // punches that week across classes. Mirrors the Time Cards page score.
+  const userWeekRequired = {}
+  enrolledClasses.forEach(c => {
+    if (!c.start_date || !c.end_date) return
+    buildClassWeeks({
+      startDate: c.start_date, endDate: c.end_date,
+      springBreakStart: c.spring_break_start, springBreakEnd: c.spring_break_end,
+      finalsStart: c.finals_start, finalsEnd: c.finals_end,
+    }, weekEndOffset).forEach(wk => {
+      const wkStart = toSafeDateStr(parseSafeDate(wk.startDate))
+      const m = mondayKeyOf(wkStart)
+      if (!m) return
+      const req = weekBaseRequirement(closureOverlay, {
+        baseHours: parseFloat(c.required_hours) || 0, mondayKey: wkStart, cls: c, isFinals: !!wk.isFinals,
+      })
+      userWeekRequired[m] = (userWeekRequired[m] || 0) + req.hours
+    })
+  })
+  const userWeekHours = {}
+  enrichedRecords.forEach(r => {
+    if (r.entry_type === 'Volunteer' || r.entry_type === 'Work Study') return
+    const d = extractDateFromTimestamp(r.punch_in)
+    const m = d ? mondayKeyOf(d) : null
+    if (!m) return
+    userWeekHours[m] = (userWeekHours[m] || 0) + (parseFloat(r.total_hours) || 0)
+  })
+  const userWeekHoursMet = (dateStr) => {
+    const m = dateStr ? mondayKeyOf(dateStr) : null
+    if (!m) return false
+    const req = userWeekRequired[m] || 0
+    return req > 0 && (userWeekHours[m] || 0) >= req
+  }
 
   // 6. Build per-class reports with week-by-week breakdown
   const classMap = {}
@@ -486,7 +563,13 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       if (!wkClosed && wkRequired > 0 && weekHours < wkRequired) {
         wkBase = Math.min(100, Math.round((weekHours / wkRequired) * 100))
       }
-      const weekScore = Math.max(0, wkBase - (lateCount * 10) - (earlyCount * 10) - (noShowCount * 20))
+      // Left Early waiver: hours met for the user-week (or week closed) → the
+      // early departures stay visible but do not deduct. Late is never waived.
+      const earlyWaived = wkClosed || userWeekHoursMet(wkStartStr)
+      const earlyPenalized = earlyWaived ? 0 : earlyCount
+      const earlyWaivedCount = earlyWaived ? earlyCount : 0
+      nonVolunteer.forEach(e => { if (e.flags?.isEarlyDeparture) e.flags.isEarlyWaived = earlyWaived })
+      const weekScore = Math.max(0, wkBase - (lateCount * 10) - (earlyPenalized * 10) - (noShowCount * 20))
 
       return {
         weekNumber: wk.weekNumber,
@@ -511,7 +594,8 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
         allDone: labStatus.allDone || hasUserAllDoneThisWeek,
         requiredHoursMet: labStatus.requiredHoursMet || hasUserAllDoneThisWeek,
         attendance: {
-          lateArrivals: lateCount, earlyDepartures: earlyCount,
+          lateArrivals: lateCount, earlyDepartures: earlyPenalized,
+          earlyDeparturesWaived: earlyWaivedCount,
           noShows: noShowCount, walkIns: walkInCount, wrongClass: wrongClassCount,
           onTimeCount,
           totalLateMinutes: totalLateMins, totalEarlyMinutes: totalEarlyMins,
@@ -525,14 +609,15 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       wk.endDate >= reportStart && wk.startDate <= reportEnd
     )
 
-    let lateCount = 0, earlyCount = 0, walkInCount = 0, wrongClassCount = 0, noShowCount = 0,
+    let lateCount = 0, earlyCount = 0, earlyWaivedTotal = 0, walkInCount = 0, wrongClassCount = 0, noShowCount = 0,
       onTimeCount = 0, totalLateMins = 0, totalEarlyMins = 0
     const nonVolunteer = data.entries.filter(e => e.entry_type !== 'Volunteer' && e.entry_type !== 'Work Study')
     nonVolunteer.forEach(e => {
       const f = e.flags
       if (f.isNoShow) noShowCount++
       else if (f.isLate) { lateCount++; totalLateMins += f.lateMinutes }
-      if (f.isEarlyDeparture) { earlyCount++; totalEarlyMins += f.earlyMinutes }
+      if (f.isEarlyDeparture && f.isEarlyWaived) { earlyWaivedTotal++ }
+      else if (f.isEarlyDeparture) { earlyCount++; totalEarlyMins += f.earlyMinutes }
       if (f.isWalkIn) walkInCount++
       if (f.isWrongClass) wrongClassCount++
       if (f.isOnTime) onTimeCount++
@@ -559,6 +644,7 @@ async function generateUserReport(userData, reportStart, reportEnd, gracePeriod,
       weeksWithLab, weeksWithHours, weeksDone,
       attendance: {
         lateArrivals: lateCount, earlyDepartures: earlyCount,
+        earlyDeparturesWaived: earlyWaivedTotal,
         noShows: noShowCount, walkIns: walkInCount, wrongClass: wrongClassCount,
         onTimeCount,
         totalLateMinutes: totalLateMins, totalEarlyMinutes: totalEarlyMins,
@@ -661,6 +747,7 @@ export function useTimeCardData() {
   const [attendanceSummary, setAttendanceSummary] = useState({
     lateArrivals: 0,
     earlyDepartures: 0,
+    earlyDeparturesWaived: 0,
     noShows: 0,
     walkIns: 0,
     wrongClass: 0,
@@ -794,6 +881,8 @@ export function useTimeCardData() {
 
       // 6. Pre-compute daily attendance spans (across all class entries on same day)
       // This prevents flagging class-switches as late/early
+      const recordById = {}
+      records.forEach(r => { recordById[r.record_id] = r })
       const daySpans = {}
       records.forEach(r => {
         if (r.status === 'No Show' || r.entry_type === 'Volunteer' || r.entry_type === 'Work Study') return
@@ -841,9 +930,9 @@ export function useTimeCardData() {
         // SKIP if the day has an All Done swipe — instructor closed out the day,
         // so the student leaving before signup end is sanctioned, not a left-early.
         if (!span.hasAllDone && !span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
-          const earlyBy = daySignup.endMin - span.lastPunchOut
-          dayEarlyInfo[date] = { isEarly: earlyBy > gracePeriod, earlyMinutes: earlyBy > gracePeriod ? earlyBy : 0 }
-          if (earlyBy > gracePeriod) earlyFlagRecords.add(span.lastRecordId)
+          const ev = evaluateEarlyDeparture({ span, daySignup, gracePeriod, lastRecord: recordById[span.lastRecordId], dateStr: date })
+          dayEarlyInfo[date] = { isEarly: ev.isEarly, earlyMinutes: ev.earlyMinutes }
+          if (ev.isEarly) earlyFlagRecords.add(span.lastRecordId)
         }
       })
 
@@ -864,6 +953,9 @@ export function useTimeCardData() {
           lateMinutes: 0,
           isEarlyDeparture: false,
           earlyMinutes: 0,
+          isEarlyWaived: false,     // early departure present but not deducted (hours met)
+          isEarlyApproved: !!r.early_departure_approved_by,
+          isBreak: !!r.is_break_punch_out,
           isWalkIn: false,
           isNoShow: false,
           isOnTime: false,
@@ -940,8 +1032,8 @@ export function useTimeCardData() {
           onTimeCount++
         }
 
-        // Early departure: only flag if entry_type is Left Early (instructor-approved keeps Class)
-        if (earlyFlagRecords.has(r.record_id) && r.entry_type === 'Left Early') {
+        // Early departure: day's last punch-out, unapproved, beyond grace (see evaluateEarlyDeparture)
+        if (earlyFlagRecords.has(r.record_id)) {
           const info = dayEarlyInfo[entryDate]
           flags.isEarlyDeparture = true
           flags.earlyMinutes = info.earlyMinutes
@@ -952,7 +1044,8 @@ export function useTimeCardData() {
         return { ...r, flags }
       })
 
-      setEntries(enrichedRecords)
+      // NOTE: setEntries() is called after the week scoring below so each
+      // entry's flags.isEarlyWaived is populated before first render.
 
       // 7. Calculate class hours from actual time entries in this date range
       const classHrsFromEntries = {}
@@ -1292,6 +1385,8 @@ export function useTimeCardData() {
       // For every week the period covers (and at least one class was running),
       // compute that week's score.
       const weekScores = []
+      let earlyWaivedCount = 0
+      let waivedEarlyMins = 0
       Object.entries(requiredHoursByMonday).forEach(([monday, weekRequired]) => {
         const wkRecs = recordsByMonday[monday] || []
         const nonVolunteerWk = wkRecs.filter(r => r.entry_type !== 'Volunteer' && r.entry_type !== 'Work Study')
@@ -1314,9 +1409,18 @@ export function useTimeCardData() {
         if (!wkHasAllDone && weekRequired > 0 && wkHours < weekRequired) {
           base = Math.min(100, Math.round((wkHours / weekRequired) * 100))
         }
-        const score = Math.max(0, base - (wkLate * 10) - (wkEarly * 10) - (wkNoShow * 20))
+        // Left Early waiver: user-week hours met (or week closed) → early
+        // departures stay visible but do not deduct. Late is never waived.
+        const earlyWaived = wkHasAllDone || (weekRequired > 0 && wkHours >= weekRequired)
+        if (earlyWaived && wkEarly > 0) {
+          nonVolunteerWk.forEach(r => { if (r.flags?.isEarlyDeparture) r.flags.isEarlyWaived = true })
+          earlyWaivedCount += wkEarly
+          waivedEarlyMins += nonVolunteerWk.reduce((a, r) => a + (r.flags?.isEarlyDeparture ? (r.flags.earlyMinutes || 0) : 0), 0)
+        }
+        const score = Math.max(0, base - (wkLate * 10) - (earlyWaived ? 0 : wkEarly * 10) - (wkNoShow * 20))
         weekScores.push(score)
       })
+      setEntries(enrichedRecords)
 
       // Diagnostic: if the user has fetchTimeCard debug enabled, log breakdown.
       // Toggle with localStorage.setItem('rict.debugScore', '1') in the browser console.
@@ -1344,12 +1448,13 @@ export function useTimeCardData() {
 
       setAttendanceSummary({
         lateArrivals: lateCount,
-        earlyDepartures: earlyCount,
+        earlyDepartures: Math.max(0, earlyCount - earlyWaivedCount),   // penalized only
+        earlyDeparturesWaived: earlyWaivedCount,                        // hours met — not deducted
         noShows: noShowCount,
         walkIns: walkInCount,
         wrongClass: wrongClassCount,
         totalLateMinutes: totalLateMins,
-        totalEarlyMinutes: totalEarlyMins,
+        totalEarlyMinutes: Math.max(0, totalEarlyMins - waivedEarlyMins),
         onTimeCount,
         totalEntries,
         attendanceScore,
@@ -1446,6 +1551,12 @@ export function useClassWeeklyReport() {
       const finalsSplit = periodReq.finalsSplit
       const examHours = periodReq.examHours
 
+      // Every class (any status) so each student's user-week requirement can be
+      // summed across ALL of their enrollments for the Left Early waiver.
+      const allClassesForWaiver = mustData(await supabase
+        .from('classes')
+        .select('class_id, course_id, required_hours, status, start_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end'), 'classes.select') || []
+
       const allUsers = mustData(await supabase
         .from('profiles')
         .select('user_id, first_name, last_name, role, classes, email')
@@ -1536,6 +1647,8 @@ export function useClassWeeklyReport() {
         })
 
         // Build day spans from ALL records (cross-class) for accurate attendance
+        const recordById = {}
+        allUserRecords.forEach(r => { recordById[r.record_id] = r })
         const daySpans = {}
         allUserRecords.forEach(r => {
           const d = extractDateFromTimestamp(r.punch_in)
@@ -1572,9 +1685,8 @@ export function useClassWeeklyReport() {
             }
           }
           if (!span.hasAllDone && !span.hasStillIn && span.lastPunchOut > 0 && span.lastRecordId && daySignup.endMin > 0) {
-            if ((daySignup.endMin - span.lastPunchOut) > gracePeriod) {
-              earlyFlagRecords.add(span.lastRecordId)
-            }
+            const ev = evaluateEarlyDeparture({ span, daySignup, gracePeriod, lastRecord: recordById[span.lastRecordId], dateStr: date })
+            if (ev.isEarly) earlyFlagRecords.add(span.lastRecordId)
           }
         })
 
@@ -1606,8 +1718,25 @@ export function useClassWeeklyReport() {
           }
 
           if (lateFlagRecords.has(r.record_id)) lateCount++
-          if (earlyFlagRecords.has(r.record_id) && r.entry_type === 'Left Early') earlyCount++
+          if (earlyFlagRecords.has(r.record_id)) earlyCount++
         })
+
+        // Left Early waiver (user-week): total hours across ALL classes this
+        // period vs the sum of every enrolled, running class's requirement.
+        // Period has an All Done → closed → waived as well. Late is never waived.
+        const userEnrolled = (u.classes || '').split(',').map(c => c.trim()).filter(Boolean)
+        let userPeriodRequired = 0
+        allClassesForWaiver.forEach(c => {
+          const enrolledHere = userEnrolled.includes(c.class_id) || userEnrolled.includes(c.course_id)
+          if (!enrolledHere || !classActiveInRange(c, startDate, endDate)) return
+          userPeriodRequired += periodRequirement(closureOverlay, startDate, endDate, c, parseFloat(c.required_hours) || 0).hours
+        })
+        const userPeriodHours = allUserRecords.reduce((sum, r) =>
+          (r.entry_type === 'Volunteer' || r.entry_type === 'Work Study') ? sum : sum + (parseFloat(r.total_hours) || 0), 0)
+        const periodClosed = allUserRecords.some(r => r.entry_type === 'All Done')
+        const earlyWaived = periodClosed || (userPeriodRequired > 0 && userPeriodHours >= userPeriodRequired)
+        const earlyWaivedCount = earlyWaived ? earlyCount : 0
+        const earlyPenalized = earlyWaived ? 0 : earlyCount
 
         const userMakeup = makeupHoursInRange(makeupOverlay, u.email, courseId, classId, startDate, endDate)
         return {
@@ -1628,7 +1757,8 @@ export function useClassWeeklyReport() {
           metRequirement: totalHours >= requiredHours + userMakeup.hours,
           entryCount: userRecords.length,
           lateCount,
-          earlyCount,
+          earlyCount: earlyPenalized,        // deducted
+          earlyWaivedCount,                  // hours met — visible, not deducted
           walkInCount,
           wrongClassCount,
         }
@@ -1934,7 +2064,9 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
             total_hours: totalHours,
             status: poDate ? 'Punched Out' : 'Punched In',
             ...(updates.class_id && { class_id: updates.class_id }),
-            ...(updates.course_id && { course_id: updates.course_id })
+            ...(updates.course_id && { course_id: updates.course_id }),
+            // Excuse / un-excuse an early departure (undefined = leave untouched)
+            ...(updates.early_departure_approved_by !== undefined && { early_departure_approved_by: updates.early_departure_approved_by || null })
           })
           .eq('record_id', recordId).select(),
       'time_clock.update'

@@ -69,6 +69,8 @@ const STATUS_CONFIG = {
   good:      { label: 'Here',       color: '#4ade80', bg: '#0d2d1a', border: '#1a4d2e', icon: 'check_circle',    avatarBg: 'linear-gradient(135deg, #1a4d2e, #0d6e35)' },
   walkin:    { label: 'Walk-in',    color: '#f97316', bg: '#2d1f0a', border: '#7c2d12', icon: 'directions_walk', avatarBg: 'linear-gradient(135deg, #7c2d12, #c2410c)' },
   workstudy: { label: 'Work Study', color: '#74c0fc', bg: '#0d1f3a', border: '#1a3a5c', icon: 'work',           avatarBg: 'linear-gradient(135deg, #1a3a5c, #1565a8)' },
+  // Punched out via the kiosk's "Taking a break — coming back" and not yet back.
+  onbreak:   { label: 'On Break',   color: '#22d3ee', bg: '#083344', border: '#155e75', icon: 'local_cafe',     avatarBg: 'linear-gradient(135deg, #155e75, #0e7490)' },
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -275,6 +277,11 @@ function PersonRow({ person }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1, flexWrap: 'wrap' }}>
           {person.courseId && <span style={{ fontSize: '0.68rem', color: '#6c757d' }}>{person.courseId}</span>}
           {person.timeRange && <span style={{ fontSize: '0.65rem', color: '#6c757d' }}>{person.timeRange}</span>}
+          {person.status === 'onbreak' && person.breakSince && (
+            <span style={{ fontSize: '0.65rem', color: '#67e8f9' }}>
+              Since {formatTimestamp12(person.breakSince)} · {minutesAgo(person.breakSince)}
+            </span>
+          )}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: cfg.bg,
@@ -481,7 +488,7 @@ export default function LabStatusPage() {
     const todayStr = toLocalDateStr(today);
 
     try {
-      const [clockRes, helpRes, profilesRes, signupRes, calRes] = await Promise.all([
+      const [clockRes, helpRes, profilesRes, signupRes, calRes, outRes] = await Promise.all([
         supabase.from('time_clock').select('record_id, user_name, user_email, punch_in, course_id, entry_type')
           .eq('status', 'Punched In').gte('punch_in', todayStr + 'T00:00:00').lte('punch_in', todayStr + 'T23:59:59')
           .order('punch_in', { ascending: true }),
@@ -493,6 +500,13 @@ export default function LabStatusPage() {
         supabase.from('lab_signup').select('user_name, user_email, start_time, end_time, status')
           .eq('date', todayStr).eq('status', 'Confirmed'),
         supabase.from('lab_calendar').select('closed_blocks').eq('date', todayStr + 'T12:00:00').maybeSingle(),
+        // Today's completed punches — used to spot students whose LATEST punch
+        // today was a "Taking a break — coming back" and who haven't swiped in
+        // since. Non-fatal: if this read fails the roster still renders, just
+        // without the On Break rows.
+        supabase.from('time_clock').select('user_name, user_email, punch_in, punch_out, course_id, is_break_punch_out')
+          .eq('status', 'Punched Out').gte('punch_in', todayStr + 'T00:00:00').lte('punch_in', todayStr + 'T23:59:59')
+          .order('punch_in', { ascending: true }),
       ]);
 
       // A newer fetch has already started — discard this (stale) response.
@@ -508,6 +522,8 @@ export default function LabStatusPage() {
       const signupData   = mustData(signupRes, 'lab_signup');
       if (calRes.error) console.warn('[LabStatus] lab_calendar query error (closures banner skipped):', calRes.error.message);
       const calData = calRes.error ? null : calRes.data;
+      if (outRes.error) console.warn('[LabStatus] time_clock punched-out query error (On Break rows skipped):', outRes.error.message);
+      const outData = outRes.error ? [] : (outRes.data || []);
 
       // ── Today's hour-level closures ──
       // Surface "Lab closed 2-3pm — Faculty Meeting" banner so students walking
@@ -570,6 +586,20 @@ export default function LabStatusPage() {
         loggedIn[email] = { userName: row.user_name, courseId: row.course_id, entryType: row.entry_type, punchIn: row.punch_in };
       }
 
+      // On-break map: the student's latest completed punch today was a break
+      // and they are not currently punched in. Rows arrive ordered by punch_in,
+      // so the last row per email wins.
+      const onBreak = {};
+      for (const row of outData) {
+        const email = (row.user_email || '').toLowerCase();
+        if (!email || loggedIn[email]) continue;
+        const latest = onBreak[email];
+        if (!latest || String(row.punch_in) > String(latest.punchIn)) {
+          onBreak[email] = { userName: row.user_name, courseId: row.course_id, punchIn: row.punch_in, breakSince: row.punch_out, isBreak: !!row.is_break_punch_out };
+        }
+      }
+      for (const email in onBreak) { if (!onBreak[email].isBreak) delete onBreak[email]; }
+
       // Signup map with merged sessions (shared with DashboardPage via
       // src/lib/labSessions.js so both pages agree on who is expected).
       const signedUp = {};
@@ -591,6 +621,11 @@ export default function LabStatusPage() {
         const li = loggedIn[email];
         allPeople[email] = { userName: li.userName, courseId: li.courseId, entryType: li.entryType, punchIn: li.punchIn, isLoggedIn: true, isSignedUp: false, sessions: [] };
       }
+      for (const email in onBreak) {
+        const ob = onBreak[email];
+        if (tcoEmails.has(email)) continue;
+        allPeople[email] = { userName: ob.userName, courseId: ob.courseId, entryType: '', punchIn: ob.punchIn, isLoggedIn: false, isSignedUp: false, sessions: [], onBreakSince: ob.breakSince };
+      }
       for (const email in signedUp) {
         const su = signedUp[email];
         if (allPeople[email]) { allPeople[email].isSignedUp = true; allPeople[email].sessions = su.sessions; }
@@ -609,12 +644,17 @@ export default function LabStatusPage() {
           if (isWorkStudy) { status = 'workstudy'; }
           else if (p.isSignedUp) { status = 'good'; if (curSession) timeRange = 'Until ' + minutesToTime12(curSession.endMin); }
           else { status = 'walkin'; }
+        } else if (p.onBreakSince) {
+          // Out on a break, expected back. Outranks "Missing" for the same person.
+          status = 'onbreak';
+          if (curSession) timeRange = 'Until ' + minutesToTime12(curSession.endMin);
         } else if (p.isSignedUp) {
           if (curSession) { status = 'missing'; timeRange = minutesToTime12(curSession.startMin) + ' – ' + minutesToTime12(curSession.endMin); }
           else if (nextSession) { status = 'expected'; timeRange = minutesToTime12(nextSession.startMin) + ' – ' + minutesToTime12(nextSession.endMin); }
         }
         if (!status) continue;
         finalList.push({ email, userName: p.userName, courseId: p.courseId, status, timeRange, punchIn: p.punchIn,
+          breakSince: p.onBreakSince || null,
           earliestStart: p.sessions.length > 0 ? minutesToDate(today, p.sessions[0].startMin).getTime() : null });
       }
 
@@ -694,6 +734,7 @@ export default function LabStatusPage() {
   const hereCount = peopleList.filter(p => p.status === 'good' || p.status === 'workstudy' || p.status === 'walkin').length;
   const expectedCount = peopleList.filter(p => p.status === 'expected').length;
   const missingCount = peopleList.filter(p => p.status === 'missing').length;
+  const breakCount = peopleList.filter(p => p.status === 'onbreak').length;
 
   // ════════════════════════════════════════════════════════════════════════
   return (
@@ -819,6 +860,7 @@ export default function LabStatusPage() {
                 {loading ? 'Loading…' : (
                   <span>
                     <span style={{ color: '#4ade80' }}>{hereCount} here</span>
+                    {breakCount > 0 && <span> · <span style={{ color: '#22d3ee' }}>{breakCount} on break</span></span>}
                     {expectedCount > 0 && <span> · <span style={{ color: '#fbbf24' }}>{expectedCount} expected</span></span>}
                     {missingCount > 0 && <span> · <span style={{ color: '#ef4444' }}>{missingCount} missing</span></span>}
                   </span>

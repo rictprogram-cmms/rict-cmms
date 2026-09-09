@@ -888,7 +888,7 @@ export default function TimeCardsPage() {
           onClose={() => setShowRequestModal(false)} onSubmitted={handleRequestSubmitted} />
       )}
       {showEditModal && editingEntry && (
-        <EditEntryModal entry={editingEntry} classes={classes} actions={actions}
+        <EditEntryModal entry={editingEntry} classes={classes} actions={actions} profile={profile}
           onClose={() => { setShowEditModal(false); setEditingEntry(null) }} onSaved={handleEntrySaved} />
       )}
       {confirmDelete && (
@@ -1577,7 +1577,10 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                   <ReportStatBox value={cr.attendance.lateArrivals} label="Late" color="red"
                     sub={cr.attendance.totalLateMinutes > 0 ? formatMinutes(cr.attendance.totalLateMinutes) : null} />
                   <ReportStatBox value={cr.attendance.earlyDepartures} label="Left Early" color="amber"
-                    sub={cr.attendance.totalEarlyMinutes > 0 ? formatMinutes(cr.attendance.totalEarlyMinutes) : null} />
+                    sub={[
+                      cr.attendance.totalEarlyMinutes > 0 ? formatMinutes(cr.attendance.totalEarlyMinutes) : null,
+                      (cr.attendance.earlyDeparturesWaived || 0) > 0 ? `${cr.attendance.earlyDeparturesWaived} waived` : null,
+                    ].filter(Boolean).join(' · ') || null} />
                   <ReportStatBox value={cr.attendance.walkIns} label="Walk-ins" color="purple" />
                   {cr.attendance.wrongClass > 0 && (
                     <ReportStatBox value={cr.attendance.wrongClass} label="Wrong Class" color="orange" />
@@ -1973,10 +1976,12 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
               <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Late</div>
               {as.totalLateMinutes > 0 && <div className="text-[10px] text-red-500 mt-0.5">{formatMinutes(as.totalLateMinutes)} total</div>}
             </div>
-            <div className={`text-center p-3 rounded-xl border ${as.earlyDepartures > 0 ? 'bg-amber-50 border-amber-200' : 'bg-surface-50 border-surface-200'}`}>
+            <div className={`text-center p-3 rounded-xl border ${as.earlyDepartures > 0 ? 'bg-amber-50 border-amber-200' : 'bg-surface-50 border-surface-200'}`}
+              title="Left Early counts the day's last punch-out only (breaks and lunches are ignored). Once the week's required hours are met, early departures are waived and no longer deducted.">
               <div className={`text-2xl font-bold ${as.earlyDepartures > 0 ? 'text-amber-600' : 'text-surface-400'}`}>{as.earlyDepartures}</div>
               <div className="text-[10px] font-medium text-surface-500 uppercase tracking-wider">Left Early</div>
               {as.totalEarlyMinutes > 0 && <div className="text-[10px] text-amber-500 mt-0.5">{formatMinutes(as.totalEarlyMinutes)} total</div>}
+              {(as.earlyDeparturesWaived || 0) > 0 && <div className="text-[10px] text-surface-500 mt-0.5">{as.earlyDeparturesWaived} waived — hours met</div>}
             </div>
             <div className={`text-center p-3 rounded-xl border ${as.walkIns > 0 ? 'bg-purple-50 border-purple-200' : 'bg-surface-50 border-surface-200'}`}
               title="Walk-ins (no signup that day) are neutral — they don't affect the on-time score">
@@ -2101,7 +2106,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                   const isAllDone = e.entry_type === 'All Done'
                   const rowBg = f.isNoShow ? 'bg-red-50' :
                     f.isLate ? 'bg-red-50/40' :
-                    f.isEarlyDeparture ? 'bg-amber-50/40' :
+                    (f.isEarlyDeparture && !f.isEarlyWaived) ? 'bg-amber-50/40' :
                     f.isWrongClass ? 'bg-orange-50/40' :
                     f.isWalkIn ? 'bg-purple-50/30' :
                     isAllDone ? 'bg-emerald-50/30' :
@@ -2157,7 +2162,18 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                             <>
                               {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={10} aria-hidden="true" />} label="On Time" />}
                               {f.isLate && <AttBadge color="red" icon={<LogIn size={10} aria-hidden="true" />} label={`Late ${formatMinutes(f.lateMinutes)}`} />}
-                              {f.isEarlyDeparture && <AttBadge color="amber" icon={<LogOut size={10} aria-hidden="true" />} label={`Left Early ${formatMinutes(f.earlyMinutes)}`} />}
+                              {f.isEarlyDeparture && !f.isEarlyWaived && <AttBadge color="amber" icon={<LogOut size={10} aria-hidden="true" />} label={`Left Early ${formatMinutes(f.earlyMinutes)}`} />}
+                              {f.isEarlyDeparture && f.isEarlyWaived && (
+                                <span title="Left early, but the week's required hours were met — not deducted from the on-time score">
+                                  <AttBadge color="gray" icon={<LogOut size={10} aria-hidden="true" />} label={`Left Early ${formatMinutes(f.earlyMinutes)} · waived`} />
+                                </span>
+                              )}
+                              {f.isEarlyApproved && (
+                                <span title={`Early departure excused by ${e.early_departure_approved_by}`}>
+                                  <AttBadge color="blue" icon={<CheckCircle2 size={10} aria-hidden="true" />} label={`Excused · ${e.early_departure_approved_by}`} />
+                                </span>
+                              )}
+                              {f.isBreak && <span title="Punched out for a break and came back — not an early departure"><AttBadge color="gray" label="Break" /></span>}
                               {f.isWrongClass && (
                                 <span title={f.wrongClassExpected ? `Signed up for ${f.wrongClassExpected} at this time — not penalized` : 'Punched into a different class than the signup — not penalized'}
                                   aria-label={f.wrongClassExpected ? `Wrong class — should have been ${f.wrongClassExpected}` : 'Wrong class punch'}>
@@ -2277,7 +2293,9 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                     {s.lateCount > 0 ? <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-red-100 text-red-700 text-xs font-bold">{s.lateCount}</span> : <span className="text-surface-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-center">
-                    {s.earlyCount > 0 ? <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold">{s.earlyCount}</span> : <span className="text-surface-300">—</span>}
+                    {s.earlyCount > 0 ? <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100 text-amber-700 text-xs font-bold">{s.earlyCount}</span>
+                      : (s.earlyWaivedCount || 0) > 0 ? <span className="inline-flex items-center justify-center min-w-6 h-6 px-1.5 rounded-full bg-surface-200 text-surface-600 text-xs font-semibold" title={`${s.earlyWaivedCount} early departure${s.earlyWaivedCount === 1 ? '' : 's'} waived — hours met`} aria-label={`${s.earlyWaivedCount} waived`}>{s.earlyWaivedCount}w</span>
+                      : <span className="text-surface-300">—</span>}
                   </td>
                   <td className="px-3 py-2.5 text-center">
                     {s.walkInCount > 0 ? <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-purple-100 text-purple-700 text-xs font-bold">{s.walkInCount}</span> : <span className="text-surface-300">—</span>}
@@ -2503,7 +2521,12 @@ function RequestEditModal({ entry, actions, profile, classes, onClose, onSubmitt
   )
 }
 
-function EditEntryModal({ entry, classes, actions, onClose, onSaved }) {
+function EditEntryModal({ entry, classes, actions, profile, onClose, onSaved }) {
+  // "Excuse early departure" — writes early_departure_approved_by (instructor
+  // short name, same format the kiosk permission flow uses) or clears it.
+  const approverName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}${profile.last_name ? '.' : ''}`.trim() : 'Instructor'
+  const [excused, setExcused] = useState(!!entry.early_departure_approved_by)
+  const excusedInitially = !!entry.early_departure_approved_by
   const piDate = entry.punch_in ? new Date(entry.punch_in) : new Date()
   const poDate = entry.punch_out ? new Date(entry.punch_out) : null
   // Use UTC components for local-as-UTC convention
@@ -2512,7 +2535,17 @@ function EditEntryModal({ entry, classes, actions, onClose, onSaved }) {
   const piDateStr = `${piDate.getUTCFullYear()}-${String(piDate.getUTCMonth()+1).padStart(2,'0')}-${String(piDate.getUTCDate()).padStart(2,'0')}`
   const [form, setForm] = useState({ date: piDateStr, punchIn: piTimeStr, punchOut: poTimeStr, classId: entry.class_id || '', courseName: entry.course_id || '' })
   // Construct timestamps with Z suffix so they're stored as UTC (matching local-as-UTC convention)
-  const handleSave = async () => { const piStr = `${form.date}T${form.punchIn}:00Z`; const poStr = form.punchOut ? `${form.date}T${form.punchOut}:00Z` : null; const res = await actions.updateEntry(entry.record_id, { punch_in: piStr, punch_out: poStr, class_id: form.classId, course_id: form.courseName }); if (res?.success) onSaved() }
+  const handleSave = async () => {
+    const piStr = `${form.date}T${form.punchIn}:00Z`
+    const poStr = form.punchOut ? `${form.date}T${form.punchOut}:00Z` : null
+    const updates = { punch_in: piStr, punch_out: poStr, class_id: form.classId, course_id: form.courseName }
+    // Only touch the approval column when the toggle actually changed.
+    if (excused !== excusedInitially) {
+      updates.early_departure_approved_by = excused ? approverName : null
+    }
+    const res = await actions.updateEntry(entry.record_id, updates)
+    if (res?.success) onSaved()
+  }
   return (
     <ModalOverlay onClose={onClose} labelledBy="tc-edit-title">
       <div className="bg-white rounded-xl w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -2527,6 +2560,23 @@ function EditEntryModal({ entry, classes, actions, onClose, onSaved }) {
             <Field label="Punch In"><input type="time" value={form.punchIn} onChange={e => setForm(f => ({ ...f, punchIn: e.target.value }))} className="input text-sm" /></Field>
             <Field label="Punch Out"><input type="time" value={form.punchOut} onChange={e => setForm(f => ({ ...f, punchOut: e.target.value }))} className="input text-sm" /></Field>
           </div>
+          {entry.entry_type !== 'Volunteer' && entry.entry_type !== 'Work Study' && entry.entry_type !== 'All Done' && (
+            <div className="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2">
+              <label htmlFor="tc-edit-excuse" className="flex items-start gap-3 cursor-pointer min-h-[44px]">
+                <input id="tc-edit-excuse" type="checkbox" checked={excused} onChange={e => setExcused(e.target.checked)}
+                  aria-describedby="tc-edit-excuse-help"
+                  className="mt-1 h-5 w-5 rounded border-surface-300 text-brand-600 focus:ring-brand-500" />
+                <span>
+                  <span className="block text-sm font-medium text-surface-800">Excuse early departure</span>
+                  <span id="tc-edit-excuse-help" className="block text-xs text-surface-500 mt-0.5">
+                    {entry.early_departure_approved_by
+                      ? `Currently excused by ${entry.early_departure_approved_by}. Uncheck to remove the excuse.`
+                      : `Removes the Left Early penalty for this punch and records you (${approverName}) as the approver.`}
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
           <p className="text-xs text-surface-400">Record ID: {entry.record_id}</p>
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
@@ -2737,8 +2787,9 @@ function GBItemsContent({ reportData }) {
 
           <p className="text-[11px] text-surface-500 mt-4 italic leading-relaxed">
             <strong className="not-italic font-semibold text-surface-600">Attendance %</strong> uses the same on-time score as the per-class report
-            (factors in Late, Left Early, and No Show penalties; weeks closed by
-            an All Done are scored as 100% across every enrolled class), computed over the class window.
+            (factors in Late, Left Early, and No Show penalties; Left Early is waived once the
+            week's required hours are met; weeks closed by an All Done are scored as 100% across
+            every enrolled class), computed over the class window.
             <br />
             <strong className="not-italic font-semibold text-surface-600">WOC Ratio</strong> uses the standard scoring shown on the WOC Ratio page,
             applied to the class window.
@@ -2824,6 +2875,6 @@ function PunchStatusBadge({ status }) {
 }
 
 function AttBadge({ color, icon, label }) {
-  const styles = { green: 'bg-green-100 text-green-700', red: 'bg-red-100 text-red-700', amber: 'bg-amber-100 text-amber-700', purple: 'bg-purple-100 text-purple-700', emerald: 'bg-emerald-100 text-emerald-700', orange: 'bg-orange-100 text-orange-700' }
+  const styles = { green: 'bg-green-100 text-green-700', red: 'bg-red-100 text-red-700', amber: 'bg-amber-100 text-amber-700', purple: 'bg-purple-100 text-purple-700', emerald: 'bg-emerald-100 text-emerald-700', orange: 'bg-orange-100 text-orange-700', blue: 'bg-blue-100 text-blue-700', gray: 'bg-surface-200 text-surface-600' }
   return <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${styles[color]}`}>{icon} {label}</span>
 }

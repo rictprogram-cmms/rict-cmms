@@ -508,17 +508,20 @@ function SuccessScreen({ message, detail, type, flags }) {
 }
 
 // SCREEN 5: Early Departure Warning
-function EarlyWarningScreen({ earlyMinutes, onAccept, onGetPermission, loading }) {
-  const [countdown, setCountdown] = useState(10)
-  const onAcceptRef = useRef(onAccept)
-  onAcceptRef.current = onAccept
+function EarlyWarningScreen({ earlyMinutes, onAccept, onBreak, onGetPermission, onTimeout, loading }) {
+  const [countdown, setCountdown] = useState(15)
+  // If nobody makes a choice, CANCEL the punch-out (student stays punched in)
+  // rather than silently recording a "Left Early". A walked-away kiosk should
+  // never write a departure on the student's behalf.
+  const onTimeoutRef = useRef(onTimeout)
+  onTimeoutRef.current = onTimeout
 
   useEffect(() => {
     const timer = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) {
           clearInterval(timer)
-          onAcceptRef.current()
+          onTimeoutRef.current()
           return 0
         }
         return prev - 1
@@ -528,29 +531,44 @@ function EarlyWarningScreen({ earlyMinutes, onAccept, onGetPermission, loading }
   }, [])
 
   return (
-    <div className="flex flex-col items-center justify-center flex-1 px-4 gap-3">
-      <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center">
-        <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <div className="flex flex-col items-center justify-center flex-1 px-4 gap-2">
+      <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+        <svg aria-hidden="true" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#d97706" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           <line x1="12" y1="9" x2="12" y2="13" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
       </div>
 
-      <div className="text-center">
-        <h2 className="text-xl font-bold text-gray-900">Leaving Early</h2>
+      <div className="text-center" role="status" aria-live="polite">
+        <h2 className="text-xl font-bold text-gray-900">Punching Out Early</h2>
         <p className="text-sm text-gray-500 mt-1">
-          You are leaving <span className="font-semibold text-amber-600">{formatMinutes(earlyMinutes)}</span> before your scheduled end time
+          It is <span className="font-semibold text-amber-600">{formatMinutes(earlyMinutes)}</span> before your scheduled end time. Are you coming back today?
         </p>
       </div>
 
-      <AttendanceFlag type="early" minutes={earlyMinutes} />
-
       <div className="w-full max-w-xs flex flex-col gap-2 mt-1">
         <button
+          type="button"
+          onClick={onBreak}
+          disabled={loading}
+          className="w-full py-3 bg-green-600 hover:bg-green-700 text-white font-bold text-sm rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-4 focus-visible:ring-green-300 min-h-[44px]"
+        >
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 8h1a4 4 0 010 8h-1" />
+            <path d="M2 8h16v9a4 4 0 01-4 4H6a4 4 0 01-4-4V8z" />
+            <line x1="6" y1="1" x2="6" y2="4" />
+            <line x1="10" y1="1" x2="10" y2="4" />
+            <line x1="14" y1="1" x2="14" y2="4" />
+          </svg>
+          Taking a Break — Coming Back
+        </button>
+
+        <button
+          type="button"
           onClick={onGetPermission}
           disabled={loading}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
+          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="18" rx="2" />
@@ -558,20 +576,21 @@ function EarlyWarningScreen({ earlyMinutes, onAccept, onGetPermission, loading }
             <path d="M15 10h.01" />
             <path d="M9 14h6" />
           </svg>
-          Get Instructor Permission
+          Leaving — Get Instructor Permission
         </button>
 
         <button
+          type="button"
           onClick={onAccept}
           disabled={loading}
           className="w-full py-2.5 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium text-sm rounded-xl transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400 min-h-[44px]"
         >
-          OK — Leave Early
+          Leaving Early for the Day
         </button>
       </div>
 
-      <p className="text-[10px] text-gray-400 mt-1">
-        Auto-accepting in <span className="font-bold text-amber-600">{countdown}s</span>...
+      <p className="text-[10px] text-gray-400 mt-1" aria-live="polite">
+        No choice in <span className="font-bold text-amber-600">{countdown}s</span> — you will stay punched in
       </p>
     </div>
   )
@@ -1482,7 +1501,10 @@ export default function TimeClockPage() {
     await executePunchOut(false, false, null)
   }, [user, punchRecord, instructor, todaySignup, gracePeriod])
 
-  const executePunchOut = useCallback(async (earlyDeparture, instructorApproved, approverName) => {
+  // isBreak: student punched out via "Taking a break — coming back". Not an
+  // early departure; entry_type is left alone and is_break_punch_out is set so
+  // reports can tell a lunch break from a real departure.
+  const executePunchOut = useCallback(async (earlyDeparture, instructorApproved, approverName, isBreak = false) => {
     if (!user || !punchRecord) return
     setLoading(true)
 
@@ -1501,7 +1523,10 @@ export default function TimeClockPage() {
         const note = `Punched out by instructor: ${instructor.first_name} ${(instructor.last_name || '').charAt(0)}.`
         description = description ? `${description} | ${note}` : note
       }
-      if (instructorApproved && approverName) {
+      if (isBreak) {
+        const note = `Break — out ${formatNow()}`
+        description = description ? `${description} | ${note}` : note
+      } else if (instructorApproved && approverName) {
         const note = `Early departure approved by ${approverName}`
         description = description ? `${description} | ${note}` : note
       } else if (earlyDeparture && !instructorApproved) {
@@ -1513,11 +1538,12 @@ export default function TimeClockPage() {
       }
 
       // Determine entry_type:
+      //   - Break (coming back) → keep original (scoring ignores mid-day gaps)
       //   - Instructor approved early departure → keep original (not penalized)
       //   - Left early without permission → "Left Early" (flagged in reports)
       //   - Normal punch out → keep original entry_type
       let entryType = punchRecord.entry_type
-      if (earlyDeparture && !instructorApproved) {
+      if (earlyDeparture && !instructorApproved && !isBreak) {
         entryType = 'Left Early'
       }
 
@@ -1527,6 +1553,12 @@ export default function TimeClockPage() {
         status: 'Punched Out',
         description,
         entry_type: entryType,
+        is_break_punch_out: !!isBreak,
+      }
+      // Authoritative approval marker — scoring checks this column, not the
+      // description text or entry_type.
+      if (instructorApproved && approverName) {
+        updateData.early_departure_approved_by = approverName
       }
 
       // For volunteer/club activity punches, record who approved
@@ -1561,7 +1593,7 @@ export default function TimeClockPage() {
 
       const isVolunteer = punchRecord.entry_type === 'Volunteer'
       let flags = []
-      if (!isVolunteer && !instructorApproved) {
+      if (!isVolunteer && !instructorApproved && !isBreak) {
         flags = checkPunchOutFlags()
       }
 
@@ -1575,10 +1607,10 @@ export default function TimeClockPage() {
         : courseCode || ''
 
       setSuccessMsg({
-        message: instructorApproved ? 'Approved & Punched Out!' : 'Punched Out!',
+        message: isBreak ? 'On Break — Punched Out' : instructorApproved ? 'Approved & Punched Out!' : 'Punched Out!',
         detail: instructor
-          ? `${studentName}${classLabel ? ` — ${classLabel}` : ''} — Total: ${formatDuration(totalHours)}`
-          : `${classLabel ? `${classLabel} — ` : ''}Total: ${formatDuration(totalHours)}`,
+          ? `${studentName}${classLabel ? ` — ${classLabel}` : ''} — Total: ${formatDuration(totalHours)}${isBreak ? ' — swipe again when you return' : ''}`
+          : `${classLabel ? `${classLabel} — ` : ''}Total: ${formatDuration(totalHours)}${isBreak ? ' — swipe again when you return' : ''}`,
         type: 'out',
         flags,
       })
@@ -1595,6 +1627,17 @@ export default function TimeClockPage() {
   const handleAcceptEarly = useCallback(() => {
     executePunchOut(true, false, null)
   }, [executePunchOut])
+
+  // "Taking a break — coming back": punch out without a Left Early mark.
+  const handleBreak = useCallback(() => {
+    executePunchOut(false, false, null, true)
+  }, [executePunchOut])
+
+  // Countdown expired with no choice: cancel the punch-out entirely so the
+  // student stays punched in. Nothing is written.
+  const handleEarlyTimeout = useCallback(() => {
+    resetToSwipe()
+  }, [])
 
   const handleGetPermission = useCallback(() => {
     setScreen('instructor-approve')
@@ -1694,7 +1737,9 @@ export default function TimeClockPage() {
           <EarlyWarningScreen
             earlyMinutes={earlyInfo?.minutes || 0}
             onAccept={handleAcceptEarly}
+            onBreak={handleBreak}
             onGetPermission={handleGetPermission}
+            onTimeout={handleEarlyTimeout}
             loading={loading}
           />
         )}
