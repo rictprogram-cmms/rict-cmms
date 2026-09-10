@@ -48,6 +48,311 @@ function fmtMoney(v) {
   return '$' + (parseFloat(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+// ─── Smart search helpers (Orders tab) ───────────────────────────────────────
+// Every word typed must appear somewhere on the order — header fields OR any
+// line item — so "zip tie amazon" finds the Amazon order containing zip ties.
+
+// Split the search box into lowercase words, ignoring extra whitespace.
+function searchTerms(search) {
+  return (search || '').toLowerCase().split(/\s+/).filter(Boolean)
+}
+
+// Text that represents one line item for matching purposes.
+function lineItemHaystack(li) {
+  return [
+    li.part_number, li.description, li.link,
+    li.unit_price != null ? fmtMoney(li.unit_price) : '',
+    li.unit_price != null ? String(li.unit_price) : '',
+    li.subtotal != null ? String(li.subtotal) : '',
+    li.quantity != null ? `qty ${li.quantity}` : '',
+    li.status,
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+// Text that represents the order header for matching purposes.
+function orderHaystack(o) {
+  return [
+    o.order_id, o.vendor_name, o.other_vendor, o.ordered_by, o.status,
+    o.notes, o.work_order_id, o.rejection_reason,
+    o.total != null ? fmtMoney(o.total) : '',
+    o.total != null ? String(o.total) : '',
+    fmtDate(o.order_date),
+    o.order_date ? String(o.order_date).slice(0, 10) : '',
+  ].filter(Boolean).join(' ').toLowerCase()
+}
+
+// Returns null when the order doesn't match, otherwise the line items that
+// contributed to the match (may be empty when only header fields matched).
+function matchOrder(o, terms) {
+  if (terms.length === 0) return []
+  const header = orderHaystack(o)
+  const lines = (o.line_items || []).map(li => ({ li, hay: lineItemHaystack(li) }))
+  // Every term must be found in the header or in at least one line item
+  const allTermsFound = terms.every(t => header.includes(t) || lines.some(l => l.hay.includes(t)))
+  if (!allTermsFound) return null
+  // Surface the line items that matched any term, so the user can see why
+  return lines.filter(l => terms.some(t => l.hay.includes(t))).map(l => l.li)
+}
+
+// Escape a string for use inside a RegExp
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Wrap matched terms in <mark> so sighted users see the hit and screen
+// readers announce it. Returns plain text when there are no terms.
+function Highlight({ text, terms }) {
+  const str = text == null ? '' : String(text)
+  if (!str || !terms || terms.length === 0) return str
+  const re = new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'ig')
+  const parts = str.split(re)
+  return (
+    <>
+      {parts.map((part, i) =>
+        terms.some(t => part.toLowerCase() === t)
+          ? <mark key={i} className="bg-yellow-200 text-surface-900 rounded-sm px-0.5">{part}</mark>
+          : <React.Fragment key={i}>{part}</React.Fragment>
+      )}
+    </>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REORDER DIALOG
+// Reorder a line item from a past PO. Checks for an existing not-yet-ordered
+// (Pending/Approved) PO for the same vendor and offers to add to it, or
+// creates a new PO. Used from the Orders tab search results and from the
+// order detail view.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ReorderDialog({ line, order, onClose, onDone }) {
+  const actions = usePOActions()
+  const vendors = useVendors()
+  const { profile } = useAuth()
+
+  const vendorName = order?.vendor_name || order?.other_vendor || ''
+  const [qty, setQty] = useState(parseInt(line?.quantity) || 1)
+  const [unitPrice, setUnitPrice] = useState(
+    line?.unit_price != null && line.unit_price !== '' ? String(parseFloat(line.unit_price) || 0) : ''
+  )
+  const [step, setStep] = useState('loading') // loading | choose | new
+  const [existingPO, setExistingPO] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const userName = profile
+    ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
+    : 'Unknown'
+
+  const dialogRef = useDialogA11y(true, onClose)
+
+  // Look for an existing unplaced PO for this vendor when the dialog opens
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (!vendorName) { setStep('new'); return }
+      try {
+        const found = await actions.findExistingPOForVendor(vendorName)
+        if (cancelled) return
+        if (found) { setExistingPO(found); setStep('choose') } else { setStep('new') }
+      } catch {
+        if (!cancelled) setStep('new')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [vendorName]) // actions is stable enough for a one-shot lookup on open
+
+  const buildLineItem = () => ({
+    partNumber: line?.part_number || '',
+    description: line?.description || '',
+    link: line?.link || '',
+    unitPrice: unitPrice === '' ? '' : (parseFloat(unitPrice) || 0),
+    quantity: parseInt(qty) || 1,
+    inventoryPartId: line?.inventory_part_id || '',
+  })
+
+  // Mirror the Low Stock flow: flag the inventory part as on order
+  const markInventoryOrdered = async (partId) => {
+    if (!partId) return
+    try {
+      await supabase.from('inventory').update({
+        order_date: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        updated_by: userName
+      }).eq('part_id', partId)
+    } catch (err) {
+      console.warn('Failed to mark inventory order_date:', err)
+    }
+  }
+
+  const qtyValid = (parseInt(qty) || 0) >= 1
+  const priceValid = unitPrice === '' || (parseFloat(unitPrice) >= 0)
+
+  const handleAddToExisting = async () => {
+    if (!existingPO || !qtyValid || !priceValid) return
+    setSaving(true)
+    try {
+      await actions.addLineToOrder(existingPO.order_id, [buildLineItem()])
+      await markInventoryOrdered(line?.inventory_part_id)
+      onDone?.(existingPO.order_id)
+    } catch (err) {
+      console.error('Reorder add-to-PO error:', err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleCreateNew = async () => {
+    if (!qtyValid || !priceValid) return
+    setSaving(true)
+    try {
+      // Prefer the vendor record already linked to the original order; fall
+      // back to a name match so "Other" vendors still work.
+      const vendor = (order?.vendor_id && vendors.find(v => v.vendor_id === order.vendor_id))
+        || vendors.find(v => (v.vendor_name || '').toLowerCase() === vendorName.toLowerCase())
+      const result = await actions.createOrder({
+        vendorId: vendor?.vendor_id || '',
+        vendorName: vendor?.vendor_name || (order?.vendor_name || ''),
+        otherVendor: vendor ? '' : (order?.other_vendor || vendorName || 'Unknown'),
+        workOrderId: '',
+        notes: `Reorder from ${order?.order_id || 'previous PO'}`,
+        lineItems: [buildLineItem()]
+      })
+      await markInventoryOrdered(line?.inventory_part_id)
+      onDone?.(result?.orderId || null)
+    } catch (err) {
+      console.error('Reorder create-PO error:', err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const label = line?.description || line?.part_number || 'line item'
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="po-reorder-title"
+        className="bg-white rounded-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+          <h3 id="po-reorder-title" className="text-sm font-bold text-surface-900 flex items-center gap-2">
+            <ShoppingCart size={16} className="text-brand-600" aria-hidden="true" /> Reorder Part
+          </h3>
+          <button type="button" onClick={onClose} aria-label="Close"
+            className="text-surface-400 hover:text-surface-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {/* Part info */}
+          <div className="bg-surface-50 rounded-lg p-3 space-y-1">
+            <div className="text-sm font-semibold text-surface-900">{line?.description || '(no description)'}</div>
+            <div className="text-xs text-surface-500">
+              {vendorName || 'No vendor'}{line?.part_number ? ` | ${line.part_number}` : ''}
+            </div>
+            <div className="text-xs text-surface-400">
+              Previously on {order?.order_id} — {line?.quantity} × {fmtMoney(line?.unit_price)}{order?.order_date ? ` (${fmtDate(order.order_date)})` : ''}
+            </div>
+            {line?.link && (
+              <a href={line.link} target="_blank" rel="noopener noreferrer"
+                aria-label={`Open product link for ${label} (opens in new tab)`}
+                className="inline-flex items-center gap-1 min-h-[44px] text-xs text-brand-600 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                <Link size={11} aria-hidden="true" /> Product link
+              </a>
+            )}
+          </div>
+
+          {/* Quantity + price */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="po-reorder-qty" className="text-xs font-medium text-surface-600 mb-1 block">Quantity</label>
+              <input id="po-reorder-qty" type="number" min={1} value={qty}
+                onChange={e => setQty(e.target.value)}
+                aria-invalid={!qtyValid}
+                aria-describedby={!qtyValid ? 'po-reorder-qty-err' : undefined}
+                className="input text-sm w-full" />
+              {!qtyValid && <p id="po-reorder-qty-err" className="text-xs text-red-600 mt-1">Quantity must be at least 1.</p>}
+            </div>
+            <div>
+              <label htmlFor="po-reorder-price" className="text-xs font-medium text-surface-600 mb-1 block">Unit Price</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 text-sm" aria-hidden="true">$</span>
+                <input id="po-reorder-price" type="number" step="0.01" min={0} value={unitPrice}
+                  onChange={e => setUnitPrice(e.target.value)}
+                  aria-invalid={!priceValid}
+                  aria-describedby="po-reorder-price-help"
+                  className="input text-sm w-full pl-7" />
+              </div>
+              <p id="po-reorder-price-help" className="text-xs text-surface-400 mt-1">Prefilled from the last order — update if it changed.</p>
+            </div>
+          </div>
+
+          {/* Loading */}
+          {step === 'loading' && (
+            <div className="text-center py-4 text-surface-400 flex items-center justify-center gap-2" role="status" aria-live="polite">
+              <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Checking for an open PO for {vendorName || 'this vendor'}...
+            </div>
+          )}
+
+          {/* Existing not-yet-ordered PO found */}
+          {step === 'choose' && existingPO && (
+            <div className="space-y-3">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <FileText size={14} className="text-blue-600" aria-hidden="true" />
+                  <span className="text-xs font-semibold text-blue-800">{vendorName} already has a PO that hasn't been ordered yet</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="text-sm font-bold text-blue-900">{existingPO.order_id}</span>
+                    <span className="ml-2"><StatusBadge status={existingPO.status} /></span>
+                  </div>
+                  <span className="text-sm font-semibold text-surface-700">{fmtMoney(existingPO.total)}</span>
+                </div>
+              </div>
+
+              <button type="button" onClick={handleAddToExisting} disabled={saving || !qtyValid || !priceValid}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />}
+                Add to {existingPO.order_id}
+              </button>
+
+              <div className="relative flex items-center" aria-hidden="true">
+                <div className="flex-1 border-t border-surface-200" />
+                <span className="px-3 text-xs text-surface-400">or</span>
+                <div className="flex-1 border-t border-surface-200" />
+              </div>
+
+              <button type="button" onClick={handleCreateNew} disabled={saving || !qtyValid || !priceValid}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium border border-surface-200 text-surface-700 hover:bg-surface-50 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ShoppingCart size={14} aria-hidden="true" />}
+                Create New PO
+              </button>
+            </div>
+          )}
+
+          {/* No open PO — create new */}
+          {step === 'new' && (
+            <div className="space-y-3">
+              <div className="bg-surface-50 rounded-lg p-3">
+                <div className="text-xs text-surface-500">
+                  {vendorName
+                    ? `No open PO for ${vendorName}. A new PO will be created.`
+                    : 'No vendor on the original order. A new PO will be created.'}
+                </div>
+              </div>
+              <button type="button" onClick={handleCreateNew} disabled={saving || !qtyValid || !priceValid}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ShoppingCart size={14} aria-hidden="true" />}
+                {saving ? 'Creating PO...' : 'Create Purchase Order'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Statuses where line items can be edited
 const EDITABLE_STATUSES = ['Pending', 'Approved', 'Ordered']
 
@@ -307,7 +612,8 @@ export default function PurchaseOrdersPage() {
 
       {/* Content */}
       {viewingOrder ? (
-        <OrderDetailView orderId={viewingOrder} onBack={() => { setViewingOrder(null); setAutoReceive(false) }} hasPerm={hasPerm} autoReceive={autoReceive} />
+        <OrderDetailView orderId={viewingOrder} onBack={() => { setViewingOrder(null); setAutoReceive(false) }} hasPerm={hasPerm} autoReceive={autoReceive}
+          onViewOrder={id => { setViewingOrder(id); setAutoReceive(false) }} />
       ) : tab === 'dashboard' ? (
         <DashboardTab
           onViewOrder={id => { setViewingOrder(id); setTab('orders') }}
@@ -518,18 +824,28 @@ function DashboardTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStar
 
 function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }) {
   const canViewAll = hasPerm('view_all_po')
+  const canCreatePO = hasPerm('create_po')
   const [statusFilter, setStatusFilter] = useState('all')
   const [search, setSearch] = useState('')
+  const [reorderTarget, setReorderTarget] = useState(null) // { line, order } while the Reorder dialog is open
   const { orders, loading, refresh } = usePOList(statusFilter, canViewAll)
 
   // Note: selectedAYStart and setSelectedAYStart are owned by the parent
   // (PurchaseOrdersPage) so they can be shared with the Dashboard tab's
   // Budget Remaining tile and driven by the page-level [ ] keyboard shortcuts.
 
+  // Smart search: the typed words, and whether a search is active. While
+  // searching, the academic-year filter is bypassed so past orders can be
+  // found without remembering when they were placed.
+  const terms = useMemo(() => searchTerms(search), [search])
+  const isSearching = terms.length > 0
+
   // The AY filter only applies to "All Status" and the closed-status filters.
   // Active views (active, Pending, Approved, Ordered, Partial) are always
   // small enough that a year filter isn't needed — and can hide pending work.
-  const ayFilterApplies = statusFilter === 'all' || CLOSED_STATUS_FILTERS.includes(statusFilter)
+  // It is also suspended while a search is active (see above).
+  const ayFilterAvailable = statusFilter === 'all' || CLOSED_STATUS_FILTERS.includes(statusFilter)
+  const ayFilterApplies = ayFilterAvailable && !isSearching
 
   // Build the list of selectable academic years from the loaded data, plus the
   // current AY and the currently-selected AY. Newest first.
@@ -544,26 +860,32 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
     return [...set].filter(v => v != null).sort((a, b) => b - a)
   }, [orders, selectedAYStart])
 
-  // Apply AY (if applicable) + search filters
+  // Apply AY (if applicable) + smart search. Each result carries the line
+  // items that matched (`matchedLines`) so the table can show why it matched.
   const filtered = useMemo(() => {
     let result = orders
     if (ayFilterApplies) {
       result = result.filter(o => isInAcademicYear(getOrderAYDate(o), selectedAYStart))
     }
-    if (search) {
-      const s = search.toLowerCase()
-      result = result.filter(o =>
-        (o.order_id || '').toLowerCase().includes(s) ||
-        (o.vendor_name || '').toLowerCase().includes(s) ||
-        (o.other_vendor || '').toLowerCase().includes(s) ||
-        (o.ordered_by || '').toLowerCase().includes(s)
-      )
+    if (isSearching) {
+      result = result.reduce((acc, o) => {
+        const matchedLines = matchOrder(o, terms)
+        if (matchedLines) acc.push({ ...o, matchedLines })
+        return acc
+      }, [])
     }
     return result
-  }, [orders, search, selectedAYStart, ayFilterApplies])
+  }, [orders, terms, isSearching, selectedAYStart, ayFilterApplies])
 
   // Whether the AY filter is what's responsible for an empty result (vs. "no orders at all")
   const isEmptyDueToAY = ayFilterApplies && filtered.length === 0 && orders.length > 0
+
+  // Screen-reader announcement for the current result set
+  const resultAnnouncement = loading ? '' : isSearching
+    ? `${filtered.length} ${filtered.length === 1 ? 'order matches' : 'orders match'} "${search.trim()}" across all years`
+    : ayFilterApplies
+      ? `Showing ${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'} for ${formatAY(selectedAYStart)}`
+      : ''
 
   return (
     <div className="space-y-3">
@@ -571,9 +893,19 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
       <div className="flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
-          <label htmlFor="po-search" className="sr-only">Search orders</label>
-          <input id="po-search" type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search orders..." className="input pl-9 text-sm" />
+          <label htmlFor="po-search" className="sr-only">Search all orders</label>
+          <input id="po-search" type="search" value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search part, description, vendor, PO #, price..." className="input pl-9 pr-10 text-sm"
+            aria-describedby="po-search-help" autoComplete="off" />
+          {search && (
+            <button type="button" onClick={() => setSearch('')} aria-label="Clear search"
+              className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-surface-400 hover:text-surface-700 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+              <X size={16} aria-hidden="true" />
+            </button>
+          )}
+          <span id="po-search-help" className="sr-only">
+            Searches every field on every purchase order, including line item part numbers, descriptions, links, and prices. While searching, all academic years are included.
+          </span>
         </div>
         <label htmlFor="po-status-filter" className="sr-only">Filter by status</label>
         <select id="po-status-filter" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
@@ -588,17 +920,20 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
           <option value="Cancelled">Cancelled</option>
           <option value="Rejected">Rejected</option>
         </select>
-        {ayFilterApplies && (
+        {ayFilterAvailable && (
           <>
             <label htmlFor="po-ay-filter" className="sr-only">Filter by academic year</label>
             <select
               id="po-ay-filter"
               value={selectedAYStart}
               onChange={e => setSelectedAYStart(parseInt(e.target.value, 10))}
-              className="input text-sm w-auto"
+              className="input text-sm w-auto disabled:opacity-50 disabled:cursor-not-allowed"
               aria-label="Filter by academic year"
               aria-keyshortcuts="[ ]"
-              title="Academic year (July 1 – June 30) — use [ and ] to step through years"
+              disabled={isSearching}
+              title={isSearching
+                ? 'Academic year filter is paused while searching — all years are included'
+                : 'Academic year (July 1 – June 30) — use [ and ] to step through years'}
             >
               {availableAYs.map(ay => (
                 <option key={ay} value={ay}>{formatAY(ay)}</option>
@@ -608,12 +943,21 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
         )}
       </div>
 
-      {/* Live announcement for screen readers when AY filter changes the result count */}
+      {/* Live announcement for screen readers when search or AY filter changes the result count */}
       <span className="sr-only" aria-live="polite" aria-atomic="true">
-        {!loading && ayFilterApplies
-          ? `Showing ${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'} for ${formatAY(selectedAYStart)}`
-          : ''}
+        {resultAnnouncement}
       </span>
+
+      {/* Visible note while a search is active */}
+      {isSearching && !loading && (
+        <div className="bg-brand-50 border border-brand-200 rounded-lg px-3 py-2 text-xs text-brand-800 flex items-center gap-2">
+          <Search size={14} aria-hidden="true" />
+          <span>
+            Searching all years and all fields — {filtered.length} {filtered.length === 1 ? 'match' : 'matches'}.
+            {ayFilterAvailable && ' Clear the search to return to the academic-year view.'}
+          </span>
+        </div>
+      )}
 
       {/* Info banner for filtered view */}
       {!canViewAll && (
@@ -628,7 +972,12 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-surface-400">
           <ShoppingCart size={32} className="mx-auto mb-2 opacity-40" aria-hidden="true" />
-          {isEmptyDueToAY ? (
+          {isSearching ? (
+            <>
+              <p className="text-sm">No orders match "{search.trim()}"</p>
+              <p className="text-xs text-surface-300 mt-1">Searched every field on every order, all years. Try fewer or different words.</p>
+            </>
+          ) : isEmptyDueToAY ? (
             <>
               <p className="text-sm">No orders for {formatAY(selectedAYStart)}</p>
               <p className="text-xs text-surface-300 mt-1">Try selecting a different academic year above.</p>
@@ -642,7 +991,7 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <caption className="sr-only">
-                Purchase orders{ayFilterApplies ? ` for ${formatAY(selectedAYStart)}` : ''} — {filtered.length} {filtered.length === 1 ? 'result' : 'results'}
+                Purchase orders{isSearching ? ` matching "${search.trim()}"` : ayFilterApplies ? ` for ${formatAY(selectedAYStart)}` : ''} — {filtered.length} {filtered.length === 1 ? 'result' : 'results'}
               </caption>
               <thead>
                 <tr className="bg-surface-50 text-left">
@@ -655,27 +1004,86 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-100">
-                {filtered.map(o => (
-                  <tr key={o.order_id} onClick={() => onViewOrder(o.order_id)}
-                    className="hover:bg-surface-50 cursor-pointer transition-colors">
-                    <td className="px-4 py-2.5 font-medium text-brand-700">
-                      <button type="button" onClick={ev => { ev.stopPropagation(); onViewOrder(o.order_id) }}
-                        aria-label={`Open purchase order ${o.order_id}`}
-                        className="min-h-[44px] px-1 -mx-1 rounded hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
-                        {o.order_id}
-                      </button>
-                    </td>
-                    <td className="px-4 py-2.5 text-surface-700">{o.vendor_name || o.other_vendor || '—'}</td>
-                    <td className="px-4 py-2.5 text-surface-500">{o.ordered_by || '—'}</td>
-                    <td className="px-4 py-2.5 text-surface-500">{fmtDate(o.order_date)}</td>
-                    <td className="px-4 py-2.5 text-surface-900 font-semibold text-right">{fmtMoney(o.total)}</td>
-                    <td className="px-4 py-2.5"><StatusBadge status={o.status} /></td>
-                  </tr>
-                ))}
+                {filtered.map(o => {
+                  const matchedLines = isSearching ? (o.matchedLines || []) : []
+                  return (
+                    <React.Fragment key={o.order_id}>
+                      <tr onClick={() => onViewOrder(o.order_id)}
+                        className="hover:bg-surface-50 cursor-pointer transition-colors">
+                        <td className="px-4 py-2.5 font-medium text-brand-700">
+                          <button type="button" onClick={ev => { ev.stopPropagation(); onViewOrder(o.order_id) }}
+                            aria-label={`Open purchase order ${o.order_id}`}
+                            className="min-h-[44px] px-1 -mx-1 rounded hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                            <Highlight text={o.order_id} terms={terms} />
+                          </button>
+                        </td>
+                        <td className="px-4 py-2.5 text-surface-700"><Highlight text={o.vendor_name || o.other_vendor || '—'} terms={terms} /></td>
+                        <td className="px-4 py-2.5 text-surface-500"><Highlight text={o.ordered_by || '—'} terms={terms} /></td>
+                        <td className="px-4 py-2.5 text-surface-500">{fmtDate(o.order_date)}</td>
+                        <td className="px-4 py-2.5 text-surface-900 font-semibold text-right"><Highlight text={fmtMoney(o.total)} terms={terms} /></td>
+                        <td className="px-4 py-2.5"><StatusBadge status={o.status} /></td>
+                      </tr>
+                      {/* Matched line items — shown only while searching, so the user
+                          can see the part and price without opening the PO */}
+                      {matchedLines.length > 0 && (
+                        <tr onClick={() => onViewOrder(o.order_id)}
+                          className="!border-t-0 hover:bg-surface-50 cursor-pointer transition-colors">
+                          <td colSpan={6} className="px-4 pb-3 pt-0">
+                            <ul className="ml-2 pl-3 border-l-2 border-brand-200 space-y-1"
+                              aria-label={`Matching line items on ${o.order_id}`}>
+                              {matchedLines.map(li => (
+                                <li key={li.line_id} className="text-xs text-surface-600 flex flex-wrap items-baseline gap-x-2">
+                                  <Package size={12} className="text-surface-400 shrink-0 self-center" aria-hidden="true" />
+                                  {li.part_number && (
+                                    <span className="font-mono text-surface-500"><Highlight text={li.part_number} terms={terms} /></span>
+                                  )}
+                                  <span className="text-surface-800"><Highlight text={li.description || '(no description)'} terms={terms} /></span>
+                                  <span className="text-surface-500">
+                                    {li.quantity != null ? `${li.quantity} × ` : ''}<Highlight text={fmtMoney(li.unit_price)} terms={terms} />
+                                  </span>
+                                  {li.link && (
+                                    <a href={li.link} target="_blank" rel="noopener noreferrer"
+                                      onClick={ev => ev.stopPropagation()}
+                                      aria-label={`Open product link for ${li.description || li.part_number || 'line item'} (opens in new tab)`}
+                                      className="inline-flex items-center gap-1 min-h-[44px] px-1 text-brand-600 hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                      <Link size={11} aria-hidden="true" /> Link
+                                    </a>
+                                  )}
+                                  {canCreatePO && (
+                                    <button type="button"
+                                      onClick={ev => { ev.stopPropagation(); setReorderTarget({ line: li, order: o }) }}
+                                      aria-label={`Reorder ${li.description || li.part_number || 'line item'} from ${o.order_id}`}
+                                      className="inline-flex items-center gap-1 min-h-[44px] px-2 rounded-lg text-xs font-semibold text-brand-700 border border-brand-200 hover:bg-brand-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                                      <ShoppingCart size={11} aria-hidden="true" /> Reorder
+                                    </button>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         </div>
+      )}
+
+      {/* Reorder dialog (from a search result line item) */}
+      {reorderTarget && (
+        <ReorderDialog
+          line={reorderTarget.line}
+          order={reorderTarget.order}
+          onClose={() => setReorderTarget(null)}
+          onDone={(targetOrderId) => {
+            setReorderTarget(null)
+            refresh()
+            if (targetOrderId) onViewOrder(targetOrderId)
+          }}
+        />
       )}
     </div>
   )
@@ -685,10 +1093,12 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
 // ORDER DETAIL VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
+function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false, onViewOrder }) {
   const { profile } = useAuth()
   const { order, lineItems, loading, refresh } = usePODetail(orderId)
   const actions = usePOActions()
+  const canCreatePO = hasPerm('create_po')
+  const [reorderLine, setReorderLine] = useState(null) // line item being reordered (Reorder dialog open)
   const [receiveMode, setReceiveMode] = useState(false)
   const [recQtys, setRecQtys] = useState({})
   const [showRejectModal, setShowRejectModal] = useState(false)
@@ -1348,6 +1758,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                 <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Received</th>
                 <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Status</th>
                 {editMode && <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Actions</th>}
+                {!editMode && canCreatePO && <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Reorder</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-surface-100">
@@ -1432,12 +1843,38 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false }) {
                         </div>
                       </td>
                     )}
+                    {!editMode && canCreatePO && (
+                      <td className="px-4 py-2 text-center">
+                        <button type="button"
+                          onClick={() => setReorderLine(li)}
+                          disabled={receiveMode}
+                          className="inline-flex items-center gap-1 min-h-[44px] px-2 rounded-lg text-xs font-semibold text-brand-700 border border-brand-200 hover:bg-brand-50 transition-colors disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+                          aria-label={`Reorder ${li.description || li.part_number || 'line item'}`}
+                          title="Reorder this part on a new or open PO">
+                          <ShoppingCart size={12} aria-hidden="true" /> Reorder
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 )
               })}
             </tbody>
           </table>
         </div>
+
+        {/* Reorder dialog (from this order's line items) */}
+        {reorderLine && order && (
+          <ReorderDialog
+            line={reorderLine}
+            order={order}
+            onClose={() => setReorderLine(null)}
+            onDone={(targetOrderId) => {
+              setReorderLine(null)
+              if (targetOrderId && targetOrderId !== orderId && onViewOrder) onViewOrder(targetOrderId)
+              else refresh()
+            }}
+          />
+        )}
 
         {/* Add Line Item section */}
         {isEditable && (

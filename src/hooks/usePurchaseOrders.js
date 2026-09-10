@@ -143,7 +143,33 @@ export function usePOList(statusFilter = 'all', viewAll = true) {
 
       const { data, error } = await query
       if (error) throw error
-      setOrders(data || [])
+      const rows = data || []
+
+      // Attach line items to each order so the Orders tab can search part
+      // numbers, descriptions, links and prices without opening each PO.
+      // Fetched as a separate query (rather than a PostgREST embed) so it does
+      // not depend on a declared FK between orders and order_line_items.
+      // A failure here is non-fatal: the list still renders, search just
+      // won't match line-item fields.
+      let linesByOrder = {}
+      if (rows.length > 0) {
+        try {
+          const ids = rows.map(o => o.order_id)
+          const { data: lineRows, error: lineErr } = await supabase
+            .from('order_line_items')
+            .select('line_id, order_id, part_number, description, link, unit_price, quantity, subtotal, status, inventory_part_id')
+            .in('order_id', ids)
+          if (lineErr) throw lineErr
+          linesByOrder = (lineRows || []).reduce((acc, li) => {
+            (acc[li.order_id] ||= []).push(li)
+            return acc
+          }, {})
+        } catch (lineFetchErr) {
+          console.error('PO list line items error:', lineFetchErr)
+        }
+      }
+
+      setOrders(rows.map(o => ({ ...o, line_items: linesByOrder[o.order_id] || [] })))
       hasLoadedRef.current = true
     } catch (err) {
       console.error('PO list error:', err)
@@ -158,7 +184,8 @@ export function usePOList(statusFilter = 'all', viewAll = true) {
   // Realtime: refresh list when orders change
   useEffect(() => {
     const channel = subscribeWithReconnect('po-list', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch()))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, () => fetch()))
     const onPOUpdate = () => fetch()
     window.addEventListener('po-updated', onPOUpdate)
     return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }
