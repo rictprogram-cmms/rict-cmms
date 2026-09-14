@@ -23,7 +23,8 @@
  * - Print-friendly layout with page breaks per student in batch mode
  */
 
-import React, { useState, useEffect, useMemo, useCallback, useId } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { Field } from '@/components/ui'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
@@ -2638,25 +2639,8 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50', labelledBy }) {
   )
 }
 
-/**
- * Field — label + control. Generates an id with useId() and links the label
- * to the control (WCAG 1.3.1 / 4.1.2). If the child is a bare
- * input/select/textarea the id is injected automatically; otherwise pass
- * `htmlFor` and put that id on the control yourself.
- */
-const FORM_TAGS = new Set(['input', 'select', 'textarea'])
-function Field({ label, children, htmlFor }) {
-  const autoId = useId()
-  const child = React.Children.only(children)
-  const injectable = !htmlFor && React.isValidElement(child) && FORM_TAGS.has(child.type)
-  const id = htmlFor || (injectable ? (child.props.id || autoId) : undefined)
-  return (
-    <div>
-      <label htmlFor={id} className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
-      {injectable ? React.cloneElement(child, { id }) : children}
-    </div>
-  )
-}
+// Field (label wrapper with id injection, WCAG 1.3.1 / 4.1.2) now comes from
+// @/components/ui — see the import at the top of this file.
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // GB ITEMS — Gradebook export view (Attendance %, WOC Ratio, Volunteer Hours)

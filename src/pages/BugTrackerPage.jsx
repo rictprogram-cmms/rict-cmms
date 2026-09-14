@@ -25,6 +25,7 @@
  */
 
 import React, { useState, useMemo, useCallback, useEffect, useRef, useId } from 'react'
+import { Field } from '@/components/ui'
 import { useLocation, useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { useAuth } from '@/contexts/AuthContext'
@@ -1394,25 +1395,8 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50' }) {
   )
 }
 
-// Label + control. If htmlFor isn't supplied and the child is a bare
-// input/select/textarea, an id is generated and injected so the label is
-// programmatically linked (WCAG 1.3.1 / 4.1.2).
-const FORM_TAGS = new Set(['input', 'select', 'textarea'])
-function Field({ label, htmlFor, children }) {
-  const autoId = useId()
-  // Multiple children are allowed (e.g. a control plus a helper <p>); only a
-  // lone bare control gets an auto-injected id, everything renders.
-  const kids = React.Children.toArray(children)
-  const child = kids.length === 1 ? kids[0] : null
-  const injectable = !htmlFor && React.isValidElement(child) && FORM_TAGS.has(child.type)
-  const id = htmlFor || (injectable ? (child.props.id || autoId) : undefined)
-  return (
-    <div>
-      <label htmlFor={id} className="block text-xs font-medium text-surface-600 mb-1">{label}</label>
-      {injectable ? React.cloneElement(child, { id }) : children}
-    </div>
-  )
-}
+// Field (label wrapper with id injection, WCAG 1.3.1 / 4.1.2) now comes from
+// @/components/ui — see the import at the top of this file.
 
 function MetaItem({ label, children }) {
   return (

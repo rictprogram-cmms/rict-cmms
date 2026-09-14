@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef, useId } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { Field as UiField } from '@/components/ui'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -904,29 +905,12 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
 }
 
 // ─── Reusable Form Helpers ─────────────────────────────────────────────────────
-// Field links its label to the control (WCAG 1.3.1 / 4.1.2): an id from
-// useId() is injected into TI / NI / TA / Sel or a bare input/select/textarea
-// child. ItemList (several inputs) labels each row itself.
-const LINKABLE = new Set(['input', 'select', 'textarea'])
-function Field({ label, required, hint, children }) {
-  const autoId = useId()
-  const hintId = `${autoId}-hint`
-  const child = React.Children.only(children)
-  const linkable = React.isValidElement(child) && (LINKABLE.has(child.type) || child.type === TI || child.type === NI || child.type === TA || child.type === Sel)
-  const id = linkable ? (child.props.id || autoId) : undefined
-  const isList = React.isValidElement(child) && child.type === ItemList
-  return (
-    <div>
-      <label htmlFor={id} className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">
-        {label}{required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}{required && <span className="sr-only"> (required)</span>}
-      </label>
-      {linkable
-        ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : undefined })
-        : isList ? React.cloneElement(child, { label }) : children}
-      {hint && <p id={hintId} className="text-xs text-surface-400 mt-1">{hint}</p>}
-    </div>
-  )
-}
+// Field is the shared label wrapper from @/components/ui (WCAG 1.3.1 / 4.1.2):
+// it injects an id into a bare input/select/textarea child or into TI / NI /
+// TA / Sel (flagged __linkable below). ItemList (several inputs) labels each
+// row itself — pass it a `label` prop. This alias only applies the syllabus
+// label styling.
+const Field = (props) => <UiField labelClassName="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1" {...props} />
 function TI({ value, onChange, placeholder, type = 'text', className = '', ...rest }) {
   return <input type={type} value={value ?? ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} {...rest}
     className={`w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-400 ${className}`} />
@@ -947,6 +931,9 @@ function Sel({ value, onChange, options, ...rest }) {
     </select>
   )
 }
+// Let Field inject ids into these helpers (see Field).
+TI.__linkable = NI.__linkable = TA.__linkable = Sel.__linkable = true
+
 function ItemList({ items, onChange, placeholder, addLabel = 'Add Item', label = 'Item' }) {
   return (
     <div className="space-y-2">
@@ -2268,7 +2255,7 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
       {/* ── Required Technology ── */}
       <div className="border-t border-surface-100 pt-4">
         <Field label="Required Technology" hint="Pre-filled with standard SCTCC requirements — edit as needed">
-          <ItemList items={data.required_technology} onChange={v => update('required_technology', v)}
+          <ItemList items={data.required_technology} onChange={v => update('required_technology', v)} label="Required Technology"
             placeholder="e.g. Active SCTCC email account" addLabel="Add Technology" />
         </Field>
       </div>
@@ -2303,7 +2290,7 @@ function Step6Description({ data, update }) {
         <TA value={data.course_description} onChange={v => update('course_description', v)} rows={5} placeholder="This course provides a comprehensive introduction to..." />
       </Field>
       <Field label="Student Learning Outcomes" hint="Each outcome will be numbered automatically in the PDF">
-        <ItemList items={data.student_outcomes} onChange={v => update('student_outcomes', v)} placeholder="e.g. Understand the working principles of various sensors." addLabel="Add Outcome" />
+        <ItemList items={data.student_outcomes} onChange={v => update('student_outcomes', v)} label="Student Learning Outcome" placeholder="e.g. Understand the working principles of various sensors." addLabel="Add Outcome" />
       </Field>
     </div>
   )

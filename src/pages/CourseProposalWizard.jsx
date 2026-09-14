@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect, useId } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
+import { Field as UiField } from '@/components/ui'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
@@ -655,26 +656,11 @@ function StepProgress({ current, maxStep, onStep }) {
 }
 
 // ─── Shared field components ──────────────────────────────────────────────────
-// Field links its label to the control (WCAG 1.3.1 / 4.1.2): an id from
-// useId() is injected into a bare input/select/textarea child. Required
-// state is announced; hint text is tied via aria-describedby.
-const LINKABLE = new Set(['input', 'select', 'textarea'])
-function Field({ label, required, hint, children }) {
-  const autoId = useId()
-  const hintId = `${autoId}-hint`
-  const child = React.Children.only(children)
-  const linkable = React.isValidElement(child) && (LINKABLE.has(child.type) || child.type?.__linkable === true)
-  const id = linkable ? (child.props.id || autoId) : undefined
-  return (
-    <div>
-      <label htmlFor={id} className="block text-xs font-semibold text-surface-700 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}{required && <span className="sr-only"> (required)</span>}
-      </label>
-      {linkable ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : undefined }) : children}
-      {hint && <p id={hintId} className="text-[10px] text-surface-400 mt-1">{hint}</p>}
-    </div>
-  )
-}
+// Field is the shared label wrapper from @/components/ui (WCAG 1.3.1 / 4.1.2:
+// it injects an id into the first input/select/textarea child — or any helper
+// flagged __linkable — announces required state, and ties hint text via
+// aria-describedby). This alias only applies the wizard label styling.
+const Field = (props) => <UiField labelClassName="block text-xs font-semibold text-surface-700 mb-1.5" {...props} />
 const inp = 'w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent'
 const Inp = ({value,onChange,placeholder,className='',...rest}) => (
   <input value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`${inp} ${className}`} {...rest}/>

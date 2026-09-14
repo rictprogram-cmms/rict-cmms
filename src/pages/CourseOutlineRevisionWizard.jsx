@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useEffect, useRef, useId } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
+import { Field as UiField } from '@/components/ui'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
@@ -428,26 +429,11 @@ function StepProgress({ current, maxStep, onStep }) {
   )
 }
 
-// Field links its label to the control (WCAG 1.3.1 / 4.1.2): an id from
-// useId() is injected into a bare input/select/textarea child. Required
-// state is announced; hint text is tied via aria-describedby.
-const LINKABLE = new Set(['input', 'select', 'textarea'])
-function Field({ label, required, hint, children }) {
-  const autoId = useId()
-  const hintId = `${autoId}-hint`
-  const child = React.Children.only(children)
-  const linkable = React.isValidElement(child) && (LINKABLE.has(child.type) || child.type?.__linkable === true)
-  const id = linkable ? (child.props.id || autoId) : undefined
-  return (
-    <div>
-      <label htmlFor={id} className="block text-xs font-semibold text-surface-700 mb-1.5">
-        {label}{required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}{required && <span className="sr-only"> (required)</span>}
-      </label>
-      {linkable ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : undefined }) : children}
-      {hint && <p id={hintId} className="text-[10px] text-surface-400 mt-1">{hint}</p>}
-    </div>
-  )
-}
+// Field is the shared label wrapper from @/components/ui (WCAG 1.3.1 / 4.1.2:
+// it injects an id into the first input/select/textarea child — or any helper
+// flagged __linkable — announces required state, and ties hint text via
+// aria-describedby). This alias only applies the wizard label styling.
+const Field = (props) => <UiField labelClassName="block text-xs font-semibold text-surface-700 mb-1.5" {...props} />
 const ic = 'w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-400'
 const Inp = ({value,onChange,placeholder,className='',...rest}) => <input value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} className={`${ic} ${className}`} {...rest}/>
 const Tex = ({value,onChange,placeholder,rows=3,...rest}) => <textarea value={value||''} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} className={`${ic} resize-vertical`} {...rest}/>
@@ -557,7 +543,14 @@ function Step1({ data, update, catalog }) {
         <Field label="Effective Date of Change (1 year out)" required>
           <Inp value={data.effective_date} onChange={v=>update('effective_date',v)} placeholder="e.g. Fall 2027"/>
         </Field>
-        <Field label="Program(s)" required hint="Select all programs this course belongs to">
+        {/* Checkbox group: a <fieldset>/<legend> is the correct grouping for
+            several related controls (WCAG 1.3.1) — a <label> can only point
+            at one control. The hint is tied via aria-describedby and the
+            selected-count line is a polite live region. */}
+        <fieldset aria-describedby="program-group-hint">
+          <legend className="block text-xs font-semibold text-surface-700 mb-1.5">
+            Program(s)<span className="text-red-500 ml-0.5" aria-hidden="true">*</span><span className="sr-only"> (required)</span>
+          </legend>
           <div className="space-y-1.5 mt-0.5">
             {PROGRAMS.map(p => {
               const selected = Array.isArray(data.program) ? data.program.includes(p.name) : data.program === p.name
@@ -578,10 +571,13 @@ function Step1({ data, update, catalog }) {
               )
             })}
           </div>
-          {Array.isArray(data.program) && data.program.length > 0 && (
-            <p className="text-[10px] text-blue-600 mt-1.5 font-medium">{data.program.length} program{data.program.length > 1 ? 's' : ''} selected</p>
-          )}
-        </Field>
+          <p aria-live="polite" className="text-[10px] text-blue-600 mt-1.5 font-medium min-h-[1em]">
+            {Array.isArray(data.program) && data.program.length > 0
+              ? `${data.program.length} program${data.program.length > 1 ? 's' : ''} selected`
+              : ''}
+          </p>
+          <p id="program-group-hint" className="text-xs text-surface-400 mt-1">Select all programs this course belongs to</p>
+        </fieldset>
       </div>
 
       {data.current_course_num && catalog.find(c=>c.course_id===data.current_course_num) && (

@@ -203,19 +203,26 @@ export function LateBadge() {
 // If the child is a wrapper (e.g. a <div> with a control inside), pass
 // `htmlFor="some-id"` and put that id on the control yourself.
 //
-// Multiple children are allowed (e.g. a control followed by a helper <p>);
-// only the first element is considered for id linking, everything renders.
+// Multiple children are allowed (e.g. an <input> followed by its <datalist>,
+// or a control followed by a helper <p>); the first element is the control
+// that gets linked, everything after it renders untouched.
 //
-// Several pages still carry a local `Field` from before this existed; they
-// behave the same way and can be migrated to this one over time.
+// `labelClassName` restyles the label; `hintClassName` the hint line.
+//
+// This is the single source of truth for Field — pages should import it from
+// here rather than carrying a local copy.
 const FIELD_LINKABLE = new Set(['input', 'select', 'textarea'])
-export function Field({ label, required, hint, htmlFor, labelClassName = 'block text-xs font-medium text-surface-600 mb-1', children }) {
+export function Field({
+  label, required, hint, htmlFor, children,
+  labelClassName = 'block text-xs font-medium text-surface-600 mb-1',
+  hintClassName = 'text-xs text-surface-400 mt-1',
+}) {
   const autoId = useId()
   const hintId = `${autoId}-hint`
   const kids = React.Children.toArray(children)
-  const child = kids.find(React.isValidElement) || null
-  const single = kids.length === 1 && child
-  const linkable = !htmlFor && single &&
+  const child = kids[0]
+  const rest = kids.slice(1)
+  const linkable = !htmlFor && React.isValidElement(child) &&
     (FIELD_LINKABLE.has(child.type) || child.type?.__linkable === true)
   const id = htmlFor || (linkable ? (child.props.id || autoId) : undefined)
   return (
@@ -227,8 +234,9 @@ export function Field({ label, required, hint, htmlFor, labelClassName = 'block 
       </label>
       {linkable
         ? React.cloneElement(child, { id, required: required || undefined, 'aria-describedby': hint ? hintId : child.props['aria-describedby'] })
-        : children}
-      {hint && <p id={hintId} className="text-xs text-surface-400 mt-1">{hint}</p>}
+        : child}
+      {rest}
+      {hint && <p id={hintId} className={hintClassName}>{hint}</p>}
     </div>
   )
 }
