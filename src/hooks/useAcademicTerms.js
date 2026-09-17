@@ -170,16 +170,23 @@ export function useTermActions() {
     let syllabiToUpdate = []
     try {
       const syl = mustData(await supabase.from('syllabus_templates')
-        .select('course_id, semester, begin_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end')
+        .select('course_id, semester, runs, begin_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end')
         .eq('semester', term.name), 'syllabus_templates.select') || []
       const old = prev || term
-      // A syllabus "still matches" when every date it has equals the old term's (blank syllabus dates don't block).
+      // A syllabus "still matches" when every date it has equals what the OLD
+      // term gave a section of its length (blank syllabus dates don't block).
+      // Compared per `runs` — an 8-week section legitimately holds half-term
+      // dates, and comparing those against the full term's would wrongly treat
+      // every half-semester syllabus as hand-edited and skip it forever.
       // Drop / withdraw are per class and never touched here.
-      syllabiToUpdate = syl.filter(s =>
-        (!s.begin_date || eq(s.begin_date, old.begin_date)) && (!s.end_date || eq(s.end_date, old.end_date))
-        && (!s.spring_break_start || eq(s.spring_break_start, old.spring_break_start)) && (!s.spring_break_end || eq(s.spring_break_end, old.spring_break_end))
-        && (!s.finals_start || eq(s.finals_start, old.finals_start)) && (!s.finals_end || eq(s.finals_end, old.finals_end))
-      )
+      syllabiToUpdate = syl.filter(s => {
+        const r = ['full', 'first', 'second'].includes(s.runs) ? s.runs : 'full'
+        const od = datesForRuns(old, r)
+        const oc = calendarFromTerm(old, { runs: r })
+        return (!s.begin_date || eq(s.begin_date, od.start_date)) && (!s.end_date || eq(s.end_date, od.end_date))
+          && (!s.spring_break_start || eq(s.spring_break_start, oc.spring_break_start)) && (!s.spring_break_end || eq(s.spring_break_end, oc.spring_break_end))
+          && (!s.finals_start || eq(s.finals_start, oc.finals_start)) && (!s.finals_end || eq(s.finals_end, oc.finals_end))
+      })
     } catch { /* syllabus table may be read-restricted for some users; classes still propagate */ }
     return { classesToUpdate, overriding, syllabiToUpdate }
   }, [])
@@ -202,11 +209,16 @@ export function useTermActions() {
         if (error) throw error
         classesDone++
       }
-      const termCal = calendarFromTerm(term)
       for (const s of syllabi) {
-        const cal = termCal
+        // Per syllabus, exactly as the classes loop above does per class.
+        // This previously wrote term.begin_date / term.end_date to EVERY
+        // syllabus, which flattened half-semester sections back to full-term
+        // dates whenever a term was edited.
+        const r = ['full', 'first', 'second'].includes(s.runs) ? s.runs : 'full'
+        const d = datesForRuns(term, r)
+        const cal = calendarFromTerm(term, { runs: r })
         const { error } = assertWrite(await supabase.from('syllabus_templates').update({
-          begin_date: term.begin_date || null, end_date: term.end_date || null,
+          begin_date: d.start_date || null, end_date: d.end_date || null,
           spring_break_start: cal.spring_break_start || null, spring_break_end: cal.spring_break_end || null,
           finals_start: cal.finals_start || null, finals_end: cal.finals_end || null,
           updated_at: nowIso, updated_by: profile?.email || '',

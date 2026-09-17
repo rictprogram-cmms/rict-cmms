@@ -14,7 +14,8 @@ import { downloadSyllabusDocx } from './syllabusDocx'
 import toast from 'react-hot-toast'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useAcademicTerms } from '@/hooks/useAcademicTerms'
-import { semesterOptions, parseTermName, inferRuns, classMatchesTerm, fmtDate as fmtTermDate } from '@/lib/academicTerms'
+import { semesterOptions, parseTermName, inferRuns, classMatchesTerm, fmtDate as fmtTermDate,
+         RUNS, datesForRuns, calendarFromTerm } from '@/lib/academicTerms'
 import { normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
@@ -52,6 +53,27 @@ export function getDefaultSemester(today = new Date()) {
   return `Spring ${y + 1}`
 }
 
+// ─── Date sanitising ───────────────────────────────────────────────────────────
+// Form state uses '' for an empty date input; Postgres rejects '' for a date
+// column ("invalid input syntax for type date"). EVERY write to
+// syllabus_templates has to go through withNullDates() first.
+//
+// handleSave did this inline. handleDuplicate did not — it set eight date
+// fields to '' and upserted them straight through, so "Duplicate to New
+// Semester" failed every time it was used. Hoisted here so the two paths
+// cannot drift apart again.
+const SYLLABUS_DATE_FIELDS = [
+  'begin_date', 'end_date', 'last_drop_date', 'last_withdraw_date',
+  'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end', 'revised_date',
+]
+export function withNullDates(obj) {
+  const out = { ...obj }
+  // Only '' is rewritten — a missing key stays missing so an upsert never
+  // blanks a column the caller didn't mean to touch.
+  for (const f of SYLLABUS_DATE_FIELDS) if (out[f] === '') out[f] = null
+  return out
+}
+
 // ─── Default State ─────────────────────────────────────────────────────────────
 const EMPTY_SYLLABUS = {
   id: null,
@@ -61,7 +83,11 @@ const EMPTY_SYLLABUS = {
   instructor_email: '',
   instructor_phone: '',
   instructor_office: '',
-  instructor_office_hours: 'Tuesday – Thursday 8AM – 4PM, needs to be scheduled.',
+  // Left blank on purpose. A non-empty default here silently blocked the
+  // "fill blanks from the instructor's profile" pass in Step 2 — the field was
+  // never empty, so the profile value never won. The old text lives on as the
+  // input's placeholder instead.
+  instructor_office_hours: '',
   instructor2_enabled: false,
   instructor2_name: '',
   instructor2_email: '',
@@ -77,6 +103,11 @@ const EMPTY_SYLLABUS = {
   credits_soe: 0,
   course_type: 'hybrid',
   semester_length: '16',        // '16' = full semester, '8' = half semester
+  // Which part of the term this section occupies: 'full' | 'first' | 'second'.
+  // Same vocabulary as classes.runs, so the syllabus and the class record can
+  // be compared directly. semester_length is derived from this (see setRuns in
+  // Step3CourseInfo) and still drives the required-hours-per-week formula.
+  runs: 'full',
   required_hours_per_week: 4,  // auto-calculated: lab_credits × 2 (16wk) or × 4 (8wk)
   revised_date: new Date().toISOString().split('T')[0],
   begin_date: '',
@@ -88,6 +119,11 @@ const EMPTY_SYLLABUS = {
   finals_start: '',
   finals_end: '',
   required_materials: [],
+  // Index-aligned with required_materials: program_tools.tool_id per entry, or
+  // null when the item has never been linked to a catalog row. This is what
+  // Program Cost prices from, so it survives catalog renames. The strings above
+  // stay the display/print source.
+  required_material_ids: [],
   required_technology: [
     'Active SCTCC email account',
     'Internet access',
@@ -1252,7 +1288,7 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
 }
 
 // ─── Step 2: Instructor ────────────────────────────────────────────────────────
-function Step2Instructor({ data, update, commonSections, instructorProfile, cls }) {
+function Step2Instructor({ data, update, commonSections, instructorProfile, cls, instructorList }) {
   // Get shared logo from common sections (uploaded once via the gear settings)
   const sharedLogo = (commonSections || []).find(s => s.section_key === 'shared_logo')?.content || ''
 
@@ -1268,20 +1304,51 @@ function Step2Instructor({ data, update, commonSections, instructorProfile, cls 
 
   const activeLogoUrl = logoSource === 'shared' ? sharedLogo : data.logo_url
 
-  // Instructor contact from the class's instructor profile (Users page).
+  // The profile this syllabus is pointed at. Previously this could ONLY come
+  // from the linked CMMS class, so a syllabus for a term that has no class
+  // scheduled yet got no prefill at all — and no banner explaining why. Now the
+  // instructor is pickable directly, and the class link is just a default.
+  const profileFor = (email) =>
+    (instructorList || []).find(p => (p.email || '').toLowerCase() === String(email || '').toLowerCase()) || null
+
+  const fullName = (p) => `${p?.first_name || ''} ${p?.last_name || ''}`.trim()
+
+  // Selected profile: whoever the syllabus names, else the class's instructor.
+  const selectedProfile = useMemo(
+    () => profileFor(data.instructor_email) || instructorProfile || null,
+    [data.instructor_email, instructorList, instructorProfile]
+  )
+
+  // Instructor contact from the selected profile (Users page).
   const expected = useMemo(() => {
-    if (instructorProfile) {
+    if (selectedProfile) {
       return {
-        instructor_name: `${instructorProfile.first_name || ''} ${instructorProfile.last_name || ''}`.trim(),
-        instructor_email: instructorProfile.email || '',
-        instructor_phone: instructorProfile.phone || '',
-        instructor_office: instructorProfile.office || '',
-        instructor_office_hours: instructorProfile.office_hours || '',
+        instructor_name: fullName(selectedProfile),
+        instructor_email: selectedProfile.email || '',
+        instructor_phone: selectedProfile.phone || '',
+        instructor_office: selectedProfile.office || '',
+        instructor_office_hours: selectedProfile.office_hours || '',
       }
     }
     if (cls?.instructor) return { instructor_name: cls.instructor }   // ad-hoc instructor: name only
     return null
-  }, [instructorProfile, cls])
+  }, [selectedProfile, cls])
+
+  // Picking someone from the dropdown overwrites all five contact fields —
+  // an explicit choice, unlike the fill-blanks pass below.
+  const pickInstructor = (email) => {
+    if (email === '__other__') { update('instructor_email', ''); update('instructor_name', ''); return }
+    const p = profileFor(email)
+    if (!p) return
+    update('instructor_name', fullName(p))
+    update('instructor_email', p.email || '')
+    update('instructor_phone', p.phone || '')
+    update('instructor_office', p.office || '')
+    update('instructor_office_hours', p.office_hours || '')
+  }
+
+  // True when the syllabus names someone who has no CMMS profile.
+  const isAdHoc = !selectedProfile && !!(data.instructor_name || '').trim()
   // Fill blanks on first visit.
   useEffect(() => {
     if (!expected) return
@@ -1326,12 +1393,38 @@ function Step2Instructor({ data, update, commonSections, instructorProfile, cls 
           <User size={13} className="text-brand-500" aria-hidden="true" /> Primary Instructor
         </p>
         <div className="grid grid-cols-2 gap-4">
+          {/* Pick the instructor — pulls phone, office and office hours from
+              their profile. Works whether or not a class has been scheduled. */}
+          <div className="col-span-2">
+            <Field label="Instructor" required
+              hint={selectedProfile
+                ? 'Contact details below come from this profile — edit them once on the Users page.'
+                : 'Not a CMMS user — type their details below.'}>
+              <Sel
+                /* Sel builds its own className, so the 44px target comes via
+                   style. WCAG 2.1 AA target size for this new control. */
+                style={{ minHeight: 44 }}
+                value={selectedProfile ? selectedProfile.email : '__other__'}
+                onChange={pickInstructor}
+                options={[
+                  ...(instructorList || []).map(p => ({ value: p.email, label: `${fullName(p)}${p.email ? ` — ${p.email}` : ''}` })),
+                  { value: '__other__', label: 'Someone else — type a name below' },
+                ]}
+              />
+            </Field>
+          </div>
+
           {expected && (
             <div className={`col-span-2 rounded-xl border px-4 py-2.5 text-xs ${differs.length ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`} role="status">
-              {instructorProfile
+              {selectedProfile
                 ? <>Contact details come from <strong>{expected.instructor_name}</strong>'s profile (Users page — edit them there once). {differs.length ? `${differs.length} field${differs.length === 1 ? '' : 's'} differ${differs.length === 1 ? 's' : ''}.` : 'Everything matches.'}</>
                 : <>The class lists <strong>{expected.instructor_name}</strong>, who isn't a CMMS user — enter their contact details here.</>}
               {differs.length > 0 && <> <button type="button" onClick={() => { for (const [k, v] of differs) update(k, v) }} className="underline font-semibold min-h-[24px]">Use profile values</button></>}
+            </div>
+          )}
+          {isAdHoc && (
+            <div className="col-span-2 rounded-xl border border-surface-200 bg-surface-50 px-4 py-2.5 text-xs text-surface-600" role="status">
+              <strong>{data.instructor_name}</strong> has no CMMS profile, so nothing prefills — type the contact details below and they save with this syllabus.
             </div>
           )}
           <Field label="Name" required hint={<InstrStatus f="instructor_name" />}><TI value={data.instructor_name} onChange={v => update('instructor_name', v)} placeholder="Aaron Barker" /></Field>
@@ -1342,6 +1435,11 @@ function Step2Instructor({ data, update, commonSections, instructorProfile, cls 
         <Field label="Office Hours" hint={<InstrStatus f="instructor_office_hours" />}>
           <TI value={data.instructor_office_hours} onChange={v => update('instructor_office_hours', v)} placeholder="Tuesday – Thursday 8AM – 4PM, needs to be scheduled." />
         </Field>
+        {selectedProfile && !(selectedProfile.office_hours || '').trim() && (
+          <p className="text-[11px] text-amber-700">
+            No office hours on {fullName(selectedProfile)}'s profile yet — whatever you type here is used for this syllabus only. Add them on the Users page to reuse them everywhere.
+          </p>
+        )}
       </div>
 
       {/* Co-instructor */}
@@ -1565,6 +1663,9 @@ function Step3CourseInfo({ data, update, cls, onApplyToClass }) {
   const labCredits   = parseInt(data.credits_lab) || 0
   const lecCredits   = parseInt(data.credits_lecture) || 0
   const semLen       = data.semester_length || '16'
+  // Templates saved before `runs` existed only recorded the length. Treat a
+  // legacy 8-week syllabus as the first half until someone picks otherwise.
+  const runs         = data.runs || (semLen === '8' ? 'first' : 'full')
   const calcedHours  = wizardHours(data)
   const isOverridden = data.required_hours_per_week !== calcedHours
   const [manualOverride, setManualOverride] = useState(isOverridden)
@@ -1577,10 +1678,17 @@ function Step3CourseInfo({ data, update, cls, onApplyToClass }) {
     }
   }, [labCredits, lecCredits, semLen, data.course_type]) // eslint-disable-line
 
-  const handleSemLenChange = (val) => {
-    update('semester_length', val)
+  // One control, two stored values: `runs` says which part of the term (and
+  // drives the dates on step 4 via datesForRuns); `semester_length` is derived
+  // from it and still drives the required-hours-per-week formula. Deriving it
+  // means the two can never disagree the way they could when length was picked
+  // on its own and nothing recorded WHICH half.
+  const handleRunsChange = (val) => {
+    const len = val === 'full' ? '16' : '8'
+    update('runs', val)
+    update('semester_length', len)
     if (!manualOverride) {
-      update('required_hours_per_week', wizardHours(data, { semester_length: val }))
+      update('required_hours_per_week', wizardHours(data, { semester_length: len }))
     }
   }
 
@@ -1599,16 +1707,27 @@ function Step3CourseInfo({ data, update, cls, onApplyToClass }) {
       credits_lecture: cls.credits_lecture == null ? null : parseFloat(cls.credits_lecture),
       credits_lab: cls.credits_lab == null ? null : parseFloat(cls.credits_lab),
       semester_length: cls.runs === 'first' || cls.runs === 'second' ? '8' : '16',
+      // Compared directly now — the old code collapsed runs to a length, so a
+      // class set to the SECOND 8 weeks looked identical to one set to the
+      // first and the mismatch was invisible here.
+      runs: ['full', 'first', 'second'].includes(cls.runs) ? cls.runs : 'full',
       required_hours_per_week: parseFloat(cls.required_hours) || 0,
     }
   }, [cls])
-  const diffs = expected ? Object.entries(expected).filter(([k, v]) => v != null && String(v) !== String(data[k] ?? '')) : []
+  // Compare against the RESOLVED runs so a legacy template with no value stored
+  // doesn't read as a mismatch. semester_length is excluded from the visible
+  // diff because it is now derived from runs — reporting both would say the
+  // same thing twice.
+  const dataForDiff = { ...data, runs }
+  const diffs = expected
+    ? Object.entries(expected).filter(([k, v]) => k !== 'semester_length' && v != null && String(v) !== String(dataForDiff[k] ?? ''))
+    : []
   const useClass = () => {
     for (const [k, v] of Object.entries(expected)) if (v != null) update(k, v)
     setManualOverride(expected.required_hours_per_week !== wizardHours({ ...data, ...expected }))
   }
-  const LABELS = { course_type: 'delivery', credits_lecture: 'lecture credits', credits_lab: 'lab credits', semester_length: 'length', required_hours_per_week: 'hours/wk' }
-  const showVal = (k, v) => (k === 'course_type' ? COURSE_TYPE_TO_DELIVERY[v] || v : k === 'semester_length' ? `${v}-week` : String(v))
+  const LABELS = { course_type: 'delivery', credits_lecture: 'lecture credits', credits_lab: 'lab credits', semester_length: 'length', runs: 'runs', required_hours_per_week: 'hours/wk' }
+  const showVal = (k, v) => (k === 'course_type' ? COURSE_TYPE_TO_DELIVERY[v] || v : k === 'semester_length' ? `${v}-week` : k === 'runs' ? (RUNS[v] || v) : String(v))
 
   return (
     <div className="space-y-5">
@@ -1666,27 +1785,35 @@ function Step3CourseInfo({ data, update, cls, onApplyToClass }) {
       {/* Semester length + hours — hidden for fully online courses */}
       {data.course_type !== 'online' && (
       <div className="space-y-5">
-      <Field label="Semester Length" required hint="Determines required campus hours per week">
-        <div className="flex gap-3 mt-0.5">
+      <Field label="Semester Length" required hint="Sets required campus hours per week AND the dates filled in on the next step">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-0.5" role="radiogroup" aria-label="Which part of the term this section runs">
           {[
-            { val: '16', label: '16-Week (Full Semester)', formula: wizardHoursText({ ...data, semester_length: '16' }) },
-            { val: '8',  label: '8-Week (Half Semester)',  formula: wizardHoursText({ ...data, semester_length: '8' }) },
-          ].map(opt => (
-            <button
-              key={opt.val}
-              onClick={() => handleSemLenChange(opt.val)}
-              className={`flex-1 flex flex-col items-start px-4 py-3 min-h-[44px] rounded-xl border text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
-                semLen === opt.val
-                  ? 'bg-brand-50 border-brand-300 text-brand-700'
-                  : 'border-surface-200 text-surface-600 hover:bg-surface-50'
-              }`}
-            >
-              <span className="text-sm font-semibold">{opt.label}</span>
-              <span className={`text-xs mt-0.5 font-mono ${semLen === opt.val ? 'text-brand-500' : 'text-surface-400'}`}>
-                {opt.formula}
-              </span>
-            </button>
-          ))}
+            { val: 'full',   label: '16-Week (Full Semester)', sub: 'Runs the whole term',      formula: wizardHoursText({ ...data, semester_length: '16' }) },
+            { val: 'first',  label: 'First 8 Weeks',           sub: 'Term begin → week 8',      formula: wizardHoursText({ ...data, semester_length: '8' }) },
+            { val: 'second', label: 'Second 8 Weeks',          sub: 'Week 9 → term end',        formula: wizardHoursText({ ...data, semester_length: '8' }) },
+          ].map(opt => {
+            const active = runs === opt.val
+            return (
+              <button
+                key={opt.val}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => handleRunsChange(opt.val)}
+                className={`flex flex-col items-start px-4 py-3 min-h-[44px] rounded-xl border text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
+                  active
+                    ? 'bg-brand-50 border-brand-300 text-brand-700'
+                    : 'border-surface-200 text-surface-600 hover:bg-surface-50'
+                }`}
+              >
+                <span className="text-sm font-semibold">{opt.label}</span>
+                <span className={`text-[11px] mt-0.5 ${active ? 'text-brand-600' : 'text-surface-400'}`}>{opt.sub}</span>
+                <span className={`text-xs mt-0.5 font-mono ${active ? 'text-brand-500' : 'text-surface-400'}`}>
+                  {opt.formula}
+                </span>
+              </button>
+            )
+          })}
         </div>
       </Field>
 
@@ -1804,12 +1931,30 @@ const TERM_DATE_MAP = [
 ]
 
 function Step4Dates({ data, update, term, cls, onApplyToClass }) {
+  const runs = data.runs || ((data.semester_length || '16') === '8' ? 'first' : 'full')
+
   // What the calendar says each date should be: the class's own start/end
   // (8-week sections, Discovery Academy) when a class exists, else the term.
+  //
+  // The term is now read THROUGH datesForRuns()/calendarFromTerm() rather than
+  // field by field. Reading term.begin_date / term.end_date directly is what
+  // made an 8-week section inherit the full term's dates: the length was
+  // recorded on step 3 but nothing here ever looked at it.
   const expected = useMemo(() => {
     if (!term && !cls) return null
     const e = {}
     for (const [f, tf] of TERM_DATE_MAP) e[f] = tf && term?.[tf] ? String(term[tf]).substring(0, 10) : ''
+    if (term) {
+      const d = datesForRuns(term, runs)
+      const c = calendarFromTerm(term, { runs })
+      if (d.start_date) e.begin_date = String(d.start_date).substring(0, 10)
+      if (d.end_date)   e.end_date   = String(d.end_date).substring(0, 10)
+      // A first-half section has no finals week, and spring break only applies
+      // when it actually falls inside the section's own dates.
+      for (const f of ['spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']) {
+        e[f] = c[f] ? String(c[f]).substring(0, 10) : ''
+      }
+    }
     if (cls) {
       if (cls.start_date) e.begin_date = String(cls.start_date).substring(0, 10)
       if (cls.end_date) e.end_date = String(cls.end_date).substring(0, 10)
@@ -1820,14 +1965,41 @@ function Step4Dates({ data, update, term, cls, onApplyToClass }) {
       for (const f of ['spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']) e[f] = cls[f] ? String(cls[f]).substring(0, 10) : ''
     }
     return e
-  }, [term, cls])
-  const source = cls ? `${cls.course_id} (class)` : term ? `${term.name} (term)` : ''
+  }, [term, cls, runs])
+  const source = cls
+    ? `${cls.course_id} (class)`
+    : term ? `${term.name} (term${runs === 'full' ? '' : ` · ${RUNS[runs]}`})` : ''
 
   // First visit with blank dates: fill from the calendar so nothing is retyped.
   useEffect(() => {
     if (!expected) return
     for (const [f] of TERM_DATE_MAP) if (!data[f] && expected[f]) update(f, expected[f])
   }, [expected]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Changing the section length on step 3 moves these dates with it — but only
+  // when they still match exactly what the PREVIOUS setting produced. If any
+  // date was hand-edited, nothing is touched and the banner's "Use calendar
+  // dates" button stays the way to opt in. Dates never change silently under
+  // an edit someone made on purpose.
+  const prevRuns = useRef(runs)
+  useEffect(() => {
+    const before = prevRuns.current
+    prevRuns.current = runs
+    if (before === runs || !term || cls || !expected) return
+    const old = { ...datesForRuns(term, before), ...calendarFromTerm(term, { runs: before }) }
+    const wasFromCalendar = {
+      begin_date: old.start_date, end_date: old.end_date,
+      spring_break_start: old.spring_break_start, spring_break_end: old.spring_break_end,
+      finals_start: old.finals_start, finals_end: old.finals_end,
+    }
+    const d10 = (v) => String(v || '').substring(0, 10)
+    const untouched = Object.entries(wasFromCalendar)
+      .every(([f, v]) => d10(data[f]) === d10(v))
+    if (!untouched) return
+    for (const f of Object.keys(wasFromCalendar)) {
+      if (d10(data[f]) !== d10(expected[f])) update(f, expected[f] || '')
+    }
+  }, [runs]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const differs = expected ? TERM_DATE_MAP.filter(([f]) => expected[f] && data[f] && data[f] !== expected[f]) : []
   const useAll = () => { for (const [f] of TERM_DATE_MAP) if (expected[f]) update(f, expected[f]) }
@@ -1862,6 +2034,22 @@ function Step4Dates({ data, update, term, cls, onApplyToClass }) {
       ) : (
         <p className="text-sm text-surface-500">No term calendar for {data.semester || 'this semester'} yet — add it under Settings → Terms and these dates fill in automatically. Spring break and finals are optional.</p>
       )}
+
+      {/* Drop and withdraw live on the class record, not the term — so with no
+          class scheduled for this course + semester there is nothing to pull
+          them from. Say so rather than leaving two required fields blank. */}
+      {!cls && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" role="status">
+          <AlertCircle size={15} className="text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
+          <p className="text-xs text-amber-800">
+            <strong>No CMMS class scheduled for {data.course_id || 'this course'} · {data.semester || 'this semester'} yet.</strong>{' '}
+            Begin and end dates come from the term above, but <strong>Last Day to Drop</strong> and{' '}
+            <strong>Last Day to Withdraw</strong> are stored per class — type them here for now. Once the
+            class is created under Settings → Classes, this syllabus picks them up and the two stay in sync.
+          </p>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-4">
         {TERM_DATE_MAP.filter(([, , , req]) => req).map(([f, , label]) => (
           <Field key={f} label={label} required hint={<Status f={f} />}><TI value={data[f]} onChange={v => update(f, v)} type="date" /></Field>
@@ -1969,7 +2157,7 @@ function CatalogPickerModal({ currentMaterials, onAdd, onRemove, onClose }) {
                   <button
                     key={tool.tool_id}
                     type="button"
-                    onClick={() => added ? onRemove(fmt(tool)) : onAdd(fmt(tool))}
+                    onClick={() => added ? onRemove(fmt(tool)) : onAdd(fmt(tool), tool.tool_id)}
                     className={`w-full flex items-center gap-3 px-5 py-3 min-h-[44px] text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1
                       ${added ? 'bg-emerald-50 hover:bg-emerald-100' : 'hover:bg-surface-50'}`}
                   >
@@ -2047,8 +2235,29 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
       .then(({ data: rows }) => setCatalog(rows || []))
   }, [catalogRefreshKey])
 
-  // Look up catalog entry — try exact name match first, then part number match
-  function findCatalogEntry(itemStr) {
+  // ── Catalog link (required_material_ids) ────────────────────────────────────
+  // ids[i] is the program_tools.tool_id for required_materials[i], or null when
+  // the item has never been resolved. Every mutation below goes through
+  // setMaterials() so the two arrays can never drift out of alignment.
+  const alignIds = (materials, ids) => {
+    const src = Array.isArray(ids) ? ids : []
+    return materials.map((_, i) => src[i] ?? null)
+  }
+  const currentIds = alignIds(data.required_materials, data.required_material_ids)
+
+  function setMaterials(materials, ids) {
+    update('required_materials', materials)
+    update('required_material_ids', alignIds(materials, ids))
+  }
+
+  // Look up catalog entry — stored tool_id first (survives renames), then
+  // exact name match, then part number match, then a loose contains match
+  function findCatalogEntry(itemStr, idx) {
+    const linkedId = idx != null ? currentIds[idx] : null
+    if (linkedId) {
+      const byId = catalog.find(t => t.tool_id === linkedId)
+      if (byId) return byId
+    }
     const clean = itemStr.replace(/ \(Part #:.*?\)$/i, '').trim().toLowerCase()
     // Extract part number from string if present
     const partMatch = itemStr.match(/\(Part #:\s*([^)]+)\)/i)
@@ -2096,9 +2305,9 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
   }
 
   // ── Add from catalog ────────────────────────────────────────────────────────
-  function handleAddFromCatalog(str) {
+  function handleAddFromCatalog(str, toolId = null) {
     if (!data.required_materials.includes(str)) {
-      update('required_materials', [...data.required_materials, str])
+      setMaterials([...data.required_materials, str], [...currentIds, toolId || null])
       // Refresh catalog so new items show price immediately
       supabase.from('program_tools').select('tool_id, item_name, part_number, cost, item_type')
         .then(({ data: rows }) => setCatalog(rows || []))
@@ -2106,11 +2315,16 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
   }
 
   function handleRemoveFromCatalog(str) {
-    update('required_materials', data.required_materials.filter(m => m !== str))
+    const i = data.required_materials.indexOf(str)
+    if (i === -1) return
+    removeItem(i)
   }
 
   function removeItem(i) {
-    update('required_materials', data.required_materials.filter((_, idx) => idx !== i))
+    setMaterials(
+      data.required_materials.filter((_, idx) => idx !== i),
+      currentIds.filter((_, idx) => idx !== i),
+    )
   }
 
   // ── Save updated price back to program_tools ─────────────────────────────────
@@ -2148,6 +2362,14 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
       'program_tools.insert'
     )
         if (error) throw error
+        // Link the syllabus entry to the row we just created, so Program Cost
+        // prices it immediately and a later rename can't break the link
+        if (editingPrice.index != null) {
+          setMaterials(
+            data.required_materials,
+            currentIds.map((id, idx) => (idx === editingPrice.index ? newId : id)),
+          )
+        }
         toast.success(`"${editingPrice.item_name}" added to catalog with price`)
       }
 
@@ -2194,7 +2416,7 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
         ? `${row.item_name} (Part #: ${row.part_number})`
         : row.item_name
 
-      update('required_materials', [...data.required_materials, str])
+      setMaterials([...data.required_materials, str], [...currentIds, row.tool_id])
       // Refresh catalog so price shows immediately without needing to save/reload
       const freshCatalog = mustData(await supabase
         .from('program_tools').select('tool_id, item_name, part_number, cost, item_type'), 'program_tools.select')
@@ -2258,7 +2480,7 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
         {data.required_materials.length > 0 ? (
           <div className="space-y-1.5 mb-3">
             {data.required_materials.map((item, i) => {
-              const entry = findCatalogEntry(item)
+              const entry = findCatalogEntry(item, i)
               const isEditingThis = editingPrice?.index === i
               const displayName = item.replace(/ \(Part #:.*?\)$/i, '').trim()
               const partNum = entry?.part_number || (item.match(/\(Part #:\s*([^)]+)\)/)?.[1] || null)
@@ -2383,7 +2605,7 @@ function Step5Materials({ data, update, catalogRefreshKey = 0 }) {
                         const str = dupMatch.entry.part_number
                           ? `${dupMatch.entry.item_name} (Part #: ${dupMatch.entry.part_number})`
                           : dupMatch.entry.item_name
-                        handleAddFromCatalog(str)
+                        handleAddFromCatalog(str, dupMatch.entry.tool_id)
                         setShowAddNew(false)
                         setNewItem({ item_name: '', item_type: 'Tool', part_number: '', cost: '' })
                         setDupMatch(null)
@@ -2963,6 +3185,16 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
       .then(({ data: rows }) => { if (!cancelled) setCmmsClass(rows?.[0] || null) })
     return () => { cancelled = true }
   }, [data.course_id, data.semester])
+  // Every instructor profile — powers the Step 2 picker. Loaded independently
+  // of the class, so a syllabus for a term with no class scheduled yet still
+  // gets phone / office / office hours filled in from the Users page.
+  const [instructorList, setInstructorList] = useState([])
+  useEffect(() => {
+    supabase.from('profiles').select('email, first_name, last_name, phone, office, office_hours')
+      .eq('role', 'Instructor').order('last_name')
+      .then(({ data: rows }) => setInstructorList(rows || []))
+  }, [])
+
   // The class's instructor profile (contact details for Step 2).
   const [instructorProfile, setInstructorProfile] = useState(null)
   useEffect(() => {
@@ -2980,9 +3212,27 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     if (!cmmsClass) return
     setApplying(true)
     try {
+      // Pushing `runs` from step 3 also moves the class's dates, the same way
+      // Settings → Classes does when its Runs picker changes. Sending runs on
+      // its own would leave the class claiming an 8-week section while still
+      // holding full-term dates.
+      const nextRuns = ['full', 'first', 'second'].includes(data.runs) ? data.runs : 'full'
+      const runsDates = (applyToClass === 'info' && term && nextRuns !== (cmmsClass?.runs || 'full'))
+        ? (() => {
+            const d = datesForRuns(term, nextRuns)
+            const c = calendarFromTerm(term, { runs: nextRuns })
+            return { start_date: d.start_date || null, end_date: d.end_date || null,
+                     spring_break_start: c.spring_break_start || null, spring_break_end: c.spring_break_end || null,
+                     finals_start: c.finals_start || null, finals_end: c.finals_end || null }
+          })()
+        : {}
+
       const upd = applyToClass === 'info'
-        ? { delivery: COURSE_TYPE_TO_DELIVERY[data.course_type] || 'Hybrid', credits_lecture: parseFloat(data.credits_lecture) || 0, credits_lab: parseFloat(data.credits_lab) || 0, required_hours: parseFloat(data.required_hours_per_week) || 0 }
-        : { start_date: data.begin_date || null, end_date: data.end_date || null, spring_break_start: data.spring_break_start || null, spring_break_end: data.spring_break_end || null, finals_start: data.finals_start || null, finals_end: data.finals_end || null, last_drop_date: data.last_drop_date || null, last_withdraw_date: data.last_withdraw_date || null, override_term_dates: true }
+        ? { delivery: COURSE_TYPE_TO_DELIVERY[data.course_type] || 'Hybrid', credits_lecture: parseFloat(data.credits_lecture) || 0, credits_lab: parseFloat(data.credits_lab) || 0, required_hours: parseFloat(data.required_hours_per_week) || 0, runs: nextRuns, ...runsDates }
+        // `runs` goes with the dates — pushing 8-week dates onto a class still
+        // marked 'full' would leave the two disagreeing the moment anything
+        // re-derives the class calendar from its term.
+        : { runs: ['full', 'first', 'second'].includes(data.runs) ? data.runs : 'full', start_date: data.begin_date || null, end_date: data.end_date || null, spring_break_start: data.spring_break_start || null, spring_break_end: data.spring_break_end || null, finals_start: data.finals_start || null, finals_end: data.finals_end || null, last_drop_date: data.last_drop_date || null, last_withdraw_date: data.last_withdraw_date || null, override_term_dates: true }
       const { data: rows, error } = await supabase.from('classes').update({ ...upd, updated_at: new Date().toISOString() }).eq('class_id', cmmsClass.class_id).select()
       if (error) throw error
       if (!rows || !rows.length) throw new Error('Update was blocked — you may not have permission to edit classes')
@@ -3041,7 +3291,21 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
           ...EMPTY_SYLLABUS,
           ...prev,
           ...row,
+          // Templates saved before `runs` existed recorded only the length.
+          // Read the class's value when there is one, else treat a legacy
+          // 8-week syllabus as the first half until someone picks otherwise.
+          runs: ['full', 'first', 'second'].includes(row.runs)
+            ? row.runs
+            : (String(row.semester_length || '16') === '8' ? 'first' : 'full'),
           required_materials:  Array.isArray(row.required_materials)  ? row.required_materials  : [],
+          // Re-align on load: a template saved before this column existed, or
+          // edited by an older build, can be short or missing entirely. Padding
+          // with null keeps index i of the ids array pointing at item i.
+          required_material_ids: (() => {
+            const mats = Array.isArray(row.required_materials) ? row.required_materials : []
+            const ids  = Array.isArray(row.required_material_ids) ? row.required_material_ids : []
+            return mats.map((_, i) => ids[i] ?? null)
+          })(),
           required_technology: Array.isArray(row.required_technology) ? row.required_technology : EMPTY_SYLLABUS.required_technology,
           course_photo_url:    row.course_photo_url || '',
           // Backfill from catalog if template has empty description/outcomes
@@ -3072,11 +3336,8 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
   const handleSave = useCallback(async (extraFields = {}) => {
     if (!data.course_id) { toast.error('Select a course first'); return false }
     setSaving(true)
-    // Sanitize: convert empty strings to null for date columns so Postgres doesn't choke
-    const DATE_FIELDS = ['begin_date','end_date','last_drop_date','last_withdraw_date',
-      'spring_break_start','spring_break_end','finals_start','finals_end','revised_date']
-    const sanitized = { ...data }
-    DATE_FIELDS.forEach(f => { if (sanitized[f] === '') sanitized[f] = null })
+    // Empty strings → null for date columns so Postgres doesn't choke
+    const sanitized = withNullDates(data)
     const payload = {
       ...sanitized, ...extraFields,
       // Ensure calculated hours are always in sync before saving
@@ -3174,7 +3435,8 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
       revised_date: new Date().toISOString().split('T')[0],
       created_by: user?.email || '',
     }
-    const payload = { ...newData, updated_at: new Date().toISOString(), updated_by: user?.email || '' }
+    // newData keeps '' so the date inputs render empty; the PAYLOAD gets nulls.
+    const payload = withNullDates({ ...newData, updated_at: new Date().toISOString(), updated_by: user?.email || '' })
     delete payload.id
     const { data: dupRows, error } = await supabase.from('syllabus_templates')
       .upsert(payload, { onConflict: 'course_id,semester' }).select()
@@ -3194,7 +3456,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
   const stepContent = () => {
     switch (step) {
       case 1: return <Step1CourseSelect data={data} update={update} courseCatalog={courseCatalog} setCatalog={setCourseCatalog} savedExists={savedExists} otherSemesters={otherSemesters} onDuplicate={handleDuplicate} semesters={semesterList} cls={cmmsClass} />
-      case 2: return <Step2Instructor data={data} update={update} commonSections={commonSections} instructorProfile={instructorProfile} cls={cmmsClass} />
+      case 2: return <Step2Instructor data={data} update={update} commonSections={commonSections} instructorProfile={instructorProfile} cls={cmmsClass} instructorList={instructorList} />
       case 3: return <Step3CourseInfo data={data} update={update} cls={cmmsClass} onApplyToClass={setApplyToClass} />
       case 4: return <Step4Dates data={data} update={update} term={term} cls={cmmsClass} onApplyToClass={setApplyToClass} />
       case 5: return <Step5Materials data={data} update={update} catalogRefreshKey={catalogRefreshKey} />

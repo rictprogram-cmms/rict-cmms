@@ -4,10 +4,11 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
+import { parseTermName } from '@/lib/academicTerms'
 import {
   DollarSign, Printer, ChevronDown, ChevronRight, ChevronLeft,
   GraduationCap, AlertCircle, Settings, Check, Wifi, Building2,
-  Search, Download, ArrowUpDown, X,
+  Search, Download, ArrowUpDown, X, Link2Off,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -27,6 +28,11 @@ const CATEGORY_CONFIG = {
   Textbook:  { color: 'bg-orange-100 text-orange-700 border-orange-200',icon: '📚', order: 6 },
   Other:     { color: 'bg-surface-100 text-surface-700 border-surface-200', icon: '📎', order: 7 },
 }
+
+// Kept at module scope so the initial load and the realtime refetches below can
+// never drift apart on which columns they select.
+const TOOL_COLS     = 'tool_id,item_name,part_number,cost,item_type,status'
+const TEMPLATE_COLS = 'course_id,course_type,required_materials,required_material_ids,semester,status,updated_at'
 
 const DEFAULT_TUITION_RATES = {
   resident_per_credit:    0,
@@ -153,23 +159,96 @@ function TuitionSettingsModal({ rates, onSave, onClose }) {
   )
 }
 
+// ─── Material string helpers ──────────────────────────────────────────────────
+// required_materials stores display strings like
+//   "RICT TEST LEAD SET SILICONE (Part #: 2810050012254)"
+// These mirror the normalizers in SyllabusWizard and in the SQL migration.
+const cleanMaterialName = (s) =>
+  String(s || '').replace(/\s*\(Part\s*#:.*\)\s*$/i, '').trim()
+const materialKey = (s) => cleanMaterialName(s).toLowerCase()
+const materialPartNumber = (s) =>
+  (String(s || '').match(/\(Part\s*#:\s*([^)]+)\)/i)?.[1] || '').trim()
+
+/**
+ * One syllabus template per course: newest non-archived semester wins.
+ *
+ * The previous version selected every template row and assigned
+ * templateMap[course_id] in a forEach, so whichever row Postgres happened to
+ * return LAST silently drove the cost sheet — an archived or prior-year
+ * syllabus could override the current one. Templates are keyed
+ * (course_id, semester), so the tie-break is semester recency, then updated_at.
+ */
+export function pickActiveTemplates(rows) {
+  const byCourse = {}
+  ;(rows || []).forEach(t => {
+    if (!t.course_id) return
+    if (String(t.status || '').toLowerCase() === 'archived') return
+    if (!byCourse[t.course_id]) byCourse[t.course_id] = []
+    byCourse[t.course_id].push(t)
+  })
+  const picked = {}
+  Object.keys(byCourse).forEach(cid => {
+    picked[cid] = byCourse[cid].sort((a, b) => {
+      const ao = a.semester ? (parseTermName(a.semester).order || 0) : 0
+      const bo = b.semester ? (parseTermName(b.semester).order || 0) : 0
+      if (bo !== ao) return bo - ao
+      return String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
+    })[0]
+  })
+  return picked
+}
+
 // ─── Cost engine ──────────────────────────────────────────────────────────────
-function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabusTemplates, externalCosts, deliveryModes) {
-  const templateMap = {}
+// Exported for testing — pure function, no React or Supabase dependency.
+export function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabusTemplates, externalCosts, deliveryModes) {
+  const activeTemplate = pickActiveTemplates(syllabusTemplates)
   // courseTypeMap: course_id → 'online' | 'hybrid' | 'traditional'
   // Used as automatic delivery mode when no manual override has been set
   const courseTypeMap = {}
-  ;(syllabusTemplates || []).forEach(t => {
-    if (t.course_id) {
-      templateMap[t.course_id]   = Array.isArray(t.required_materials) ? t.required_materials : []
-      if (t.course_type) courseTypeMap[t.course_id] = t.course_type
-    }
+  Object.entries(activeTemplate).forEach(([cid, t]) => {
+    if (t.course_type) courseTypeMap[cid] = t.course_type
   })
-  const toolByName = {}
+
+  // Catalog indexes. Retired rows are kept so a syllabus item pointing at one
+  // still shows its price (flagged "retired") instead of silently becoming TBD,
+  // but an Active row always wins a name/part-number collision.
+  const preferActive = (a, b) => (!a ? b : (a.status !== 'Active' && b.status === 'Active' ? b : a))
+  const toolById = {}, toolByName = {}, toolByPart = {}
   ;(toolCatalog || []).forEach(t => {
-    if (t.item_name) toolByName[t.item_name.trim().toLowerCase()] = t
+    if (t.tool_id) toolById[t.tool_id] = t
+    const n = (t.item_name || '').trim().toLowerCase()
+    const p = (t.part_number || '').trim().toLowerCase()
+    if (n) toolByName[n] = preferActive(toolByName[n], t)
+    if (p) toolByPart[p] = preferActive(toolByPart[p], t)
   })
-  const seenTools = new Set()
+
+  /**
+   * Resolve one syllabus entry to a catalog row.
+   * tool_id first — that link survives catalog renames, which is the whole
+   * point of required_material_ids. Then exact name, then part number, then a
+   * substring match ONLY when exactly one candidate matches, so an ambiguous
+   * name can never silently bind to the wrong item's price.
+   */
+  const resolveMaterial = (raw, linkedId) => {
+    if (linkedId && toolById[linkedId]) return toolById[linkedId]
+    const clean = materialKey(raw)
+    if (clean && toolByName[clean]) return toolByName[clean]
+    const part = materialPartNumber(raw).toLowerCase()
+    if (part && toolByPart[part]) return toolByPart[part]
+    if (clean.length > 3) {
+      const hits = (toolCatalog || []).filter(t => {
+        const tn = (t.item_name || '').trim().toLowerCase()
+        return tn.length > 3 && (tn.includes(clean) || clean.includes(tn))
+      })
+      if (hits.length === 1) return hits[0]
+    }
+    return null
+  }
+
+  // key → the course that first requires it. Items are PRICED once across the
+  // program, but every course still lists everything its syllabus requires —
+  // repeats are shown with a "counted in <course>" note and add $0 here.
+  const seenTools = new Map()
 
   const semesters = (planner.planner_semesters || []).map(sem => {
     const courseRows = (sem.courses || []).filter(c => c.course_num || c.course_title)
@@ -192,35 +271,61 @@ function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabu
       const tuitionCost = calcTuition(totalCr, isOnline, tuitionRates)
 
       const toolItems = []
+      const tmplRow = planCourse.course_num ? (activeTemplate[planCourse.course_num] || null) : null
+      let materialSource = null
+
       if (isExternal) {
         const amt = parseFloat(externalCosts?.[planCourse.course_num]) || 0
-        if (amt > 0) toolItems.push({ name: 'Materials & Supplies', cost: amt, category: 'Material', partNumber: '', firstOccurrence: true, isManual: true })
+        if (amt > 0) toolItems.push({ name: 'Materials & Supplies', cost: amt, category: 'Material', partNumber: '', firstOccurrence: true, isManual: true, linked: true })
       } else {
-        const tmpl = planCourse.course_num ? (templateMap[planCourse.course_num] || null) : null
-        const matArr = (tmpl && tmpl.length > 0)
-          ? tmpl
+        const tmplMats = Array.isArray(tmplRow?.required_materials) ? tmplRow.required_materials : []
+        const tmplIds  = Array.isArray(tmplRow?.required_material_ids) ? tmplRow.required_material_ids : []
+        const usingTemplate = tmplMats.length > 0
+        materialSource = usingTemplate
+          ? { kind: 'syllabus', semester: tmplRow?.semester || '' }
+          : ((catalogCourse?.suggested_materials || '').trim() ? { kind: 'catalog', semester: '' } : null)
+
+        const matArr = usingTemplate
+          ? tmplMats
           : (catalogCourse?.suggested_materials || '').split('\n').map(s => s.trim()).filter(Boolean)
-        matArr.forEach(line => {
-          const clean = line.replace(/\s*\(Part #:.*?\)$/i, '').trim().toLowerCase()
+
+        matArr.forEach((line, i) => {
+          const clean = materialKey(line)
           if (!clean) return
-          let match = toolByName[clean]
-          if (!match) match = toolCatalog.find(t => { const tn = (t.item_name||'').trim().toLowerCase(); return tn.length>3&&(clean.includes(tn)||tn.includes(clean)) })
-          if (match) {
-            const key = match.tool_id || match.item_name
-            if (!seenTools.has(key)) { seenTools.add(key); toolItems.push({ name: match.item_name, cost: match.cost, category: match.item_type||'Other', partNumber: match.part_number||'', firstOccurrence: true }) }
-          } else {
-            const key = `unknown:${clean}`
-            if (!seenTools.has(key)) { seenTools.add(key); toolItems.push({ name: line.replace(/\s*\(Part #:.*?\)$/i,'').trim(), cost: null, category: 'Other', partNumber: '', firstOccurrence: true }) }
-          }
+          const match = resolveMaterial(line, usingTemplate ? (tmplIds[i] ?? null) : null)
+          const key   = match ? (match.tool_id || match.item_name) : `unlinked:${clean}`
+          const firstCourse     = seenTools.get(key)
+          const firstOccurrence = firstCourse === undefined
+          const here            = planCourse.course_num || planCourse.course_title || ''
+          // Same item listed twice on one syllabus — show it once
+          if (!firstOccurrence && firstCourse === here) return
+          if (firstOccurrence) seenTools.set(key, here)
+          toolItems.push({
+            name:       match ? match.item_name : cleanMaterialName(line),
+            cost:       match ? match.cost : null,
+            category:   match ? (match.item_type || 'Other') : 'Other',
+            partNumber: match ? (match.part_number || '') : materialPartNumber(line),
+            linked:     !!match,
+            inactive:   !!match && match.status !== 'Active',
+            firstOccurrence,
+            countedIn:  firstOccurrence ? null : firstCourse,
+          })
         })
       }
 
-      const toolTotal = toolItems.reduce((s, t) => s + (t.cost || 0), 0)
+      // toolTotal charges each item ONCE across the program (first course to
+      // require it). toolListTotal is the full retail value of everything this
+      // course's syllabus requires, shown so the two numbers are never confused.
+      const toolTotal     = toolItems.reduce((s, t) => s + (t.firstOccurrence ? (t.cost || 0) : 0), 0)
+      const toolListTotal = toolItems.reduce((s, t) => s + (t.cost || 0), 0)
+      const sharedCount   = toolItems.filter(t => !t.firstOccurrence).length
+      const unlinkedCount = toolItems.filter(t => !t.linked).length
       return {
         course_num: planCourse.course_num,
         course_title: planCourse.course_title || catalogCourse?.course_name || '',
         credits: totalCr, lec: effLec, lab, soe,
         isOnline, isExternal, syllabusType, tuitionCost, toolItems, toolTotal,
+        toolListTotal, sharedCount, unlinkedCount, materialSource,
         courseTotal: tuitionCost + toolTotal,
       }
     })
@@ -238,6 +343,9 @@ function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabu
   // counted once), so course/semester = where the item first enters the program.
   const categoryTotals = {}
   semesters.forEach(sem => sem.courses.forEach(c => c.toolItems.forEach(t => {
+    // Repeats are listed on their course for clarity but must not be counted
+    // a second time here, or the category tiles would double the grand total.
+    if (!t.firstOccurrence) return
     if (!categoryTotals[t.category]) categoryTotals[t.category] = { count:0, total:0, items:[] }
     categoryTotals[t.category].count++
     categoryTotals[t.category].total += t.cost || 0
@@ -252,7 +360,31 @@ function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabu
       semester: sem.label || '',
     })
   })))
-  return { semesters, grandTuition, grandTools, grandTotal, categoryTotals }
+
+  // Syllabus items with no catalog match. These carry no price, so they are
+  // absent from every total — previously that happened silently. They are
+  // surfaced in a banner so the gap gets fixed instead of quietly understating
+  // the program cost.
+  const unlinkedMap = {}
+  semesters.forEach(sem => sem.courses.forEach(c => c.toolItems.forEach(t => {
+    if (t.linked) return
+    const k = t.name.toLowerCase()
+    if (!unlinkedMap[k]) unlinkedMap[k] = { name: t.name, partNumber: t.partNumber || '', courses: [] }
+    const label = c.course_num || c.course_title || ''
+    if (label && !unlinkedMap[k].courses.includes(label)) unlinkedMap[k].courses.push(label)
+  })))
+  const unlinked = Object.values(unlinkedMap).sort((a, b) => a.name.localeCompare(b.name))
+
+  // Courses whose materials still come from the catalog's free-text
+  // suggested_materials rather than a saved syllabus.
+  const coursesWithoutSyllabus = []
+  semesters.forEach(sem => sem.courses.forEach(c => {
+    if (c.isExternal) return
+    if (c.materialSource?.kind === 'syllabus') return
+    if (c.credits > 0 || c.toolItems.length > 0) coursesWithoutSyllabus.push(c.course_num || c.course_title || '')
+  }))
+
+  return { semesters, grandTuition, grandTools, grandTotal, categoryTotals, unlinked, coursesWithoutSyllabus }
 }
 
 // ─── Print ────────────────────────────────────────────────────────────────────
@@ -264,9 +396,22 @@ function printCostReport(programName, breakdown, tuitionRates) {
   const semHtml = breakdown.semesters.map(sem => {
     if (!sem.courses.some(c => c.credits>0||c.toolItems.length>0||c.isExternal)) return ''
     const rows = sem.courses.filter(c=>c.credits>0||c.toolItems.length>0||c.isExternal).map(c => {
-      const toolRows = c.toolItems.map(t =>
-        `<tr class="tr"><td></td><td style="padding-left:20px">${esc(t.name)}${t.isManual?' <em style="color:#999;font-size:7.5pt">(manual)</em>':''}</td><td class="cat">${esc(t.category)}</td><td class="amt">${t.cost!=null?fmt(t.cost):'TBD'}</td></tr>`
-      ).join('')
+      const toolRows = c.toolItems.map(t => {
+        const note = t.isManual   ? ' <em style="color:#999;font-size:7.5pt">(manual)</em>'
+                   : !t.linked    ? ' <em style="color:#b91c1c;font-size:7.5pt">(not in catalog — not counted)</em>'
+                   : t.inactive   ? ' <em style="color:#b45309;font-size:7.5pt">(retired)</em>'
+                   : ''
+        // Repeats are listed so the course shows its full required kit, but
+        // they contribute $0 — the price was charged to the first course.
+        const shared = !t.firstOccurrence
+        const amt = shared
+          ? `<span style="color:#999">${t.cost!=null?fmt(t.cost):'TBD'} · $0.00</span>`
+          : (t.cost!=null?fmt(t.cost):'TBD')
+        const sharedNote = shared
+          ? ` <em style="color:#999;font-size:7.5pt">(counted in ${esc(t.countedIn||'an earlier course')})</em>`
+          : ''
+        return `<tr class="tr"><td></td><td style="padding-left:20px${shared?';color:#888':''}">${esc(t.name)}${note}${sharedNote}</td><td class="cat">${esc(t.category)}</td><td class="amt">${amt}</td></tr>`
+      }).join('')
       const noMat = c.isExternal&&c.toolItems.length===0
         ? `<tr class="tr"><td></td><td colspan="2" style="color:#bbb;font-style:italic">No materials cost entered</td><td class="amt">—</td></tr>` : ''
       return `<tr class="cr"><td class="cn">${esc(c.course_num)}</td>
@@ -310,7 +455,12 @@ function printCostReport(programName, breakdown, tuitionRates) {
     <div class="gi"><div class="gl">Total Materials &amp; Tools</div><div class="gv">${fmt(breakdown.grandTools)}</div></div>
     <div class="gi"><div class="gl">PROGRAM GRAND TOTAL</div><div class="gv">${fmt(breakdown.grandTotal)}</div></div>
   </div>
-  <p style="font-size:7.5pt;color:#888;margin-top:10px">* Estimates only. Tuition/fees subject to change. RICT material costs from catalog; items shared across courses counted once. External course material costs manually entered.</p>
+  ${breakdown.unlinked?.length ? `<div style="margin-top:12px;border:1px solid #fecaca;background:#fef2f2;border-radius:4px;padding:8px">
+    <b style="font-size:8pt;color:#991b1b">${breakdown.unlinked.length} syllabus item${breakdown.unlinked.length!==1?'s are':' is'} not in the tools catalog and ${breakdown.unlinked.length!==1?'are':'is'} NOT included in these totals:</b>
+    <ul style="margin:4px 0 0 16px;padding:0;font-size:7.5pt;color:#b91c1c">
+      ${breakdown.unlinked.map(u => `<li>${esc(u.name)}${u.courses.length?` — ${esc(u.courses.join(', '))}`:''}</li>`).join('')}
+    </ul></div>` : ''}
+  <p style="font-size:7.5pt;color:#888;margin-top:10px">* Estimates only. Tuition/fees subject to change. RICT material costs from catalog. Each course lists every item its syllabus requires; items shared across courses are charged once, to the first course that requires them, and show $0.00 thereafter. External course material costs manually entered.</p>
   </body></html>`
   const w = window.open('','_blank')
   if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(),300) }
@@ -437,7 +587,16 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
         {/* Meta + total */}
         <div className="flex items-center gap-2 shrink-0 ml-1">
           {course.isExternal && <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">external</span>}
-          {course.toolItems.length>0 && !course.isExternal && <span className="text-[10px] text-surface-400">{course.toolItems.length} item{course.toolItems.length!==1?'s':''}</span>}
+          {course.toolItems.length>0 && !course.isExternal && (
+            <span className="text-[10px] text-surface-400">
+              {course.toolItems.length} item{course.toolItems.length!==1?'s':''}
+            </span>
+          )}
+          {course.unlinkedCount>0 && !course.isExternal && (
+            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
+              {course.unlinkedCount} unpriced
+            </span>
+          )}
           <span className="text-xs font-semibold text-emerald-700 w-20 text-right">{fmtCurrencyShort(course.courseTotal)}</span>
         </div>
       </div>
@@ -494,10 +653,21 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
             </div>
           )}
 
+          {/* Where this course's material list came from */}
+          {!course.isExternal && course.materialSource && (
+            <p className="text-[10px] text-surface-400 pl-1">
+              {course.materialSource.kind === 'syllabus'
+                ? <>Materials from the <strong className="text-surface-500">{course.materialSource.semester || 'saved'}</strong> syllabus</>
+                : <>Materials from the course catalog — no saved syllabus for this course yet</>}
+            </p>
+          )}
+
           {/* RICT items by category */}
           {!course.isExternal && sortedCats.map(([cat,items])=>{
             const cfg = CATEGORY_CONFIG[cat]||CATEGORY_CONFIG.Other
-            const catTotal = items.reduce((s,t)=>s+(t.cost||0),0)
+            // Only first-occurrence items contribute — repeats are listed for
+            // completeness but were already charged to an earlier course
+            const catTotal = items.reduce((s,t)=>s+(t.firstOccurrence?(t.cost||0):0),0)
             return (
               <div key={cat}>
                 <div className="flex items-center justify-between mb-1">
@@ -505,10 +675,27 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
                   <span className="text-[10px] text-surface-400">{fmtCurrencyShort(catTotal)}</span>
                 </div>
                 {items.map((item,ii)=>(
-                  <div key={ii} className="flex items-center justify-between py-1 pl-6 pr-2">
-                    <span className="text-xs text-surface-600 flex-1 truncate">{item.name}</span>
-                    <span className="text-xs font-medium text-surface-700 shrink-0 ml-3">
-                      {item.cost!=null?fmtCurrencyShort(item.cost):<span className="text-surface-400 italic text-[10px]">TBD</span>}
+                  <div key={ii} className="flex items-start justify-between py-1 pl-6 pr-2 gap-3">
+                    <span className={`text-xs flex-1 min-w-0 ${item.firstOccurrence?'text-surface-600':'text-surface-400'}`}>
+                      <span className="truncate">{item.name}</span>
+                      {!item.firstOccurrence && (
+                        <span className="ml-1.5 text-[10px] text-surface-400 italic">
+                          already counted in {item.countedIn || 'an earlier course'}
+                        </span>
+                      )}
+                      {item.inactive && (
+                        <span className="ml-1.5 text-[10px] font-semibold text-amber-700">retired from catalog</span>
+                      )}
+                      {!item.linked && (
+                        <span className="ml-1.5 text-[10px] font-semibold text-rose-600">not in catalog</span>
+                      )}
+                    </span>
+                    <span className="text-xs shrink-0 ml-3 text-right">
+                      {item.cost==null
+                        ? <span className="text-surface-400 italic text-[10px]">no price</span>
+                        : item.firstOccurrence
+                          ? <span className="font-medium text-surface-700">{fmtCurrencyShort(item.cost)}</span>
+                          : <span className="text-surface-400">{fmtCurrencyShort(item.cost)} · $0.00 here</span>}
                     </span>
                   </div>
                 ))}
@@ -520,9 +707,17 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
             <p className="text-[11px] text-surface-400 italic pl-3">No materials listed for this course.</p>
           )}
 
-          <div className="flex items-center justify-between pt-1.5 border-t border-surface-200">
-            <span className="text-[11px] font-bold text-surface-600 uppercase tracking-wide">Course Total</span>
-            <span className="text-sm font-bold text-emerald-700">{fmtCurrencyShort(course.courseTotal)}</span>
+          <div className="pt-1.5 border-t border-surface-200">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-surface-600 uppercase tracking-wide">Course Total</span>
+              <span className="text-sm font-bold text-emerald-700">{fmtCurrencyShort(course.courseTotal)}</span>
+            </div>
+            {!course.isExternal && course.sharedCount > 0 && (
+              <p className="text-[10px] text-surface-400 mt-1">
+                Full kit value {fmtCurrencyShort(course.toolListTotal)} — {course.sharedCount} item{course.sharedCount!==1?'s':''} already
+                charged to an earlier course, so only {fmtCurrencyShort(course.toolTotal)} is added here.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -815,8 +1010,12 @@ export default function ProgramCostPage() {
       const [plannersRes,coursesRes,toolsRes,templatesRes,ratesRes,extRes,delivRes] = await Promise.all([
         supabase.from('program_revisions').select('revision_id,current_program_name,planner_semesters,planner_name,academic_year,major,approved_at,course_id').eq('status','approved').not('planner_semesters','is',null),
         supabase.from('syllabus_courses').select('course_id,course_name,credits_lecture,credits_lab,credits_soe,suggested_materials'),
-        supabase.from('program_tools').select('tool_id,item_name,part_number,cost,item_type').eq('status','Active'),
-        supabase.from('syllabus_templates').select('course_id,course_type,required_materials'),
+        // Retired items are loaded too: a syllabus pointing at one should show
+        // its price flagged "retired", not silently fall out of the totals.
+        supabase.from('program_tools').select(TOOL_COLS),
+        // status/semester/updated_at drive "newest non-archived syllabus wins";
+        // required_material_ids is the rename-proof link to program_tools.
+        supabase.from('syllabus_templates').select(TEMPLATE_COLS),
         supabase.from('settings').select('setting_value').eq('setting_key','program_cost_tuition_rates').maybeSingle(),
         supabase.from('settings').select('setting_value').eq('setting_key','program_cost_external_costs').maybeSingle(),
         supabase.from('settings').select('setting_value').eq('setting_key','program_cost_delivery_modes').maybeSingle(),
@@ -832,17 +1031,35 @@ export default function ProgramCostPage() {
     }
     load()
 
-    // Keep tool prices live — if someone edits a price in Required Tools catalog
-    // while this page is open, reloads just the tools without a full page refresh
-    const ch = subscribeWithReconnect('program_cost_tools_rt', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' },
-        async () => {
-          const { data } = await supabase
-            .from('program_tools').select('tool_id,item_name,part_number,cost,item_type').eq('status','Active')
-          if (data) setToolCatalog(data)
-        }
-      ))
-    return () => ch()
+    // Keep the sheet live in BOTH directions:
+    //   • program_tools     — a price edited in Required Tools & Materials
+    //   • syllabus_templates — a tool/software added or removed in the Syllabus
+    //                          Generator, which previously needed a full reload
+    //                          before it showed up here at all
+    const refetchTools = async () => {
+      const { data } = await supabase.from('program_tools').select(TOOL_COLS)
+      if (data) setToolCatalog(data)
+    }
+    const refetchTemplates = async () => {
+      const { data } = await supabase.from('syllabus_templates').select(TEMPLATE_COLS)
+      if (data) setSyllabusTemplates(data)
+    }
+
+    const chTools = subscribeWithReconnect('program_cost_tools_rt', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, refetchTools))
+    const chTemplates = subscribeWithReconnect('program_cost_syllabi_rt', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'syllabus_templates' }, refetchTemplates))
+
+    // A dropped socket can silently miss events; re-pull on reconnect so the
+    // page never sits on stale numbers (same pattern as InstructorToolsPage).
+    const onReconnect = () => { refetchTools(); refetchTemplates() }
+    window.addEventListener('supabase-reconnected', onReconnect)
+
+    return () => {
+      chTools()
+      chTemplates()
+      window.removeEventListener('supabase-reconnected', onReconnect)
+    }
   }, [])
 
   const saveTuitionRates = useCallback(async (rates) => {
@@ -1040,9 +1257,55 @@ export default function ProgramCostPage() {
               <p className="text-xs text-amber-700"><strong>External courses</strong> (MATH, ENGL, PHYS, TECH, CRTK, RNEW, WELD, etc.) are not in the RICT catalog. Expand each one to enter an estimated materials &amp; supplies cost.</p>
             </div>
           )}
+          {/* Unlinked syllabus items — these carry no price and are missing
+              from every total, so they are named rather than hidden. */}
+          <div aria-live="polite" className="sr-only">
+            {breakdown.unlinked.length === 0
+              ? 'All syllabus materials are linked to the tools catalog.'
+              : `${breakdown.unlinked.length} syllabus material${breakdown.unlinked.length !== 1 ? 's are' : ' is'} not linked to the tools catalog and ${breakdown.unlinked.length !== 1 ? 'are' : 'is'} excluded from the totals.`}
+          </div>
+          {breakdown.unlinked.length > 0 && (
+            <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3">
+              <Link2Off size={15} className="text-rose-500 shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-rose-800">
+                  {breakdown.unlinked.length} syllabus item{breakdown.unlinked.length !== 1 ? 's are' : ' is'} not in the tools catalog — not included in any total
+                </p>
+                <p className="text-[11px] text-rose-600 mt-0.5">
+                  The program cost below is understated by whatever {breakdown.unlinked.length !== 1 ? 'these items' : 'this item'} cost.
+                  Add {breakdown.unlinked.length !== 1 ? 'them' : 'it'} in Required Tools &amp; Materials, then re-pick {breakdown.unlinked.length !== 1 ? 'them' : 'it'} on the syllabus so the price flows through.
+                </p>
+                <ul className="mt-2 space-y-0.5">
+                  {breakdown.unlinked.map((u, i) => (
+                    <li key={i} className="text-[11px] text-rose-700">
+                      <strong>{u.name}</strong>
+                      {u.partNumber && <span className="ml-1.5 font-mono text-[10px] text-rose-500">ISBN: {u.partNumber}</span>}
+                      {u.courses.length > 0 && <span className="text-rose-500"> — {u.courses.join(', ')}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <button onClick={() => navigate('/instructor-tools')}
+                className="shrink-0 px-3 py-2 min-h-[44px] text-xs font-semibold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                Open Tools
+              </button>
+            </div>
+          )}
+
+          {breakdown.coursesWithoutSyllabus.length > 0 && (
+            <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+              <span className="text-base shrink-0 mt-0.5" aria-hidden="true">📄</span>
+              <p className="text-xs text-blue-700">
+                <strong>{breakdown.coursesWithoutSyllabus.length} course{breakdown.coursesWithoutSyllabus.length !== 1 ? 's have' : ' has'} no saved syllabus</strong> —
+                materials fall back to the course catalog's suggested list, which may be out of date:{' '}
+                <span className="font-semibold">{breakdown.coursesWithoutSyllabus.join(', ')}</span>
+              </p>
+            </div>
+          )}
+
           <div className="flex items-start gap-3 bg-surface-50 border border-surface-200 rounded-xl px-4 py-3">
             <span className="text-base shrink-0 mt-0.5">🔀</span>
-            <p className="text-xs text-surface-500">Use the <strong className="text-blue-700">In-Person</strong> / <strong className="text-violet-700">Online</strong> toggle on each course to apply the correct tuition rate. Selections are saved automatically.</p>
+            <p className="text-xs text-surface-500">Use the <strong className="text-blue-700">In-Person</strong> / <strong className="text-violet-700">Online</strong> toggle on each course to apply the correct tuition rate. Selections are saved automatically. Items required by more than one course are listed on every course that needs them but charged only once.</p>
           </div>
 
           {/* Semesters */}
