@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   DollarSign, Printer, ChevronDown, ChevronRight, ChevronLeft,
   GraduationCap, AlertCircle, Settings, Check, Wifi, Building2,
+  Search, Download, ArrowUpDown, X,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -193,7 +194,7 @@ function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabu
       const toolItems = []
       if (isExternal) {
         const amt = parseFloat(externalCosts?.[planCourse.course_num]) || 0
-        if (amt > 0) toolItems.push({ name: 'Materials & Supplies', cost: amt, category: 'Material', firstOccurrence: true, isManual: true })
+        if (amt > 0) toolItems.push({ name: 'Materials & Supplies', cost: amt, category: 'Material', partNumber: '', firstOccurrence: true, isManual: true })
       } else {
         const tmpl = planCourse.course_num ? (templateMap[planCourse.course_num] || null) : null
         const matArr = (tmpl && tmpl.length > 0)
@@ -206,10 +207,10 @@ function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabu
           if (!match) match = toolCatalog.find(t => { const tn = (t.item_name||'').trim().toLowerCase(); return tn.length>3&&(clean.includes(tn)||tn.includes(clean)) })
           if (match) {
             const key = match.tool_id || match.item_name
-            if (!seenTools.has(key)) { seenTools.add(key); toolItems.push({ name: match.item_name, cost: match.cost, category: match.item_type||'Other', firstOccurrence: true }) }
+            if (!seenTools.has(key)) { seenTools.add(key); toolItems.push({ name: match.item_name, cost: match.cost, category: match.item_type||'Other', partNumber: match.part_number||'', firstOccurrence: true }) }
           } else {
             const key = `unknown:${clean}`
-            if (!seenTools.has(key)) { seenTools.add(key); toolItems.push({ name: line.replace(/\s*\(Part #:.*?\)$/i,'').trim(), cost: null, category: 'Other', firstOccurrence: true }) }
+            if (!seenTools.has(key)) { seenTools.add(key); toolItems.push({ name: line.replace(/\s*\(Part #:.*?\)$/i,'').trim(), cost: null, category: 'Other', partNumber: '', firstOccurrence: true }) }
           }
         })
       }
@@ -231,11 +232,25 @@ function buildCostBreakdown(planner, courses, toolCatalog, tuitionRates, syllabu
   const grandTuition = semesters.reduce((s,sem) => s+sem.semTuition, 0)
   const grandTools   = semesters.reduce((s,sem) => s+sem.semTools, 0)
   const grandTotal   = grandTuition + grandTools
+  // categoryTotals also carries the full item list behind each total so the
+  // "Breakdown by Category" tiles can open a drill-down of every item.
+  // Items are recorded at their FIRST occurrence only (shared RICT items are
+  // counted once), so course/semester = where the item first enters the program.
   const categoryTotals = {}
   semesters.forEach(sem => sem.courses.forEach(c => c.toolItems.forEach(t => {
-    if (!categoryTotals[t.category]) categoryTotals[t.category] = { count:0, total:0 }
+    if (!categoryTotals[t.category]) categoryTotals[t.category] = { count:0, total:0, items:[] }
     categoryTotals[t.category].count++
     categoryTotals[t.category].total += t.cost || 0
+    categoryTotals[t.category].items.push({
+      name: t.name,
+      cost: t.cost ?? null,
+      partNumber: t.partNumber || '',
+      category: t.category,
+      isManual: !!t.isManual,
+      course_num: c.course_num || '',
+      course_title: c.course_title || '',
+      semester: sem.label || '',
+    })
   })))
   return { semesters, grandTuition, grandTools, grandTotal, categoryTotals }
 }
@@ -515,6 +530,269 @@ function CourseBlock({ course, manualCost, deliveryMode, onManualCostSave, onDel
   )
 }
 
+// ─── Category drill-down helpers ──────────────────────────────────────────────
+const csvCell = (v) => {
+  const s = v == null ? '' : String(v)
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function downloadCategoryCsv(category, rows, programName) {
+  const header = ['Item', 'Part Number', 'Category', 'First Used In (Course)', 'Course Title', 'Semester', 'Cost']
+  const body = rows.map(r => [
+    r.name, r.partNumber, r.category, r.course_num, r.course_title, r.semester,
+    r.cost != null ? Number(r.cost).toFixed(2) : 'TBD',
+  ])
+  const totalKnown = rows.reduce((s, r) => s + (r.cost || 0), 0)
+  body.push(['', '', '', '', '', 'TOTAL', totalKnown.toFixed(2)])
+  const csv = [header, ...body].map(line => line.map(csvCell).join(',')).join('\r\n')
+  // BOM so Excel reads UTF-8 item names correctly
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  const slug = s => String(s || '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()
+  a.href = url
+  a.download = `program-cost-${slug(programName) || 'program'}-${slug(category) || 'items'}.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function printCategoryList(category, rows, programName) {
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const fmt = n => n != null ? `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : 'TBD'
+  const total = rows.reduce((s, r) => s + (r.cost || 0), 0)
+  const tbd = rows.filter(r => r.cost == null).length
+  const body = rows.map(r => `<tr>
+      <td>${esc(r.name)}${r.isManual ? ' <em style="color:#999;font-size:7.5pt">(manual)</em>' : ''}</td>
+      <td class="pn">${esc(r.partNumber) || '—'}</td>
+      <td class="cn">${esc(r.course_num) || '—'}</td>
+      <td>${esc(r.semester)}</td>
+      <td class="amt">${r.cost != null ? fmt(r.cost) : 'TBD'}</td>
+    </tr>`).join('')
+
+  const html = `<!DOCTYPE html><html><head><title>${esc(category)} Items — ${esc(programName)}</title><style>
+    *{box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:9.5pt;margin:.6in;color:#111}
+    h1{font-size:15pt;color:#065f46;margin:0 0 4px}.sub{font-size:9pt;color:#555;margin-bottom:14px}
+    table{width:100%;border-collapse:collapse;font-size:8.5pt}
+    th{background:#d1fae5;padding:4px 6px;text-align:left;border:1px solid #6ee7b7}
+    td{padding:3px 6px;border:1px solid #ddd;vertical-align:top}
+    .amt{text-align:right;width:85px}.pn{width:110px;color:#555}.cn{width:80px;font-weight:bold}
+    tr:nth-child(even) td{background:#f8fafc}
+    tfoot td{background:#d1fae5;font-weight:bold}
+    .note{font-size:7.5pt;color:#888;margin-top:10px}
+    @media print{body{margin:.5in}thead{display:table-header-group}tr{break-inside:avoid;page-break-inside:avoid}}
+  </style></head><body>
+  <h1>${esc(category)} — Item List</h1>
+  <div class="sub">${esc(programName)} · ${rows.length} item${rows.length !== 1 ? 's' : ''} · Generated ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</div>
+  <table>
+    <thead><tr><th scope="col">Item</th><th scope="col">Part #</th><th scope="col">Course</th><th scope="col">Semester</th><th scope="col" class="amt">Cost</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr><td colspan="4" style="text-align:right">Total</td><td class="amt">${fmt(total)}</td></tr></tfoot>
+  </table>
+  <p class="note">* Items shared across courses are counted once — "Course" is where the item first enters the program.${tbd > 0 ? ` ${tbd} item${tbd !== 1 ? 's have' : ' has'} no catalog price (TBD) and ${tbd !== 1 ? 'are' : 'is'} not included in the total.` : ''}</p>
+  </body></html>`
+  const w = window.open('', '_blank')
+  if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(() => w.print(), 300) }
+}
+
+// ─── Category Items Modal ─────────────────────────────────────────────────────
+function CategoryItemsModal({ categoryTotals, initialCategory, programName, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
+  const [category, setCategory] = useState(initialCategory)
+  const [query, setQuery]       = useState('')
+  const [sort, setSort]         = useState({ key: 'name', dir: 'asc' })
+
+  const cats = useMemo(
+    () => Object.keys(categoryTotals).sort((a, b) => (CATEGORY_CONFIG[a]?.order || 99) - (CATEGORY_CONFIG[b]?.order || 99)),
+    [categoryTotals]
+  )
+  const cfg = CATEGORY_CONFIG[category] || CATEGORY_CONFIG.Other
+  const allItems = categoryTotals[category]?.items || []
+
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const filtered = q
+      ? allItems.filter(i =>
+          (i.name || '').toLowerCase().includes(q) ||
+          (i.partNumber || '').toLowerCase().includes(q) ||
+          (i.course_num || '').toLowerCase().includes(q) ||
+          (i.course_title || '').toLowerCase().includes(q) ||
+          (i.semester || '').toLowerCase().includes(q))
+      : allItems.slice()
+    const dir = sort.dir === 'asc' ? 1 : -1
+    return filtered.sort((a, b) => {
+      if (sort.key === 'cost') {
+        // Unpriced (TBD) items always sort to the bottom regardless of direction
+        if (a.cost == null && b.cost == null) return 0
+        if (a.cost == null) return 1
+        if (b.cost == null) return -1
+        return (a.cost - b.cost) * dir
+      }
+      const av = String(a[sort.key] || '')
+      const bv = String(b[sort.key] || '')
+      return av.localeCompare(bv, 'en', { numeric: true, sensitivity: 'base' }) * dir
+    })
+  }, [allItems, query, sort])
+
+  const shownTotal = rows.reduce((s, r) => s + (r.cost || 0), 0)
+  const tbdCount   = rows.filter(r => r.cost == null).length
+  const isFiltered = query.trim().length > 0
+
+  const toggleSort = (key) =>
+    setSort(p => p.key === key ? { key, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'cost' ? 'desc' : 'asc' })
+
+  const ariaSort = (key) => sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'
+
+  const SortHeader = ({ label, sortKey, className = '', align = 'left' }) => (
+    <th scope="col" aria-sort={ariaSort(sortKey)} className={`px-3 py-2 ${className}`}>
+      <button
+        onClick={() => toggleSort(sortKey)}
+        aria-label={`Sort by ${label}${sort.key === sortKey ? (sort.dir === 'asc' ? ', currently ascending' : ', currently descending') : ''}`}
+        className={`flex items-center gap-1 w-full min-h-[44px] text-[11px] font-bold uppercase tracking-wide rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${align === 'right' ? 'justify-end' : ''} ${sort.key === sortKey ? 'text-emerald-700' : 'text-surface-500 hover:text-surface-700'}`}
+      >
+        {label}
+        {sort.key === sortKey
+          ? <span aria-hidden="true">{sort.dir === 'asc' ? '▲' : '▼'}</span>
+          : <ArrowUpDown size={10} className="opacity-40" aria-hidden="true" />}
+      </button>
+    </th>
+  )
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="pc-cat-modal-title"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-surface-100 flex items-start justify-between gap-4 shrink-0">
+          <div className="min-w-0">
+            <h2 id="pc-cat-modal-title" className="text-base font-bold text-surface-900 flex items-center gap-2">
+              <span aria-hidden="true">{cfg.icon}</span> {category} — Item List
+            </h2>
+            <p className="text-xs text-surface-400 mt-0.5 truncate">
+              {programName} · shared items counted once
+            </p>
+          </div>
+          <button onClick={onClose} aria-label="Close item list"
+            className="shrink-0 flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg text-surface-400 hover:text-surface-700 hover:bg-surface-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        {/* Category switcher */}
+        <div className="px-6 pt-3 shrink-0">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Switch category">
+            {cats.map(c => {
+              const ccfg = CATEGORY_CONFIG[c] || CATEGORY_CONFIG.Other
+              const active = c === category
+              const { count, total } = categoryTotals[c]
+              return (
+                <button key={c} onClick={() => { setCategory(c); setQuery('') }}
+                  aria-pressed={active}
+                  aria-label={`${c}: ${count} item${count !== 1 ? 's' : ''}, ${fmtCurrencyShort(total)}`}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] rounded-xl border text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${active ? `${ccfg.color} ring-2 ring-emerald-400` : 'bg-white border-surface-200 text-surface-500 hover:bg-surface-50'}`}>
+                  <span aria-hidden="true">{ccfg.icon}</span>
+                  <span>{c}</span>
+                  <span className="opacity-70 font-medium">({count})</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Search + actions */}
+        <div className="px-6 py-3 flex items-center gap-2 flex-wrap shrink-0">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-surface-400 pointer-events-none" aria-hidden="true" />
+            <input id="pc-cat-search" type="search" value={query} onChange={e => setQuery(e.target.value)}
+              placeholder={`Search ${category.toLowerCase()} items, part #, course…`}
+              aria-label={`Search ${category} items by name, part number, course, or semester`}
+              className="w-full pl-9 pr-3 py-2 min-h-[44px] text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/40"/>
+          </div>
+          <button onClick={() => downloadCategoryCsv(category, rows, programName)}
+            disabled={rows.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <Download size={13} aria-hidden="true" /> CSV
+          </button>
+          <button onClick={() => printCategoryList(category, rows, programName)}
+            disabled={rows.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-xs font-semibold border border-emerald-200 bg-emerald-50 text-emerald-700 rounded-lg hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <Printer size={13} aria-hidden="true" /> Print
+          </button>
+        </div>
+
+        {/* Live region — announces filtered result count to screen readers */}
+        <p aria-live="polite" className="sr-only">
+          {rows.length} {category} item{rows.length !== 1 ? 's' : ''} shown
+          {isFiltered ? ` of ${allItems.length}` : ''}, totalling {fmtCurrencyShort(shownTotal)}
+        </p>
+
+        {/* Table */}
+        <div className="flex-1 overflow-y-auto px-6">
+          {rows.length === 0 ? (
+            <div className="py-12 text-center">
+              <p className="text-sm text-surface-500 font-medium">
+                {isFiltered ? 'No items match your search' : 'No items in this category'}
+              </p>
+              {isFiltered && (
+                <button onClick={() => setQuery('')}
+                  className="mt-2 px-3 py-2 min-h-[44px] text-xs font-semibold text-emerald-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 rounded">
+                  Clear search
+                </button>
+              )}
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse">
+              <caption className="sr-only">{category} items for {programName}</caption>
+              <thead className="sticky top-0 bg-white z-10">
+                <tr className="border-b border-surface-200">
+                  <SortHeader label="Item" sortKey="name" />
+                  <SortHeader label="Part #" sortKey="partNumber" className="hidden sm:table-cell w-32" />
+                  <SortHeader label="Course" sortKey="course_num" className="w-28" />
+                  <SortHeader label="Semester" sortKey="semester" className="hidden md:table-cell w-44" />
+                  <SortHeader label="Cost" sortKey="cost" className="w-28" align="right" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-100">
+                {rows.map((r, i) => (
+                  <tr key={`${r.category}-${r.name}-${i}`} className="hover:bg-surface-50 transition-colors">
+                    <td className="px-3 py-2.5 text-xs text-surface-700">
+                      {r.name}
+                      {r.isManual && <span className="ml-1.5 text-[9px] text-surface-400 italic">(manual)</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs text-surface-500 hidden sm:table-cell">{r.partNumber || '—'}</td>
+                    <td className="px-3 py-2.5 text-xs font-semibold text-surface-700">{r.course_num || '—'}</td>
+                    <td className="px-3 py-2.5 text-[11px] text-surface-500 hidden md:table-cell">{r.semester}</td>
+                    <td className="px-3 py-2.5 text-xs font-medium text-surface-800 text-right">
+                      {r.cost != null ? fmtCurrencyShort(r.cost) : <span className="text-surface-400 italic text-[10px]">TBD</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Footer totals */}
+        <div className="px-6 py-3.5 border-t border-surface-100 flex items-center justify-between gap-4 shrink-0 bg-surface-50/60 rounded-b-2xl">
+          <p className="text-[11px] text-surface-500">
+            Showing <strong className="text-surface-700">{rows.length}</strong>
+            {isFiltered ? ` of ${allItems.length}` : ''} item{allItems.length !== 1 ? 's' : ''}
+            {tbdCount > 0 && <span className="text-surface-400"> · {tbdCount} with no catalog price (TBD, not in total)</span>}
+          </p>
+          <p className="text-sm font-bold text-emerald-700">
+            <span className="text-[10px] font-semibold text-surface-500 uppercase tracking-wide mr-2">
+              {isFiltered ? 'Filtered total' : 'Category total'}
+            </span>
+            {fmtCurrencyShort(shownTotal)}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function ProgramCostPage() {
   const { user } = useAuth()
@@ -522,6 +800,7 @@ export default function ProgramCostPage() {
   const [selectedProgram, setSelectedProgram]   = useState(null)
   const [tuitionRates, setTuitionRates]         = useState(DEFAULT_TUITION_RATES)
   const [showTuitionModal, setShowTuitionModal] = useState(false)
+  const [openCategory, setOpenCategory]         = useState(null)
   const [masterPlanners, setMasterPlanners]     = useState([])
   const [courses, setCourses]                   = useState([])
   const [toolCatalog, setToolCatalog]           = useState([])
@@ -668,7 +947,7 @@ export default function ProgramCostPage() {
             const planner = masterPlanners.find(p=>prog.keywords.some(kw=>(p.current_program_name||p.planner_name||'').toLowerCase().includes(kw)))
             const hasPlanner = !!planner
             return (
-              <button key={prog.id} onClick={()=>hasPlanner&&setSelectedProgram(prog.id)} disabled={!hasPlanner}
+              <button key={prog.id} onClick={()=>{ if(!hasPlanner) return; setOpenCategory(null); setSelectedProgram(prog.id) }} disabled={!hasPlanner}
                 className={`relative flex flex-col gap-1.5 px-4 py-3.5 rounded-xl border-2 text-left transition-all min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${selectedProgram===prog.id?'bg-emerald-50 border-emerald-400 shadow-sm':hasPlanner?'bg-white border-surface-200 hover:border-emerald-300 hover:bg-emerald-50/30':'bg-surface-50 border-surface-100 opacity-50 cursor-not-allowed'}`}>
                 <span className="text-sm font-semibold text-surface-900 leading-tight">{prog.name}</span>
                 {hasPlanner?<span className="text-[10px] text-emerald-600 font-medium">✓ Approved planner available</span>:<span className="text-[10px] text-surface-400 italic">No approved planner yet</span>}
@@ -714,18 +993,24 @@ export default function ProgramCostPage() {
           {/* Category summary */}
           {Object.keys(breakdown.categoryTotals).length>0&&(
             <div className="bg-white border border-surface-200 rounded-2xl p-5">
-              <p className="text-xs font-bold text-surface-600 uppercase tracking-wide mb-3">Breakdown by Category</p>
+              <div className="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
+                <p className="text-xs font-bold text-surface-600 uppercase tracking-wide">Breakdown by Category</p>
+                <p className="text-[10px] text-surface-400 italic">Click a category to see every item in it</p>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(breakdown.categoryTotals).sort(([a],[b])=>(CATEGORY_CONFIG[a]?.order||99)-(CATEGORY_CONFIG[b]?.order||99)).map(([cat,{count,total}])=>{
                   const cfg=CATEGORY_CONFIG[cat]||CATEGORY_CONFIG.Other
                   return (
-                    <div key={cat} className={`flex items-center gap-2 px-3 py-2 rounded-xl border ${cfg.color}`}>
-                      <span className="text-base">{cfg.icon}</span>
+                    <button key={cat} onClick={()=>setOpenCategory(cat)}
+                      aria-label={`View all ${count} ${cat} item${count!==1?'s':''}, totalling ${fmtCurrencyShort(total)}`}
+                      className={`flex items-center gap-2 px-3 py-2 min-h-[44px] rounded-xl border text-left transition-all hover:shadow-sm hover:-translate-y-px focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${cfg.color}`}>
+                      <span className="text-base" aria-hidden="true">{cfg.icon}</span>
                       <div>
                         <p className="text-xs font-bold leading-tight">{cat}</p>
                         <p className="text-[10px] opacity-75">{count} item{count!==1?'s':''} · {fmtCurrencyShort(total)}</p>
                       </div>
-                    </div>
+                      <ChevronRight size={13} className="opacity-50 shrink-0" aria-hidden="true" />
+                    </button>
                   )
                 })}
               </div>
@@ -782,6 +1067,15 @@ export default function ProgramCostPage() {
 
       {showTuitionModal&&(
         <TuitionSettingsModal rates={tuitionRates} onSave={saveTuitionRates} onClose={()=>setShowTuitionModal(false)}/>
+      )}
+
+      {openCategory&&breakdown?.categoryTotals?.[openCategory]&&(
+        <CategoryItemsModal
+          categoryTotals={breakdown.categoryTotals}
+          initialCategory={openCategory}
+          programName={programName}
+          onClose={()=>setOpenCategory(null)}
+        />
       )}
     </div>
   )

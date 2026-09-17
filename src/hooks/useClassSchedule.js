@@ -94,8 +94,10 @@ export function useSemesterOptions() {
     return m
   }, [classes])
 
-  /** The current term (Settings → Terms); else the semester whose classes are in session, next up, or newest. */
+  /** The current term (Settings → Terms); else the semester whose classes are in session, next up, or newest.
+   *  Empty until the class list has loaded, so the first schedule load never runs with no classes. */
   const defaultSemester = useMemo(() => {
+    if (loading || termsLoading) return ''
     const cur = pickCurrentTerm(terms)
     if (cur) return cur.name
     if (!semesters.length) return ''
@@ -107,7 +109,7 @@ export function useSemesterOptions() {
       if (b.start && b.start > today && (!upcoming || b.start < upcoming.start)) upcoming = { start: b.start, name: s.name }
     }
     return upcoming ? upcoming.name : semesters[0].name
-  }, [terms, semesters, classesBySemester])
+  }, [terms, semesters, classesBySemester, loading, termsLoading])
 
   return { classes, semesters, classesBySemester, defaultSemester, loading: loading || termsLoading, refresh: load }
 }
@@ -194,6 +196,7 @@ export function useClassSchedule(semester, { canEdit = false, classes: semesterC
   semesterRef.current = semester
   const classesRef = useRef(semesterClasses)
   classesRef.current = semesterClasses
+  const loadSeqRef = useRef(0)         // a newer load always wins over an older one still in flight
 
   // ── load ──
   const load = useCallback(async (opts = {}) => {
@@ -203,6 +206,7 @@ export function useClassSchedule(semester, { canEdit = false, classes: semesterC
     // that haven't been saved yet — they'll be saved in a moment and the
     // next remote event reloads cleanly.
     if (opts.silent && (dirtyRef.current || savingRef.current)) return
+    const mySeq = ++loadSeqRef.current
     if (!opts.silent) setLoading(true)
     try {
       const provided = classesRef.current
@@ -220,6 +224,7 @@ export function useClassSchedule(semester, { canEdit = false, classes: semesterC
           .eq('schedule_id', scheduleRow.schedule_id).order('sort_order'), 'class_schedule_items.select') || []
       }
       if (semesterRef.current !== name) return   // user switched while we were loading
+      if (mySeq !== loadSeqRef.current) return    // a newer load superseded this one
       const built = buildDoc({ semester: name, scheduleRow, items, classes })
       docRef.current = built
       savedRef.current = clone(built)
@@ -230,7 +235,7 @@ export function useClassSchedule(semester, { canEdit = false, classes: semesterC
       console.error('useClassSchedule load:', e)
       toast.error('Could not load the schedule: ' + e.message)
     }
-    setLoading(false)
+    if (mySeq === loadSeqRef.current) setLoading(false)
   }, [canEdit])
 
   useEffect(() => { load() }, [load, semester])
