@@ -22,6 +22,11 @@
  *   New/Edit Request modal; thumbnails + accessible lightbox in View
  * - Pre-filled New Request via router state { prefill } (PageErrorBoundary
  *   "Report this bug")
+ * - Bulk release (super admin only): checkbox column on Open / In Progress /
+ *   Completed rows, a select-all, and a "Release as one version" bar that
+ *   opens ReleaseModal — one version bump (Auto / Minor / Major / None), one
+ *   release date, one changelog row per request plus an optional headline
+ *   row, then every selected request is Closed. See useBugActions.releaseRequests.
  */
 
 import React, { useState, useMemo, useCallback, useEffect, useRef, useId } from 'react'
@@ -33,12 +38,13 @@ import { useDialogA11y } from '@/hooks/useDialogA11y'
 import {
   useBugRequests, useBugActions, useChangelog, useBugRequestLookup, useAutoClose,
   MAX_SCREENSHOTS, SCREENSHOT_TYPES, validateScreenshot,
+  RELEASABLE_STATUSES, fetchCurrentVersion, computeNextVersion,
 } from '@/hooks/useBugTracker'
 import {
   Search, Plus, Bug, Lightbulb, Clock, CheckCircle2, Loader2,
   Eye, Edit3, Trash2, CheckCircle, XCircle, History, AlertCircle,
   HelpCircle, X, Hourglass, ExternalLink, FileText, ChevronDown, ChevronRight,
-  Paperclip, ImagePlus, ZoomIn, ChevronLeft,
+  Paperclip, ImagePlus, ZoomIn, ChevronLeft, Rocket,
 } from 'lucide-react'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -135,6 +141,10 @@ export default function BugTrackerPage() {
   // Add-changelog-entry modal (super admin only)
   const [showAddChangelogModal, setShowAddChangelogModal] = useState(false)
 
+  // Bulk release selection (super admin only)
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [showReleaseModal, setShowReleaseModal] = useState(false)
+
   // Pre-filled New Request (from PageErrorBoundary "Report this bug" or any
   // navigate('/bug-tracker', { state: { prefill: { type, title, description } } }))
   const [prefill, setPrefill] = useState(null)
@@ -167,6 +177,33 @@ export default function BugTrackerPage() {
       return matchSearch && matchType && matchStatus && matchPriority
     })
   }, [activeRequests, search, typeFilter, statusFilter, priorityFilter])
+
+  // Bulk release helpers — only Open / In Progress / Completed rows can be checked
+  const canRelease = actions.isSuperAdmin
+  const isReleasable = (item) => RELEASABLE_STATUSES.includes(item.status)
+  const selectedItems = useMemo(
+    () => activeRequests.filter(r => selectedIds.has(r.request_id) && isReleasable(r)),
+    [activeRequests, selectedIds]
+  )
+  const releasableInView = useMemo(() => filtered.filter(isReleasable), [filtered])
+  const allInViewSelected = releasableInView.length > 0 && releasableInView.every(r => selectedIds.has(r.request_id))
+  const someInViewSelected = releasableInView.some(r => selectedIds.has(r.request_id))
+  const selectAllRef = useRef(null)
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someInViewSelected && !allInViewSelected
+  }, [someInViewSelected, allInViewSelected])
+  const toggleSelected = (id) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const toggleSelectAllInView = () => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (allInViewSelected) releasableInView.forEach(r => next.delete(r.request_id))
+    else releasableInView.forEach(r => next.add(r.request_id))
+    return next
+  })
+  const clearSelection = () => setSelectedIds(new Set())
 
   // Stats
   const stats = useMemo(() => {
@@ -310,6 +347,38 @@ export default function BugTrackerPage() {
           </span>
         </div>
 
+        {/* Bulk release bar — super admin, appears once something is checked */}
+        {canRelease && selectedItems.length > 0 && (
+          <div
+            className="px-4 py-2.5 bg-brand-50 border-b border-brand-100 flex items-center justify-between gap-3 flex-wrap"
+            role="region"
+            aria-label="Release selected requests"
+          >
+            <p className="text-sm text-brand-900" role="status" aria-live="polite">
+              <strong>{selectedItems.length}</strong> selected
+              {selectedItems.some(r => r.type === 'Feature Request')
+                ? <span className="text-xs text-brand-700 ml-2">(includes a Feature Request — Auto bump is minor)</span>
+                : <span className="text-xs text-brand-700 ml-2">(all Bugs — Auto bump is patch)</span>}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="px-3 py-1.5 text-xs font-medium text-surface-600 hover:bg-white border border-surface-200 rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowReleaseModal(true)}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-lg min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+              >
+                <Rocket size={14} aria-hidden="true" /> Release {selectedItems.length} as one version
+              </button>
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex items-center justify-center py-16 text-surface-400 gap-2 text-sm">
             <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Loading requests…
@@ -323,6 +392,19 @@ export default function BugTrackerPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-50 text-left">
+                  {canRelease && (
+                    <th scope="col" className="px-3 py-2.5 w-10">
+                      <input
+                        ref={selectAllRef}
+                        type="checkbox"
+                        checked={allInViewSelected}
+                        onChange={toggleSelectAllInView}
+                        disabled={releasableInView.length === 0}
+                        aria-label={allInViewSelected ? 'Deselect all releasable requests in view' : 'Select all releasable requests in view'}
+                        className="w-4 h-4 rounded border-surface-300 text-brand-600 focus:ring-brand-500 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                    </th>
+                  )}
                   <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500 w-24">ID</th>
                   <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Type</th>
                   <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-surface-500">Title</th>
@@ -335,7 +417,22 @@ export default function BugTrackerPage() {
               </thead>
               <tbody className="divide-y divide-surface-100">
                 {filtered.map(item => (
-                  <tr key={item.request_id} className="hover:bg-surface-50 transition-colors">
+                  <tr key={item.request_id} className={`hover:bg-surface-50 transition-colors ${selectedIds.has(item.request_id) && isReleasable(item) ? 'bg-brand-50/40' : ''}`}>
+                    {canRelease && (
+                      <td className="px-3 py-2.5">
+                        {isReleasable(item) ? (
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(item.request_id)}
+                            onChange={() => toggleSelected(item.request_id)}
+                            aria-label={`Select ${item.request_id} for release`}
+                            className="w-4 h-4 rounded border-surface-300 text-brand-600 focus:ring-brand-500 cursor-pointer"
+                          />
+                        ) : (
+                          <span className="sr-only">{item.status === 'Pending' ? 'Pending approval — cannot be released' : 'Cannot be released'}</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-4 py-2.5 font-semibold text-surface-900 text-xs">{item.request_id}</td>
                     <td className="px-4 py-2.5"><Badge text={item.type} styleMap={TYPE_STYLES} /></td>
                     <td className="px-4 py-2.5 text-surface-700 max-w-xs truncate">
@@ -467,6 +564,14 @@ export default function BugTrackerPage() {
           onClose={() => setShowAddChangelogModal(false)}
           onSaved={() => { refreshChangelog() }}
           actions={actions}
+        />
+      )}
+      {showReleaseModal && selectedItems.length > 0 && (
+        <ReleaseModal
+          items={selectedItems}
+          actions={actions}
+          onClose={() => setShowReleaseModal(false)}
+          onReleased={() => { setShowReleaseModal(false); clearSelection(); refresh(); refreshChangelog() }}
         />
       )}
     </div>
@@ -1410,6 +1515,219 @@ function MetaItem({ label, children }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADD CHANGELOG MODAL (super admin only — manual entries)
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RELEASE MODAL (super admin) — close several requests as one version
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const BUMP_OPTIONS = [
+  { value: 'auto',  label: 'Auto',  help: 'Patch if every item is a Bug, minor if any is a Feature Request' },
+  { value: 'minor', label: 'Minor', help: 'x.y.z → x.(y+1).0' },
+  { value: 'major', label: 'Major', help: 'x.y.z → (x+1).0.0 — for a big combined release' },
+  { value: 'none',  label: 'None',  help: 'Log every item under the current version without bumping' },
+]
+
+function ReleaseModal({ items, actions, onClose, onReleased }) {
+  const dialogRef = useDialogA11y(true, onClose)
+  const uid = useId()
+  const [mode, setMode] = useState('auto')
+  const [headline, setHeadline] = useState('')
+  const [headlineDesc, setHeadlineDesc] = useState('')
+  const [currentVersion, setCurrentVersion] = useState(null)
+  const [versionLoading, setVersionLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    fetchCurrentVersion()
+      .then(v => { if (!cancelled) setCurrentVersion(v) })
+      .catch(e => { if (!cancelled) setError('Could not read the current version: ' + e.message) })
+      .finally(() => { if (!cancelled) setVersionLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const releaseType = items.some(r => r.type === 'Feature Request') ? 'Feature Request' : 'Bug'
+  const nextVersion = versionLoading ? '…' : computeNextVersion(currentVersion, mode, releaseType)
+  const bugCount = items.filter(r => r.type === 'Bug').length
+  const featureCount = items.length - bugCount
+
+  const handleRelease = async () => {
+    setSubmitting(true)
+    setError('')
+    const result = await actions.releaseRequests({
+      requestIds: items.map(r => r.request_id),
+      bumpVersion: mode,
+      headlineTitle: headline,
+      headlineDescription: headlineDesc,
+    })
+    setSubmitting(false)
+    if (result?.success) onReleased?.()
+    else if (result?.error) setError(result.error)
+  }
+
+  const titleId = `${uid}-title`
+  const descId = `${uid}-desc`
+  const versionId = `${uid}-version`
+
+  return (
+    <ModalOverlay onClose={submitting ? () => {} : onClose}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-600 flex items-center justify-center text-white shrink-0">
+              <Rocket size={16} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h3 id={titleId} className="font-semibold text-surface-900">Release as one version</h3>
+              <div className="text-[11px] text-surface-400">Super admin only — one bump, one changelog group</div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            aria-label="Close"
+            className="p-1 rounded-lg hover:bg-surface-100 focus:outline-none focus:ring-2 focus:ring-brand-500 text-surface-400 shrink-0 min-h-[44px] min-w-[44px] inline-flex items-center justify-center disabled:opacity-40"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
+          <p id={descId} className="text-xs text-surface-600">
+            The {items.length} request{items.length === 1 ? '' : 's'} below will be marked <strong>Closed</strong> and listed together in the changelog under the new version. Each keeps its own changelog line (and its link back to the request).
+          </p>
+
+          {/* Selected items */}
+          <div className="border border-surface-200 rounded-lg overflow-hidden">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Requests included in this release</caption>
+              <thead>
+                <tr className="bg-surface-50 text-left">
+                  <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 w-24">ID</th>
+                  <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 w-32">Type</th>
+                  <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500">Title</th>
+                  <th scope="col" className="px-3 py-2 text-xs font-semibold text-surface-500 w-28">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-100">
+                {items.map(r => (
+                  <tr key={r.request_id}>
+                    <td className="px-3 py-2 font-semibold text-surface-900 text-xs">{r.request_id}</td>
+                    <td className="px-3 py-2"><Badge text={r.type} styleMap={TYPE_STYLES} /></td>
+                    <td className="px-3 py-2 text-surface-700 truncate max-w-xs">{r.title}</td>
+                    <td className="px-3 py-2"><Badge text={r.status} styleMap={STATUS_STYLES} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Version bump */}
+          <fieldset>
+            <legend className="text-xs font-semibold text-surface-700 mb-2">Version bump</legend>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {BUMP_OPTIONS.map(opt => (
+                <label
+                  key={opt.value}
+                  className={`flex flex-col gap-0.5 px-3 py-2 rounded-lg border cursor-pointer min-h-[44px] ${mode === opt.value ? 'border-brand-500 bg-brand-50' : 'border-surface-200 hover:bg-surface-50'}`}
+                >
+                  <span className="flex items-center gap-2 text-sm font-medium text-surface-900">
+                    <input
+                      type="radio"
+                      name={`${uid}-bump`}
+                      value={opt.value}
+                      checked={mode === opt.value}
+                      onChange={() => setMode(opt.value)}
+                      className="text-brand-600 focus:ring-brand-500"
+                      aria-describedby={`${uid}-bump-${opt.value}-help`}
+                    />
+                    {opt.label}
+                  </span>
+                  <span id={`${uid}-bump-${opt.value}-help`} className="text-[11px] text-surface-500 pl-6">{opt.help}</span>
+                </label>
+              ))}
+            </div>
+            <p id={versionId} className="mt-2 text-sm text-surface-700" role="status" aria-live="polite">
+              {versionLoading ? (
+                <span className="text-surface-400">Reading current version…</span>
+              ) : (
+                <>
+                  <span className="text-surface-500">Current </span><strong>{currentVersion || 'none'}</strong>
+                  <span className="text-surface-400 mx-2" aria-hidden="true">→</span>
+                  <span className="text-surface-500">{mode === 'none' ? 'Logged under ' : 'New '}</span><strong className="text-brand-700">v{nextVersion}</strong>
+                  <span className="text-xs text-surface-400 ml-2">({bugCount} bug{bugCount === 1 ? '' : 's'}, {featureCount} feature request{featureCount === 1 ? '' : 's'})</span>
+                </>
+              )}
+            </p>
+          </fieldset>
+
+          {/* Headline */}
+          <Field label="Release headline (optional)" htmlFor={`${uid}-headline`}>
+            <input
+              id={`${uid}-headline`}
+              type="text"
+              value={headline}
+              onChange={e => setHeadline(e.target.value)}
+              maxLength={200}
+              placeholder="e.g. Fall 2026 release — temp access editing, WOC exclusions, All Done on Time Cards"
+              className="input text-sm"
+              aria-describedby={`${uid}-headline-help`}
+            />
+            <p id={`${uid}-headline-help`} className="text-[11px] text-surface-500 mt-1">
+              Adds one extra changelog line at the top of this version's group. Shown in What's New too.
+            </p>
+          </Field>
+          {headline.trim() && (
+            <Field label="Headline description (optional)" htmlFor={`${uid}-headline-desc`}>
+              <textarea
+                id={`${uid}-headline-desc`}
+                value={headlineDesc}
+                onChange={e => setHeadlineDesc(e.target.value)}
+                rows={3}
+                placeholder="What this release is about, in a sentence or two…"
+                className="input text-sm resize-none"
+              />
+            </Field>
+          )}
+
+          {error && (
+            <div role="alert" className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{error}</div>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleRelease}
+            disabled={submitting || versionLoading || actions.saving}
+            aria-describedby={versionId}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-brand-600 text-white hover:bg-brand-700 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Rocket size={14} aria-hidden="true" />}
+            {submitting ? 'Releasing…' : `Release ${items.length} as v${nextVersion}`}
+          </button>
+        </div>
+      </div>
+    </ModalOverlay>
+  )
+}
 
 function AddChangelogModal({ onClose, onSaved, actions }) {
   const dialogRef = useDialogA11y(true, onClose)

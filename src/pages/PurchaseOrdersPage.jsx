@@ -43,6 +43,17 @@ function fmtDate(d) {
   if (!d) return '—'
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
+/** Whole days from an order_date (date or ISO string) to today, local time; null if unknown. */
+function daysSince(orderDate) {
+  if (!orderDate) return null
+  const s = String(orderDate)
+  const d = s.length === 10 ? new Date(s + 'T00:00:00') : new Date(s)
+  if (Number.isNaN(d.getTime())) return null
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  d.setHours(0, 0, 0, 0)
+  return Math.max(0, Math.round((today - d) / 86400000))
+}
+
 function fmtMoney(v) {
   // Thousands separators + 2 decimals, e.g. $12,345.60
   return '$' + (parseFloat(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -786,6 +797,51 @@ function DashboardTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStar
           </div>
         </div>
       )}
+
+      {/* Open Orders — everything not yet placed or not yet received, no cap */}
+      <section className="bg-white rounded-xl border border-amber-200" aria-labelledby="po-open-orders-title">
+        <div className="px-4 py-3 border-b border-amber-100 bg-amber-50/60 flex items-center justify-between gap-3 rounded-t-xl">
+          <div>
+            <h3 id="po-open-orders-title" className="text-sm font-semibold text-surface-900">Open Orders</h3>
+            <p className="text-[11px] text-surface-500">Not yet ordered or not yet received — always listed here, oldest first</p>
+          </div>
+          <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${summary.openOrders.length > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}
+            role="status" aria-live="polite">
+            {summary.openOrders.length === 0 ? 'All received' : `${summary.openOrders.length} open`}
+          </span>
+        </div>
+        {summary.openOrders.length === 0 ? (
+          <div className="text-center py-6 text-surface-400 text-sm">Nothing waiting — every order has been received.</div>
+        ) : (
+          <div className="divide-y divide-surface-100">
+            {summary.openOrders.map(o => {
+              const age = daysSince(o.orderDate)
+              return (
+                <button key={o.orderId} onClick={() => onViewOrder(o.orderId)}
+                  aria-label={`${o.orderId}, ${o.vendor}, ${o.status}${age != null ? `, ${age} day${age === 1 ? '' : 's'} old` : ''}, ${fmtMoney(o.total)}`}
+                  className="w-full px-4 py-3 flex items-center gap-3 hover:bg-surface-50 transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-surface-900">
+                      {o.orderId}
+                      {age != null && (
+                        <span className={`ml-2 text-[11px] font-medium ${age >= 14 ? 'text-red-600' : age >= 7 ? 'text-amber-700' : 'text-surface-400'}`}>
+                          {age === 0 ? 'today' : `${age} day${age === 1 ? '' : 's'}`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-surface-500 truncate">{o.vendor} — {o.orderedBy}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-surface-900">{fmtMoney(o.total)}</div>
+                    <StatusBadge status={o.status} />
+                  </div>
+                  <ChevronRight size={14} className="text-surface-300" aria-hidden="true" />
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       {/* Recent Orders */}
       <div className="bg-white rounded-xl border border-surface-200">

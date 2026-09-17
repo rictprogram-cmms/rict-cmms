@@ -8,6 +8,13 @@ import toast from 'react-hot-toast'
 
 // ─── PO Dashboard Summary ────────────────────────────────────────────────────
 
+// Orders still in flight — not yet placed with the vendor, or placed but not
+// fully received. The Dashboard's "Open Orders" list shows EVERY one of these
+// (no cap, oldest first) so nothing slips off the bottom of Recent Orders.
+export const OPEN_PO_STATUSES = ['Pending', 'Approved', 'Ready', 'Submitted', 'Ordered', 'Partial']
+// Sort key: earlier stage first, so what still needs action sits at the top.
+const OPEN_PO_STAGE = { Pending: 0, Approved: 1, Ready: 1, Submitted: 1, Ordered: 2, Partial: 3 }
+
 export function usePODashboard(viewAll = true) {
   const { profile } = useAuth()
   const [summary, setSummary] = useState(null)
@@ -41,7 +48,7 @@ export function usePODashboard(viewAll = true) {
       const s = {
         pendingApproval: 0, approved: 0, onOrder: 0, partiallyReceived: 0,
         received: 0, cancelled: 0, rejected: 0, totalOrders: 0,
-        monthlySpend: 0, yearlySpend: 0, recentOrders: []
+        monthlySpend: 0, yearlySpend: 0, recentOrders: [], openOrders: []
       }
 
       ;(data || []).forEach(o => {
@@ -63,16 +70,24 @@ export function usePODashboard(viewAll = true) {
             if (od >= yearStart) s.yearlySpend += total
           }
         }
-        if (s.recentOrders.length < 5) {
-          s.recentOrders.push({
-            orderId: o.order_id,
-            vendor: o.vendor_name || o.other_vendor || 'Unknown',
-            orderedBy: o.ordered_by || '',
-            total: total.toFixed(2),
-            status: o.status,
-            orderDate: o.order_date
-          })
+        const row = {
+          orderId: o.order_id,
+          vendor: o.vendor_name || o.other_vendor || 'Unknown',
+          orderedBy: o.ordered_by || '',
+          total: total.toFixed(2),
+          status: o.status,
+          orderDate: o.order_date
         }
+        if (s.recentOrders.length < 5) s.recentOrders.push(row)
+        if (OPEN_PO_STATUSES.includes(o.status)) s.openOrders.push(row)
+      })
+      // Open orders: stage first (Pending → Approved → Ordered → Partial), then
+      // oldest first within a stage — the forgotten one floats to the top.
+      s.openOrders.sort((a, b) => {
+        const sa = OPEN_PO_STAGE[a.status] ?? 9
+        const sb = OPEN_PO_STAGE[b.status] ?? 9
+        if (sa !== sb) return sa - sb
+        return String(a.orderDate || '').localeCompare(String(b.orderDate || ''))
       })
       setSummary(s)
       hasLoadedRef.current = true

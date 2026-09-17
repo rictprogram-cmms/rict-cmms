@@ -9,6 +9,9 @@ import { usePermissions } from '@/hooks/usePermissions'
 // SCREENSHOT ATTACHMENTS (Supabase Storage bucket: bug-screenshots)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** Statuses that can be bulk-released as one version (Pending must be approved first; Rejected never). */
+export const RELEASABLE_STATUSES = ['Open', 'In Progress', 'Completed']
+
 export const BUG_SCREENSHOT_BUCKET = 'bug-screenshots'
 export const MAX_SCREENSHOTS = 5
 export const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024       // bucket limit
@@ -548,13 +551,248 @@ export function useBugActions() {
     }
   }
 
+  // ── Bulk release ────────────────────────────────────────────────────────
+  // Close several requests as ONE version: a single bump, one release_date,
+  // one changelog row per request (plus an optional headline row with
+  // request_id = null) all sharing the new version string. The changelog
+  // table and What's New already group rows by version, so this needs no
+  // schema change.
+  //
+  //   requestIds          — Open / In Progress / Completed requests only
+  //   bumpVersion         — 'auto' (patch if all Bugs, minor if any Feature
+  //                         Request) | 'minor' | 'major' | 'none'
+  //   headlineTitle       — optional release headline (own changelog row, shown
+  //                         first within the version group)
+  //   headlineDescription — optional, stored only with a headline title
+  //
+  // Write order is chosen so a mid-way failure is recoverable, not silent:
+  //   1. all changelog rows in ONE insert (atomic per statement)
+  //   2. each request → Closed, one at a time, failures collected
+  //   3. app_version written once (unless 'none')
+  //   4. audit rows
+  // If a close in step 2 fails, its changelog row already exists under the
+  // new version; re-closing that request from the Edit modal with "no bump"
+  // completes it without a duplicate version.
+  //
+  // Returns { success, partial, version, closed, failed: [{ request_id, error }] }.
+  const releaseRequests = async ({ requestIds, bumpVersion = 'auto', headlineTitle = '', headlineDescription = '' }) => {
+    if (!isSuperAdmin) {
+      toast.error('Only the super admin can release requests')
+      return { success: false }
+    }
+    const ids = [...new Set((requestIds || []).filter(Boolean))]
+    if (ids.length === 0) {
+      toast.error('Select at least one request')
+      return { success: false }
+    }
+    const mode = ['minor', 'major', 'none'].includes(bumpVersion) ? bumpVersion : 'auto'
+
+    setSaving(true)
+    try {
+      // Load the rows fresh — statuses may have changed since the list rendered.
+      const rows = mustData(await supabase
+        .from('bug_tracker')
+        .select('request_id, type, title, status, resolved_date')
+        .in('request_id', ids), 'bug_tracker.select') || []
+      const byId = new Map(rows.map(r => [r.request_id, r]))
+      const notReleasable = ids.filter(id => {
+        const r = byId.get(id)
+        return !r || !RELEASABLE_STATUSES.includes(r.status)
+      })
+      if (notReleasable.length > 0) {
+        throw new Error(`Not releasable (must be Open, In Progress or Completed): ${notReleasable.join(', ')}`)
+      }
+      const eligible = ids.map(id => byId.get(id))
+
+      const currentVersion = await fetchCurrentVersion()
+      const releaseType = eligible.some(r => r.type === 'Feature Request') ? 'Feature Request' : 'Bug'
+      const newVersion = computeNextVersion(currentVersion, mode, releaseType)
+
+      // Headline gets the later timestamp so it sorts to the top of the group
+      // (ChangelogTable sorts release_date descending within a version).
+      const now = new Date()
+      const headlineDate = now.toISOString()
+      const itemDate = new Date(now.getTime() - 1000).toISOString()
+
+      const cleanHeadline = (headlineTitle || '').trim()
+      const cleanHeadlineDesc = (headlineDescription || '').trim()
+      const payload = []
+      if (cleanHeadline) {
+        const headlineRow = {
+          version: newVersion,
+          release_date: headlineDate,
+          request_id: null,
+          type: releaseType,
+          title: cleanHeadline,
+          released_by: userName,
+        }
+        if (cleanHeadlineDesc) headlineRow.description = cleanHeadlineDesc
+        payload.push(headlineRow)
+      }
+      eligible.forEach(r => payload.push({
+        version: newVersion,
+        release_date: itemDate,
+        request_id: r.request_id,
+        type: r.type || 'Bug',
+        title: r.title || '',
+        released_by: userName,
+      }))
+
+      // 1. Changelog rows — one statement
+      const inserted = mustData(await supabase.from('changelog').insert(payload).select(), 'changelog.insert') || []
+      if (inserted.length !== payload.length) {
+        throw new Error(`Changelog insert wrote ${inserted.length} of ${payload.length} rows — nothing was closed`)
+      }
+
+      // 2. Close each request
+      const nowIso = new Date().toISOString()
+      const failed = []
+      const closed = []
+      for (const r of eligible) {
+        try {
+          const updateData = {
+            status: 'Closed',
+            updated_at: nowIso,
+            updated_by: userName,
+            laste_updated: new Date().toLocaleString(),
+          }
+          if (!r.resolved_date) updateData.resolved_date = nowIso
+          const { error } = assertWrite(
+            await supabase.from('bug_tracker').update(updateData).eq('request_id', r.request_id).select(),
+            'bug_tracker.update'
+          )
+          if (error) throw error
+          closed.push(r.request_id)
+        } catch (e) {
+          console.error(`releaseRequests: failed to close ${r.request_id}:`, e)
+          failed.push({ request_id: r.request_id, error: e.message })
+        }
+      }
+
+      // 3. Version — the changelog rows exist under newVersion, so bump even
+      //    if a close failed; the operator fixes the straggler with "no bump".
+      if (mode !== 'none') await writeAppVersion(newVersion, userName)
+
+      // 4. Audit
+      try {
+        const auditRows = closed.map(id => ({
+          log_id: `AUD${Date.now()}${Math.floor(Math.random() * 1000)}`,
+          timestamp: nowIso,
+          user_email: userEmail,
+          user_name: userName,
+          action: 'Update',
+          entity_type: 'Bug Request',
+          entity_id: id,
+          details: `Closed in release v${newVersion}${cleanHeadline ? ` — ${cleanHeadline}` : ''}`,
+        }))
+        auditRows.push({
+          log_id: `AUD${Date.now()}R`,
+          timestamp: nowIso,
+          user_email: userEmail,
+          user_name: userName,
+          action: 'Release',
+          entity_type: 'Changelog',
+          entity_id: newVersion,
+          details: `Released v${newVersion} (${mode === 'none' ? 'no bump' : mode + ' bump'} from ${currentVersion || 'none'}): ${closed.length} closed${failed.length ? `, ${failed.length} failed (${failed.map(f => f.request_id).join(', ')})` : ''}${cleanHeadline ? ` — ${cleanHeadline}` : ''}`,
+        })
+        await supabase.from('audit_log').insert(auditRows)
+      } catch (auditErr) {
+        console.error('Release audit log error:', auditErr)
+      }
+
+      if (failed.length > 0) {
+        toast.error(
+          `Released v${newVersion} but ${failed.length} request${failed.length === 1 ? '' : 's'} did not close: ${failed.map(f => f.request_id).join(', ')}. Close them from Edit with "no version bump".`,
+          { duration: 10000 }
+        )
+        return { success: true, partial: true, version: newVersion, closed: closed.length, failed }
+      }
+      toast.success(mode === 'none'
+        ? `${closed.length} request${closed.length === 1 ? '' : 's'} closed under v${newVersion} (no bump)`
+        : `Released v${newVersion} — ${closed.length} request${closed.length === 1 ? '' : 's'} closed 🚀`)
+      return { success: true, partial: false, version: newVersion, closed: closed.length, failed: [] }
+    } catch (err) {
+      console.error('releaseRequests error:', err)
+      toast.error(err.message || 'Release failed')
+      return { success: false, error: err.message }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return {
     saving, isSuperAdmin, hasPerm,
     createRequest, updateRequest, deleteRequest,
     approveRequest, rejectRequest,
     addManualChangelogEntry,
+    releaseRequests,
     uploadScreenshots, removeScreenshot,
   }
+}
+
+// ─── Version helpers (shared by single close, manual entry, and bulk release) ──
+
+/**
+ * Current app version: settings.app_version, falling back to the highest
+ * changelog version. Returns null when neither exists.
+ */
+export async function fetchCurrentVersion() {
+  const settingsData = mustData(await supabase
+    .from('settings')
+    .select('setting_value')
+    .eq('setting_key', 'app_version')
+    .maybeSingle(), 'settings.select')
+  if (settingsData?.setting_value) return settingsData.setting_value
+
+  const latestChangelog = mustData(await supabase
+    .from('changelog')
+    .select('version')
+    .order('version', { ascending: false })
+    .limit(1), 'changelog.select')
+  return latestChangelog?.[0]?.version || null
+}
+
+/**
+ * Pure version arithmetic. mode: 'auto' | 'minor' | 'major' | 'none'.
+ *   auto  — Bug → patch (x.y.z → x.y.z+1); Feature Request → minor (x.y.z → x.y+1.0)
+ *   minor — x.y.z → x.y+1.0 regardless of type
+ *   major — x.y.z → x+1.0.0
+ *   none  — unchanged (defaults to '0.0.1' if nothing is known)
+ * Mirrors the historical rules exactly (including the '2.0.1' auto fallback
+ * and '1.0.0' major fallback when no current version exists).
+ */
+export function computeNextVersion(currentVersion, mode = 'auto', type = 'Bug') {
+  if (mode === 'none') return currentVersion || '0.0.1'
+  if (mode === 'major') {
+    if (!currentVersion) return '1.0.0'
+    const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
+    return `${(parts[0] || 0) + 1}.0.0`
+  }
+  if (!currentVersion) return '2.0.1'
+  const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
+  const major = parts[0] || 2
+  let minor = parts[1] || 0
+  let patch = parts[2] || 0
+  if (mode === 'minor' || type === 'Feature Request') { minor += 1; patch = 0 }
+  else { patch += 1 }
+  return `${major}.${minor}.${patch}`
+}
+
+/** Write the new app_version and tell the layout so the sidebar updates now. */
+async function writeAppVersion(newVersion, updatedBy) {
+  const { error: settingsError } = assertWrite(
+    await supabase
+      .from('settings')
+      .update({
+        setting_value: newVersion,
+        updated_at: new Date().toISOString(),
+        updated_by: updatedBy || 'System'
+      })
+      .eq('setting_key', 'app_version').select(),
+    'settings.update'
+  )
+  if (settingsError) console.error('Settings version update error:', settingsError)
+  window.dispatchEvent(new CustomEvent('app-version-updated', { detail: { version: newVersion } }))
 }
 
 // ─── Changelog Hook ───────────────────────────────────────────────────────────
@@ -754,71 +992,11 @@ async function addChangelogEntry(requestId, type, title, releasedBy, description
   else mode = 'auto'
 
   try {
-    // Get current version from settings first, fall back to changelog
-    let currentVersion = null
-
-    const settingsData = mustData(await supabase
-      .from('settings')
-      .select('setting_value')
-      .eq('setting_key', 'app_version')
-      .maybeSingle(), 'settings.select')
-
-    if (settingsData?.setting_value) {
-      currentVersion = settingsData.setting_value
-    }
-
-    // Fall back to latest changelog version if settings doesn't have it
-    if (!currentVersion) {
-      const latestChangelog = mustData(await supabase
-        .from('changelog')
-        .select('version')
-        .order('version', { ascending: false })
-        .limit(1), 'changelog.select')
-
-      if (latestChangelog && latestChangelog.length > 0) {
-        currentVersion = latestChangelog[0].version
-      }
-    }
-
-    // Calculate the version this entry will be filed under, based on `mode`.
-    // - 'auto':  increment per type rules; fall back to "2.0.1" if no
-    //            current version is known.
-    // - 'major': increment major, reset minor + patch to 0.
-    // - 'none':  file under the current version unchanged. If no current
-    //            version is set anywhere, default to "0.0.1" so the row
-    //            still has a valid version string (extremely unlikely).
-    let newVersion
-    if (mode === 'none') {
-      newVersion = currentVersion || '0.0.1'
-    } else if (mode === 'major') {
-      if (currentVersion) {
-        const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
-        const major = (parts[0] || 0) + 1
-        newVersion = `${major}.0.0`
-      } else {
-        newVersion = '1.0.0'
-      }
-    } else {
-      // 'auto'
-      newVersion = '2.0.1'
-      if (currentVersion) {
-        const parts = currentVersion.split('.').map(p => parseInt(p) || 0)
-        const major = parts[0] || 2
-        let minor = parts[1] || 0
-        let patch = parts[2] || 0
-
-        if (type === 'Feature Request') {
-          // Feature Request → increment minor, reset patch to 0
-          minor += 1
-          patch = 0
-        } else {
-          // Bug (default) → increment patch
-          patch += 1
-        }
-
-        newVersion = `${major}.${minor}.${patch}`
-      }
-    }
+    // Current version (settings.app_version → latest changelog → null) and
+    // the version this entry files under — see fetchCurrentVersion() and
+    // computeNextVersion() above; the bulk release uses the same two helpers.
+    const currentVersion = await fetchCurrentVersion()
+    const newVersion = computeNextVersion(currentVersion, mode, type)
 
     // Insert changelog entry
     const insertPayload = {
@@ -850,24 +1028,7 @@ async function addChangelogEntry(requestId, type, title, releasedBy, description
     // + settings page reflect the change. When 'none', skip both the settings
     // update and the version-updated event so the displayed version stays put.
     if (mode !== 'none') {
-      const { error: settingsError } = assertWrite(
-      await supabase
-        .from('settings')
-        .update({
-          setting_value: newVersion,
-          updated_at: new Date().toISOString(),
-          updated_by: releasedBy || 'System'
-        })
-        .eq('setting_key', 'app_version').select(),
-      'settings.update'
-    )
-
-      if (settingsError) {
-        console.error('Settings version update error:', settingsError)
-      }
-
-      // Dispatch a custom event so AppLayout (and any other listener) can update immediately
-      window.dispatchEvent(new CustomEvent('app-version-updated', { detail: { version: newVersion } }))
+      await writeAppVersion(newVersion, releasedBy)
     }
 
     if (mode === 'major') {
