@@ -73,6 +73,7 @@ const AssetsPage = lazyPage(() => import('@/pages/AssetsPage'))
 const AssetCheckoutsPage = lazyPage(() => import('@/pages/AssetCheckoutsPage'))
 const InventoryPage = lazyPage(() => import('@/pages/InventoryPage'))
 const LabSignupPage = lazyPage(() => import('@/pages/LabSignupPage'))
+const ClassSchedulePage = lazyPage(() => import('@/pages/ClassSchedulePage'))
 const EquipmentSchedulingPage = lazyPage(() => import('@/pages/EquipmentSchedulingPage'))
 const AbsenceRequestPage = lazyPage(() => import('@/pages/AbsenceRequestPage'))
 const PurchaseOrdersPage = lazyPage(() => import('@/pages/PurchaseOrdersPage'))
@@ -486,6 +487,7 @@ function AppRoutes() {
             {/* Scheduling */}
             <Route path="/pm-schedules" element={<Lazy><PMPage /></Lazy>} />
             <Route path="/lab-signup" element={<Lazy><LabSignupPage /></Lazy>} />
+            <Route path="/class-schedule" element={<Lazy><ClassSchedulePage /></Lazy>} />
             <Route path="/equipment-scheduling" element={<Lazy><EquipmentSchedulingPage /></Lazy>} />
             <Route path="/absence-requests" element={<Lazy><AbsenceRequestPage /></Lazy>} />
 

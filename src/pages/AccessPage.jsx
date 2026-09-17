@@ -43,6 +43,7 @@ const PAGE_ICONS = {
   'Purchase Orders': 'local_shipping',
   'PM': 'event_repeat',
   'Lab Signup': 'event_available',
+  'Class Schedule': 'calendar_month',
   'Equipment Scheduling': 'build',
   'SOPs': 'description',
   'Network Map': 'lan',
@@ -196,6 +197,11 @@ const DEFAULT_PERMISSIONS = [
   // (Was listed as P177, but the 2026-09-02 seed never ran and P177 went to
   // exclude_from_woc on 2026-09-16; Sync inserts this row as P178.)
   ['P178', 'Network Map', 'manage_it_segments', false, false, true, 'Can add, edit, and delete devices on IT-managed segments (e.g. the wireless access point)'],
+
+  // Class Schedule (term scheduler moved into the CMMS 2026-09) — seeded by
+  // 20260917_class_schedule.sql with the next free P-numbers.
+  ['P179', 'Class Schedule', 'view_page',     true,  true,  true, 'Can view the Class Schedule page'],
+  ['P180', 'Class Schedule', 'edit_schedule', false, false, true, 'Can place classes on the grid, edit rooms / notes / combined groups, add unlisted classes, and copy a layout from a past semester'],
 
   // Reports (Time Cards)
   ['P060', 'Reports', 'view_page', true, true, true, 'Can access Reports/Time Cards'],
