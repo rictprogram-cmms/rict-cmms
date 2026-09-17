@@ -14,7 +14,10 @@
  *   - Expected Today
  *   - Punched In Now
  *   - Day View: who is here / expected, with date nav arrows
- *   - "Active Temp Access" card with History + Revoke
+ *   - "Active Temp Access" card with History + Edit + Revoke
+ *     (Edit opens EditTempAccessDialog; Edit/Revoke go through the
+ *     edit_temp_access_request / revoke_temp_access_request RPCs so a
+ *     role change and its profiles.role write land in one transaction)
  * 
  * All pending approvals are handled by NotificationBell, NOT dashboard tiles.
  */
@@ -40,6 +43,7 @@ import {
   POOLED_SCANNER_ASSET_ID,
 } from '@/hooks/useAssetCheckouts';
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
+import EditTempAccessDialog from '@/components/EditTempAccessDialog';
 import '@/styles/dashboard.css';
 
 // ─── Fun Facts ──────────────────────────────────────────────────────────
@@ -1233,6 +1237,7 @@ function InstructorOverview({ navigate }) {
   const [tempHistory, setTempHistory] = useState([]);
   const [tempHistoryLoading, setTempHistoryLoading] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(null);
+  const [editTempGrant, setEditTempGrant] = useState(null); // grant row being edited in EditTempAccessDialog
   const [toast, setToast] = useState(null);
 
   // ── A11y: Escape closes + focus trap + focus return for each modal (WCAG 2.1.1, 2.4.3) ──
@@ -1427,22 +1432,25 @@ function InstructorOverview({ navigate }) {
     if (!req) return;
     setConfirmRevoke(null);
     try {
-      const { data: revokeRows, error: revokeErr } = await supabase.from('temp_access_requests')
-        .update({ status: 'Revoked', reviewed_by: userName(), reverted_date: new Date().toISOString() })
-        .eq('request_id', req.request_id).select();
-      if (revokeErr) throw revokeErr;
-      if (!revokeRows || revokeRows.length === 0) { showToast('Revoke failed — you may not have permission.', 'error'); return; }
-      if (req.request_type !== 'permissions') {
-        const originalRole = req.original_role || req.user_current_role;
-        if (originalRole && req.user_email) {
-          const { data: roleRows, error: roleErr } = await supabase.from('profiles').update({ role: originalRole }).eq('email', req.user_email).select();
-          if (roleErr) throw roleErr;
-          if (!roleRows || roleRows.length === 0) { showToast('Revoked access request but failed to restore original role.', 'error'); }
-        }
+      // One RPC, one transaction: marks the grant Revoked and (role-type only)
+      // restores profiles.role to user_original_role || user_current_role.
+      // Either both land or neither does; the function also writes the audit
+      // row. See 20260916_edit_revoke_temp_access_rpc.sql.
+      const revoked = mustData(await supabase.rpc('revoke_temp_access_request', {
+        p_request_id: req.request_id,
+      }), 'revoke_temp_access_request');
+      if (!revoked || revoked.status !== 'Revoked') {
+        throw new Error('The grant was not marked Revoked — it may have already expired or been revoked');
       }
       showToast(`Revoked access for ${req.user_name}`, 'success');
       loadActiveTempAccess();
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
+  };
+
+  const handleTempEditSaved = (row, summary) => {
+    setEditTempGrant(null);
+    showToast(`Updated temp access for ${row?.user_name || 'user'}. ${summary || ''}`.trim(), 'success');
+    loadActiveTempAccess();
   };
 
   // ── Build merged people list for day view ──
@@ -1877,9 +1885,32 @@ function InstructorOverview({ navigate }) {
                           <span style={{ color: '#868e96', fontSize: '0.8rem', marginLeft: 8 }}>(was {a.original_role || a.user_current_role})</span>
                         </p>
                       )}
-                      <small style={{ color: '#2b8a3e' }}>Expires: {fmtDate(a.expiry_date)}</small>
+                      <small style={{ color: '#2b8a3e' }}>
+                        Expires: {fmtDate(a.expiry_date)}
+                        {a.edited_by && (
+                          <span style={{ color: '#868e96', marginLeft: 8 }}>· edited by {a.edited_by} {fmtDate(a.edited_date)}</span>
+                        )}
+                      </small>
                     </div>
-                    <button className="dash-btn-reject" onClick={() => setConfirmRevoke(a)}>Revoke</button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        className="dash-btn-sm"
+                        onClick={() => setEditTempGrant(a)}
+                        aria-label={`Edit temp access for ${a.user_name}`}
+                        style={{ minWidth: 44, padding: '4px 12px' }}
+                      >
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.95rem', marginRight: 4 }}>edit</span>Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="dash-btn-reject"
+                        onClick={() => setConfirmRevoke(a)}
+                        aria-label={`Revoke temp access for ${a.user_name}`}
+                      >
+                        Revoke
+                      </button>
+                    </div>
                   </div>
                 );
               })
@@ -1957,7 +1988,14 @@ function InstructorOverview({ navigate }) {
                       const permCount = (h.approved_permissions || h.requested_permissions || []).length;
                       return (
                         <tr key={h.request_id}>
-                          <td>{h.user_name || h.user_email}</td>
+                          <td>
+                            {h.user_name || h.user_email}
+                            {h.edited_by && (
+                              <span style={{ display: 'block', fontSize: '0.68rem', color: '#868e96' }}>
+                                Edited{h.edit_count > 1 ? ` ×${h.edit_count}` : ''} by {h.edited_by} · {fmtDate(h.edited_date)}
+                              </span>
+                            )}
+                          </td>
                           <td>
                             <span style={{ display: 'inline-block', padding: '2px 6px', borderRadius: 4, fontSize: '0.65rem', fontWeight: 600, background: isPermType ? '#f3e8ff' : '#fff9db', color: isPermType ? '#7c3aed' : '#664d03' }}>
                               {isPermType ? 'Perms' : 'Role'}
@@ -2014,6 +2052,15 @@ function InstructorOverview({ navigate }) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Edit Temp Access Dialog ── */}
+      {editTempGrant && (
+        <EditTempAccessDialog
+          grant={editTempGrant}
+          onClose={() => setEditTempGrant(null)}
+          onSaved={handleTempEditSaved}
+        />
       )}
     </>
   );

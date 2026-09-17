@@ -44,6 +44,7 @@ function isHiddenPickerEmail(email) {
 const SYSTEM_NOTIFICATION_TYPES = new Set([
   'wo_assignment',
   'wo_unassignment',
+  'temp_access_update',   // written by edit_temp_access_request() RPC when an instructor edits a grant
 ])
 function isSystemNotificationType(t) {
   return !!t && SYSTEM_NOTIFICATION_TYPES.has(t)
