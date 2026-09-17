@@ -8,6 +8,12 @@
  * Accessibility: owns its own useDialogA11y instance (Escape closes, Tab is
  * trapped, focus returns to the trigger on close, role="dialog" + aria-modal).
  *
+ * WOC Ratio exclusion: users with the 'exclude_from_woc' permission see an
+ * "Exclude from WOC Ratio score" checkbox + optional reason. On an OPEN WO it
+ * saves with the normal Save Changes button; on a CLOSED WO (which has no save
+ * bar) a "Save WOC Exclusion" button appears once the value differs from what
+ * is stored. Everyone sees the "Excluded from WOC" badge when it is set.
+ *
  * File: src/components/WorkOrderDetailModal.jsx
  */
 
@@ -30,6 +36,8 @@ export default function WorkOrderDetailModal({
   assetId, setAssetId,
   dueDate, setDueDate,
   status, setStatus,
+  excludeFromWoc, setExcludeFromWoc,          // boolean — WOC Ratio exclusion
+  wocExcludeReason, setWocExcludeReason,      // string  — optional reason
 
   // Assignees
   assignees,
@@ -58,6 +66,7 @@ export default function WorkOrderDetailModal({
 
   // Action callbacks
   onSave,
+  onSaveWocExclusion,   // closed WOs only — exclusion has its own save
   onReopen,
   onDelete,
   onCloseWO,
@@ -104,6 +113,13 @@ export default function WorkOrderDetailModal({
 
   const canManage = !wo.isClosed && (isInstructor || hasPerm('assign_wo') || (!alreadyAssigned && !blockedByLate));
 
+  // ── WOC Ratio exclusion ──
+  const canExclude = hasPerm('exclude_from_woc');
+  const storedExcluded = wo.exclude_from_woc === true || wo.exclude_from_woc === 'true' || wo.exclude_from_woc === 'Yes';
+  const storedReason = wo.woc_exclude_reason || '';
+  const exclusionDirty = !!excludeFromWoc !== storedExcluded || (excludeFromWoc && (wocExcludeReason || '') !== storedReason);
+  const showExclusionBadge = storedExcluded;
+
   return (
     <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && onClose()}>
       <div
@@ -124,6 +140,15 @@ export default function WorkOrderDetailModal({
             <span id="wo-view-modal-title">Work Order: {wo.wo_id}</span>
             {isPmWorkOrder(wo) && (
               <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 12, fontSize: '0.7rem', fontWeight: 600, background: '#e7f5ff', color: '#1864ab', verticalAlign: 'middle' }}>PM</span>
+            )}
+            {showExclusionBadge && (
+              <span
+                style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 12, fontSize: '0.7rem', fontWeight: 600, background: '#fff3bf', color: '#7a5a00', verticalAlign: 'middle', whiteSpace: 'nowrap' }}
+                title={storedReason ? `Excluded from WOC Ratio: ${storedReason}` : 'Excluded from WOC Ratio score'}
+              >
+                <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.8rem', verticalAlign: 'text-bottom', marginRight: 3 }}>block</span>
+                Excluded from WOC
+              </span>
             )}
           </h3>
           <button className="modal-close" aria-label="Close dialog" onClick={onClose}>&times;</button>
@@ -215,6 +240,73 @@ export default function WorkOrderDetailModal({
               ) : <span>{wo.status || '-'}</span>}
             </div>
           </div>
+
+          {/* WOC Ratio exclusion — editors see the control; everyone else sees the note when set */}
+          {(canExclude || storedExcluded) && (
+            <div className="detail-section" style={{ background: storedExcluded || excludeFromWoc ? '#fff9db' : undefined, borderRadius: 8, padding: canExclude ? '10px 12px' : undefined }}>
+              <h4>
+                <span className="material-icons" aria-hidden="true">rule</span>
+                WOC Ratio
+              </h4>
+              {canExclude ? (
+                <div>
+                  <label htmlFor="wo-exclude-woc" style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44, cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+                    <input
+                      id="wo-exclude-woc"
+                      type="checkbox"
+                      checked={!!excludeFromWoc}
+                      onChange={e => setExcludeFromWoc(e.target.checked)}
+                      aria-describedby="wo-exclude-woc-help"
+                      style={{ width: 20, height: 20, accentColor: '#e67700', cursor: 'pointer', flexShrink: 0 }}
+                    />
+                    Exclude this work order from the WOC Ratio score
+                  </label>
+                  <p id="wo-exclude-woc-help" style={{ margin: '0 0 8px 30px', fontSize: '0.78rem', color: '#868e96' }}>
+                    When excluded, no late, team-late or stale penalties and no early or closer bonuses are computed from this work order for anyone. Hours logged on it still count toward activity.
+                  </p>
+                  {excludeFromWoc && (
+                    <div style={{ marginLeft: 30 }}>
+                      <label htmlFor="wo-exclude-woc-reason" className="form-label" style={{ fontSize: '0.8rem' }}>Reason (optional)</label>
+                      <input
+                        id="wo-exclude-woc-reason"
+                        type="text"
+                        className="form-input form-input-sm"
+                        value={wocExcludeReason || ''}
+                        onChange={e => setWocExcludeReason(e.target.value)}
+                        maxLength={200}
+                        placeholder="e.g. Parts backordered — not the student's fault"
+                        style={{ maxWidth: 480, minHeight: 44 }}
+                      />
+                    </div>
+                  )}
+                  {storedExcluded && wo.woc_excluded_by && (
+                    <p style={{ margin: '8px 0 0 30px', fontSize: '0.75rem', color: '#868e96' }}>
+                      Excluded by {showName(wo.woc_excluded_by)}{wo.woc_excluded_at ? ` on ${formatDate(wo.woc_excluded_at)}` : ''}
+                    </p>
+                  )}
+                  {wo.isClosed && (
+                    <div style={{ marginLeft: 30, marginTop: 10 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={onSaveWocExclusion}
+                        disabled={!exclusionDirty}
+                        aria-describedby="wo-exclude-woc-help"
+                        style={{ minHeight: 44 }}
+                      >
+                        <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>save</span>Save WOC Exclusion
+                      </button>
+                      {!exclusionDirty && <span className="sr-only">No unsaved WOC exclusion changes</span>}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#7a5a00' }}>
+                  This work order is excluded from the WOC Ratio score{storedReason ? `: ${storedReason}` : '.'}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Assignees Section */}
           <div className="detail-section">

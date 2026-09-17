@@ -200,6 +200,19 @@ function parseClosedDays(settingValue) {
 }
 
 /** Round to one decimal place for display */
+/**
+ * Is this work order excluded from WOC scoring?
+ * Instructors can flag a WO (exclude_from_woc on work_orders /
+ * work_orders_closed) so it produces no penalties and no bonuses for anyone.
+ * Hours logged on it are NOT dropped — the activity factor reads work_log
+ * directly, and the work was still done. Tolerates boolean/text variants the
+ * same way isPmWorkOrder() does for is_pm.
+ */
+export function isExcludedFromWoc(wo) {
+  const v = wo?.exclude_from_woc
+  return v === true || v === 'true' || v === 'Yes' || v === 'yes' || v === 1 || v === '1'
+}
+
 function round1(n) {
   return Math.round(n * 10) / 10
 }
@@ -235,6 +248,12 @@ const DEFAULT_CONFIG = {
  *     capped at maxBonusPerWo from any single WO (hours-weighted share).
  *   +closerAckPct flat to whoever clicked Close, IF they logged ≥ minCloserHours on the WO.
  *   Floor: 0%, Cap: 100% (also returns rawScore — uncapped, for reference).
+ *
+ * EXCLUDED WORK ORDERS:
+ *   WOs flagged exclude_from_woc are removed from openWOs / closedWOs before
+ *   this function runs (see isExcludedFromWoc at both fetch sites), so they
+ *   contribute no penalties and no bonuses. Their work_log hours still count
+ *   toward the activity factor.
  *
  * JOIN-DATE CLAMP:
  *   A user is never penalized for school days before their profile existed.
@@ -673,7 +692,9 @@ export async function computeStudentScoresForWindows(profile, windows) {
     supabase.from('work_log').select('wo_id, user_email, hours, timestamp'),
   ])
 
-  const openWOs = openRes.data || []
+  // Excluded WOs (exclude_from_woc) never enter the scoring lists: no late,
+  // team-late or stale penalties and no early / closer bonuses come from them.
+  const openWOs = (openRes.data || []).filter(wo => !isExcludedFromWoc(wo))
   // Merge closed WOs from both tables, dedup by wo_id (matches useWOCRatio behavior)
   const closedFromMain = closedRes.data || []
   const closedFromArchive = closedArchiveRes.data || []
@@ -682,7 +703,7 @@ export async function computeStudentScoresForWindows(profile, windows) {
   for (const wo of closedFromArchive) {
     if (!closedMap.has(wo.wo_id)) closedMap.set(wo.wo_id, wo)
   }
-  const closedWOs = Array.from(closedMap.values())
+  const closedWOs = Array.from(closedMap.values()).filter(wo => !isExcludedFromWoc(wo))
 
   const settingsArr = settingsRes.data || []
   const settingsMap = new Map(settingsArr.map(r => [r.setting_key, r.setting_value]))
@@ -861,7 +882,9 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
         supabase.from('work_log').select('wo_id, user_email, hours, timestamp')
       ])
 
-      const openWOs = openRes.data || []
+      // Excluded WOs (exclude_from_woc) never enter the scoring lists: no late,
+      // team-late or stale penalties and no early / closer bonuses come from them.
+      const openWOs = (openRes.data || []).filter(wo => !isExcludedFromWoc(wo))
       // Merge closed WOs from both tables, dedup by wo_id
       const closedFromMain = closedRes.data || []
       const closedFromArchive = closedArchiveRes.data || []
@@ -870,7 +893,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
       for (const wo of closedFromArchive) {
         if (!closedMap.has(wo.wo_id)) closedMap.set(wo.wo_id, wo)
       }
-      const closedWOs = Array.from(closedMap.values())
+      const closedWOs = Array.from(closedMap.values()).filter(wo => !isExcludedFromWoc(wo))
 
       // Build settings lookup
       const settingsArr = settingsRes.data || []

@@ -86,6 +86,9 @@ const DEFAULT_PERMISSIONS = [
   ['P114', 'Work Orders', 'delete_work_log', false, false, true, 'Can delete work log entries'],
   ['P115', 'Work Orders', 'delete_parts', false, true, true, 'Can delete parts from work orders'],
   ['P116', 'Work Orders', 'delete_documents', false, true, true, 'Can delete documents from work orders'],
+  // P177: WOC Ratio exclusion — seeded by 20260916_wo_exclude_from_woc.sql. An
+  // excluded WO produces no penalties or bonuses for anyone (hours still count).
+  ['P177', 'Work Orders', 'exclude_from_woc', false, false, true, 'Can mark a work order as excluded from the WOC Ratio score (no penalties or bonuses computed from it)'],
 
   // Inventory
   ['P020', 'Inventory', 'view_page', true, true, true, 'Can access Inventory page'],
@@ -188,9 +191,11 @@ const DEFAULT_PERMISSIONS = [
   ['P146', 'Network Map', 'print_map',       false, true,  true,  'Can print the Network Map'],
   ['P147', 'Network Map', 'export_data',     false, true,  true,  'Can export Network Map data'],
   ['P148', 'Network Map', 'manage_subnets',  false, false, true,  'Can manage subnet definitions (planned feature)'],
-  // P177: IT-managed segments (wireless AP). IT assigns these addresses, so
+  // P178: IT-managed segments (wireless AP). IT assigns these addresses, so
   // recording them is instructor-only regardless of add/edit/delete_devices.
-  ['P177', 'Network Map', 'manage_it_segments', false, false, true, 'Can add, edit, and delete devices on IT-managed segments (e.g. the wireless access point)'],
+  // (Was listed as P177, but the 2026-09-02 seed never ran and P177 went to
+  // exclude_from_woc on 2026-09-16; Sync inserts this row as P178.)
+  ['P178', 'Network Map', 'manage_it_segments', false, false, true, 'Can add, edit, and delete devices on IT-managed segments (e.g. the wireless access point)'],
 
   // Reports (Time Cards)
   ['P060', 'Reports', 'view_page', true, true, true, 'Can access Reports/Time Cards'],

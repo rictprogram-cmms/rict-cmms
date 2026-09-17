@@ -16,6 +16,10 @@
  * - Reopen WO (instructor only)
  * - Delete WO (double confirm, cascading deletes)
  * - Approve/Reject requests
+ * - Exclude a WO from the WOC Ratio score (exclude_from_woc — permission
+ *   'exclude_from_woc', instructor by default). Saved with the open-WO Save
+ *   bar or the closed-WO "Save WOC Exclusion" button; carried across on
+ *   close and reopen; shown as a badge in the list and the detail modal.
  * - Full permission gating via hasPerm()
  */
 
@@ -119,6 +123,9 @@ export default function WorkOrdersPage() {
   const [viewAssetId, setViewAssetId] = useState('');
   // viewAssignEmail removed — assignment is now managed via work_order_assignments table
   const [viewDueDate, setViewDueDate] = useState('');
+  // WOC Ratio exclusion (editable with the exclude_from_woc permission)
+  const [viewExcludeFromWoc, setViewExcludeFromWoc] = useState(false);
+  const [viewWocExcludeReason, setViewWocExcludeReason] = useState('');
   // Multi-assignment state
   const [woAssignments, setWoAssignments] = useState({}); // { [wo_id]: [{email, name}] } for list display
   const [woHasDocs, setWoHasDocs] = useState({}); // { [wo_id]: count } — true count of documents attached, used to show paperclip icon in list
@@ -694,6 +701,8 @@ export default function WorkOrdersPage() {
       setViewPriority(currentWO.priority || '');
       setViewAssetId(currentWO.asset_id || '');
       setViewDueDate(currentWO.due_date ? currentWO.due_date.split('T')[0] : '');
+      setViewExcludeFromWoc(currentWO.exclude_from_woc === true || currentWO.exclude_from_woc === 'true' || currentWO.exclude_from_woc === 'Yes');
+      setViewWocExcludeReason(currentWO.woc_exclude_reason || '');
     }
   }, [currentWO?.wo_id, currentWO?.status]);
 
@@ -1430,6 +1439,73 @@ export default function WorkOrdersPage() {
     setLoading(false);
   };
 
+  /**
+   * Compare the WOC-exclusion controls against the stored row. Returns
+   * { updates, label } when something changed (and the user may change it),
+   * else null. Shared by the open-WO Save bar and the closed-WO button.
+   */
+  const buildWocExclusionUpdates = (wo, userName) => {
+    if (!wo || !hasPerm('exclude_from_woc')) return null;
+    const stored = wo.exclude_from_woc === true || wo.exclude_from_woc === 'true' || wo.exclude_from_woc === 'Yes';
+    const storedReason = wo.woc_exclude_reason || '';
+    const nextReason = viewExcludeFromWoc ? viewWocExcludeReason.trim() : '';
+    if (viewExcludeFromWoc === stored && nextReason === storedReason) return null;
+    if (viewExcludeFromWoc) {
+      return {
+        updates: {
+          exclude_from_woc: true,
+          woc_exclude_reason: nextReason || null,
+          woc_excluded_by: stored ? (wo.woc_excluded_by || userName) : userName,
+          woc_excluded_at: stored ? (wo.woc_excluded_at || new Date().toISOString()) : new Date().toISOString(),
+        },
+        label: stored
+          ? `WOC exclusion reason → ${nextReason || '(none)'}`
+          : `excluded from WOC Ratio${nextReason ? ` (${nextReason})` : ''}`,
+      };
+    }
+    return {
+      updates: { exclude_from_woc: false, woc_exclude_reason: null, woc_excluded_by: null, woc_excluded_at: null },
+      label: 'included in WOC Ratio again',
+    };
+  };
+
+  /** Closed WOs have no Save bar — the exclusion saves on its own. Works for open rows too. */
+  const saveWocExclusion = async () => {
+    if (!currentWO) return;
+    const userName = profile ? `${profile.first_name} ${profile.last_name?.charAt(0)}.` : '';
+    const change = buildWocExclusionUpdates(currentWO, userName);
+    if (!change) { showToast('No WOC exclusion changes to save', 'info'); return; }
+    const table = currentWO.isClosed ? 'work_orders_closed' : 'work_orders';
+    try {
+      setLoading(true);
+      const { data: rows, error } = await supabase.from(table).update(change.updates).eq('wo_id', currentWO.wo_id).select();
+      if (error) throw error;
+      if (!rows || rows.length === 0) {
+        showToast('Save failed — you may not have permission to change WOC exclusion.', 'error');
+        setLoading(false);
+        return;
+      }
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Update',
+          entity_type: 'Work Order',
+          entity_id: currentWO.wo_id,
+          details: `Updated: ${change.label}`,
+        });
+      } catch {}
+      showToast(change.updates.exclude_from_woc ? 'Excluded from WOC Ratio score' : 'Included in WOC Ratio score again', 'success');
+      const merged = { ...currentWO, ...rows[0], isClosed: currentWO.isClosed, isLate: currentWO.isLate };
+      currentWORef.current = merged;
+      setCurrentWO(merged);
+      loadWorkOrders(currentWO.isClosed ? 'closed' : 'open', true);
+    } catch (e) {
+      showToast('Error: ' + e.message, 'error');
+    }
+    setLoading(false);
+  };
+
   const saveWOInline = async () => {
     if (!currentWO) return;
     const updates = {};
@@ -1469,6 +1545,13 @@ export default function WorkOrdersPage() {
     if (hasPerm('edit_status') && viewStatus && viewStatus !== currentWO.status) {
       updates.status = viewStatus;
       changedFields.push(`status → ${viewStatus}`);
+    }
+
+    // WOC Ratio exclusion (permission-gated inside the helper)
+    const wocChange = buildWocExclusionUpdates(currentWO, userName);
+    if (wocChange) {
+      Object.assign(updates, wocChange.updates);
+      changedFields.push(wocChange.label);
     }
 
     updates.updated_at = new Date().toISOString();
@@ -1726,7 +1809,12 @@ export default function WorkOrdersPage() {
         pm_id: currentWO.pm_id,
         total_hours: currentWO.total_hours,
         days_open: daysOpen,
-        was_late: wasLate
+        was_late: wasLate,
+        // WOC Ratio exclusion travels with the row
+        exclude_from_woc: currentWO.exclude_from_woc === true || currentWO.exclude_from_woc === 'true' || currentWO.exclude_from_woc === 'Yes',
+        woc_exclude_reason: currentWO.woc_exclude_reason || null,
+        woc_excluded_by: currentWO.woc_excluded_by || null,
+        woc_excluded_at: currentWO.woc_excluded_at || null,
       };
 
       // Add closing notes as work log if provided
@@ -1793,7 +1881,12 @@ export default function WorkOrdersPage() {
             created_by: currentWO.created_by,
             total_hours: currentWO.total_hours,
             updated_at: new Date().toISOString(),
-            updated_by: userName
+            updated_by: userName,
+            // WOC Ratio exclusion travels with the row
+            exclude_from_woc: currentWO.exclude_from_woc === true || currentWO.exclude_from_woc === 'true' || currentWO.exclude_from_woc === 'Yes',
+            woc_exclude_reason: currentWO.woc_exclude_reason || null,
+            woc_excluded_by: currentWO.woc_excluded_by || null,
+            woc_excluded_at: currentWO.woc_excluded_at || null,
           };
           const { data: openRows, error: openErr } = await supabase.from('work_orders').insert([openRow]).select();
           if (openErr) throw openErr;
@@ -2288,6 +2381,19 @@ export default function WorkOrdersPage() {
                       >
                         {highlightMatch(wo.wo_id)}
                       </button>
+                      {(wo.exclude_from_woc === true || wo.exclude_from_woc === 'true' || wo.exclude_from_woc === 'Yes') && (
+                        <>
+                          <span
+                            className="material-icons"
+                            aria-hidden="true"
+                            title={wo.woc_exclude_reason ? `Excluded from WOC Ratio: ${wo.woc_exclude_reason}` : 'Excluded from WOC Ratio score'}
+                            style={{ fontSize: '1rem', color: '#e67700', verticalAlign: 'middle', marginLeft: 4 }}
+                          >
+                            block
+                          </span>
+                          <span className="sr-only">(excluded from WOC Ratio score)</span>
+                        </>
+                      )}
                       {woHasDocs[wo.wo_id] > 0 && (
                         <>
                           <span
@@ -2500,6 +2606,8 @@ export default function WorkOrdersPage() {
           assetId={viewAssetId} setAssetId={setViewAssetId}
           dueDate={viewDueDate} setDueDate={setViewDueDate}
           status={viewStatus} setStatus={setViewStatus}
+          excludeFromWoc={viewExcludeFromWoc} setExcludeFromWoc={setViewExcludeFromWoc}
+          wocExcludeReason={viewWocExcludeReason} setWocExcludeReason={setViewWocExcludeReason}
           // Assignees
           assignees={viewAssignees}
           assigneeSaving={assigneeSaving}
@@ -2524,6 +2632,7 @@ export default function WorkOrdersPage() {
           user={user}
           // Action callbacks
           onSave={saveWOInline}
+          onSaveWocExclusion={saveWocExclusion}
           onReopen={reopenWorkOrder}
           onDelete={deleteWorkOrder}
           onCloseWO={openCloseWOModalFn}
