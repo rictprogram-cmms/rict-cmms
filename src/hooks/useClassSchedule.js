@@ -43,8 +43,9 @@ import {
   HUES, normalize, clone, ensure, emptyWeek, diffDocs, parseSemester, semesterList,
   deriveSpan, semesterBounds, termsOf, primaryTerm, uid, DAYS,
 } from '@/lib/scheduleModel'
+import { normalizeDelivery } from '@/lib/classDelivery'
 
-const CLASS_COLS = 'class_id, course_id, course_name, instructor, required_hours, semester, status, start_date, end_date'
+const CLASS_COLS = 'class_id, course_id, course_name, instructor, required_hours, semester, status, start_date, end_date, delivery'
 const ITEM_COLS = 'item_id, schedule_id, class_id, is_adhoc, code, title, instructor, hours, room, span, color, group_key, note, slots_a, slots_b, sort_order, updated_at, updated_by'
 const SAVE_DEBOUNCE_MS = 500
 const MAX_AUDIT_LINES = 40
@@ -121,7 +122,7 @@ function buildDoc({ semester, scheduleRow, items, classes }) {
       hours: parseFloat(cls.required_hours) || 0,
       room: it?.room || '', span: it?.span || deriveSpan(cls, bounds),
       color: it?.color || HUES[i % HUES.length].k, group: it?.group_key || '', note: it?.note || '',
-      status: cls.status || 'Active',
+      status: cls.status || 'Active', delivery: normalizeDelivery(cls.delivery),
     })
     assign[id] = { A: it?.slots_a || emptyWeek(), B: it?.slots_b || emptyWeek() }
   })

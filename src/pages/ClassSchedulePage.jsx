@@ -249,7 +249,8 @@ export default function ClassSchedulePage() {
   const listCourses = useMemo(() => {
     if (!doc) return { all: [], shown: [], elsewhere: 0 }
     const inHalf = doc.courses.filter(c => view === 'both' || termsOf(c).includes(view))
-    const all = [...inHalf].sort((a, b) => SPAN_ORDER[a.span] - SPAN_ORDER[b.span] || a.code.localeCompare(b.code))
+    // Online classes sit at the bottom — they rarely need grid time.
+    const all = [...inHalf].sort((a, b) => (a.delivery === 'Online' ? 1 : 0) - (b.delivery === 'Online' ? 1 : 0) || SPAN_ORDER[a.span] - SPAN_ORDER[b.span] || a.code.localeCompare(b.code))
     return { all, shown: all.filter(c => matches(c, query)), elsewhere: doc.courses.length - inHalf.length }
   }, [doc, view, query])
 
@@ -513,7 +514,7 @@ function ClassCard({ doc, c, query, selected, canEdit, liveSch, onLoad, onEdit, 
     <div role="listitem">
       <div className={`cs-cls ${selected ? 'sel' : ''} ${dim ? 'dim' : ''}`} style={{ '--hue': hueOf(c.color) }}
         role="button" tabIndex={0} aria-pressed={selected}
-        aria-label={`${c.code} ${c.title}, ${c.instructor || 'no instructor'}, ${SPANS[c.span]}, ${hrs(liveSch)} of ${hrs(c.hours)} hours scheduled${selected ? ', loaded' : ''}`}
+        aria-label={`${c.code} ${c.title}, ${c.instructor || 'no instructor'}, ${SPANS[c.span]}${c.delivery ? ', ' + c.delivery : ''}, ${hrs(liveSch)} of ${hrs(c.hours)} hours scheduled${selected ? ', loaded' : ''}`}
         onClick={onLoad} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onLoad() } }}>
         <div className="cs-swatch" aria-hidden="true" />
         <div className="min-w-0">
@@ -521,6 +522,8 @@ function ClassCard({ doc, c, query, selected, canEdit, liveSch, onLoad, onEdit, 
             <span className="cs-code"><Mark text={c.code} query={query} /></span>
             <span className="cs-term">{SPANS[c.span]}</span>
             {c.adhoc && <span className="cs-adhoc">Unlisted</span>}
+            {c.delivery === 'Online' && <span className="cs-delivery online">Online</span>}
+            {c.delivery === 'Face-to-Face' && <span className="cs-delivery f2f">Face-to-Face</span>}
             {c.status && c.status !== 'Active' && <span className="cs-badge-inactive">{c.status}</span>}
           </div>
           <div className="cs-name"><Mark text={c.title} query={query} /></div>
@@ -537,7 +540,7 @@ function ClassCard({ doc, c, query, selected, canEdit, liveSch, onLoad, onEdit, 
             <div className="cs-track"><div className="cs-fill" style={{ width: `${st.pct}%` }} /></div>
             <span className="cs-num">{hrs(st.sch)} / {hrs(st.need)} hr</span>
           </div>
-          <div className="cs-meter-note">{st.note}</div>
+          <div className="cs-meter-note">{c.delivery === 'Online' && !c.hours ? 'online — no lab time needed' : st.note}</div>
         </div>
         {canEdit && (
           <div className="cs-acts" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>

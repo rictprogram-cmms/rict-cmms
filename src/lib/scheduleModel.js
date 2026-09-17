@@ -73,6 +73,7 @@ export function normalize(doc) {
     code: c.code || '', title: c.title || '', instructor: c.instructor || '',
     room: c.room || '', hours: +c.hours || 0, span: SPANS[c.span] ? c.span : 'first',
     color: c.color || 'blue', group: c.group || '', note: c.note || '',
+    status: c.status || 'Active', delivery: c.delivery || '',   // '' for ad-hoc classes
   }))
   cleanupGroups(doc)
   doc.assign = doc.assign || {}

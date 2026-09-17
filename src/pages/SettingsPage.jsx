@@ -60,6 +60,7 @@ import WeeklyReminderHistoryModal from '@/components/WeeklyReminderHistoryModal'
 import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
+import { DELIVERY_OPTIONS, DEFAULT_DELIVERY, normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SETTING METADATA — every visible setting gets a label, helper text, type, and
@@ -4149,6 +4150,73 @@ function ClassesSection() {
   const [showInactive, setShowInactive] = useState(false)
   const [search, setSearch] = useState('')
   const [enrollmentMap, setEnrollmentMap] = useState({})
+  // Course catalog (syllabus_courses) — the "pick from catalog" search on Add
+  // Class. Loaded once; the catalog changes rarely.
+  const [catalog, setCatalog] = useState([])
+  const [catalogQuery, setCatalogQuery] = useState('')
+  const [catalogOpen, setCatalogOpen] = useState(false)
+  const catalogWrapRef = useRef(null)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const rows = mustData(await supabase
+          .from('syllabus_courses')
+          .select('course_id, course_name, credits_lecture, credits_lab, credits_soe, status')
+          .order('course_id'), 'syllabus_courses.select') || []
+        if (!cancelled) setCatalog(rows.filter(r => !r.status || String(r.status).toLowerCase() === 'active'))
+      } catch (err) {
+        console.error('Catalog load error:', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+  // Close the catalog dropdown on outside click
+  useEffect(() => {
+    if (!catalogOpen) return undefined
+    const h = (e) => { if (catalogWrapRef.current && !catalogWrapRef.current.contains(e.target)) setCatalogOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [catalogOpen])
+  const catalogMatches = useMemo(() => {
+    const q = catalogQuery.trim().toLowerCase().replace(/\s+/g, '')
+    if (!q) return catalog.slice(0, 12)
+    return catalog.filter(c =>
+      String(c.course_id || '').toLowerCase().replace(/\s+/g, '').includes(q) ||
+      String(c.course_name || '').toLowerCase().includes(catalogQuery.trim().toLowerCase())
+    ).slice(0, 12)
+  }, [catalog, catalogQuery])
+
+  // Required hours auto-compute: whenever delivery / credits / dates change
+  // and the instructor hasn't typed a number of their own, keep hours in
+  // step with the program rule (see src/lib/classDelivery.js).
+  const autoHours = editing ? computeRequiredHours(form) : 0
+  useEffect(() => {
+    if (!editing || form.hours_manual) return
+    setForm(f => (parseFloat(f.required_hours) === autoHours ? f : { ...f, required_hours: autoHours }))
+  }, [editing, autoHours, form.hours_manual]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Fill the form from a catalog course (+ instructor / delivery from its last offering). */
+  const pickFromCatalog = (course) => {
+    const idNorm = String(course.course_id || '').replace(/\s+/g, '').toUpperCase()
+    const past = classes
+      .filter(c => String(c.course_id || '').replace(/\s+/g, '').toUpperCase() === idNorm)
+      .sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || '')))[0]
+    setForm(f => ({
+      ...f,
+      course_id: idNorm,
+      course_name: course.course_name || f.course_name,
+      credits_lecture: course.credits_lecture ?? '',
+      credits_lab: course.credits_lab ?? '',
+      instructor: f.instructor || past?.instructor || '',
+      delivery: past?.delivery ? normalizeDelivery(past.delivery) : (f.delivery || DEFAULT_DELIVERY),
+      requires_volunteer_hours: past ? !!past.requires_volunteer_hours : f.requires_volunteer_hours,
+      hours_manual: false,
+    }))
+    setCatalogQuery(`${idNorm} — ${course.course_name || ''}`)
+    setCatalogOpen(false)
+  }
+
   // Tracks mount state so async loads (initial fetch + realtime-triggered
   // reloads + post-save refresh) never call setState after unmount.
   const enrollmentMountedRef = useRef(true)
@@ -4223,13 +4291,24 @@ function ClassesSection() {
       course_id: '', course_name: '', required_hours: 0, instructor: '',
       semester: '', status: 'Active', tracking_type: 'None',   // tracker retired 2026-09 — every class is 'None'
       requires_volunteer_hours: false,
+      delivery: DEFAULT_DELIVERY, credits_lecture: '', credits_lab: '',
+      hours_manual: false,   // form-only: true once the instructor types hours by hand
       start_date: '', end_date: '',
       spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: ''
     })
+    setCatalogQuery('')
+    setCatalogOpen(false)
     setEditing('new')
   }
 
   const startEdit = (cls) => {
+    const seed = {
+      delivery: normalizeDelivery(cls.delivery), credits_lecture: cls.credits_lecture ?? '', credits_lab: cls.credits_lab ?? '',
+      start_date: cls.start_date ? String(cls.start_date).substring(0, 10) : '', end_date: cls.end_date ? String(cls.end_date).substring(0, 10) : '',
+    }
+    // Keep a stored number that doesn't match the rule (e.g. a deliberate override) instead of silently rewriting it.
+    const storedHours = parseFloat(cls.required_hours) || 0
+    const manual = storedHours !== computeRequiredHours(seed)
     setForm({
       class_id: cls.class_id,
       course_id: cls.course_id || '',
@@ -4240,6 +4319,8 @@ function ClassesSection() {
       status: cls.status || 'Active',
       tracking_type: 'None',   // tracker retired 2026-09 — saving normalises every class to 'None'
       requires_volunteer_hours: cls.requires_volunteer_hours || false,
+      delivery: seed.delivery, credits_lecture: seed.credits_lecture, credits_lab: seed.credits_lab,
+      hours_manual: manual,
       start_date: cls.start_date ? String(cls.start_date).substring(0, 10) : '',
       end_date: cls.end_date ? String(cls.end_date).substring(0, 10) : '',
       spring_break_start: cls.spring_break_start ? String(cls.spring_break_start).substring(0, 10) : '',
@@ -4253,6 +4334,10 @@ function ClassesSection() {
   const handleSave = async () => {
     try {
       const data = cleanDates({ ...form })
+      delete data.hours_manual                       // form-only
+      data.delivery = normalizeDelivery(data.delivery)
+      data.credits_lecture = data.credits_lecture === '' || data.credits_lecture == null ? null : parseFloat(data.credits_lecture)
+      data.credits_lab = data.credits_lab === '' || data.credits_lab == null ? null : parseFloat(data.credits_lab)
       if (editing === 'new') {
         delete data.class_id
         await actions.addItem(data)
@@ -4413,6 +4498,44 @@ function ClassesSection() {
               {editing === 'new' ? 'Add New Class' : `Edit ${form.course_id}`}
             </div>
 
+            {editing === 'new' && (
+              <div ref={catalogWrapRef} className="relative">
+                <label htmlFor="st-fld-catalog-pick" className="text-[10px] text-surface-500 font-medium">Pick from course catalog</label>
+                <div className="relative">
+                  <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-surface-400" aria-hidden="true" />
+                  <input
+                    id="st-fld-catalog-pick"
+                    value={catalogQuery}
+                    onChange={e => { setCatalogQuery(e.target.value); setCatalogOpen(true) }}
+                    onFocus={() => setCatalogOpen(true)}
+                    onKeyDown={e => { if (e.key === 'Escape') setCatalogOpen(false); if (e.key === 'Enter' && catalogOpen && catalogMatches[0]) { e.preventDefault(); pickFromCatalog(catalogMatches[0]) } }}
+                    role="combobox" aria-expanded={catalogOpen} aria-controls="st-catalog-list" aria-autocomplete="list"
+                    aria-describedby="st-catalog-help"
+                    placeholder={catalog.length ? 'Type a course number or name… (or enter the class manually below)' : 'Catalog is empty — enter the class manually below'}
+                    className="input text-sm pl-8 min-h-[44px]"
+                    autoComplete="off"
+                  />
+                </div>
+                <p id="st-catalog-help" className="text-[10px] text-surface-500 mt-0.5">
+                  Fills the course ID, name and credits from the catalog, and the instructor and delivery from the last time it was offered. Everything can still be changed below.
+                </p>
+                {catalogOpen && catalogMatches.length > 0 && (
+                  <ul id="st-catalog-list" role="listbox" aria-label="Catalog courses"
+                    className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto bg-white border border-surface-200 rounded-lg shadow-lg divide-y divide-surface-100">
+                    {catalogMatches.map(c => (
+                      <li key={c.course_id} role="option" aria-selected={false}>
+                        <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => pickFromCatalog(c)}
+                          className="w-full text-left px-3 py-2 min-h-[44px] hover:bg-brand-50 focus:outline-none focus-visible:bg-brand-50 flex items-center justify-between gap-3">
+                          <span><span className="font-semibold text-sm text-surface-900">{c.course_id}</span> <span className="text-xs text-surface-600">{c.course_name}</span></span>
+                          <span className="text-[10px] text-surface-400 whitespace-nowrap">{parseFloat(c.credits_lecture) || 0} lec / {parseFloat(c.credits_lab) || 0} lab</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
                 <label htmlFor="st-fld-course-id-1" className="text-[10px] text-surface-500 font-medium">Course ID *</label>
@@ -4425,15 +4548,46 @@ function ClassesSection() {
                   className="input text-sm" placeholder="Production Automation" />
               </div>
               <div>
-                <label htmlFor="st-fld-required-hours-wk-3" className="text-[10px] text-surface-500 font-medium">Required Hours/wk</label>
-                <input id="st-fld-required-hours-wk-3" type="number" value={form.required_hours}
-                  onChange={e => setForm(f => ({ ...f, required_hours: parseFloat(e.target.value) || 0 }))}
+                <label htmlFor="st-fld-required-hours-wk-3" className="text-[10px] text-surface-500 font-medium">
+                  Required Hours/wk
+                  {!form.hours_manual && <span className="ml-1 text-[9px] font-bold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5">auto</span>}
+                </label>
+                <input id="st-fld-required-hours-wk-3" type="number" step="0.5" min="0" value={form.required_hours}
+                  onChange={e => setForm(f => ({ ...f, required_hours: parseFloat(e.target.value) || 0, hours_manual: true }))}
+                  aria-describedby="st-fld-required-hours-help"
                   className="input text-sm" />
+                <p id="st-fld-required-hours-help" className="text-[10px] text-surface-500 mt-0.5 leading-snug">
+                  {form.hours_manual
+                    ? <>Entered by hand. Rule says {autoHours}. <button type="button" onClick={() => setForm(f => ({ ...f, hours_manual: false }))} className="underline text-brand-700 min-h-[24px]">Use {autoHours}</button></>
+                    : explainRequiredHours(form)}
+                </p>
               </div>
               <div>
                 <label htmlFor="st-fld-instructor-4" className="text-[10px] text-surface-500 font-medium">Instructor</label>
                 <input id="st-fld-instructor-4" value={form.instructor} onChange={e => setForm(f => ({ ...f, instructor: e.target.value }))}
                   className="input text-sm" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div>
+                <label htmlFor="st-fld-delivery" className="text-[10px] text-surface-500 font-medium">Delivery *</label>
+                <select id="st-fld-delivery" value={form.delivery || DEFAULT_DELIVERY} onChange={e => setForm(f => ({ ...f, delivery: e.target.value }))} className="input text-sm">
+                  {DELIVERY_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="st-fld-credits-lecture" className="text-[10px] text-surface-500 font-medium">Lecture credits</label>
+                <input id="st-fld-credits-lecture" type="number" step="0.5" min="0" value={form.credits_lecture ?? ''} onChange={e => setForm(f => ({ ...f, credits_lecture: e.target.value }))} className="input text-sm" placeholder="0" />
+              </div>
+              <div>
+                <label htmlFor="st-fld-credits-lab" className="text-[10px] text-surface-500 font-medium">Lab credits</label>
+                <input id="st-fld-credits-lab" type="number" step="0.5" min="0" value={form.credits_lab ?? ''} onChange={e => setForm(f => ({ ...f, credits_lab: e.target.value }))} className="input text-sm" placeholder="0" />
+              </div>
+              <div className="flex items-end pb-1.5">
+                <p className="text-[10px] text-surface-500 leading-snug">
+                  Face-to-Face: 1 hr/lecture cr + 2 hr/lab cr · Hybrid: 2 hr/lab cr · Online: 0 · 8-week sections ×2
+                </p>
               </div>
             </div>
 
@@ -4644,6 +4798,11 @@ function ClassesSection() {
                               Volunteer
                             </span>
                           )}
+                          {(() => {
+                            const d = normalizeDelivery(cls.delivery)
+                            const cls2 = d === 'Online' ? 'bg-sky-50 text-sky-700 border-sky-200' : d === 'Face-to-Face' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-surface-100 text-surface-600 border-surface-200'
+                            return <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium border ${cls2}`}>{d}</span>
+                          })()}
                         </div>
                       </td>
                       <td className="px-4 py-2">
@@ -4863,6 +5022,9 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         status: 'Active',
         tracking_type: 'None',   // tracker retired 2026-09
         requires_volunteer_hours: cls.requires_volunteer_hours || false,
+        delivery: normalizeDelivery(cls.delivery),
+        credits_lecture: cls.credits_lecture ?? null,
+        credits_lab: cls.credits_lab ?? null,
         semester: form.semester.trim(),
         start_date: form.start_date,
         end_date: form.end_date,

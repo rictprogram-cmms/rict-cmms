@@ -32,6 +32,9 @@
 .cs-cls .cs-pair { font-size: 11px; color: #475569; margin-top: 3px; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
 .cs-cls .cs-pair.short { color: #b45309; }
 .cs-cls .cs-badge-inactive { font-size: 9px; font-weight: 700; color: #94a3b8; border: 1px solid #e2e8f0; border-radius: 999px; padding: 0 5px; margin-left: 6px; text-transform: uppercase; letter-spacing: .03em; }
+.cs-cls .cs-delivery { font-size: 9px; font-weight: 700; border-radius: 999px; padding: 0 5px; margin-left: 6px; text-transform: uppercase; letter-spacing: .03em; }
+.cs-cls .cs-delivery.online { color: #0369a1; background: #e0f2fe; }
+.cs-cls .cs-delivery.f2f { color: #4338ca; background: #e0e7ff; }
 .cs-cls .cs-adhoc { font-size: 9px; font-weight: 700; color: #7c3aed; background: #f3e8ff; border-radius: 999px; padding: 0 5px; margin-left: 6px; text-transform: uppercase; letter-spacing: .03em; }
 .cs-meter { margin-top: 6px; display: flex; align-items: center; gap: 8px; }
 .cs-meter .cs-track { flex: 1; height: 5px; border-radius: 999px; background: #e2e8f0; overflow: hidden; }

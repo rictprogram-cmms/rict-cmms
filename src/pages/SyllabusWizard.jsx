@@ -1533,7 +1533,7 @@ function Step3CourseInfo({ data, update }) {
           }
         }} options={[
           { value: 'hybrid',      label: 'Hybrid – Online lecture + scheduled lab hours' },
-          { value: 'traditional', label: 'Traditional – Scheduled class meetings' },
+          { value: 'traditional', label: 'Face-to-Face – Scheduled class meetings' },
           { value: 'online',      label: 'Online – No required campus hours' },
         ]} />
       </Field>
