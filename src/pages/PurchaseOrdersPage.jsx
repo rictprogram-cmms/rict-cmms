@@ -11,6 +11,7 @@ import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { useAcademicTerms } from '@/hooks/useAcademicTerms'
 import {
   ShoppingCart, Plus, Search, Filter, Package, Truck, CheckCircle2,
   XCircle, Clock, DollarSign, AlertTriangle, ChevronRight, Eye,
@@ -386,6 +387,18 @@ function getCurrentAcademicYearStart() {
   return getAcademicYearStart(new Date())
 }
 
+// Academic years implied by Settings → Terms: Fall YYYY → AY YYYY-YY+1,
+// Spring YYYY → AY (YYYY-1)-YY. Lets a future term (Fall 2027 set up in
+// advance) appear in the AY dropdowns so orders can be filed against it.
+function ayStartsFromTerms(terms) {
+  const out = new Set()
+  for (const t of terms || []) {
+    if (t.status === 'Archived' || !t.year) continue
+    out.add(t.season === 'Spring' ? t.year - 1 : t.year)
+  }
+  return out
+}
+
 // "AY 2025-26"
 function formatAY(startYear) {
   if (startYear == null) return ''
@@ -663,13 +676,15 @@ function DashboardTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStar
   // Year options for the inline budget-tile selector. Generates a sensible
   // range (current AY back 5 years, plus the currently selected AY in case
   // it was reached via keyboard shortcut beyond that range).
+  const { terms } = useAcademicTerms()
   const ayOptions = useMemo(() => {
     const current = getCurrentAcademicYearStart()
     const years = new Set()
     for (let y = current - 5; y <= current; y++) years.add(y)
+    ayStartsFromTerms(terms).forEach(y => years.add(y))   // future terms already set up
     if (selectedAYStart != null) years.add(selectedAYStart)
     return [...years].filter(v => v != null).sort((a, b) => b - a)
-  }, [selectedAYStart])
+  }, [selectedAYStart, terms])
 
   if (loading) return <div className="text-center py-12 text-surface-400">Loading dashboard...</div>
   if (!summary) return <div className="text-center py-12 text-surface-400">No data</div>
@@ -905,16 +920,18 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
 
   // Build the list of selectable academic years from the loaded data, plus the
   // current AY and the currently-selected AY. Newest first.
+  const { terms: academicTerms } = useAcademicTerms()
   const availableAYs = useMemo(() => {
     const set = new Set()
     set.add(getCurrentAcademicYearStart())
     set.add(selectedAYStart)
+    ayStartsFromTerms(academicTerms).forEach(y => set.add(y))   // future terms already set up
     orders.forEach(o => {
       const ay = getAcademicYearStart(getOrderAYDate(o))
       if (ay != null) set.add(ay)
     })
     return [...set].filter(v => v != null).sort((a, b) => b - a)
-  }, [orders, selectedAYStart])
+  }, [orders, selectedAYStart, academicTerms])
 
   // Apply AY (if applicable) + smart search. Each result carries the line
   // items that matched (`matchedLines`) so the table can show why it matched.

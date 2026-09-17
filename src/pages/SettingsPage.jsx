@@ -61,6 +61,9 @@ import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
 import { DELIVERY_OPTIONS, DEFAULT_DELIVERY, normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
+import { useAcademicTerms, useTermActions } from '@/hooks/useAcademicTerms'
+import { useEnrollmentCounts, useEnrollmentActions } from '@/hooks/useEnrollments'
+import { RUNS, RUNS_SHORT, datesForRuns, calendarFromTerm, classMatchesTerm, inferRuns, needsNextTerm, suggestNextTerm, sortTerms, fmtDate as fmtTermDate, fmtShort as fmtTermShort, parseTermName, semesterOptions } from '@/lib/academicTerms'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SETTING METADATA — every visible setting gets a label, helper text, type, and
@@ -545,6 +548,7 @@ function buildRegistry() {
   reg.push({ key: 'inv_locations', tab: 'inv_locations', label: 'Inventory Locations', desc: 'Bin / shelf locations for inventory parts', aliases: 'lookup table bin shelf' })
   reg.push({ key: 'vendors', tab: 'vendors', label: 'Vendors', desc: 'Approved vendor list for purchase orders', aliases: 'lookup table supplier' })
   reg.push({ key: 'wo_statuses', tab: 'wo_statuses', label: 'WO Statuses', desc: 'Work order status workflow definitions', aliases: 'lookup table status workflow' })
+  reg.push({ key: 'terms', tab: 'terms', label: 'Academic Terms', desc: 'Semester calendars — begin/end, spring break, finals, drop/withdraw, 8-week split — entered once for classes, syllabi and the Class Schedule', aliases: 'term semester calendar dates spring fall break finals drop withdraw 8 week' })
   reg.push({ key: 'classes', tab: 'classes', label: 'Classes', desc: 'Course offerings, dates, weekly schedule, enrollment', aliases: 'class course semester student enrollment' })
 
   return reg
@@ -940,6 +944,7 @@ export default function SettingsPage() {
     {
       label: 'Academic',
       items: [
+        { id: 'terms', label: 'Terms', icon: Calendar },
         { id: 'classes', label: 'Classes', icon: GraduationCap },
       ],
     },
@@ -1025,6 +1030,7 @@ export default function SettingsPage() {
       {tab === 'inv_locations' && <InventoryLocationsSection />}
       {tab === 'vendors' && <VendorsSection />}
       {tab === 'wo_statuses' && <WOStatusesSection />}
+      {tab === 'terms' && <TermsSection />}
       {tab === 'classes' && <ClassesSection />}
     </div>
   )
@@ -4134,9 +4140,257 @@ function countClassWeeks(cls, weekEndOffset = 3) {
 // Internal logic preserved from previous version; outer shell updated to SettingCard.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ACADEMIC TERMS — one calendar per semester, entered once
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TERM_DATE_FIELDS = [
+  ['begin_date', 'Begin *'], ['end_date', 'End *'],
+  ['first_half_end', 'First 8 weeks end'], ['second_half_start', 'Second 8 weeks start'],
+  ['spring_break_start', 'Spring break start'], ['spring_break_end', 'Spring break end'],
+  ['finals_start', 'Finals start'], ['finals_end', 'Finals end'],
+]
+// Drop / withdraw deadlines depend on when a CLASS starts, so they live on the class, not here.
+const EMPTY_TERM = { name: '', begin_date: '', end_date: '', first_half_end: '', second_half_start: '', spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: '', status: 'Active', notes: '' }
+
+function TermsSection() {
+  const { hasPerm } = usePermissions('Settings')
+  const canManage = hasPerm('manage_terms')
+  const { terms, current, loading } = useAcademicTerms()
+  const { saving, saveTerm, archiveTerm, previewPropagation, propagateTerm } = useTermActions()
+  const { items: classes } = useClasses()
+  const { weekEndOffset } = useLabVisibleDays()
+  const [editing, setEditing] = useState(null)      // null | 'new' | term_id
+  const [form, setForm] = useState(EMPTY_TERM)
+  const [showArchived, setShowArchived] = useState(false)
+  const [propagate, setPropagate] = useState(null)  // { term, prev, classesToUpdate, overriding, syllabiToUpdate }
+
+  const shown = showArchived ? terms : terms.filter(t => t.status !== 'Archived')
+  const classCount = (t) => classes.filter(c => c.term_id === t.term_id).length
+  const nudge = needsNextTerm(terms)
+
+  const startNew = (seed = null) => { setForm(seed ? { ...EMPTY_TERM, ...seed } : { ...EMPTY_TERM }); setEditing('new') }
+  const startEdit = (t) => { setForm({ ...EMPTY_TERM, ...t, notes: t.notes || '' }); setEditing(t.term_id) }
+  const cancel = () => { setEditing(null); setForm(EMPTY_TERM) }
+
+  const weekPreview = useMemo(() => {
+    if (!form.begin_date || !form.end_date) return []
+    return calculateWeeks(form.begin_date, form.end_date, form.spring_break_start, form.spring_break_end, form.finals_start, form.finals_end, weekEndOffset)
+  }, [form.begin_date, form.end_date, form.spring_break_start, form.spring_break_end, form.finals_start, form.finals_end, weekEndOffset])
+  const normalWeekCount = weekPreview.filter(w => w.type === 'normal').length
+
+  const handleSave = async () => {
+    const prev = editing && editing !== 'new' ? terms.find(t => t.term_id === editing) || null : null
+    const saved = await saveTerm(form, prev)
+    if (!saved) return
+    setEditing(null); setForm(EMPTY_TERM)
+    // Dates changed on an existing term → offer to push them out.
+    if (prev) {
+      const datesChanged = ['begin_date', 'end_date', 'first_half_end', 'second_half_start', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']
+        .some(k => String(prev[k] || '').substring(0, 10) !== String(saved[k] || '').substring(0, 10))
+      if (datesChanged) {
+        const p = await previewPropagation(saved, prev)
+        if (p.classesToUpdate.length || p.syllabiToUpdate.length) setPropagate({ term: saved, prev, ...p })
+      }
+    }
+  }
+
+  const suggestion = terms.length ? suggestNextTerm(terms) : null
+
+  return (
+    <>
+      <ConfirmDialog
+        open={!!propagate}
+        variant="primary"
+        title={`Apply the new ${propagate?.term?.name} dates?`}
+        message={propagate && (
+          <div className="space-y-2 text-sm">
+            <p>
+              <strong>{propagate.classesToUpdate.length}</strong> class{propagate.classesToUpdate.length === 1 ? '' : 'es'} follow this term's calendar and would be updated
+              {propagate.syllabiToUpdate.length ? <>, and <strong>{propagate.syllabiToUpdate.length}</strong> syllab{propagate.syllabiToUpdate.length === 1 ? 'us' : 'i'} still matching the old dates</> : null}.
+            </p>
+            {propagate.classesToUpdate.length > 0 && (
+              <p className="text-xs text-surface-600">Classes: {propagate.classesToUpdate.map(c => c.course_id).join(', ')}</p>
+            )}
+            {propagate.syllabiToUpdate.length > 0 && (
+              <p className="text-xs text-surface-600">Syllabi: {propagate.syllabiToUpdate.map(x => x.course_id).join(', ')}</p>
+            )}
+            {propagate.overriding.length > 0 && (
+              <p className="text-xs text-amber-700">Left alone (own calendar): {propagate.overriding.map(c => c.course_id).join(', ')}</p>
+            )}
+            <p className="text-xs text-surface-500">Choose "Not now" to leave everything as it is — the term is already saved.</p>
+          </div>
+        )}
+        confirmLabel="Apply dates"
+        cancelLabel="Not now"
+        busy={saving}
+        onConfirm={async () => { await propagateTerm(propagate.term, { classes: propagate.classesToUpdate, syllabi: propagate.syllabiToUpdate }); setPropagate(null) }}
+        onClose={() => setPropagate(null)}
+      />
+
+      <SettingCard
+        icon={Calendar}
+        title="Academic Terms"
+        count={shown.length}
+        actions={canManage && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button type="button" onClick={() => setShowArchived(v => !v)} className="btn-secondary btn-sm min-h-[44px]" aria-pressed={showArchived}>
+              {showArchived ? 'Hide archived' : 'Show archived'}
+            </button>
+            {suggestion && (
+              <button type="button" onClick={() => startNew(suggestion)} className="btn-secondary btn-sm min-h-[44px]" title={`Pre-filled from ${suggestion._template}`}>
+                <Plus size={14} aria-hidden="true" /> Add {suggestion.name}
+              </button>
+            )}
+            <button type="button" onClick={() => startNew()} className="btn-primary btn-sm min-h-[44px]">
+              <Plus size={14} aria-hidden="true" /> Add term
+            </button>
+          </div>
+        )}
+      >
+        <div className="px-4 py-2 text-[11px] text-surface-500 border-b border-surface-100">
+          Semester dates live here once. Classes take their start/end from the term (full term, first or second 8 weeks) and inherit spring break and finals; syllabi and every semester dropdown read from here too. Last day to drop / withdraw are set per class (they depend on the class start).
+          {current && <> Current term: <strong>{current.name}</strong>.</>}
+        </div>
+
+        {nudge && (
+          <div className="mx-4 my-3 flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2" role="status">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>
+              {current?.name} is more than half over and no term follows it.
+              {canManage && suggestion ? <> Add <button type="button" onClick={() => startNew(suggestion)} className="underline font-semibold min-h-[24px]">{suggestion.name}</button> so classes and the schedule can be built for it.</> : ' Ask an instructor to add the next term.'}
+            </span>
+          </div>
+        )}
+
+        {editing && canManage && (
+          <div className="px-4 py-4 bg-brand-50 border-b border-brand-100 space-y-3">
+            <div className="text-xs font-semibold text-brand-700">{editing === 'new' ? 'Add term' : `Edit ${form.name}`}</div>
+            {form._template && <p className="text-[11px] text-surface-500">Dates pre-filled from {form._template}, shifted a year and snapped to Monday/Friday — check them against the college calendar.</p>}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div>
+                <label htmlFor="st-term-name" className="text-[10px] text-surface-500 font-medium">Name *</label>
+                <input id="st-term-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} disabled={editing !== 'new'} placeholder="Spring 2027" className="input text-sm" aria-describedby="st-term-name-help" />
+                <p id="st-term-name-help" className="text-[10px] text-surface-500 mt-0.5">"Spring YYYY" or "Fall YYYY" — must match how classes name the semester.</p>
+              </div>
+              <div>
+                <label htmlFor="st-term-status" className="text-[10px] text-surface-500 font-medium">Status</label>
+                <select id="st-term-status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))} className="input text-sm">
+                  <option>Active</option><option>Archived</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label htmlFor="st-term-notes" className="text-[10px] text-surface-500 font-medium">Notes</label>
+                <input id="st-term-notes" value={form.notes || ''} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="input text-sm" placeholder="e.g. confirmed against the 2026-27 college calendar" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {TERM_DATE_FIELDS.map(([k, label]) => (
+                <div key={k}>
+                  <label htmlFor={`st-term-${k}`} className="text-[10px] text-surface-500 font-medium">{label}</label>
+                  <input id={`st-term-${k}`} type="date" value={form[k] || ''} onChange={e => setForm(f => ({ ...f, [k]: e.target.value }))} className="input text-sm" />
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-surface-500">First / second 8 weeks: an 8-week class set to "First 8 weeks" runs Begin → First 8 weeks end; "Second 8 weeks" runs Second 8 weeks start → End. Leave blank to use week 8 / week 9.</p>
+            {weekPreview.length > 0 && (
+              <div className="bg-white border border-surface-200 rounded-lg p-3">
+                <div className="text-xs font-semibold text-surface-700 flex items-center gap-1.5 mb-2"><Calendar size={13} className="text-brand-500" aria-hidden="true" /> Week Preview ({normalWeekCount} weeks)</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {weekPreview.map((w, i) => (
+                    <div key={i} className={`text-center px-2 py-1.5 rounded-lg text-[10px] font-medium border min-w-[60px] ${w.type === 'spring_break' ? 'bg-blue-50 border-blue-200 text-blue-700' : w.type === 'finals' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+                      <div className="font-bold">{w.num}</div><div className="opacity-75">{w.start}–{w.end}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={handleSave} disabled={saving} className="btn-primary btn-sm min-h-[44px]">{saving ? 'Saving…' : 'Save term'}</button>
+              <button type="button" onClick={cancel} disabled={saving} className="btn-secondary btn-sm min-h-[44px]">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="p-8 text-center text-surface-400 text-sm">Loading…</div>
+        ) : shown.length === 0 ? (
+          <div className="p-8 text-center text-surface-400 text-sm">No terms yet. Add Fall and Spring terms here and classes will pick their dates from them.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Academic terms</caption>
+              <thead>
+                <tr className="bg-surface-50 text-left">
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Term</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Dates</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">8-week split</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Spring break</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600">Finals</th>
+                  <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-center">Classes</th>
+                  {canManage && <th scope="col" className="px-4 py-2 text-xs font-semibold text-surface-600 text-right">Actions</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-100">
+                {shown.map(t => (
+                  <tr key={t.term_id} className={`hover:bg-surface-50 ${t.status === 'Archived' ? 'opacity-50' : ''}`}>
+                    <td className="px-4 py-2 font-medium">
+                      {t.name}
+                      {current?.term_id === t.term_id && <span className="ml-2 inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Current</span>}
+                      {t.status === 'Archived' && <span className="ml-2 inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-surface-100 text-surface-500 border border-surface-200">Archived</span>}
+                      {t.notes && <div className="text-[11px] text-surface-400 mt-0.5 max-w-[260px] truncate" title={t.notes}>{t.notes}</div>}
+                    </td>
+                    <td className="px-4 py-2 text-xs text-surface-600 whitespace-nowrap">{fmtTermShort(t.begin_date)} – {fmtTermShort(t.end_date)}</td>
+                    <td className="px-4 py-2 text-xs text-surface-600 whitespace-nowrap">{t.first_half_end ? `${fmtTermShort(t.first_half_end)} | ${fmtTermShort(t.second_half_start)}` : <span className="text-surface-400">wk 8 / 9</span>}</td>
+                    <td className="px-4 py-2 text-xs text-surface-600 whitespace-nowrap">{t.spring_break_start ? `${fmtTermShort(t.spring_break_start)} – ${fmtTermShort(t.spring_break_end)}` : '—'}</td>
+                    <td className="px-4 py-2 text-xs text-surface-600 whitespace-nowrap">{t.finals_start ? `${fmtTermShort(t.finals_start)} – ${fmtTermShort(t.finals_end)}` : '—'}</td>
+                    <td className="px-4 py-2 text-xs text-center">{classCount(t)}</td>
+                    {canManage && (
+                      <td className="px-4 py-2 text-right whitespace-nowrap">
+                        <button type="button" onClick={() => startEdit(t)} className="p-2 rounded-lg hover:bg-surface-100 text-surface-500 min-h-[44px] min-w-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label={`Edit ${t.name}`} title="Edit"><Edit3 size={14} aria-hidden="true" /></button>
+                        <button type="button" onClick={() => archiveTerm(t, t.status !== 'Archived')} className="p-2 rounded-lg hover:bg-surface-100 text-surface-500 min-h-[44px] min-w-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label={t.status === 'Archived' ? `Restore ${t.name}` : `Archive ${t.name}`} title={t.status === 'Archived' ? 'Restore' : 'Archive'}>
+                          {t.status === 'Archived' ? <ArchiveRestore size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SettingCard>
+    </>
+  )
+}
+
 function ClassesSection() {
   const { items: classes, loading, refresh } = useClasses()
   const actions = useClassActions()
+  // Academic terms — the semester dropdown and, unless a class overrides
+  // them, its start/end (by "runs") and spring break / finals.
+  const { terms, current: currentTerm } = useAcademicTerms()
+  const termById = useMemo(() => new Map(terms.map(t => [t.term_id, t])), [terms])
+  const legacySemesters = useMemo(() => semesterOptions([], classes.map(c => c.semester)).filter(n => !terms.some(t => t.name === n)), [classes, terms])
+  /** Fill the date fields a class inherits from its term (no-op when overriding or no term). */
+  const applyTermDates = (f) => {
+    const t = termById.get(f.term_id)
+    if (!t || f.override_term_dates) return f
+    return { ...f, semester: t.name, ...datesForRuns(t, f.runs || 'full'), ...calendarFromTerm(t, { runs: f.runs || 'full' }) }
+  }
+  // Instructor profiles for the Instructor dropdown. A class links to one by
+  // email; "Other" keeps a typed name for an outside instructor (e.g. an
+  // adjunct who isn't a CMMS user) with no link.
+  const [instructors, setInstructors] = useState([])
+  useEffect(() => {
+    let cancelled = false
+    supabase.from('profiles').select('email, first_name, last_name, status').eq('role', 'Instructor').order('last_name')
+      // Leave out the super-admin service account unless a class is already linked to it.
+      .then(({ data }) => { if (!cancelled) setInstructors((data || []).filter(p => p.status !== 'Archived' && (!isSuperAdminEmail(p.email) || classes.some(c => String(c.instructor_email || '').toLowerCase() === String(p.email).toLowerCase())))) })
+    return () => { cancelled = true }
+  }, [classes])
+  const instructorName = (p) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email
+  const OTHER_INSTRUCTOR = '__other__'
   // Live lab-open days — drives the week-end day in the Week Preview and the
   // weeks counter. Updates in real time when the Lab Open Days toggle changes.
   const { weekEndOffset } = useLabVisibleDays()
@@ -4149,7 +4403,8 @@ function ClassesSection() {
   const [archiveConfirm, setArchiveConfirm] = useState(null)
   const [showInactive, setShowInactive] = useState(false)
   const [search, setSearch] = useState('')
-  const [enrollmentMap, setEnrollmentMap] = useState({})
+  // Enrollment per class offering (class_enrollments) — keyed by class_id.
+  const { byClass: enrollmentByClass, refresh: refreshEnrollment } = useEnrollmentCounts()
   // Course catalog (syllabus_courses) — the "pick from catalog" search on Add
   // Class. Loaded once; the catalog changes rarely.
   const [catalog, setCatalog] = useState([])
@@ -4209,6 +4464,7 @@ function ClassesSection() {
       credits_lecture: course.credits_lecture ?? '',
       credits_lab: course.credits_lab ?? '',
       instructor: f.instructor || past?.instructor || '',
+      instructor_email: f.instructor_email || past?.instructor_email || '',
       delivery: past?.delivery ? normalizeDelivery(past.delivery) : (f.delivery || DEFAULT_DELIVERY),
       requires_volunteer_hours: past ? !!past.requires_volunteer_hours : f.requires_volunteer_hours,
       hours_manual: false,
@@ -4217,87 +4473,29 @@ function ClassesSection() {
     setCatalogOpen(false)
   }
 
-  // Tracks mount state so async loads (initial fetch + realtime-triggered
-  // reloads + post-save refresh) never call setState after unmount.
-  const enrollmentMountedRef = useRef(true)
-
-  // Load enrollment data so we can search by student name/email AND drive the
-  // live Enrolled count per class. Includes Archived (graduated) students —
-  // tagged with `archived: true` — so the historical roster of who was in a
-  // class is preserved in the UI even after a student is archived. Archiving
-  // never clears profiles.classes, so this is purely a display concern.
-  //
-  // Exposed as a callable (useCallback) so the EnrollmentModal can trigger an
-  // immediate refresh after saving, and so the realtime subscription below can
-  // re-pull when profiles change from any session or kiosk.
-  const loadEnrollment = useCallback(async () => {
-    try {
-      const data = mustData(await supabase
-        .from('profiles')
-        .select('first_name, last_name, email, classes, status')
-        .in('role', ['Student', 'Work Study'])
-        .in('status', ['Active', 'Archived']), 'profiles.select')
-      if (!enrollmentMountedRef.current) return
-      const map = {}
-      ;(data || []).forEach(s => {
-        const archived = s.status === 'Archived'
-        const courses = (s.classes || '').split(',').map(c => c.trim()).filter(Boolean)
-        courses.forEach(courseId => {
-          if (!map[courseId]) map[courseId] = []
-          map[courseId].push({
-            name: `${s.first_name} ${s.last_name}`,
-            email: s.email || '',
-            archived,
-          })
-        })
-      })
-      setEnrollmentMap(map)
-    } catch (err) {
-      console.error('Enrollment map load error:', err)
-    }
-  }, [])
-
-  // Initial load on mount.
-  useEffect(() => {
-    enrollmentMountedRef.current = true
-    loadEnrollment()
-    return () => { enrollmentMountedRef.current = false }
-  }, [loadEnrollment])
-
-  // Realtime: keep the Enrolled column in sync when student enrollment changes
-  // (profiles.classes) — from this session, another instructor's session, or a
-  // kiosk. Unique channel name per mount avoids collisions with other realtime
-  // channels elsewhere in the app. Enrollment changes are infrequent, so we
-  // simply re-pull the whole map on any profiles change (cheap and robust).
-  useEffect(() => {
-    const channel = subscribeWithReconnect(`classes-enrollment-${Math.random().toString(36).slice(2)}`, ch => ch
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles' },
-        () => { loadEnrollment() }
-      ))
-    return () => { channel() }
-  }, [loadEnrollment])
-
   // Convert empty date strings to null for Supabase
   const cleanDates = (data) => {
-    const dateFields = ['start_date', 'end_date', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']
+    const dateFields = ['start_date', 'end_date', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end', 'last_drop_date', 'last_withdraw_date']
     dateFields.forEach(f => { if (!data[f] || data[f] === '') data[f] = null })
     return data
   }
 
   const startAdd = () => {
     setForm({
-      course_id: '', course_name: '', required_hours: 0, instructor: '',
+      course_id: '', course_name: '', required_hours: 0, instructor: '', instructor_email: '',
       semester: '', status: 'Active', tracking_type: 'None',   // tracker retired 2026-09 — every class is 'None'
       requires_volunteer_hours: false,
       delivery: DEFAULT_DELIVERY, credits_lecture: '', credits_lab: '',
       hours_manual: false,   // form-only: true once the instructor types hours by hand
+      term_id: '', runs: 'full', override_term_dates: false,
+      last_drop_date: '', last_withdraw_date: '',
       start_date: '', end_date: '',
       spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: ''
     })
     setCatalogQuery('')
     setCatalogOpen(false)
+    // Default to the current term; dates follow from it.
+    if (currentTerm) setForm(f => applyTermDates({ ...f, term_id: currentTerm.term_id, semester: currentTerm.name }))
     setEditing('new')
   }
 
@@ -4316,11 +4514,17 @@ function ClassesSection() {
       required_hours: cls.required_hours || 0,
       instructor: cls.instructor || '',
       semester: cls.semester || '',
+      instructor_email: cls.instructor_email || '',
       status: cls.status || 'Active',
       tracking_type: 'None',   // tracker retired 2026-09 — saving normalises every class to 'None'
       requires_volunteer_hours: cls.requires_volunteer_hours || false,
       delivery: seed.delivery, credits_lecture: seed.credits_lecture, credits_lab: seed.credits_lab,
       hours_manual: manual,
+      term_id: cls.term_id || (terms.find(t => t.name === cls.semester)?.term_id || ''),
+      runs: cls.runs || inferRuns(cls, termById.get(cls.term_id) || terms.find(t => t.name === cls.semester)),
+      override_term_dates: !!cls.override_term_dates,
+      last_drop_date: cls.last_drop_date ? String(cls.last_drop_date).substring(0, 10) : '',
+      last_withdraw_date: cls.last_withdraw_date ? String(cls.last_withdraw_date).substring(0, 10) : '',
       start_date: cls.start_date ? String(cls.start_date).substring(0, 10) : '',
       end_date: cls.end_date ? String(cls.end_date).substring(0, 10) : '',
       spring_break_start: cls.spring_break_start ? String(cls.spring_break_start).substring(0, 10) : '',
@@ -4335,6 +4539,11 @@ function ClassesSection() {
     try {
       const data = cleanDates({ ...form })
       delete data.hours_manual                       // form-only
+      if (data.term_id) { const t = termById.get(data.term_id); if (t) data.semester = t.name } else data.term_id = null
+      data.runs = ['full', 'first', 'second'].includes(data.runs) ? data.runs : 'full'
+      data.override_term_dates = !!data.override_term_dates
+      data.instructor_email = data.instructor_email ? String(data.instructor_email).toLowerCase() : null
+      data.instructor = String(data.instructor || '').trim()
       data.delivery = normalizeDelivery(data.delivery)
       data.credits_lecture = data.credits_lecture === '' || data.credits_lecture == null ? null : parseFloat(data.credits_lecture)
       data.credits_lab = data.credits_lab === '' || data.credits_lab == null ? null : parseFloat(data.credits_lab)
@@ -4410,7 +4619,7 @@ function ClassesSection() {
           cls.instructor, cls.semester, cls.status,
           String(cls.required_hours ?? '')
         ].some(v => String(v || '').toLowerCase().includes(s))
-        const enrolledTokens = enrollmentMap[cls.course_id] || []
+        const enrolledTokens = enrollmentByClass.get(cls.class_id) || []
         const enrollMatch = enrolledTokens.some(t =>
           t.name.toLowerCase().includes(s) || t.email.toLowerCase().includes(s)
         )
@@ -4418,7 +4627,7 @@ function ClassesSection() {
       })
     }
     return result
-  }, [classes, showInactive, search, enrollmentMap])
+  }, [classes, showInactive, search, enrollmentByClass])
 
   const inactiveCount = classes.filter(c => c.status === 'Inactive').length
 
@@ -4564,8 +4773,33 @@ function ClassesSection() {
               </div>
               <div>
                 <label htmlFor="st-fld-instructor-4" className="text-[10px] text-surface-500 font-medium">Instructor</label>
-                <input id="st-fld-instructor-4" value={form.instructor} onChange={e => setForm(f => ({ ...f, instructor: e.target.value }))}
-                  className="input text-sm" />
+                {(() => {
+                  const linked = form.instructor_email && instructors.some(p => String(p.email).toLowerCase() === String(form.instructor_email).toLowerCase())
+                  const value = linked ? String(form.instructor_email).toLowerCase() : (form.instructor || form.instructor_email ? OTHER_INSTRUCTOR : '')
+                  return (
+                    <>
+                      <select id="st-fld-instructor-4" value={value}
+                        onChange={e => {
+                          const v = e.target.value
+                          if (v === OTHER_INSTRUCTOR) { setForm(f => ({ ...f, instructor_email: '', instructor: linked ? '' : f.instructor })); return }
+                          const p = instructors.find(x => String(x.email).toLowerCase() === v)
+                          setForm(f => ({ ...f, instructor_email: p ? String(p.email).toLowerCase() : '', instructor: p ? instructorName(p) : '' }))
+                        }}
+                        className="input text-sm" aria-describedby="st-fld-instructor-help">
+                        <option value="">— pick an instructor —</option>
+                        {instructors.map(p => <option key={p.email} value={String(p.email).toLowerCase()}>{instructorName(p)}</option>)}
+                        <option value={OTHER_INSTRUCTOR}>Other (not a CMMS user)…</option>
+                      </select>
+                      {value === OTHER_INSTRUCTOR && (
+                        <input aria-label="Instructor name" value={form.instructor} onChange={e => setForm(f => ({ ...f, instructor: e.target.value, instructor_email: '' }))}
+                          className="input text-sm mt-1" placeholder="D. Johnson" />
+                      )}
+                      <p id="st-fld-instructor-help" className="text-[10px] text-surface-500 mt-0.5">
+                        {linked ? 'Linked to a profile — the syllabus fills in their contact details.' : 'A typed name has no profile link; the syllabus will ask for contact details.'}
+                      </p>
+                    </>
+                  )
+                })()}
               </div>
             </div>
 
@@ -4593,9 +4827,27 @@ function ClassesSection() {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
-                <label htmlFor="st-fld-semester-5" className="text-[10px] text-surface-500 font-medium">Semester</label>
-                <input id="st-fld-semester-5" value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
-                  className="input text-sm" placeholder="Spring 2026" />
+                <label htmlFor="st-fld-semester-5" className="text-[10px] text-surface-500 font-medium">Semester (term) *</label>
+                <select id="st-fld-semester-5" value={form.term_id || (form.semester ? `legacy:${form.semester}` : '')}
+                  onChange={e => {
+                    const v = e.target.value
+                    if (v.startsWith('legacy:')) { setForm(f => ({ ...f, term_id: '', semester: v.slice(7) })); return }
+                    setForm(f => applyTermDates({ ...f, term_id: v, semester: termById.get(v)?.name || f.semester }))
+                  }}
+                  className="input text-sm" aria-describedby="st-fld-semester-help">
+                  {!form.term_id && !form.semester && <option value="">— pick a term —</option>}
+                  {sortTerms(terms).filter(t => t.status !== 'Archived' || t.term_id === form.term_id).map(t => (
+                    <option key={t.term_id} value={t.term_id}>{t.name}{currentTerm?.term_id === t.term_id ? ' (current)' : ''}</option>
+                  ))}
+                  {legacySemesters.map(n => <option key={n} value={`legacy:${n}`}>{n} (no term calendar)</option>)}
+                </select>
+                <p id="st-fld-semester-help" className="text-[10px] text-surface-500 mt-0.5">Terms are set up under Settings → Terms.</p>
+              </div>
+              <div>
+                <label htmlFor="st-fld-runs" className="text-[10px] text-surface-500 font-medium">Runs</label>
+                <select id="st-fld-runs" value={form.runs || 'full'} onChange={e => setForm(f => applyTermDates({ ...f, runs: e.target.value }))} className="input text-sm">
+                  {Object.entries(RUNS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
               </div>
               <div>
                 <label htmlFor="st-fld-status-6" className="text-[10px] text-surface-500 font-medium">Status</label>
@@ -4617,16 +4869,49 @@ function ClassesSection() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <div>
-                <label htmlFor="st-fld-start-date-8" className="text-[10px] text-surface-500 font-medium">Start Date *</label>
-                <input id="st-fld-start-date-8" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
-              </div>
-              <div>
-                <label htmlFor="st-fld-end-date-9" className="text-[10px] text-surface-500 font-medium">End Date *</label>
-                <input id="st-fld-end-date-9" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} className="input text-sm" />
-              </div>
-            </div>
+            {(() => {
+              const term = termById.get(form.term_id)
+              const locked = !!term && !form.override_term_dates
+              const diverges = !!term && form.override_term_dates && !classMatchesTerm(form, term)
+              return (
+                <>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    {term ? (
+                      <label className="flex items-center gap-2 cursor-pointer select-none min-h-[44px]" title="Keep this class on its own calendar (e.g. Discovery Academy runs on the high-school schedule)">
+                        <input type="checkbox" checked={!!form.override_term_dates}
+                          onChange={e => setForm(f => e.target.checked ? { ...f, override_term_dates: true } : applyTermDates({ ...f, override_term_dates: false }))}
+                          className="w-4 h-4 rounded border-surface-300 text-amber-600 focus:ring-amber-500" />
+                        <span className="text-xs font-medium text-surface-700">Override term dates <span className="font-normal text-surface-500">(own calendar, e.g. Discovery Academy)</span></span>
+                      </label>
+                    ) : (
+                      <p className="text-[11px] text-surface-500">No term calendar for this semester — dates are entered by hand. Add the term under Settings → Terms to manage them in one place.</p>
+                    )}
+                    {locked && <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">Dates from {term.name} · {RUNS[form.runs || 'full']}</span>}
+                    {diverges && <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">Differs from {term.name}</span>}
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <div>
+                      <label htmlFor="st-fld-start-date-8" className="text-[10px] text-surface-500 font-medium">Start Date *</label>
+                      <input id="st-fld-start-date-8" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} disabled={locked} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
+                    </div>
+                    <div>
+                      <label htmlFor="st-fld-end-date-9" className="text-[10px] text-surface-500 font-medium">End Date *</label>
+                      <input id="st-fld-end-date-9" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} disabled={locked} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
+                    </div>
+                    <div>
+                      <label htmlFor="st-fld-last-drop" className="text-[10px] text-surface-500 font-medium">Last day to drop</label>
+                      <input id="st-fld-last-drop" type="date" value={form.last_drop_date || ''} onChange={e => setForm(f => ({ ...f, last_drop_date: e.target.value }))} className="input text-sm" aria-describedby="st-fld-drop-help" />
+                    </div>
+                    <div>
+                      <label htmlFor="st-fld-last-withdraw" className="text-[10px] text-surface-500 font-medium">Last day to withdraw (W)</label>
+                      <input id="st-fld-last-withdraw" type="date" value={form.last_withdraw_date || ''} onChange={e => setForm(f => ({ ...f, last_withdraw_date: e.target.value }))} className="input text-sm" aria-describedby="st-fld-drop-help" />
+                    </div>
+                  </div>
+                  <p id="st-fld-drop-help" className="text-[10px] text-surface-500 -mt-1">Drop / withdraw deadlines depend on this class's start date — copy them from the college calendar. The syllabus reads them from here.</p>
+                </>
+              )
+            })()}
 
             {form.start_date && form.end_date && (
               <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
@@ -4638,19 +4923,19 @@ function ClassesSection() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               <div>
                 <label htmlFor="st-fld-spring-break-start-10" className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
-                <input id="st-fld-spring-break-start-10" type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
+                <input id="st-fld-spring-break-start-10" type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
               </div>
               <div>
                 <label htmlFor="st-fld-spring-break-end-11" className="text-[10px] text-surface-500 font-medium">Spring Break End</label>
-                <input id="st-fld-spring-break-end-11" type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} className="input text-sm" />
+                <input id="st-fld-spring-break-end-11" type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
               </div>
               <div>
                 <label htmlFor="st-fld-finals-start-12" className="text-[10px] text-surface-500 font-medium">Finals Start</label>
-                <input id="st-fld-finals-start-12" type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} className="input text-sm" />
+                <input id="st-fld-finals-start-12" type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
               </div>
               <div>
                 <label htmlFor="st-fld-finals-end-13" className="text-[10px] text-surface-500 font-medium">Finals End</label>
-                <input id="st-fld-finals-end-13" type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} className="input text-sm" />
+                <input id="st-fld-finals-end-13" type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
               </div>
             </div>
 
@@ -4730,7 +5015,7 @@ function ClassesSection() {
               <tbody className="divide-y divide-surface-100">
                 {displayedClasses.map(cls => {
                   const wks = countClassWeeks(cls, weekEndOffset)
-                  const enrolledStudents = enrollmentMap[cls.course_id] || []
+                  const enrolledStudents = enrollmentByClass.get(cls.class_id) || []
                   const activeStudents = enrolledStudents.filter(s => !s.archived)
                   const formerStudents = enrolledStudents.filter(s => s.archived)
                   const enrolledCount = activeStudents.length
@@ -4758,7 +5043,11 @@ function ClassesSection() {
                         )}
                       </td>
                       <td className="px-4 py-2 text-surface-600">{cls.instructor || '—'}</td>
-                      <td className="px-4 py-2 text-surface-500 text-xs">{cls.semester || '—'}</td>
+                      <td className="px-4 py-2 text-surface-500 text-xs whitespace-nowrap">
+                        {cls.semester || '—'}
+                        {cls.runs && cls.runs !== 'full' && <span className="ml-1.5 inline-flex px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-surface-100 text-surface-600 border border-surface-200">{RUNS_SHORT[cls.runs]}</span>}
+                        {cls.override_term_dates && <span className="ml-1.5 inline-flex px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="Keeps its own calendar">own dates</span>}
+                      </td>
                       <td className="px-4 py-2 text-xs text-surface-400">
                         {cls.start_date ? `${String(cls.start_date).substring(0, 10)} → ${String(cls.end_date || '').substring(0, 10)}` : '—'}
                       </td>
@@ -4858,7 +5147,7 @@ function ClassesSection() {
         <EnrollmentModal
           cls={enrollmentClass}
           onClose={() => setEnrollmentClass(null)}
-          onSaved={loadEnrollment}
+          onSaved={refreshEnrollment}
         />
       )}
 
@@ -4867,6 +5156,7 @@ function ClassesSection() {
         <DuplicateClassModal
           cls={duplicateClass}
           actions={actions}
+          terms={terms}
           onClose={() => setDuplicateClass(null)}
           onSaved={() => { setDuplicateClass(null); refresh() }}
         />
@@ -4973,12 +5263,23 @@ function ClassArchiveConfirmModal({ confirm, saving, onCancel, onConfirm }) {
 // DUPLICATE CLASS MODAL (preserved as-is)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
+function DuplicateClassModal({ cls, actions, terms = [], onClose, onSaved }) {
   const dialogRef = useDialogA11y(true, onClose)
   // Live lab-open days — keeps this modal's Week Preview consistent with the
   // Classes-tab preview and the actual tracker weeks.
   const { weekEndOffset } = useLabVisibleDays()
+  // Pick the target term; the class keeps its "runs" and inherits the dates
+  // (unless the source class kept its own calendar).
+  const termById = useMemo(() => new Map(terms.map(t => [t.term_id, t])), [terms])
+  const applyTermDates = (f) => {
+    const t = termById.get(f.term_id)
+    if (!t || f.override_term_dates) return f
+    return { ...f, semester: t.name, ...datesForRuns(t, f.runs || 'full'), ...calendarFromTerm(t, { runs: f.runs || 'full' }) }
+  }
   const [form, setForm] = useState({
+    term_id: '',
+    runs: cls.runs || 'full',
+    override_term_dates: !!cls.override_term_dates,
     semester: '',
     start_date: '',
     end_date: '',
@@ -5019,12 +5320,16 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         course_name: cls.course_name,
         required_hours: cls.required_hours,
         instructor: cls.instructor,
+        instructor_email: cls.instructor_email || null,
         status: 'Active',
         tracking_type: 'None',   // tracker retired 2026-09
         requires_volunteer_hours: cls.requires_volunteer_hours || false,
         delivery: normalizeDelivery(cls.delivery),
         credits_lecture: cls.credits_lecture ?? null,
         credits_lab: cls.credits_lab ?? null,
+        term_id: form.term_id || null,
+        runs: form.runs || 'full',
+        override_term_dates: !!form.override_term_dates,
         semester: form.semester.trim(),
         start_date: form.start_date,
         end_date: form.end_date,
@@ -5066,36 +5371,58 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
             <div>
-              <label htmlFor="st-fld-new-semester-14" className="text-[10px] text-surface-500 font-medium">New Semester *</label>
-              <input id="st-fld-new-semester-14" value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))}
-                className="input text-sm" placeholder="Fall 2026" />
+              <label htmlFor="st-fld-new-semester-14" className="text-[10px] text-surface-500 font-medium">New Semester (term) *</label>
+              {terms.length ? (
+                <select id="st-fld-new-semester-14" value={form.term_id} onChange={e => setForm(f => applyTermDates({ ...f, term_id: e.target.value, semester: termById.get(e.target.value)?.name || '' }))} className="input text-sm">
+                  <option value="">— pick a term —</option>
+                  {sortTerms(terms).filter(t => t.status !== 'Archived' && t.name !== cls.semester).map(t => <option key={t.term_id} value={t.term_id}>{t.name}</option>)}
+                </select>
+              ) : (
+                <input id="st-fld-new-semester-14" value={form.semester} onChange={e => setForm(f => ({ ...f, semester: e.target.value }))} className="input text-sm" placeholder="Fall 2026" />
+              )}
             </div>
             <div>
+              <label htmlFor="st-fld-dup-runs" className="text-[10px] text-surface-500 font-medium">Runs</label>
+              <select id="st-fld-dup-runs" value={form.runs} onChange={e => setForm(f => applyTermDates({ ...f, runs: e.target.value }))} className="input text-sm">
+                {Object.entries(RUNS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            </div>
+            {form.term_id && (
+              <div className="flex items-end pb-1.5">
+                <label className="flex items-center gap-2 cursor-pointer select-none min-h-[44px]">
+                  <input type="checkbox" checked={!!form.override_term_dates}
+                    onChange={e => setForm(f => e.target.checked ? { ...f, override_term_dates: true } : applyTermDates({ ...f, override_term_dates: false }))}
+                    className="w-4 h-4 rounded border-surface-300 text-amber-600 focus:ring-amber-500" />
+                  <span className="text-xs font-medium text-surface-700">Override term dates</span>
+                </label>
+              </div>
+            )}
+            <div>
               <label htmlFor="st-fld-start-date-15" className="text-[10px] text-surface-500 font-medium">Start Date *</label>
-              <input id="st-fld-start-date-15" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} className="input text-sm" />
+              <input id="st-fld-start-date-15" type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
             </div>
             <div>
               <label htmlFor="st-fld-end-date-16" className="text-[10px] text-surface-500 font-medium">End Date *</label>
-              <input id="st-fld-end-date-16" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} className="input text-sm" />
+              <input id="st-fld-end-date-16" type="date" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
             </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <div>
               <label htmlFor="st-fld-spring-break-start-17" className="text-[10px] text-surface-500 font-medium">Spring Break Start</label>
-              <input id="st-fld-spring-break-start-17" type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} className="input text-sm" />
+              <input id="st-fld-spring-break-start-17" type="date" value={form.spring_break_start} onChange={e => setForm(f => ({ ...f, spring_break_start: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
             </div>
             <div>
               <label htmlFor="st-fld-spring-break-end-18" className="text-[10px] text-surface-500 font-medium">Spring Break End</label>
-              <input id="st-fld-spring-break-end-18" type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} className="input text-sm" />
+              <input id="st-fld-spring-break-end-18" type="date" value={form.spring_break_end} onChange={e => setForm(f => ({ ...f, spring_break_end: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
             </div>
             <div>
               <label htmlFor="st-fld-finals-start-19" className="text-[10px] text-surface-500 font-medium">Finals Start</label>
-              <input id="st-fld-finals-start-19" type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} className="input text-sm" />
+              <input id="st-fld-finals-start-19" type="date" value={form.finals_start} onChange={e => setForm(f => ({ ...f, finals_start: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
             </div>
             <div>
               <label htmlFor="st-fld-finals-end-20" className="text-[10px] text-surface-500 font-medium">Finals End</label>
-              <input id="st-fld-finals-end-20" type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} className="input text-sm" />
+              <input id="st-fld-finals-end-20" type="date" value={form.finals_end} onChange={e => setForm(f => ({ ...f, finals_end: e.target.value }))} disabled={!!termById.get(form.term_id) && !form.override_term_dates} className="input text-sm disabled:bg-surface-50 disabled:text-surface-500" />
             </div>
           </div>
 
@@ -5143,12 +5470,12 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
 
 function EnrollmentModal({ cls, onClose, onSaved }) {
   const dialogRef = useDialogA11y(true, onClose)
+  const { setRoster, saving } = useEnrollmentActions()
   const [students, setStudents] = useState([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
-  const [enrolled, setEnrolled] = useState({})
-  // Read-only history: archived (graduated) students who were enrolled in this course.
+  const [enrolled, setEnrolled] = useState({})          // email → true (working copy)
+  // Read-only history: archived (graduated) students enrolled in THIS class.
   const [formerMembers, setFormerMembers] = useState([])
 
   useEffect(() => {
@@ -5156,40 +5483,25 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
     async function load() {
       setLoading(true)
       try {
-        const data = mustData(await supabase
-          .from('profiles')
-          .select('id, first_name, last_name, email, role, classes, time_clock_only')
-          .eq('status', 'Active')
-          .in('role', ['Student', 'Work Study'])
-          .order('last_name'), 'profiles.select')
+        const [active, roster] = await Promise.all([
+          supabase.from('profiles')
+            .select('id, first_name, last_name, email, role, time_clock_only, status')
+            .in('role', ['Student', 'Work Study'])
+            .in('status', ['Active', 'Archived'])
+            .order('last_name'),
+          supabase.from('class_enrollments').select('enrollment_id, student_email').eq('class_id', cls.class_id),
+        ])
         if (cancelled) return
-
-        const courseId = cls.course_id || ''
-        const studentList = (data || []).filter(s => s.time_clock_only !== 'Yes')
-        setStudents(studentList)
-
-        const enrolledMap = {}
-        studentList.forEach(s => {
-          const classes = (s.classes || '').split(',').map(c => c.trim())
-          if (classes.includes(courseId)) enrolledMap[s.id] = true
-        })
-        setEnrolled(enrolledMap)
-
-        // Read-only history — archived (graduated) students who were in this
-        // course. Archiving never clears profiles.classes, so this list shows
-        // who was previously enrolled even after they've left the program.
-        const archivedData = mustData(await supabase
-          .from('profiles')
-          .select('id, first_name, last_name, email, role, classes')
-          .eq('status', 'Archived')
-          .in('role', ['Student', 'Work Study'])
-          .order('last_name'), 'profiles.select')
-        if (cancelled) return
-        const former = (archivedData || []).filter(s => {
-          const classes = (s.classes || '').split(',').map(c => c.trim())
-          return classes.includes(courseId)
-        })
-        setFormerMembers(former)
+        const people = mustData(active, 'profiles.select') || []
+        const rows = mustData(roster, 'class_enrollments.select') || []
+        const enrolledEmails = new Set(rows.map(r => String(r.student_email).toLowerCase()))
+        // Pick list: active students (time-clock-only staff excluded)
+        setStudents(people.filter(s => s.status === 'Active' && s.time_clock_only !== 'Yes'))
+        const map = {}
+        people.forEach(s => { if (s.status === 'Active' && enrolledEmails.has(String(s.email || '').toLowerCase())) map[String(s.email).toLowerCase()] = true })
+        setEnrolled(map)
+        // Former members: archived students on this class's roster
+        setFormerMembers(people.filter(s => s.status === 'Archived' && enrolledEmails.has(String(s.email || '').toLowerCase())))
       } catch (err) {
         if (!cancelled) console.error('Error loading students:', err)
       } finally {
@@ -5200,47 +5512,22 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
     return () => { cancelled = true }
   }, [cls])
 
-  const toggle = (id) => {
+  const toggle = (email) => {
+    const k = String(email).toLowerCase()
     setEnrolled(prev => {
       const next = { ...prev }
-      if (next[id]) delete next[id]; else next[id] = true
+      if (next[k]) delete next[k]; else next[k] = true
       return next
     })
   }
 
   const handleSave = async () => {
-    setSaving(true)
-    try {
-      const courseId = cls.course_id || ''
-      for (const student of students) {
-        const currentClasses = (student.classes || '').split(',').map(c => c.trim()).filter(Boolean)
-        const isEnrolled = !!enrolled[student.id]
-        const wasEnrolled = currentClasses.includes(courseId)
-
-        if (isEnrolled && !wasEnrolled) {
-          const updated = [...currentClasses, courseId].join(', ')
-          const { data: eRows, error: eErr } = await supabase.from('profiles').update({ classes: updated }).eq('id', student.id).select()
-          if (eErr) throw eErr
-          if (!eRows || eRows.length === 0) {
-            toast.error(`Failed to enroll ${student.first_name} — check permissions.`)
-          }
-        } else if (!isEnrolled && wasEnrolled) {
-          const updated = currentClasses.filter(c => c !== courseId).join(', ')
-          const { data: eRows, error: eErr } = await supabase.from('profiles').update({ classes: updated }).eq('id', student.id).select()
-          if (eErr) throw eErr
-          if (!eRows || eRows.length === 0) {
-            toast.error(`Failed to unenroll ${student.first_name} — check permissions.`)
-          }
-        }
-      }
-      toast.success('Enrollment updated!')
-      onSaved?.()
-      onClose()
-    } catch (err) {
-      toast.error(err.message || 'Failed to save enrollment')
-    } finally {
-      setSaving(false)
-    }
+    // Archived former members stay on the roster (history); only active students are managed here.
+    const keep = [...Object.keys(enrolled), ...formerMembers.map(s => String(s.email).toLowerCase())]
+    const labels = {}
+    students.forEach(s => { labels[String(s.email).toLowerCase()] = `${s.first_name} ${s.last_name}`.trim() })
+    const ok = await setRoster(cls, keep, labels)
+    if (ok) { onSaved?.(); onClose() }
   }
 
   const enrolledCount = Object.keys(enrolled).length
@@ -5254,7 +5541,7 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
         <div className="px-5 py-4 border-b border-surface-100 flex items-center justify-between">
           <div>
             <h3 id="st-enroll-title" className="text-sm font-bold text-surface-900">Manage Enrollment</h3>
-            <p className="text-xs text-surface-500">{cls.course_id} — {cls.course_name}</p>
+            <p className="text-xs text-surface-500">{cls.course_id} — {cls.course_name} · {cls.semester || "no semester"}</p>
           </div>
           <button type="button" onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close">
             <X size={16} aria-hidden="true" />
@@ -5280,10 +5567,10 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
             <div className="space-y-1">
               {filtered.map(s => (
                 <label key={s.id}
-                  className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors ${
-                    enrolled[s.id] ? 'bg-brand-50 border border-brand-200' : 'bg-surface-50 border border-transparent hover:bg-surface-100'
+                  className={`flex items-center gap-3 p-2.5 rounded-lg cursor-pointer transition-colors min-h-[44px] ${
+                    enrolled[String(s.email).toLowerCase()] ? 'bg-brand-50 border border-brand-200' : 'bg-surface-50 border border-transparent hover:bg-surface-100'
                   }`}>
-                  <input type="checkbox" checked={!!enrolled[s.id]} onChange={() => toggle(s.id)} className="rounded" />
+                  <input type="checkbox" checked={!!enrolled[String(s.email).toLowerCase()]} onChange={() => toggle(s.email)} className="rounded" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-surface-900">{s.first_name} {s.last_name}</div>
                     <div className="text-xs text-surface-500">{s.email}</div>

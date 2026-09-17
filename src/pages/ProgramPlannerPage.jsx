@@ -11,6 +11,8 @@ import {
 import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { isSuperAdmin } from '@/lib/superAdmin'
+import { useAcademicTerms } from '@/hooks/useAcademicTerms'
+import { sortTermsAsc } from '@/lib/academicTerms'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROGRAMS = [
@@ -23,10 +25,12 @@ const PROGRAM_COLORS = {
   'MECH-AAS':  { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-300' },
   'MECH-CERT': { bg: 'bg-violet-100',  text: 'text-violet-700',  border: 'border-violet-300' },
 }
+// Fallback only — the Start Semester dropdown reads Settings → Terms (Spring /
+// Fall) when any exist; this list covers a database with no terms yet.
 const SEMESTERS_LIST = [
-  'Fall 2025','Spring 2026','Summer 2026',
-  'Fall 2026','Spring 2027','Summer 2027',
-  'Fall 2027','Spring 2028','Summer 2028',
+  'Fall 2025','Spring 2026',
+  'Fall 2026','Spring 2027',
+  'Fall 2027','Spring 2028',
 ]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -595,6 +599,19 @@ function NewPlanModal({ onCreated, onClose }) {
   const [form, setForm] = useState({ student_email:'', student_name:'', plan_name:'', programs:[], start_semester:'Fall 2026' })
   const [saving, setSaving] = useState(false)
   const [studentSearch, setStudentSearch] = useState('')
+  // Start Semester options come from Settings → Terms (oldest → newest so a
+  // plan can start next Fall); default to the current term.
+  const { terms, current: currentTerm } = useAcademicTerms()
+  const startSemesters = useMemo(() => {
+    const fromTerms = sortTermsAsc(terms.filter(t => t.status !== 'Archived')).map(t => t.name)
+    return fromTerms.length ? fromTerms : SEMESTERS_LIST
+  }, [terms])
+  const semDefaultedRef = useRef(false)
+  useEffect(() => {
+    if (semDefaultedRef.current || !currentTerm) return
+    semDefaultedRef.current = true
+    setForm(p => ({ ...p, start_semester: currentTerm.name }))
+  }, [currentTerm])
 
   useEffect(() => {
     supabase.from('profiles').select('email,first_name,last_name').in('role',['Student','Work Study']).eq('status','Active')
@@ -703,7 +720,7 @@ function NewPlanModal({ onCreated, onClose }) {
             <label htmlFor="pp-fld-start-semester-1" className="block text-xs font-semibold text-surface-700 mb-1.5">Start Semester <span className="text-red-500">*</span></label>
             <select id="pp-fld-start-semester-1" value={form.start_semester} onChange={e=>setForm(p=>({...p,start_semester:e.target.value}))}
               className="w-full px-3 py-2 text-sm border border-surface-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/40 bg-white">
-              {SEMESTERS_LIST.map(s=><option key={s} value={s}>{s}</option>)}
+              {startSemesters.map(s=><option key={s} value={s}>{s}</option>)}
             </select>
             {form.start_semester&&!form.start_semester.startsWith('Fall')&&(
               <p className="text-[11px] text-amber-600 mt-1 flex items-center gap-1"><AlertCircle size={11} aria-hidden="true" /> Plan will be rotated to start from {form.start_semester}.</p>

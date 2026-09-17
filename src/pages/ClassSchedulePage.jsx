@@ -275,7 +275,7 @@ export default function ClassSchedulePage() {
     return (
       <div className="p-4 lg:p-6 max-w-3xl mx-auto">
         <div className="card p-8 text-center text-surface-500 text-sm">
-          No semesters yet. Add classes with a Semester (e.g. "Spring 2027") under Settings → Classes and they will appear here.
+          No semesters yet. Add a term under Settings → Terms (e.g. "Spring 2027") and classes for it under Settings → Classes, and they will appear here.
         </div>
       </div>
     )

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Field as UiField } from '@/components/ui'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
@@ -13,6 +13,10 @@ import {
 import { downloadSyllabusDocx } from './syllabusDocx'
 import toast from 'react-hot-toast'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
+import { useAcademicTerms } from '@/hooks/useAcademicTerms'
+import { semesterOptions, parseTermName, inferRuns, classMatchesTerm, fmtDate as fmtTermDate } from '@/lib/academicTerms'
+import { normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ─── Step Definitions ──────────────────────────────────────────────────────────
 const STEPS = [
@@ -607,8 +611,11 @@ async function generateClassId(options = {}) {
   return `${prefix}${nextVal}`
 }
 
-function CreateCMSSClassModal({ syllabusData, onClose }) {
+function CreateCMSSClassModal({ syllabusData, onClose, terms = [] }) {
   const { user, profile } = useAuth()
+  // The class links to the semester's term (Settings → Terms) when one exists,
+  // so its dates follow the term calendar from then on.
+  const term = terms.find(t => t.name === (syllabusData.semester || '')) || null
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState(false)
   const [createdClassId, setCreatedClassId] = useState('')
@@ -627,7 +634,7 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
   const [classData, setClassData] = useState({
     course_id: syllabusData.course_id || '',
     course_name: syllabusData.course_name || '',
-    required_hours: syllabusData.required_hours_per_week || calcHours(syllabusData.credits_lab || 1, semLen),
+    required_hours: syllabusData.required_hours_per_week || wizardHours(syllabusData),
     instructor: syllabusData.instructor_name || '',
     semester: syllabusData.semester || getDefaultSemester(),
     status: 'Active',
@@ -671,6 +678,7 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
           break
         }
 
+        const runs = inferRuns(classData, term)
         const { data: rows, error } = await supabase.from('classes').insert({
           class_id:           classId,
           course_id:          classData.course_id,
@@ -679,6 +687,15 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
           instructor:         classData.instructor,
           semester:           classData.semester,
           status:             classData.status,
+          // Same fields Settings → Classes writes, so the class is complete either way round.
+          delivery:           normalizeDelivery(syllabusData.course_type),
+          credits_lecture:    syllabusData.credits_lecture === '' || syllabusData.credits_lecture == null ? null : parseFloat(syllabusData.credits_lecture),
+          credits_lab:        syllabusData.credits_lab === '' || syllabusData.credits_lab == null ? null : parseFloat(syllabusData.credits_lab),
+          term_id:            term?.term_id || null,
+          runs,
+          override_term_dates: term ? !classMatchesTerm({ ...classData, runs }, term) : false,
+          last_drop_date:     syllabusData.last_drop_date || null,
+          last_withdraw_date: syllabusData.last_withdraw_date || null,
           start_date:         classData.start_date || null,
           end_date:           classData.end_date || null,
           spring_break_start: classData.spring_break_start || null,
@@ -835,7 +852,7 @@ function CreateCMSSClassModal({ syllabusData, onClose }) {
                   aria-describedby="ccm-hours-hint"
                   className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/40" />
                 <p id="ccm-hours-hint" className="text-[10px] text-surface-400 mt-1">
-                  Formula: {syllabusData.credits_lab || 1} lab cr × {semLen === '8' ? '4' : '2'} ({semLen}-wk) = {calcHours(syllabusData.credits_lab || 1, semLen)} hrs/wk
+                  Rule: {wizardHoursText(syllabusData)}
                 </p>
               </div>
               <div>
@@ -957,14 +974,40 @@ function ItemList({ items, onChange, placeholder, addLabel = 'Add Item', label =
 
 // ─── Hours Calculator ─────────────────────────────────────────────────────────
 // Rule: lab credits × 2 for a 16-week class, lab credits × 4 for an 8-week class
+// Required campus hours/week — the program rule shared with Settings → Classes
+// (src/lib/classDelivery.js): Face-to-Face = lecture + 2×lab, Hybrid = 2×lab,
+// Online = 0, doubled for an 8-week section. The wizard's course_type values
+// ('hybrid' | 'traditional' | 'online') map onto the delivery names.
+const COURSE_TYPE_TO_DELIVERY = { hybrid: 'Hybrid', traditional: 'Face-to-Face', online: 'Online' }
+const DELIVERY_TO_COURSE_TYPE = { Hybrid: 'hybrid', 'Face-to-Face': 'traditional', Online: 'online' }
+function wizardHours(d, overrides = {}) {
+  const x = { ...d, ...overrides }
+  const eight = (x.semester_length || '16') === '8'
+  // Feed the rule a synthetic 8-week span when the wizard says 8 weeks, so
+  // the doubling matches the Semester Length toggle rather than the dates.
+  const base = computeRequiredHours({
+    delivery: COURSE_TYPE_TO_DELIVERY[x.course_type] || 'Hybrid',
+    credits_lecture: x.credits_lecture, credits_lab: x.credits_lab,
+    start_date: null, end_date: null,
+  })
+  return Math.round(base * (eight ? 2 : 1) * 2) / 2
+}
+function wizardHoursText(d) {
+  const eight = (d.semester_length || '16') === '8'
+  const t = COURSE_TYPE_TO_DELIVERY[d.course_type] || 'Hybrid'
+  const lec = parseFloat(d.credits_lecture) || 0, lab = parseFloat(d.credits_lab) || 0
+  if (t === 'Online') return 'online — no campus hours'
+  const core = t === 'Face-to-Face' ? `${lec} lecture cr × 1 hr + ${lab} lab cr × 2 hr` : `${lab} lab cr × 2 hr`
+  return `${core}${eight ? ' × 2 (8-week)' : ''} = ${wizardHours(d)} hrs/wk`
+}
+// Kept for callers that pass (labCredits, semesterLength) — Hybrid rule.
 function calcHours(labCredits, semesterLength) {
-  const lab = parseInt(labCredits) || 0
-  return semesterLength === '8' ? lab * 4 : lab * 2
+  return wizardHours({ course_type: 'hybrid', credits_lecture: 0, credits_lab: labCredits, semester_length: semesterLength })
 }
 
 // ─── Step 1: Course Catalog Select ────────────────────────────────────────────
 // Pulls from syllabus_courses (catalog only — NOT the CMMS classes table)
-function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExists, otherSemesters = [], onDuplicate }) {
+function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExists, otherSemesters = [], onDuplicate, semesters = SEMESTERS, cls = null }) {
   const { user } = useAuth()
   const [mode, setMode] = useState('existing')
   const [showDuplicate, setShowDuplicate] = useState(false)
@@ -974,7 +1017,7 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
   const [newCourse, setNewCourse] = useState({ course_id: '', course_name: '', credits_lecture: 1, credits_lab: 1, credits_soe: 0, required_hours: 4 })
   const [savingCourse, setSavingCourse] = useState(false)
 
-  const availableSemesters = SEMESTERS.filter(s => s !== data.semester)
+  const availableSemesters = semesters.filter(s => s !== data.semester)
 
   const handleDuplicate = async () => {
     if (!dupSemester) return
@@ -1044,8 +1087,8 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
               update('credits_lecture', course.credits_lecture ?? 1)
               update('credits_lab', course.credits_lab ?? 1)
               update('credits_soe', course.credits_soe ?? 0)
-              // Auto-calculate hours from lab credits + current semester length
-              update('required_hours_per_week', calcHours(course.credits_lab ?? 1, data.semester_length || '16'))
+              // Auto-calculate hours with the program rule (delivery + credits + semester length)
+              update('required_hours_per_week', wizardHours(data, { credits_lecture: course.credits_lecture ?? 0, credits_lab: course.credits_lab ?? 1 }))
               // Pre-fill description, outcomes, and prerequisites from catalog
               update('course_description', course.course_description || '')
               update('student_outcomes', Array.isArray(course.student_outcomes) ? course.student_outcomes : [])
@@ -1156,8 +1199,19 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
       {/* Semester */}
       <Field label="Semester" required>
         <Sel value={data.semester} onChange={v => update('semester', v)}
-          options={SEMESTERS.map(s => ({ value: s, label: s }))} />
+          options={semesters.map(s => ({ value: s, label: s }))} />
       </Field>
+      {data.course_id && data.semester && (
+        cls ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs text-emerald-900" role="status">
+            A CMMS class exists for <strong>{cls.course_id} {cls.semester}</strong> ({cls.instructor || 'no instructor'}, {normalizeDelivery(cls.delivery)}, {parseFloat(cls.required_hours) || 0} hrs/wk). The instructor, delivery, credits, hours and dates will fill in from it — you only type what's different.
+          </div>
+        ) : (
+          <div className="rounded-xl border border-surface-200 bg-surface-50 px-4 py-2.5 text-xs text-surface-600" role="status">
+            No CMMS class yet for {data.course_id} {data.semester}. Finish the syllabus and use "Create CMMS Class" on the last step — it will carry the instructor, delivery, credits, hours and dates across.
+          </div>
+        )
+      )}
 
       {/* Duplicate panel */}
       {savedExists && (
@@ -1198,7 +1252,7 @@ function Step1CourseSelect({ data, update, courseCatalog, setCatalog, savedExist
 }
 
 // ─── Step 2: Instructor ────────────────────────────────────────────────────────
-function Step2Instructor({ data, update, commonSections }) {
+function Step2Instructor({ data, update, commonSections, instructorProfile, cls }) {
   // Get shared logo from common sections (uploaded once via the gear settings)
   const sharedLogo = (commonSections || []).find(s => s.section_key === 'shared_logo')?.content || ''
 
@@ -1213,6 +1267,32 @@ function Step2Instructor({ data, update, commonSections }) {
       : 'custom'
 
   const activeLogoUrl = logoSource === 'shared' ? sharedLogo : data.logo_url
+
+  // Instructor contact from the class's instructor profile (Users page).
+  const expected = useMemo(() => {
+    if (instructorProfile) {
+      return {
+        instructor_name: `${instructorProfile.first_name || ''} ${instructorProfile.last_name || ''}`.trim(),
+        instructor_email: instructorProfile.email || '',
+        instructor_phone: instructorProfile.phone || '',
+        instructor_office: instructorProfile.office || '',
+        instructor_office_hours: instructorProfile.office_hours || '',
+      }
+    }
+    if (cls?.instructor) return { instructor_name: cls.instructor }   // ad-hoc instructor: name only
+    return null
+  }, [instructorProfile, cls])
+  // Fill blanks on first visit.
+  useEffect(() => {
+    if (!expected) return
+    for (const [k, v] of Object.entries(expected)) if (!data[k] && v) update(k, v)
+  }, [expected]) // eslint-disable-line react-hooks/exhaustive-deps
+  const differs = expected ? Object.entries(expected).filter(([k, v]) => v && data[k] && data[k] !== v) : []
+  const InstrStatus = ({ f }) => {
+    if (!expected || !expected[f]) return null
+    if (data[f] === expected[f]) return <span className="text-[11px] text-emerald-700">matches profile ✓</span>
+    return <span className="text-[11px] text-amber-700">Profile says {expected[f]}. <button type="button" onClick={() => update(f, expected[f])} className="underline font-medium min-h-[24px]">Use it</button></span>
+  }
 
   // Auto-apply shared logo if no per-course value is set yet. Also heal
   // blob: URLs — they only live as long as the browser session that created
@@ -1246,12 +1326,20 @@ function Step2Instructor({ data, update, commonSections }) {
           <User size={13} className="text-brand-500" aria-hidden="true" /> Primary Instructor
         </p>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Name" required><TI value={data.instructor_name} onChange={v => update('instructor_name', v)} placeholder="Aaron Barker" /></Field>
-          <Field label="Email" required><TI value={data.instructor_email} onChange={v => update('instructor_email', v)} placeholder="abarker@sctcc.edu" type="email" /></Field>
-          <Field label="Phone"><TI value={data.instructor_phone} onChange={v => update('instructor_phone', v)} placeholder="320.308.6518" /></Field>
-          <Field label="Office Location" hint="e.g. 1-352A"><TI value={data.instructor_office} onChange={v => update('instructor_office', v)} placeholder="Location – 1-352A" /></Field>
+          {expected && (
+            <div className={`col-span-2 rounded-xl border px-4 py-2.5 text-xs ${differs.length ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`} role="status">
+              {instructorProfile
+                ? <>Contact details come from <strong>{expected.instructor_name}</strong>'s profile (Users page — edit them there once). {differs.length ? `${differs.length} field${differs.length === 1 ? '' : 's'} differ${differs.length === 1 ? 's' : ''}.` : 'Everything matches.'}</>
+                : <>The class lists <strong>{expected.instructor_name}</strong>, who isn't a CMMS user — enter their contact details here.</>}
+              {differs.length > 0 && <> <button type="button" onClick={() => { for (const [k, v] of differs) update(k, v) }} className="underline font-semibold min-h-[24px]">Use profile values</button></>}
+            </div>
+          )}
+          <Field label="Name" required hint={<InstrStatus f="instructor_name" />}><TI value={data.instructor_name} onChange={v => update('instructor_name', v)} placeholder="Aaron Barker" /></Field>
+          <Field label="Email" required hint={<InstrStatus f="instructor_email" />}><TI value={data.instructor_email} onChange={v => update('instructor_email', v)} placeholder="abarker@sctcc.edu" type="email" /></Field>
+          <Field label="Phone" hint={<InstrStatus f="instructor_phone" />}><TI value={data.instructor_phone} onChange={v => update('instructor_phone', v)} placeholder="320.308.6518" /></Field>
+          <Field label="Office Location" hint={<InstrStatus f="instructor_office" /> || 'e.g. 1-352A'}><TI value={data.instructor_office} onChange={v => update('instructor_office', v)} placeholder="Location – 1-352A" /></Field>
         </div>
-        <Field label="Office Hours">
+        <Field label="Office Hours" hint={<InstrStatus f="instructor_office_hours" />}>
           <TI value={data.instructor_office_hours} onChange={v => update('instructor_office_hours', v)} placeholder="Tuesday – Thursday 8AM – 4PM, needs to be scheduled." />
         </Field>
       </div>
@@ -1473,38 +1561,75 @@ function Step2Instructor({ data, update, commonSections }) {
   )
 }
 
-function Step3CourseInfo({ data, update }) {
+function Step3CourseInfo({ data, update, cls, onApplyToClass }) {
   const labCredits   = parseInt(data.credits_lab) || 0
+  const lecCredits   = parseInt(data.credits_lecture) || 0
   const semLen       = data.semester_length || '16'
-  const calcedHours  = calcHours(labCredits, semLen)
+  const calcedHours  = wizardHours(data)
   const isOverridden = data.required_hours_per_week !== calcedHours
   const [manualOverride, setManualOverride] = useState(isOverridden)
 
-  // Recalculate hours whenever lab credits or semester length changes,
+  // Recalculate hours whenever delivery, credits or semester length change,
   // unless the instructor has manually overridden the value.
   useEffect(() => {
     if (!manualOverride) {
       update('required_hours_per_week', calcedHours)
     }
-  }, [labCredits, semLen]) // eslint-disable-line
+  }, [labCredits, lecCredits, semLen, data.course_type]) // eslint-disable-line
 
   const handleSemLenChange = (val) => {
     update('semester_length', val)
     if (!manualOverride) {
-      update('required_hours_per_week', calcHours(labCredits, val))
+      update('required_hours_per_week', wizardHours(data, { semester_length: val }))
     }
   }
 
   const handleLabChange = (val) => {
     update('credits_lab', parseInt(val) || 0)
     if (!manualOverride) {
-      update('required_hours_per_week', calcHours(parseInt(val) || 0, semLen))
+      update('required_hours_per_week', wizardHours(data, { credits_lab: parseInt(val) || 0 }))
     }
   }
+
+  // What the CMMS class says, when one exists for this course + semester.
+  const expected = useMemo(() => {
+    if (!cls) return null
+    return {
+      course_type: DELIVERY_TO_COURSE_TYPE[normalizeDelivery(cls.delivery)] || 'hybrid',
+      credits_lecture: cls.credits_lecture == null ? null : parseFloat(cls.credits_lecture),
+      credits_lab: cls.credits_lab == null ? null : parseFloat(cls.credits_lab),
+      semester_length: cls.runs === 'first' || cls.runs === 'second' ? '8' : '16',
+      required_hours_per_week: parseFloat(cls.required_hours) || 0,
+    }
+  }, [cls])
+  const diffs = expected ? Object.entries(expected).filter(([k, v]) => v != null && String(v) !== String(data[k] ?? '')) : []
+  const useClass = () => {
+    for (const [k, v] of Object.entries(expected)) if (v != null) update(k, v)
+    setManualOverride(expected.required_hours_per_week !== wizardHours({ ...data, ...expected }))
+  }
+  const LABELS = { course_type: 'delivery', credits_lecture: 'lecture credits', credits_lab: 'lab credits', semester_length: 'length', required_hours_per_week: 'hours/wk' }
+  const showVal = (k, v) => (k === 'course_type' ? COURSE_TYPE_TO_DELIVERY[v] || v : k === 'semester_length' ? `${v}-week` : String(v))
 
   return (
     <div className="space-y-5">
       <p className="text-sm text-surface-500">Verify the credit structure (auto-filled from the course catalog).</p>
+
+      {cls && (
+        <div className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${diffs.length ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`} role="status">
+          <span>
+            Class <strong>{cls.course_id} {cls.semester}</strong> exists in the CMMS.
+            {diffs.length
+              ? ` Differs here: ${diffs.map(([k, v]) => `${LABELS[k]} ${showVal(k, v)} (syllabus: ${showVal(k, data[k] ?? '—')})`).join(', ')}.`
+              : ' Delivery, credits and hours match.'}
+          </span>
+          {diffs.length > 0 && (
+            <span className="shrink-0 flex flex-col gap-1 items-end">
+              <button type="button" onClick={useClass} className="text-xs font-semibold underline min-h-[44px]">Use class values</button>
+              {onApplyToClass && <button type="button" onClick={() => onApplyToClass('info')} className="text-xs underline min-h-[24px]">Update the class instead</button>}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Credits */}
       <div className="grid grid-cols-3 gap-4">
@@ -1529,7 +1654,7 @@ function Step3CourseInfo({ data, update }) {
           if (v === 'online') {
             update('required_hours_per_week', 0)
           } else if (!manualOverride) {
-            update('required_hours_per_week', calcHours(labCredits, semLen))
+            update('required_hours_per_week', wizardHours(data, { course_type: v }))
           }
         }} options={[
           { value: 'hybrid',      label: 'Hybrid – Online lecture + scheduled lab hours' },
@@ -1544,8 +1669,8 @@ function Step3CourseInfo({ data, update }) {
       <Field label="Semester Length" required hint="Determines required campus hours per week">
         <div className="flex gap-3 mt-0.5">
           {[
-            { val: '16', label: '16-Week (Full Semester)', formula: `${labCredits} lab cr × 2 = ${calcHours(labCredits, '16')} hrs/wk` },
-            { val: '8',  label: '8-Week (Half Semester)',  formula: `${labCredits} lab cr × 4 = ${calcHours(labCredits, '8')} hrs/wk` },
+            { val: '16', label: '16-Week (Full Semester)', formula: wizardHoursText({ ...data, semester_length: '16' }) },
+            { val: '8',  label: '8-Week (Half Semester)',  formula: wizardHoursText({ ...data, semester_length: '8' }) },
           ].map(opt => (
             <button
               key={opt.val}
@@ -1573,7 +1698,7 @@ function Step3CourseInfo({ data, update }) {
             <p className="text-xs text-surface-400 mt-0.5">
               {manualOverride
                 ? 'Manually set — auto-calculation disabled'
-                : `Auto-calculated: ${labCredits} lab credit${labCredits !== 1 ? 's' : ''} × ${semLen === '8' ? '4' : '2'} (${semLen}-week) = ${calcedHours} hrs/wk`
+                : `Auto-calculated: ${wizardHoursText(data)}`
               }
             </p>
           </div>
@@ -1663,23 +1788,91 @@ function Step3CourseInfo({ data, update }) {
   )
 }
 
-function Step4Dates({ data, update }) {
+// Syllabus date field ↔ term / class field. The class (an 8-week section) wins
+// for begin/end when one exists; everything else comes from the term.
+// Third column: which source the date comes from — 'term' or 'class' (drop /
+// withdraw depend on the class start, so they only ever come from the class).
+const TERM_DATE_MAP = [
+  ['begin_date', 'begin_date', 'Course Begin Date', true],
+  ['end_date', 'end_date', 'Course End Date', true],
+  ['last_drop_date', null, 'Last Day to Drop (Full Refund)', true],
+  ['last_withdraw_date', null, 'Last Day to Withdraw (Grade \'W\')', true],
+  ['spring_break_start', 'spring_break_start', 'Spring Break Start', false],
+  ['spring_break_end', 'spring_break_end', 'Spring Break End', false],
+  ['finals_start', 'finals_start', 'Finals Week Start', false],
+  ['finals_end', 'finals_end', 'Finals Week End', false],
+]
+
+function Step4Dates({ data, update, term, cls, onApplyToClass }) {
+  // What the calendar says each date should be: the class's own start/end
+  // (8-week sections, Discovery Academy) when a class exists, else the term.
+  const expected = useMemo(() => {
+    if (!term && !cls) return null
+    const e = {}
+    for (const [f, tf] of TERM_DATE_MAP) e[f] = tf && term?.[tf] ? String(term[tf]).substring(0, 10) : ''
+    if (cls) {
+      if (cls.start_date) e.begin_date = String(cls.start_date).substring(0, 10)
+      if (cls.end_date) e.end_date = String(cls.end_date).substring(0, 10)
+      e.last_drop_date = cls.last_drop_date ? String(cls.last_drop_date).substring(0, 10) : ''
+      e.last_withdraw_date = cls.last_withdraw_date ? String(cls.last_withdraw_date).substring(0, 10) : ''
+      // Break / finals as the class actually has them (an 8-week section has no
+      // finals week; a break only applies when it falls inside its dates).
+      for (const f of ['spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']) e[f] = cls[f] ? String(cls[f]).substring(0, 10) : ''
+    }
+    return e
+  }, [term, cls])
+  const source = cls ? `${cls.course_id} (class)` : term ? `${term.name} (term)` : ''
+
+  // First visit with blank dates: fill from the calendar so nothing is retyped.
+  useEffect(() => {
+    if (!expected) return
+    for (const [f] of TERM_DATE_MAP) if (!data[f] && expected[f]) update(f, expected[f])
+  }, [expected]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const differs = expected ? TERM_DATE_MAP.filter(([f]) => expected[f] && data[f] && data[f] !== expected[f]) : []
+  const useAll = () => { for (const [f] of TERM_DATE_MAP) if (expected[f]) update(f, expected[f]) }
+
+  const Status = ({ f }) => {
+    if (!expected || !expected[f]) return null
+    const fromClass = !!cls && (f === 'begin_date' || f === 'end_date' || f === 'last_drop_date' || f === 'last_withdraw_date')
+    if (data[f] === expected[f]) return <span className="text-[11px] text-emerald-700">matches {fromClass ? 'class' : 'term'} ✓</span>
+    return (
+      <span className="text-[11px] text-amber-700">
+        {fromClass ? 'Class' : 'Term'} says {fmtTermDate(expected[f])}.{' '}
+        <button type="button" onClick={() => update(f, expected[f])} className="underline font-medium min-h-[24px]">Use it</button>
+      </span>
+    )
+  }
+
   return (
     <div className="space-y-5">
-      <p className="text-sm text-surface-500">Enter all important semester dates. Spring break and finals are optional.</p>
+      {expected ? (
+        <div className={`flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${differs.length ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-emerald-50 border-emerald-200 text-emerald-900'}`} role="status">
+          <span>
+            Dates come from <strong>{source}</strong> — set once under Settings.
+            {differs.length ? ` ${differs.length} date${differs.length === 1 ? '' : 's'} on this syllabus differ${differs.length === 1 ? 's' : ''} from the calendar.` : ' Everything matches.'}
+          </span>
+          {differs.length > 0 && (
+            <span className="shrink-0 flex flex-col gap-1 items-end">
+              <button type="button" onClick={useAll} className="text-xs font-semibold underline min-h-[44px]">Use calendar dates</button>
+              {cls && onApplyToClass && <button type="button" onClick={() => onApplyToClass('dates')} className="text-xs underline min-h-[24px]">Update the class instead</button>}
+            </span>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-surface-500">No term calendar for {data.semester || 'this semester'} yet — add it under Settings → Terms and these dates fill in automatically. Spring break and finals are optional.</p>
+      )}
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Course Begin Date" required><TI value={data.begin_date} onChange={v => update('begin_date', v)} type="date" /></Field>
-        <Field label="Course End Date" required><TI value={data.end_date} onChange={v => update('end_date', v)} type="date" /></Field>
-        <Field label="Last Day to Drop (Full Refund)" required><TI value={data.last_drop_date} onChange={v => update('last_drop_date', v)} type="date" /></Field>
-        <Field label="Last Day to Withdraw (Grade 'W')" required><TI value={data.last_withdraw_date} onChange={v => update('last_withdraw_date', v)} type="date" /></Field>
+        {TERM_DATE_MAP.filter(([, , , req]) => req).map(([f, , label]) => (
+          <Field key={f} label={label} required hint={<Status f={f} />}><TI value={data[f]} onChange={v => update(f, v)} type="date" /></Field>
+        ))}
       </div>
       <div className="border-t border-surface-100 pt-4">
         <p className="text-xs font-semibold text-surface-400 uppercase tracking-wide mb-3">Optional Dates</p>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Spring Break Start"><TI value={data.spring_break_start} onChange={v => update('spring_break_start', v)} type="date" /></Field>
-          <Field label="Spring Break End"><TI value={data.spring_break_end} onChange={v => update('spring_break_end', v)} type="date" /></Field>
-          <Field label="Finals Week Start"><TI value={data.finals_start} onChange={v => update('finals_start', v)} type="date" /></Field>
-          <Field label="Finals Week End"><TI value={data.finals_end} onChange={v => update('finals_end', v)} type="date" /></Field>
+          {TERM_DATE_MAP.filter(([, , , req]) => !req).map(([f, , label]) => (
+            <Field key={f} label={label} hint={<Status f={f} />}><TI value={data[f]} onChange={v => update(f, v)} type="date" /></Field>
+          ))}
         </div>
       </div>
     </div>
@@ -2749,6 +2942,57 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     ...(initialSemester ? { semester: initialSemester } : {}),
   }))
   const [courseCatalog, setCourseCatalog] = useState([])  // from syllabus_courses, NOT classes
+  // Academic terms (Settings → Terms): semester dropdown, default semester, Step 4 dates.
+  const { terms } = useAcademicTerms()
+  const semesterList = useMemo(() => {
+    const opts = semesterOptions(terms, [data.semester, ...SEMESTERS])
+    return opts.length ? opts : SEMESTERS
+  }, [terms, data.semester])
+  const term = useMemo(() => terms.find(t => t.name === data.semester) || null, [terms, data.semester])
+  // The default semester keeps the wizard's own rule (getDefaultSemester):
+  // about two weeks into a term instructors are already writing the NEXT
+  // semester's syllabus, so it rolls early. The term calendar supplies the
+  // dropdown and the dates, not the default.
+  // The CMMS class for this course + semester, if one exists (its dates win in Step 4).
+  const [cmmsClass, setCmmsClass] = useState(null)
+  useEffect(() => {
+    if (!data.course_id || !data.semester) { setCmmsClass(null); return }
+    let cancelled = false
+    supabase.from('classes').select('class_id, course_id, course_name, semester, instructor, instructor_email, delivery, credits_lecture, credits_lab, required_hours, start_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end, runs, override_term_dates, last_drop_date, last_withdraw_date')
+      .eq('course_id', data.course_id).eq('semester', data.semester).limit(1)
+      .then(({ data: rows }) => { if (!cancelled) setCmmsClass(rows?.[0] || null) })
+    return () => { cancelled = true }
+  }, [data.course_id, data.semester])
+  // The class's instructor profile (contact details for Step 2).
+  const [instructorProfile, setInstructorProfile] = useState(null)
+  useEffect(() => {
+    const email = cmmsClass?.instructor_email
+    if (!email) { setInstructorProfile(null); return }
+    let cancelled = false
+    supabase.from('profiles').select('email, first_name, last_name, phone, office, office_hours').ilike('email', email).limit(1)
+      .then(({ data: rows }) => { if (!cancelled) setInstructorProfile(rows?.[0] || null) })
+    return () => { cancelled = true }
+  }, [cmmsClass?.instructor_email])
+  // "Update the class instead" — push syllabus values onto the CMMS class (never silent).
+  const [applyToClass, setApplyToClass] = useState(null)   // null | 'info' | 'dates'
+  const [applying, setApplying] = useState(false)
+  const applyToClassNow = async () => {
+    if (!cmmsClass) return
+    setApplying(true)
+    try {
+      const upd = applyToClass === 'info'
+        ? { delivery: COURSE_TYPE_TO_DELIVERY[data.course_type] || 'Hybrid', credits_lecture: parseFloat(data.credits_lecture) || 0, credits_lab: parseFloat(data.credits_lab) || 0, required_hours: parseFloat(data.required_hours_per_week) || 0 }
+        : { start_date: data.begin_date || null, end_date: data.end_date || null, spring_break_start: data.spring_break_start || null, spring_break_end: data.spring_break_end || null, finals_start: data.finals_start || null, finals_end: data.finals_end || null, last_drop_date: data.last_drop_date || null, last_withdraw_date: data.last_withdraw_date || null, override_term_dates: true }
+      const { data: rows, error } = await supabase.from('classes').update({ ...upd, updated_at: new Date().toISOString() }).eq('class_id', cmmsClass.class_id).select()
+      if (error) throw error
+      if (!rows || !rows.length) throw new Error('Update was blocked — you may not have permission to edit classes')
+      await supabase.from('audit_log').insert({ user_email: user?.email, user_name: user?.email, action: 'Update', entity_type: 'classes', entity_id: cmmsClass.class_id,
+        details: `Updated from syllabus (${applyToClass === 'info' ? 'delivery/credits/hours' : 'dates'}): ${Object.entries(upd).map(([k, v]) => `${k}=${v ?? '—'}`).join(', ')}` })
+      setCmmsClass(rows[0])
+      toast.success('Class updated from this syllabus')
+    } catch (e) { toast.error(e.message) }
+    setApplying(false); setApplyToClass(null)
+  }
   const [commonSections, setCommonSections] = useState([])
   const [saving, setSaving] = useState(false)
   const [loadingData, setLoadingData] = useState(false)
@@ -2789,7 +3033,7 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     ]).then(([{ data: row }, { data: catalogRow }, { data: allRows }]) => {
       const others = (allRows || [])
         .filter(r => r.semester !== data.semester)
-        .sort((a, b) => SEMESTERS.indexOf(a.semester) - SEMESTERS.indexOf(b.semester))
+        .sort((a, b) => parseTermName(b.semester).order - parseTermName(a.semester).order)
       setOtherSemesters(others)
       if (row) {
         setSavedExists(true)
@@ -2949,10 +3193,10 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
 
   const stepContent = () => {
     switch (step) {
-      case 1: return <Step1CourseSelect data={data} update={update} courseCatalog={courseCatalog} setCatalog={setCourseCatalog} savedExists={savedExists} otherSemesters={otherSemesters} onDuplicate={handleDuplicate} />
-      case 2: return <Step2Instructor data={data} update={update} commonSections={commonSections} />
-      case 3: return <Step3CourseInfo data={data} update={update} />
-      case 4: return <Step4Dates data={data} update={update} />
+      case 1: return <Step1CourseSelect data={data} update={update} courseCatalog={courseCatalog} setCatalog={setCourseCatalog} savedExists={savedExists} otherSemesters={otherSemesters} onDuplicate={handleDuplicate} semesters={semesterList} cls={cmmsClass} />
+      case 2: return <Step2Instructor data={data} update={update} commonSections={commonSections} instructorProfile={instructorProfile} cls={cmmsClass} />
+      case 3: return <Step3CourseInfo data={data} update={update} cls={cmmsClass} onApplyToClass={setApplyToClass} />
+      case 4: return <Step4Dates data={data} update={update} term={term} cls={cmmsClass} onApplyToClass={setApplyToClass} />
       case 5: return <Step5Materials data={data} update={update} catalogRefreshKey={catalogRefreshKey} />
       case 6: return <Step6Description data={data} update={update} />
       case 7: return <Step7Grading data={data} update={update} />
@@ -3036,8 +3280,20 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
 
       {/* Post-PDF: offer to create CMMS class */}
       {showCreateClass && (
-        <CreateCMSSClassModal syllabusData={data} onClose={() => setShowCreateClass(false)} />
+        <CreateCMSSClassModal syllabusData={data} onClose={() => setShowCreateClass(false)} terms={terms} />
       )}
+      <ConfirmDialog
+        open={!!applyToClass}
+        variant="primary"
+        title={applyToClass === 'info' ? `Update ${cmmsClass?.course_id} ${cmmsClass?.semester} to match this syllabus?` : `Update ${cmmsClass?.course_id} ${cmmsClass?.semester} dates to match this syllabus?`}
+        message={applyToClass === 'info'
+          ? <>The class will take this syllabus's delivery ({COURSE_TYPE_TO_DELIVERY[data.course_type] || 'Hybrid'}), credits ({parseFloat(data.credits_lecture) || 0} lecture / {parseFloat(data.credits_lab) || 0} lab) and {parseFloat(data.required_hours_per_week) || 0} hrs/wk. Time Cards and the Class Schedule use these.</>
+          : <>The class will take this syllabus's begin/end, break, finals and drop/withdraw dates and be marked as keeping its own calendar. Time Cards, Lab Signup and WOC read the class dates.</>}
+        confirmLabel="Update class"
+        busy={applying}
+        onConfirm={applyToClassNow}
+        onClose={() => setApplyToClass(null)}
+      />
     </>
   )
 }

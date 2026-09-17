@@ -17,6 +17,9 @@ import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import { useAcademicTerms } from '@/hooks/useAcademicTerms'
+import { useStudentEnrollments, useEnrollmentActions } from '@/hooks/useEnrollments'
+import { RUNS_SHORT } from '@/lib/academicTerms'
 import {
   usePooledCheckouts,
   useCheckoutActions,
@@ -1231,14 +1234,57 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
     lastName: user.last_name || '',
     role: user.role || 'Student',
     status: user.status || 'Active',
-    classes: user.classes || '',
     cardId: user.card_id ? String(user.card_id) : '',
-    timeClockOnly: user.time_clock_only === 'Yes'
+    timeClockOnly: user.time_clock_only === 'Yes',
+    // Instructor contact — the Syllabus Wizard prefills from these
+    phone: user.phone || '',
+    office: user.office || '',
+    officeHours: user.office_hours || '',
   })
+
+  // ── Enrollment (per class offering) ──
+  // Classes are enrolled per offering in class_enrollments; the old
+  // profiles.classes list is a cache the database keeps up to date. Here the
+  // current term's Active classes are a checklist; earlier enrollments are
+  // shown read-only below.
+  const { current: currentTerm } = useAcademicTerms()
+  const { enrollments, loading: enrLoading, refresh: refreshEnrollments } = useStudentEnrollments(user.email)
+  const { setRoster: setRosterFor, saving: enrSaving } = useEnrollmentActions()
+  const [termClasses, setTermClasses] = useState([])
+  useEffect(() => {
+    if (!currentTerm) { setTermClasses([]); return }
+    let cancelled = false
+    supabase.from('classes').select('class_id, course_id, course_name, semester, runs, instructor, status')
+      .eq('term_id', currentTerm.term_id).eq('status', 'Active').order('course_id')
+      .then(({ data }) => { if (!cancelled) setTermClasses(data || []) })
+    return () => { cancelled = true }
+  }, [currentTerm])
+  const enrolledIds = useMemo(() => new Set(enrollments.map(e => e.class_id)), [enrollments])
+  const [picked, setPicked] = useState(null)   // Set<class_id> for the current term, null until loaded
+  useEffect(() => { if (!enrLoading) setPicked(new Set([...enrolledIds].filter(id => termClasses.some(c => c.class_id === id)))) }, [enrLoading, enrolledIds, termClasses])
+  const pastEnrollments = enrollments.filter(e => !termClasses.some(c => c.class_id === e.class_id))
+  const enrollmentDirty = picked && (
+    termClasses.some(c => picked.has(c.class_id) !== enrolledIds.has(c.class_id))
+  )
+  const isStudentRole = form.role === 'Student' || form.role === 'Work Study'
 
   const handleSave = async () => {
     try {
       await actions.updateUser(user.id, form)
+      // Enrollment: per class, one call each for the current term's classes that changed.
+      if (picked && enrollmentDirty) {
+        const label = `${form.firstName} ${form.lastName}`.trim() || user.email
+        for (const c of termClasses) {
+          const want = picked.has(c.class_id), have = enrolledIds.has(c.class_id)
+          if (want === have) continue
+          // Compute the class roster with this one student added / removed.
+          const rows = await supabase.from('class_enrollments').select('student_email').eq('class_id', c.class_id)
+          const emails = new Set((rows.data || []).map(r => String(r.student_email).toLowerCase()))
+          if (want) emails.add(String(user.email).toLowerCase()); else emails.delete(String(user.email).toLowerCase())
+          await setRosterFor(c, [...emails], { [String(user.email).toLowerCase()]: label })
+        }
+        refreshEnrollments()
+      }
       onSaved()
     } catch {}
   }
@@ -1278,11 +1324,57 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
           </div>
         </div>
 
-        <div>
-          <label htmlFor="edit-classes" className="label">Classes (comma-separated)</label>
-          <input id="edit-classes" value={form.classes} onChange={e => setForm(f => ({ ...f, classes: e.target.value }))}
-            className="input text-sm" placeholder="RICT-101, RICT-201" />
-        </div>
+        {form.role === 'Instructor' && (
+          <fieldset className="space-y-2">
+            <legend className="label">Instructor contact <span className="font-normal text-surface-400">(printed on syllabi)</span></legend>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label htmlFor="edit-phone" className="text-[10px] text-surface-500 font-medium">Phone</label>
+                <input id="edit-phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} className="input text-sm" placeholder="320.308.6518" />
+              </div>
+              <div>
+                <label htmlFor="edit-office" className="text-[10px] text-surface-500 font-medium">Office</label>
+                <input id="edit-office" value={form.office} onChange={e => setForm(f => ({ ...f, office: e.target.value }))} className="input text-sm" placeholder="1-352A" />
+              </div>
+            </div>
+            <div>
+              <label htmlFor="edit-office-hours" className="text-[10px] text-surface-500 font-medium">Office hours</label>
+              <input id="edit-office-hours" value={form.officeHours} onChange={e => setForm(f => ({ ...f, officeHours: e.target.value }))} className="input text-sm" placeholder="Tuesday – Thursday 8AM – 4PM, by appointment" />
+            </div>
+          </fieldset>
+        )}
+
+        {isStudentRole && (
+          <fieldset>
+            <legend className="label">Enrolled classes{currentTerm ? ` — ${currentTerm.name}` : ''}</legend>
+            {!currentTerm ? (
+              <p className="text-xs text-surface-500">No current term is set up (Settings → Terms), so there is nothing to enroll in yet.</p>
+            ) : termClasses.length === 0 ? (
+              <p className="text-xs text-surface-500">No Active classes in {currentTerm.name} yet — add them under Settings → Classes.</p>
+            ) : picked === null || enrLoading ? (
+              <p className="text-xs text-surface-400">Loading enrollment…</p>
+            ) : (
+              <div className="max-h-48 overflow-y-auto border border-surface-200 rounded-lg divide-y divide-surface-100">
+                {termClasses.map(c => (
+                  <label key={c.class_id} className="flex items-center gap-3 px-3 min-h-[44px] text-sm cursor-pointer hover:bg-surface-50">
+                    <input type="checkbox" checked={picked.has(c.class_id)}
+                      onChange={e => setPicked(prev => { const n = new Set(prev); if (e.target.checked) n.add(c.class_id); else n.delete(c.class_id); return n })}
+                      className="w-4 h-4 rounded border-surface-300 text-brand-600 focus:ring-brand-500" />
+                    <span className="font-semibold text-surface-900">{c.course_id}</span>
+                    <span className="text-surface-600 truncate">{c.course_name}</span>
+                    {c.runs && c.runs !== 'full' && <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-600 border border-surface-200">{RUNS_SHORT[c.runs]}</span>}
+                  </label>
+                ))}
+              </div>
+            )}
+            {pastEnrollments.length > 0 && (
+              <p className="text-[11px] text-surface-500 mt-1.5">
+                Also enrolled (other terms): {pastEnrollments.map(e => `${e.class.course_id} ${e.class.semester || ''}`.trim()).join(', ')} — manage those under Settings → Classes.
+              </p>
+            )}
+            <p className="text-[11px] text-surface-400 mt-1">Saving updates the class rosters and this user's class list.</p>
+          </fieldset>
+        )}
 
         <div>
           <label htmlFor="edit-card-id" className="label">Card ID / Badge</label>
@@ -1300,7 +1392,7 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
         </label>
 
         <div className="flex gap-2 pt-1">
-          <button onClick={handleSave} disabled={actions.saving} className="btn-primary text-sm gap-1.5 flex-1 min-h-[44px]">
+          <button onClick={handleSave} disabled={actions.saving || enrSaving} className="btn-primary text-sm gap-1.5 flex-1 min-h-[44px]">
             {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />} Save
           </button>
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>

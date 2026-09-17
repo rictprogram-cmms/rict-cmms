@@ -40,12 +40,14 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import {
-  HUES, normalize, clone, ensure, emptyWeek, diffDocs, parseSemester, semesterList,
+  HUES, normalize, clone, ensure, emptyWeek, diffDocs, parseSemester,
   deriveSpan, semesterBounds, termsOf, primaryTerm, uid, DAYS,
 } from '@/lib/scheduleModel'
 import { normalizeDelivery } from '@/lib/classDelivery'
+import { useAcademicTerms } from '@/hooks/useAcademicTerms'
+import { semesterOptions, currentTerm as pickCurrentTerm, parseTermName } from '@/lib/academicTerms'
 
-const CLASS_COLS = 'class_id, course_id, course_name, instructor, required_hours, semester, status, start_date, end_date, delivery'
+const CLASS_COLS = 'class_id, course_id, course_name, instructor, instructor_email, required_hours, semester, status, start_date, end_date, delivery, term_id, runs, override_term_dates'
 const ITEM_COLS = 'item_id, schedule_id, class_id, is_adhoc, code, title, instructor, hours, room, span, color, group_key, note, slots_a, slots_b, sort_order, updated_at, updated_by'
 const SAVE_DEBOUNCE_MS = 500
 const MAX_AUDIT_LINES = 40
@@ -56,6 +58,9 @@ export function useSemesterOptions() {
   const [classes, setClasses] = useState([])
   const [loading, setLoading] = useState(true)
   const loadedRef = useRef(false)
+  // Settings → Terms is the semester list of record; distinct classes.semester
+  // values are only a fallback for data older than the terms calendar.
+  const { terms, loading: termsLoading } = useAcademicTerms()
 
   const load = useCallback(async () => {
     try {
@@ -74,7 +79,10 @@ export function useSemesterOptions() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, load)
   , { tag: 'ClassSchedule' }), [load])
 
-  const semesters = useMemo(() => semesterList(classes), [classes])
+  const semesters = useMemo(() => {
+    const names = semesterOptions(terms.filter(t => t.status !== 'Archived'), classes.map(c => c.semester))
+    return names.map(n => ({ ...parseSemester(n), name: n }))
+  }, [terms, classes])
   const classesBySemester = useMemo(() => {
     const m = new Map()
     for (const c of classes) {
@@ -86,8 +94,10 @@ export function useSemesterOptions() {
     return m
   }, [classes])
 
-  /** Semester in session today, else the next one up, else the newest. */
+  /** The current term (Settings → Terms); else the semester whose classes are in session, next up, or newest. */
   const defaultSemester = useMemo(() => {
+    const cur = pickCurrentTerm(terms)
+    if (cur) return cur.name
     if (!semesters.length) return ''
     const today = new Date(); today.setHours(0, 0, 0, 0)
     let upcoming = null
@@ -97,9 +107,9 @@ export function useSemesterOptions() {
       if (b.start && b.start > today && (!upcoming || b.start < upcoming.start)) upcoming = { start: b.start, name: s.name }
     }
     return upcoming ? upcoming.name : semesters[0].name
-  }, [semesters, classesBySemester])
+  }, [terms, semesters, classesBySemester])
 
-  return { classes, semesters, classesBySemester, defaultSemester, loading, refresh: load }
+  return { classes, semesters, classesBySemester, defaultSemester, loading: loading || termsLoading, refresh: load }
 }
 
 // ─── Doc ↔ rows ───────────────────────────────────────────────────────────────
@@ -118,9 +128,10 @@ function buildDoc({ semester, scheduleRow, items, classes }) {
     const id = it?.item_id || `CSI-${scheduleId}-${cls.class_id}`
     courses.push({
       id, classId: cls.class_id, adhoc: false,
-      code: cls.course_id || '', title: cls.course_name || '', instructor: cls.instructor || '',
+      code: cls.course_id || '', title: cls.course_name || '', instructor: cls.instructor || '', instructorEmail: cls.instructor_email || '',
       hours: parseFloat(cls.required_hours) || 0,
-      room: it?.room || '', span: it?.span || deriveSpan(cls, bounds),
+      // Half of term: the class's own "runs" (Settings) wins; dates are the fallback for legacy rows.
+      room: it?.room || '', span: it?.span || (cls.runs === 'first' ? 'first' : cls.runs === 'second' ? 'second' : cls.runs === 'full' ? 'both' : deriveSpan(cls, bounds)),
       color: it?.color || HUES[i % HUES.length].k, group: it?.group_key || '', note: it?.note || '',
       status: cls.status || 'Active', delivery: normalizeDelivery(cls.delivery),
     })

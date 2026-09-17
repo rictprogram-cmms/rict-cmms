@@ -192,16 +192,16 @@ const DEFAULT_PERMISSIONS = [
   ['P146', 'Network Map', 'print_map',       false, true,  true,  'Can print the Network Map'],
   ['P147', 'Network Map', 'export_data',     false, true,  true,  'Can export Network Map data'],
   ['P148', 'Network Map', 'manage_subnets',  false, false, true,  'Can manage subnet definitions (planned feature)'],
-  // P178: IT-managed segments (wireless AP). IT assigns these addresses, so
+  // P181: IT-managed segments (wireless AP). IT assigns these addresses, so
   // recording them is instructor-only regardless of add/edit/delete_devices.
-  // (Was listed as P177, but the 2026-09-02 seed never ran and P177 went to
-  // exclude_from_woc on 2026-09-16; Sync inserts this row as P178.)
-  ['P178', 'Network Map', 'manage_it_segments', false, false, true, 'Can add, edit, and delete devices on IT-managed segments (e.g. the wireless access point)'],
+  // (The 2026-09-02 seed never ran; P177–P180 were taken by later migrations.
+  // The Access page Sync inserts this row as P181.)
+  ['P181', 'Network Map', 'manage_it_segments', false, false, true, 'Can add, edit, and delete devices on IT-managed segments (e.g. the wireless access point)'],
 
   // Class Schedule (term scheduler moved into the CMMS 2026-09) — seeded by
   // 20260917_class_schedule.sql with the next free P-numbers.
-  ['P179', 'Class Schedule', 'view_page',     true,  true,  true, 'Can view the Class Schedule page'],
-  ['P180', 'Class Schedule', 'edit_schedule', false, false, true, 'Can place classes on the grid, edit rooms / notes / combined groups, add unlisted classes, and copy a layout from a past semester'],
+  ['P178', 'Class Schedule', 'view_page',     true,  true,  true, 'Can view the Class Schedule page'],
+  ['P179', 'Class Schedule', 'edit_schedule', false, false, true, 'Can place classes on the grid, edit rooms / notes / combined groups, add unlisted classes, and copy a layout from a past semester'],
 
   // Reports (Time Cards)
   ['P060', 'Reports', 'view_page', true, true, true, 'Can access Reports/Time Cards'],
@@ -294,6 +294,8 @@ const DEFAULT_PERMISSIONS = [
   ['P107', 'Settings', 'manage_asset_locations', false, false, false, 'Can manage asset locations'],
   ['P108', 'Settings', 'manage_inventory_locations', false, false, false, 'Can manage inventory locations'],
   ['P109', 'Settings', 'edit_storage_settings', false, false, false, 'Can edit Google Drive folder IDs (Super Admin)'],
+  // P180: Academic Terms (Settings → Terms) — seeded by 20260918_academic_terms.sql
+  ['P180', 'Settings', 'manage_terms', false, false, true, 'Can add and edit academic terms (semester calendars) under Settings → Terms'],
   ['P10A', 'Settings', 'edit_notification_settings', false, false, false, 'Can edit notification email (Super Admin)'],
   ['P10B', 'Settings', 'edit_printing_settings', false, false, false, 'Can edit label printer settings (Super Admin)'],
   ['P10C', 'Settings', 'edit_lab_settings', false, false, true, 'Can edit weekly lab tracker settings']

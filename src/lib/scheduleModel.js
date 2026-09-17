@@ -70,7 +70,7 @@ export function normalize(doc) {
   doc.endHour = clamp(+doc.endHour || 18, doc.startHour + 1, 24)
   doc.courses = (doc.courses || []).map(c => ({
     id: c.id || uid(), classId: c.classId || null, adhoc: !!c.adhoc,
-    code: c.code || '', title: c.title || '', instructor: c.instructor || '',
+    code: c.code || '', title: c.title || '', instructor: c.instructor || '', instructorEmail: c.instructorEmail || '',
     room: c.room || '', hours: +c.hours || 0, span: SPANS[c.span] ? c.span : 'first',
     color: c.color || 'blue', group: c.group || '', note: c.note || '',
     status: c.status || 'Active', delivery: c.delivery || '',   // '' for ad-hoc classes
@@ -199,10 +199,13 @@ export function conflicts(doc) {
         const combined = A.group && A.group === B.group
         const pairs = []
         // One instructor in two places is a clash — unless the classes are
-        // deliberately combined, which is exactly that arrangement.
-        if (!combined && A.instructor && B.instructor
-            && A.instructor.trim().toLowerCase() === B.instructor.trim().toLowerCase())
-          pairs.push(['Instructor', A.instructor])
+        // deliberately combined, which is exactly that arrangement. Linked
+        // classes match by profile email; typed names match by text.
+        const sameInstructor = (A.instructorEmail && B.instructorEmail)
+          ? A.instructorEmail.trim().toLowerCase() === B.instructorEmail.trim().toLowerCase()
+          : (A.instructor && B.instructor && A.instructor.trim().toLowerCase() === B.instructor.trim().toLowerCase())
+        if (!combined && sameInstructor)
+          pairs.push(['Instructor', A.instructor || A.instructorEmail])
         if (A.room && B.room && A.room.trim().toLowerCase() === B.room.trim().toLowerCase())
           pairs.push([combined ? 'Combined, same room' : 'Room', A.room])
         for (const [kind, who] of pairs) {

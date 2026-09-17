@@ -66,6 +66,10 @@ export function useUserActions() {
       if (updates.classes !== undefined) dbUpdates.classes = updates.classes
       if (updates.cardId !== undefined) dbUpdates.card_id = updates.cardId
       if (updates.timeClockOnly !== undefined) dbUpdates.time_clock_only = updates.timeClockOnly ? 'Yes' : ''
+      // Instructor contact (printed on syllabi — entered once here)
+      if (updates.phone !== undefined) dbUpdates.phone = updates.phone || null
+      if (updates.office !== undefined) dbUpdates.office = updates.office || null
+      if (updates.officeHours !== undefined) dbUpdates.office_hours = updates.officeHours || null
 
       const { data: rows, error } = await supabase
         .from('profiles')
