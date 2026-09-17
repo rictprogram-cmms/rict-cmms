@@ -15,7 +15,7 @@
  *   • Lab Access Mode confirm-then-toggle + audit log + PM auto-pause sync
  *   • Instructor Away Mode toggle + return time + audit log
  *   • Dashboard defaults (Day View, Temp Access)
- *   • Weekly Labs reminder textarea
+ *   • All Done reminder editor (tab formerly "Weekly Labs" — tracker retired 2026-09, labs in D2L)
  *   • WOC Ratio 7-knob editor + reset-to-default
  *   • General settings auto-grouping by category (with skip list)
  *   • lab_visible_days custom day picker
@@ -492,7 +492,7 @@ const AUDIT_SETTINGS = [
 const TAB_LABELS = {
   general: 'General',
   dashboard: 'Dashboard',
-  weekly_labs: 'Weekly Labs',
+  weekly_labs: 'All Done',
   evaluation: 'WOC Ratio',
   audit: 'Audit Log',
   categories: 'Categories',
@@ -523,7 +523,7 @@ function buildRegistry() {
   })
 
   // Weekly Labs
-  reg.push({ key: 'weekly_reminders', tab: 'weekly_labs', label: 'Mark All Done — Weekly Reminders', desc: 'Per-class reminder messages with markdown support and history', aliases: 'reminder message weekly tracker swipe markdown class history' })
+  reg.push({ key: 'weekly_reminders', tab: 'weekly_labs', label: 'Mark All Done — Weekly Reminders', desc: 'Per-class reminder messages shown in the All Done swipe (Time Cards), with markdown support and history', aliases: 'reminder message weekly labs tracker swipe markdown class history all done' })
 
   // Evaluation
   EVAL_SETTINGS.forEach(s => {
@@ -921,7 +921,7 @@ export default function SettingsPage() {
       items: [
         { id: 'general', label: 'General', icon: Sliders },
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'weekly_labs', label: 'Weekly Labs', icon: FlaskConical },
+        { id: 'weekly_labs', label: 'All Done', icon: FlaskConical },
         { id: 'evaluation', label: 'WOC Ratio', icon: Target },
         { id: 'audit',      label: 'Audit Log', icon: FileSearch },
       ],
@@ -2234,7 +2234,8 @@ function DashboardSettings() {
 //
 // Every save appends to `reminder_history` (auto-pruned to last 100 per scope).
 // Markdown rendering uses react-markdown + remark-gfm — see the popup in
-// WeeklyLabsTrackerPage.jsx for the matching student-facing renderer.
+// src/components/AllDoneModal.jsx (opened from Time Cards) for the matching
+// student-facing renderer.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Auto-grow textarea hook ────────────────────────────────────────────────
@@ -4220,7 +4221,7 @@ function ClassesSection() {
   const startAdd = () => {
     setForm({
       course_id: '', course_name: '', required_hours: 0, instructor: '',
-      semester: '', status: 'Active', tracking_type: 'Weekly',
+      semester: '', status: 'Active', tracking_type: 'None',   // tracker retired 2026-09 — every class is 'None'
       requires_volunteer_hours: false,
       start_date: '', end_date: '',
       spring_break_start: '', spring_break_end: '', finals_start: '', finals_end: ''
@@ -4237,7 +4238,7 @@ function ClassesSection() {
       instructor: cls.instructor || '',
       semester: cls.semester || '',
       status: cls.status || 'Active',
-      tracking_type: cls.tracking_type || 'Weekly',
+      tracking_type: 'None',   // tracker retired 2026-09 — saving normalises every class to 'None'
       requires_volunteer_hours: cls.requires_volunteer_hours || false,
       start_date: cls.start_date ? String(cls.start_date).substring(0, 10) : '',
       end_date: cls.end_date ? String(cls.end_date).substring(0, 10) : '',
@@ -4449,14 +4450,6 @@ function ClassesSection() {
                   <option>Inactive</option>
                 </select>
               </div>
-              <div>
-                <label htmlFor="st-fld-tracking-type-7" className="text-[10px] text-surface-500 font-medium">Tracking Type</label>
-                <select id="st-fld-tracking-type-7" value={form.tracking_type} onChange={e => setForm(f => ({ ...f, tracking_type: e.target.value }))} className="input text-sm">
-                  <option value="Weekly">Weekly</option>
-                  <option value="Daily">Daily</option>
-                  <option value="None">None</option>
-                </select>
-              </div>
               <div className="flex items-end pb-1.5">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
@@ -4481,10 +4474,10 @@ function ClassesSection() {
               </div>
             </div>
 
-            {form.start_date && form.end_date && form.tracking_type !== 'None' && (
+            {form.start_date && form.end_date && (
               <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
                 <Calendar size={13} aria-hidden="true" />
-                Start/End dates determine the weekly lab tracker weeks. Weeks run Monday–{weekEndDayName(weekEndOffset)} (set by Lab Open Days).
+                Start/End dates determine the class week calendar (All Done, Time Cards reports, Lab Signup, WOC Ratio). Weeks run Monday–{weekEndDayName(weekEndOffset)} (set by Lab Open Days).
               </div>
             )}
 
@@ -4646,11 +4639,6 @@ function ClassesSection() {
                           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                             cls.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-surface-100 text-surface-500'
                           }`}>{cls.status}</span>
-                          {(cls.tracking_type === 'None') && (
-                            <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-surface-100 text-surface-500 border border-surface-200">
-                              No Tracker
-                            </span>
-                          )}
                           {cls.requires_volunteer_hours && (
                             <span className="inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-700 border border-purple-200">
                               Volunteer
@@ -4873,7 +4861,7 @@ function DuplicateClassModal({ cls, actions, onClose, onSaved }) {
         required_hours: cls.required_hours,
         instructor: cls.instructor,
         status: 'Active',
-        tracking_type: cls.tracking_type || 'Weekly',
+        tracking_type: 'None',   // tracker retired 2026-09
         requires_volunteer_hours: cls.requires_volunteer_hours || false,
         semester: form.semester.trim(),
         start_date: form.start_date,

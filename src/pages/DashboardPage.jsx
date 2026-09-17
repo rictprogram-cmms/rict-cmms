@@ -5,7 +5,8 @@
  * 
  * Student / Work Study: Compact 1×4 accountability metrics
  *   - Work Orders (open, assigned to me)
- *   - Weekly Labs (completed this week out of enrolled classes)
+ *   - All Done (instructor-swipe confirmation for today — reads the time_clock marker;
+ *     replaced the Weekly Labs tile when the tracker was retired for D2L, 2026-09)
  *   - Attendance Score (on-time %)
  *   - Volunteer Hours (approved / required)
  * 
@@ -33,7 +34,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow';
 import { resolveVolunteerWindow } from '@/lib/volunteerWindow';
 import { useVolunteerData } from '@/hooks/useVolunteerHours';
-import { useStudentLabReport } from '@/hooks/useWeeklyLabs';
+import { fetchAllDoneToday, formatFakeUtcTime } from '@/components/AllDoneSection';
 import { useWOCRatio, computeStudentScoresForWindows } from '@/hooks/useWOCRatio';
 import { generateUserReport } from '@/hooks/useTimeCards';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
@@ -171,7 +172,9 @@ function formatDateLabel(date) {
 function AccountabilityMetrics({ navigate }) {
   const { profile } = useAuth();
   const { stats: volStats, loading: volLoading } = useVolunteerData();
-  const { report: labReport, loading: labLoading } = useStudentLabReport();
+  // All Done today — same time_clock marker AllDoneSection (Time Cards) reads
+  const [allDone, setAllDone] = useState({ done: false, by: '', at: null, punchedIn: false });
+  const [allDoneLoading, setAllDoneLoading] = useState(true);
   const { myScore: wocScore, loading: wocLoading } = useWOCRatio();
 
   const [woCount, setWoCount] = useState(0);
@@ -278,22 +281,25 @@ function AccountabilityMetrics({ navigate }) {
     return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email, profile?.user_id, profile?.classes]);
 
-  const labsThisWeek = useMemo(() => {
-    if (!labReport?.classes?.length) return { done: 0, total: 0 };
-    let done = 0, total = 0;
-    labReport.classes.forEach(cls => {
-      const weekNum = getCurrentWeekNumber(cls.classWeeks?.[0]?.startDate || null);
-      const totalWeeks = cls.totalWeeks || 0;
-      if (weekNum > 0 && weekNum <= totalWeeks) {
-        total++;
-        const wd = cls.weeks?.[weekNum];
-        if (wd?.labComplete) done++;
-      }
-    });
-    return { done, total };
-  }, [labReport]);
+  useEffect(() => {
+    if (!profile?.email) { setAllDoneLoading(false); return undefined; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetchAllDoneToday(profile.email);
+        if (!cancelled) setAllDone(r);
+      } catch { /* leave previous */ }
+      if (!cancelled) setAllDoneLoading(false);
+    };
+    load();
+    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
+    const unsubscribe = subscribeWithReconnect('dash-all-done', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, load)
+    , { tag: 'Dashboard' });
+    return () => { cancelled = true; unsubscribe(); };
+  }, [profile?.email]);
 
-  const isLoading = volLoading || labLoading || woLoading || attLoading || wocLoading;
+  const isLoading = volLoading || allDoneLoading || woLoading || attLoading || wocLoading;
   if (isLoading) return null;
 
   const scoreColor = (v) => v >= 90 ? '#40c057' : v >= 70 ? '#fab005' : '#fa5252';
@@ -310,12 +316,12 @@ function AccountabilityMetrics({ navigate }) {
           <div className="dash-metric-label">Work Orders</div>
           <div className="dash-metric-sub">{woCount === 0 ? 'None assigned' : 'assigned to me'}</div>
         </button>
-        <button type="button" className="dash-metric-tile" onClick={() => navigate('/weekly-labs-tracker')}
-          aria-label={`Weekly Labs: ${labsThisWeek.total > 0 ? `${labsThisWeek.done} of ${labsThisWeek.total}` : 'none'} ${labsThisWeek.total === 0 ? 'this week' : labsThisWeek.done === labsThisWeek.total ? 'all complete' : 'complete this week'}`}>
-          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#20c997', background: '#e6fcf5' }}>fact_check</span>
-          <div className="dash-metric-value">{labsThisWeek.total > 0 ? `${labsThisWeek.done}/${labsThisWeek.total}` : '—'}</div>
-          <div className="dash-metric-label">Weekly Labs</div>
-          <div className="dash-metric-sub">{labsThisWeek.total === 0 ? 'No labs this week' : labsThisWeek.done === labsThisWeek.total ? 'All complete ✓' : 'complete this week'}</div>
+        <button type="button" className="dash-metric-tile" onClick={() => navigate('/time-cards')}
+          aria-label={`All Done: ${allDone.done ? `confirmed today${allDone.by ? ` by ${allDone.by}` : ''}${allDone.punchedIn ? ', still punched in' : ''}` : 'not yet today'}`}>
+          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: allDone.done ? '#2b8a3e' : '#20c997', background: allDone.done ? '#d3f9d8' : '#e6fcf5' }}>{allDone.done ? 'task_alt' : 'fact_check'}</span>
+          <div className="dash-metric-value">{allDone.done ? '✓' : '—'}</div>
+          <div className="dash-metric-label">All Done</div>
+          <div className="dash-metric-sub">{allDone.done ? (allDone.punchedIn ? 'Done — punch out!' : `Confirmed${allDone.at ? ` ${formatFakeUtcTime(allDone.at)}` : ''}`) : 'Not yet today'}</div>
         </button>
         <button type="button" className="dash-metric-tile" onClick={() => navigate('/time-cards')}
           aria-label={`Attendance: ${score} percent, ${score >= 90 ? 'on track' : score >= 70 ? 'needs improvement' : 'at risk'}`}>

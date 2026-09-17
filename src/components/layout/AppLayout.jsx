@@ -33,7 +33,6 @@ import {
   FlaskConical,
   LayoutDashboard,
   ClipboardList,
-  FileSpreadsheet,
   PieChart,
   Landmark,
   Megaphone,
@@ -93,7 +92,7 @@ const navSections = [
     title: 'REPORTS',
     items: [
       { name: 'Time Cards', href: '/time-cards', icon: Clock, permPage: 'Reports', roles: ['Student', 'Work Study', 'Instructor'] },
-      { name: 'Weekly Labs Tracker', href: '/weekly-labs', icon: FileSpreadsheet, permPage: 'Weekly Labs', roles: ['Student', 'Work Study', 'Instructor'] },
+      // Weekly Labs Tracker retired 2026-09 (labs tracked in D2L). All Done now lives on Time Cards.
       { name: 'Volunteer Hours', href: '/volunteer-hours', icon: Heart, permPage: 'Volunteer Hours', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Attendance Reports', href: '/attendance-reports', icon: BarChart3, permPage: null, roles: ['Instructor'] },
       { name: 'WOC Ratio', href: '/woc-ratio', icon: PieChart, permPage: 'WOC Ratio', roles: ['Student', 'Work Study', 'Instructor'] },

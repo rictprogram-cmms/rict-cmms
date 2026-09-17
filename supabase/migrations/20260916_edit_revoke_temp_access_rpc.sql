@@ -27,6 +27,13 @@
 --   • The request type (role vs permissions) cannot be changed by an edit.
 --   • Each call writes one audit_log row in the same transaction
 --     (entity_type 'Temp Access', matching the auto-expiry entries).
+--   • An edit also inserts an in-app notification for the student
+--     (announcements row, notification_type 'temp_access_update') in the
+--     same transaction, so the NotificationBell shows what changed.
+--   • Revoke restores profiles.role ONLY if the profile still holds the temp
+--     role. If an instructor changed the student's role by hand while the
+--     grant was active, that manual change is left alone and the audit row
+--     says so. (The browser version restored unconditionally.)
 --   • New columns edited_by / edited_date / edit_count record the most
 --     recent edit without overwriting the original approver in
 --     reviewed_by / review_date. The Dashboard History modal reads them.
@@ -42,10 +49,10 @@
 --   1. edited_by / edited_date / edit_count columns (idempotent)
 --   2. edit_temp_access_request() + grants
 --   3. revoke_temp_access_request() + grants
---   4. Consolidated verification SELECT (last statement before ROLLBACK)
+--   4. Consolidated verification SELECT (last statement before COMMIT)
 --
--- DRY RUN: ends with ROLLBACK. Swap to COMMIT after the verification output
--- looks right.
+-- COMMIT version (dry run verified 2026-09-16). Section 0 aborts the whole
+-- transaction if any dependency is missing, so nothing partial can land.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 BEGIN;
@@ -60,6 +67,13 @@ BEGIN
   END IF;
   IF to_regprocedure('public.approve_temp_access_request(text, integer, timestamptz, text, jsonb)') IS NULL THEN
     RAISE EXCEPTION 'Missing public.approve_temp_access_request() — apply 20260908_approve_temp_access_rpc.sql first';
+  END IF;
+  -- The edit RPC inserts a student notification; make sure the columns it
+  -- writes exist before we create a function that would fail at runtime.
+  IF (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'announcements'
+         AND column_name IN ('recipient_email','sender_email','sender_name','subject','body','read','notification_type','created_at')) <> 8 THEN
+    RAISE EXCEPTION 'public.announcements is missing one of: recipient_email, sender_email, sender_name, subject, body, read, notification_type, created_at';
   END IF;
 END $$;
 
@@ -95,7 +109,11 @@ DECLARE
   v_old_perm_count integer;
   v_new_perm_count integer;
   v_approved_days  integer;
-  v_changes        text[] := ARRAY[]::text[];
+  v_changes        text[] := ARRAY[]::text[];   -- audit wording
+  v_added_names    text;                        -- "Inventory: add items, …"
+  v_removed_names  text;
+  v_body           text;
+  v_expiry_label   text;
 BEGIN
   -- Caller must be an instructor / super admin.
   IF NOT public.current_user_is_instructor() THEN
@@ -137,10 +155,11 @@ BEGIN
 
   -- JS sends millisecond precision; compare to the second so a "keep current"
   -- round-trip never logs a phantom expiry change.
+  v_expiry_label := to_char(p_expiry_date AT TIME ZONE 'America/Chicago', 'FMMon FMDD, YYYY');
   IF v_old_expiry IS NULL OR abs(extract(epoch FROM (v_old_expiry - p_expiry_date))) >= 1 THEN
     v_changes := v_changes || format('expiry %s → %s',
-      coalesce(to_char(v_old_expiry AT TIME ZONE 'America/Chicago', 'Mon DD, YYYY'), '—'),
-      to_char(p_expiry_date AT TIME ZONE 'America/Chicago', 'Mon DD, YYYY'));
+      coalesce(to_char(v_old_expiry AT TIME ZONE 'America/Chicago', 'FMMon FMDD, YYYY'), '—'),
+      v_expiry_label);
   END IF;
 
   IF v_req.request_type = 'permissions' THEN
@@ -153,8 +172,31 @@ BEGIN
 
     v_old_perm_count := coalesce(jsonb_array_length(v_req.approved_permissions), 0);
     v_new_perm_count := jsonb_array_length(p_approved_permissions);
-    IF v_req.approved_permissions IS DISTINCT FROM p_approved_permissions THEN
-      v_changes := v_changes || format('permissions %s → %s', v_old_perm_count, v_new_perm_count);
+
+    -- Names of permissions added / removed, by permission_id.
+    SELECT string_agg(coalesce(e->>'page', '?') || ': ' || replace(coalesce(e->>'feature', e->>'permission_id', '?'), '_', ' '), ', ' ORDER BY e->>'page', e->>'feature')
+      INTO v_added_names
+      FROM jsonb_array_elements(p_approved_permissions) e
+     WHERE NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(coalesce(v_req.approved_permissions, '[]'::jsonb)) o
+        WHERE o->>'permission_id' = e->>'permission_id');
+    SELECT string_agg(coalesce(o->>'page', '?') || ': ' || replace(coalesce(o->>'feature', o->>'permission_id', '?'), '_', ' '), ', ' ORDER BY o->>'page', o->>'feature')
+      INTO v_removed_names
+      FROM jsonb_array_elements(coalesce(v_req.approved_permissions, '[]'::jsonb)) o
+     WHERE NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(p_approved_permissions) e
+        WHERE e->>'permission_id' = o->>'permission_id');
+
+    IF v_added_names IS NOT NULL THEN
+      v_changes := v_changes || format('added [%s]', v_added_names);
+    END IF;
+    IF v_removed_names IS NOT NULL THEN
+      v_changes := v_changes || format('removed [%s]', v_removed_names);
+    END IF;
+    IF v_added_names IS NULL AND v_removed_names IS NULL
+       AND v_req.approved_permissions IS DISTINCT FROM p_approved_permissions THEN
+      -- Same ids, different metadata (e.g. a description refresh) — still a change.
+      v_changes := v_changes || format('permissions %s → %s (details updated)', v_old_perm_count, v_new_perm_count);
     END IF;
 
     IF cardinality(v_changes) = 0 THEN
@@ -226,6 +268,35 @@ BEGIN
             coalesce(v_req.user_name, v_req.user_email),
             array_to_string(v_changes, '; ')));
 
+  -- ── In-app notification for the student (NotificationBell reads announcements) ──
+  IF v_req.user_email IS NOT NULL AND v_req.user_email <> '' THEN
+    v_body := format('Your temporary access was updated by %s.', v_editor);
+    IF v_req.request_type = 'permissions' THEN
+      IF v_added_names IS NOT NULL THEN
+        v_body := v_body || E'\n\nAdded: ' || v_added_names;
+      END IF;
+      IF v_removed_names IS NOT NULL THEN
+        v_body := v_body || E'\n\nRemoved: ' || v_removed_names;
+      END IF;
+      v_body := v_body || format(E'\n\nYou now have %s temporary permission(s).', v_new_perm_count);
+    ELSE
+      IF v_old_role IS DISTINCT FROM p_approved_role THEN
+        v_body := v_body || format(E'\n\nYour temporary role changed from %s to %s.', coalesce(v_old_role, '—'), p_approved_role);
+      ELSE
+        v_body := v_body || format(E'\n\nYour temporary role is still %s.', p_approved_role);
+      END IF;
+    END IF;
+    v_body := v_body || format(E'\n\nAccess now ends %s at 11:59 PM.', v_expiry_label)
+                     || E'\n\nIf you have questions, please speak with your instructor.';
+
+    INSERT INTO public.announcements
+      (recipient_email, sender_email, sender_name, subject, body, read, notification_type, created_at)
+    VALUES
+      (lower(v_req.user_email), v_caller_email, v_editor,
+       'Temporary Access Updated: ' || p_request_id,
+       v_body, false, 'temp_access_update', now());
+  END IF;
+
   RETURN to_jsonb(v_req);
 END;
 $$;
@@ -237,7 +308,10 @@ GRANT EXECUTE ON FUNCTION public.edit_temp_access_request(text, timestamptz, tex
 -- Section 3: revoke_temp_access_request()
 --   Same semantics the Dashboard already had (status → Revoked, reviewed_by
 --   → the revoker, reverted_date → now, role-type → profiles.role restored
---   to user_original_role || user_current_role) but atomic and audited.
+--   to user_original_role || user_current_role) but atomic and audited —
+--   with one guard: the role is restored only if the profile still holds
+--   the temp role. A manual role change made while the grant was active is
+--   left in place and noted in the audit row.
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION public.revoke_temp_access_request(
   p_request_id text
@@ -252,6 +326,8 @@ DECLARE
   v_reviewer      text;
   v_caller_email  text := lower(coalesce(auth.jwt() ->> 'email', ''));
   v_restore_role  text;
+  v_profile_role  text;
+  v_role_note     text := '';
   v_rows          integer;
 BEGIN
   IF NOT public.current_user_is_instructor() THEN
@@ -292,12 +368,26 @@ BEGIN
   IF v_req.request_type IS DISTINCT FROM 'permissions' THEN
     v_restore_role := coalesce(v_req.user_original_role, v_req.user_current_role);
     IF v_restore_role IS NOT NULL AND v_req.user_email IS NOT NULL AND v_req.user_email <> '' THEN
-      UPDATE public.profiles
-         SET role = v_restore_role
-       WHERE lower(email) = lower(v_req.user_email);
-      GET DIAGNOSTICS v_rows = ROW_COUNT;
-      IF v_rows = 0 THEN
-        RAISE EXCEPTION 'Role restore for % affected no rows', v_req.user_email;
+      SELECT p.role INTO v_profile_role
+        FROM public.profiles p
+       WHERE lower(p.email) = lower(v_req.user_email)
+       LIMIT 1;
+
+      IF v_profile_role IS NULL THEN
+        v_role_note := ' (no profile found — role not changed)';
+      ELSIF v_profile_role IS DISTINCT FROM v_req.approved_role THEN
+        -- Someone changed the role by hand while the grant was active.
+        -- Leave it alone rather than clobber a deliberate change.
+        v_role_note := format(' (profile role is %s, not the temp role %s — left unchanged)',
+                              v_profile_role, coalesce(v_req.approved_role, '—'));
+      ELSE
+        UPDATE public.profiles
+           SET role = v_restore_role
+         WHERE lower(email) = lower(v_req.user_email);
+        GET DIAGNOSTICS v_rows = ROW_COUNT;
+        IF v_rows = 0 THEN
+          RAISE EXCEPTION 'Role restore for % affected no rows', v_req.user_email;
+        END IF;
       END IF;
     END IF;
   END IF;
@@ -312,10 +402,11 @@ BEGIN
           THEN format('Revoked %s temp permission(s) for %s',
                       coalesce(jsonb_array_length(v_req.approved_permissions), 0),
                       coalesce(v_req.user_name, v_req.user_email))
-          ELSE format('Revoked temp role access for %s — reverted from %s to %s',
+          ELSE format('Revoked temp role access for %s — reverted from %s to %s%s',
                       coalesce(v_req.user_name, v_req.user_email),
                       coalesce(v_req.approved_role, '—'),
-                      coalesce(v_restore_role, '—'))
+                      coalesce(v_restore_role, '—'),
+                      v_role_note)
      END);
 
   RETURN to_jsonb(v_req);
@@ -326,7 +417,7 @@ REVOKE ALL ON FUNCTION public.revoke_temp_access_request(text) FROM PUBLIC, anon
 GRANT EXECUTE ON FUNCTION public.revoke_temp_access_request(text) TO authenticated;
 
 -- ───────────────────────────────────────────────────────────────────────────
--- Section 4: verification (single SELECT — last statement before ROLLBACK)
+-- Section 4: verification (single SELECT — last statement before COMMIT)
 -- ───────────────────────────────────────────────────────────────────────────
 SELECT
   to_regprocedure('public.edit_temp_access_request(text, timestamptz, text, jsonb)') IS NOT NULL
@@ -348,6 +439,7 @@ SELECT
   (SELECT count(*) FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'temp_access_requests'
       AND column_name IN ('edited_by', 'edited_date', 'edit_count')) AS new_columns_present,  -- expect 3
-  (SELECT count(*) FROM public.temp_access_requests WHERE status = 'Active') AS active_grants_untouched;
+  (SELECT count(*) FROM public.temp_access_requests WHERE status = 'Active') AS active_grants_untouched,
+  (SELECT count(*) FROM public.announcements WHERE notification_type = 'temp_access_update') AS edit_notifications_so_far;  -- expect 0 on first run
 
-ROLLBACK;
+COMMIT;

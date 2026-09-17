@@ -75,7 +75,6 @@ const InventoryPage = lazyPage(() => import('@/pages/InventoryPage'))
 const LabSignupPage = lazyPage(() => import('@/pages/LabSignupPage'))
 const EquipmentSchedulingPage = lazyPage(() => import('@/pages/EquipmentSchedulingPage'))
 const AbsenceRequestPage = lazyPage(() => import('@/pages/AbsenceRequestPage'))
-const WeeklyLabsTrackerPage = lazyPage(() => import('@/pages/WeeklyLabsTrackerPage'))
 const PurchaseOrdersPage = lazyPage(() => import('@/pages/PurchaseOrdersPage'))
 const PMPage = lazyPage(() => import('@/pages/PMPage'))
 const UsersPage = lazyPage(() => import('@/pages/UsersPage'))
@@ -495,7 +494,8 @@ function AppRoutes() {
             <Route path="/woc-ratio" element={<Lazy><WOCRatioPage /></Lazy>} />
             <Route path="/program-budget" element={<Lazy><ProgramBudgetPage /></Lazy>} />
             <Route path="/bug-tracker" element={<Lazy><BugTrackerPage /></Lazy>} />
-            <Route path="/weekly-labs" element={<Lazy><WeeklyLabsTrackerPage /></Lazy>} />
+            {/* Weekly Labs Tracker retired 2026-09 (labs in D2L). All Done lives on Time Cards; keep old bookmarks working. */}
+            <Route path="/weekly-labs" element={<Navigate to="/time-cards" replace />} />
             <Route path="/volunteer-hours" element={<Lazy><VolunteerHoursPage /></Lazy>} />
             <Route path="/attendance-reports" element={<Lazy><AttendanceReportsPage /></Lazy>} />
             <Route path="/request-history" element={<Lazy><RequestHistoryPage /></Lazy>} />

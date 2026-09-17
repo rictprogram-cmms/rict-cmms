@@ -21,6 +21,11 @@
  *     · Shows each week's hours, attendance flags, and lab completion status
  *     · Individual student report OR batch class report (all students)
  * - Print-friendly layout with page breaks per student in batch mode
+ * - All Done (students / work study): instructor-swipe card at the top of the
+ *   Individual Time Card tab (AllDoneSection) — moved here from the retired
+ *   Weekly Labs Tracker page. Students confirm hours, get swiped, then punch out.
+ *   Instructors undo an All Done by deleting its time_clock marker row from the
+ *   entry list; ConfirmDeleteModal explains that when the row is an All Done.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
@@ -48,6 +53,7 @@ import {
   Download, GraduationCap
 } from 'lucide-react'
 import PendingTimeRequestsPanel from '@/components/PendingTimeRequestsPanel'
+import AllDoneSection from '@/components/AllDoneSection'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -682,6 +688,13 @@ export default function TimeCardsPage() {
       {/* ─── Individual Time Card ──────────────────────────────────────── */}
       {tab === 'timecard' && (
         <>
+          {/* All Done — own card only (instructors don't get swiped) */}
+          {!isInstructor && (
+            <div className="print:hidden">
+              <AllDoneSection />
+            </div>
+          )}
+
           {isInstructor && (
             <div className="bg-white rounded-xl border border-surface-200 shadow-sm p-4 print:hidden">
               <label htmlFor="tc-select-student" className="block text-xs font-medium text-surface-600 mb-1">Select Student:</label>
@@ -2593,17 +2606,37 @@ function ConfirmDeleteModal({ entry, saving, classes, onConfirm, onCancel }) {
   const classId = entry.course_id || entry.class_id
   const classConfig = (classes || []).find(c => c.course_id === classId || c.class_id === classId)
   const className = classConfig?.course_name || ''
+  // The All Done marker row is the only record of an All Done swipe (the
+  // Weekly Labs Tracker was retired 2026-09), so deleting it IS the undo.
+  // Say so plainly instead of the generic "delete entry" wording.
+  const isAllDone = entry.entry_type === 'All Done'
+  const studentName = (entry.user_name || '').trim() || 'this student'
+  const swipedBy = (entry.description || '').replace(/^All Done — released by /, '').trim()
   return (
     <ModalOverlay onClose={onCancel} zIndex="z-[60]" labelledBy="tc-delete-title">
       <div className="bg-white rounded-xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-surface-100"><h3 id="tc-delete-title" className="font-semibold text-surface-900">Delete Time Entry</h3></div>
+        <div className="px-5 py-4 border-b border-surface-100"><h3 id="tc-delete-title" className="font-semibold text-surface-900">{isAllDone ? 'Undo All Done' : 'Delete Time Entry'}</h3></div>
         <div className="px-5 py-4 text-center">
-          <p className="text-sm text-surface-600">Delete entry for <strong>{classId}</strong>{className && <span className="text-xs text-surface-400"> ({className})</span>} on {formatDate(entry.punch_in)}?</p>
-          <p className="text-xs text-surface-400 mt-1">This cannot be undone.</p>
+          {isAllDone ? (
+            <>
+              <p className="text-sm text-surface-700">
+                This will undo the All Done for <strong>{studentName}</strong> on {formatDate(entry.punch_in)}{swipedBy ? <span className="text-xs text-surface-400"> (swiped by {swipedBy})</span> : null}.
+              </p>
+              <p className="text-xs text-surface-500 mt-2">
+                Their Time Card and Dashboard will show the day as not done, and left-early checks apply again. Lab signups that were cancelled at swipe time stay cancelled. The student's own punches are not affected.
+              </p>
+              <p className="text-xs text-surface-400 mt-1">They can be swiped All Done again if needed.</p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-surface-600">Delete entry for <strong>{classId}</strong>{className && <span className="text-xs text-surface-400"> ({className})</span>} on {formatDate(entry.punch_in)}?</p>
+              <p className="text-xs text-surface-400 mt-1">This cannot be undone.</p>
+            </>
+          )}
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex justify-center gap-3">
           <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">Cancel</button>
-          <button onClick={onConfirm} disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">{saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} Delete</button>
+          <button onClick={onConfirm} disabled={saving} className="px-4 py-2 rounded-lg text-sm font-medium bg-red-500 text-white hover:bg-red-600 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">{saving && <Loader2 size={14} className="animate-spin" aria-hidden="true" />} {isAllDone ? 'Undo All Done' : 'Delete'}</button>
         </div>
       </div>
     </ModalOverlay>

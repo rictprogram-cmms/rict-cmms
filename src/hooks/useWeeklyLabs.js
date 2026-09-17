@@ -693,7 +693,14 @@ export function useLabTrackerActions() {
         }
       }
 
-      // 4. Time clock: insert an All Done MARKER row if the student is currently punched in.
+      // 4. Time clock: insert an All Done MARKER row — always (as of 2026-09).
+      //
+      // Until 2026-09 the marker was only written when the student was punched
+      // in; the weekly_lab_tracker row covered the "not punched in" case. With
+      // the tracker retired (labs in D2L, every class treated as tracking_type
+      // 'None') the marker is the ONLY record of All Done, so it is written
+      // whether or not there is an active punch. When there is no active punch
+      // the class/course come from the first class in classInfos.
       //
       // Previous behavior (pre-May-2026): the active Punched-In row was mutated to
       //   status='Punched Out' + entry_type='All Done', forcibly closing the student
@@ -718,11 +725,12 @@ export function useLabTrackerActions() {
         .eq('status', 'Punched In')
         .maybeSingle(), 'time_clock.select')
 
-      if (activeEntry) {
+      {
         try {
           // Generate next TC###### id via shared collision-safe helper so
           // every write path agrees on format and counter sync.
           const markerRecordId = await generateSafeTcId()
+          const fallbackClass = classInfos.find(c => c.classId || c.className) || {}
 
           // Monday-of-this-week (YYYY-MM-DD) — same convention as TimeClockPage getWeekStart()
           const wkStartFallback = (() => {
@@ -742,11 +750,11 @@ export function useLabTrackerActions() {
             .from('time_clock')
             .insert({
               record_id: markerRecordId,
-              user_id: activeEntry.user_id,
+              user_id: activeEntry?.user_id || (isValidUUID(userId) ? userId : null),
               user_name: userName,
               user_email: userEmail,
-              class_id: activeEntry.class_id || '',
-              course_id: activeEntry.course_id || '',
+              class_id: activeEntry?.class_id || fallbackClass.classId || '',
+              course_id: activeEntry?.course_id || fallbackClass.className || '',
               // Zero-duration marker: punch_in === punch_out. Downstream daySpans
               // logic short-circuits on entry_type==='All Done' before reading the
               // time fields, so the equal timestamps don't pollute first/last spans.
@@ -754,7 +762,7 @@ export function useLabTrackerActions() {
               punch_out: nowIso,
               total_hours: 0,
               status: 'Punched Out',
-              week_start: activeEntry.week_start || wkStartFallback,
+              week_start: activeEntry?.week_start || wkStartFallback,
               entry_type: 'All Done',
               description: `All Done — released by ${instructor.first_name} ${instructor.last_name}`,
               approval_status: 'Approved',
@@ -797,7 +805,7 @@ export function useLabTrackerActions() {
       }
 
       // Surface partial-failure state to the caller. The caller (handleAllDone in
-      // WeeklyLabsTrackerPage) can decide how to message the user — typically:
+      // AllDoneSection, formerly WeeklyLabsTrackerPage) can decide how to message the user — typically:
       //   success: true, partial: false → green "All Done confirmed" toast
       //   success: true, partial: true  → amber "Partially saved — N class(es) failed" toast
       // Returning success:true even on partial means refresh() still runs and the
