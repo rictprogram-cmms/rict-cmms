@@ -122,6 +122,16 @@ const SETTING_META = {
       effect: 'Set to your most common log duration to reduce typing.',
     },
   },
+  wo_close_summary_email: {
+    label: 'Weekly Close Summary Email',
+    type: 'email', category: 'Work Orders',
+    desc: 'Shared inbox that gets one digest every Friday at 4 PM listing every work order closed that week, with each work log. Leave blank to turn it off.',
+    details: {
+      what: 'Address that receives the automatic weekly digest: a summary of each closed work order (equipment, priority, who, when, hours, closing notes) plus its complete work log, with a "Check" flag on any work order whose log is missing, has blank descriptions, zero-hour entries, or hours that do not add up.',
+      where: 'Sent by a scheduled database job (pg_cron) that calls the send-wo-weekly-summary Edge Function. Nothing is sent in a week with no closed work orders.',
+      effect: 'Normally RICT@sctcc.edu, the instructors\' shared inbox. One address only. A blank value turns the digest off; the schedule itself (Fridays 4:00 PM) is set in the database, not here.',
+    },
+  },
 
   // ── Notifications ──
   // Note: notification_email was retired in the audit pass — outbound emails
