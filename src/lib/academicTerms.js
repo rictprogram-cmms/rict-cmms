@@ -231,6 +231,53 @@ export function suggestNextTerm(terms) {
   return t
 }
 
+/** "Spring 2026" → "Spring 2027". Same season, one year on. '' when unparseable. */
+export function nextSameSeasonName(semesterName) {
+  const p = parseTermName(semesterName)
+  if (!p.season || !p.year) return ''
+  return `${p.season} ${p.year + 1}`
+}
+
+/**
+ * Propose next year's same-season term from this one: every date shifted a year
+ * and snapped to Mon/Fri, so only what the college actually moved needs fixing.
+ *
+ * Differs from suggestNextTerm(), which walks the Spring→Fall→Spring sequence
+ * from the newest term. This one answers "what will Spring 2027 look like?"
+ * given Spring 2026 — the question the syllabus roll-forward flow asks.
+ *
+ * Returns a term row shaped for saveTerm(), or null when `term` can't be parsed.
+ * `_template` names the term it was derived from, for display.
+ */
+export function proposeSameSeasonNextYear(term) {
+  if (!term) return null
+  const p = parseTermName(term.name)
+  if (!p.season || !p.year) return null
+  const name = `${p.season} ${p.year + 1}`
+  const shift = (s, snap) => {
+    if (!s) return ''
+    const d = parseDate(s); if (!d) return ''
+    d.setFullYear(d.getFullYear() + 1)
+    const str = toDateStr(d)
+    return snap === 'mon' ? snapToMonday(str) : snap === 'fri' ? snapToFriday(str) : str
+  }
+  return {
+    term_id: parseTermName(name).term_id,
+    name, season: p.season, year: p.year + 1, status: 'Active',
+    begin_date: shift(term.begin_date, 'mon'),
+    end_date: shift(term.end_date, 'fri'),
+    spring_break_start: shift(term.spring_break_start, 'mon'),
+    spring_break_end: shift(term.spring_break_end, 'fri'),
+    finals_start: shift(term.finals_start, 'mon'),
+    finals_end: shift(term.finals_end, 'fri'),
+    last_drop_date: shift(term.last_drop_date),
+    last_withdraw_date: shift(term.last_withdraw_date),
+    first_half_end: shift(term.first_half_end, 'fri'),
+    second_half_start: shift(term.second_half_start, 'mon'),
+    _template: term.name,
+  }
+}
+
 /** Semester names for dropdowns: terms (newest first) plus any legacy names not in terms. */
 export function semesterOptions(terms, extraNames = []) {
   const names = sortTerms(terms).map(t => t.name)
