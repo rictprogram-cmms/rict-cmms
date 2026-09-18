@@ -90,9 +90,22 @@ export default function ClassSchedulePage() {
   const canEdit = hasPerm('edit_schedule')
   const uid = useId()
 
-  const { semesters, classesBySemester, defaultSemester, loading: semLoading } = useSemesterOptions()
+  // Archived semesters are hidden by default so the list stays short as terms
+  // pile up; the toggle below brings them back when an old one is needed.
+  const [showArchived, setShowArchived] = useState(false)
+  const { semesters, classesBySemester, defaultSemester, archivedHiddenCount, loading: semLoading } =
+    useSemesterOptions({ showArchived })
   const [semester, setSemester] = useState('')
   useEffect(() => { if (!semester && defaultSemester) setSemester(defaultSemester) }, [defaultSemester, semester])
+  // Turning "Show archived" back off while viewing an archived semester would
+  // leave the selector pointing at an option that no longer exists — the grid
+  // would keep rendering it while the dropdown showed something else. Fall back
+  // to the default instead. Only runs once the list has loaded, so a slow load
+  // never knocks the user off a semester they deliberately chose.
+  useEffect(() => {
+    if (semLoading || !semester || !semesters.length) return
+    if (!semesters.some(s => s.name === semester) && defaultSemester) setSemester(defaultSemester)
+  }, [semesters, semester, defaultSemester, semLoading])
   const semesterClasses = useMemo(() => (semester ? classesBySemester.get(semester) || [] : null), [classesBySemester, semester])
 
   const sched = useClassSchedule(semester, { canEdit, classes: semesterClasses })
@@ -287,8 +300,33 @@ export default function ClassSchedulePage() {
       <div className="cs-toolbar card px-4 py-3 flex items-center gap-3 flex-wrap relative">
         <label htmlFor={`${uid}-sem`} className="text-xs font-semibold text-surface-600">Semester</label>
         <select id={`${uid}-sem`} value={semester} onChange={e => setSemester(e.target.value)} className="input text-sm w-auto min-h-[44px]">
-          {semesters.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+          {semesters.map(s => (
+            <option key={s.name} value={s.name}>{s.name}{s.archived ? ' (archived)' : ''}</option>
+          ))}
         </select>
+        {/* Offered only when it would actually reveal something. */}
+        {(showArchived || archivedHiddenCount > 0) && (
+          <label htmlFor={`${uid}-show-arch`}
+            className="flex items-center gap-1.5 text-xs text-surface-500 cursor-pointer select-none min-h-[44px]">
+            <input
+              id={`${uid}-show-arch`}
+              type="checkbox"
+              checked={showArchived}
+              onChange={e => setShowArchived(e.target.checked)}
+              className="w-4 h-4 rounded border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
+            />
+            Show archived
+            {!showArchived && archivedHiddenCount > 0 && (
+              <span className="text-surface-400">({archivedHiddenCount})</span>
+            )}
+          </label>
+        )}
+        {/* Announce what changed — the dropdown's contents shift under the user. */}
+        <span aria-live="polite" className="sr-only">
+          {showArchived
+            ? `Showing all ${semesters.length} semesters, including archived.`
+            : `Showing ${semesters.length} active semester${semesters.length === 1 ? '' : 's'}${archivedHiddenCount > 0 ? `, ${archivedHiddenCount} archived hidden` : ''}.`}
+        </span>
         {doc && canEdit && (
           <div className="flex items-center gap-1 text-xs text-surface-500">
             <label htmlFor={`${uid}-sh`} className="sr-only">Grid start hour</label>

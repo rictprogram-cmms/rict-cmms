@@ -54,7 +54,12 @@ const MAX_AUDIT_LINES = 40
 
 // ─── Semesters ────────────────────────────────────────────────────────────────
 
-export function useSemesterOptions() {
+/**
+ * @param {boolean} showArchived  include semesters whose term is archived.
+ *   Archiving a term in Settings → Terms is how an old semester leaves this
+ *   dropdown; this is the toggle that brings it back when it's needed.
+ */
+export function useSemesterOptions({ showArchived = false } = {}) {
   const [classes, setClasses] = useState([])
   const [loading, setLoading] = useState(true)
   const loadedRef = useRef(false)
@@ -79,10 +84,27 @@ export function useSemesterOptions() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, load)
   , { tag: 'ClassSchedule' }), [load])
 
+  // Names of terms that have been archived in Settings → Terms.
+  const archivedNames = useMemo(
+    () => new Set(terms.filter(t => t.status === 'Archived').map(t => String(t.name || '').trim())),
+    [terms]
+  )
+
   const semesters = useMemo(() => {
-    const names = semesterOptions(terms.filter(t => t.status !== 'Archived'), classes.map(c => c.semester))
-    return names.map(n => ({ ...parseSemester(n), name: n }))
-  }, [terms, classes])
+    const visibleTerms = showArchived ? terms : terms.filter(t => t.status !== 'Archived')
+    // The second argument to semesterOptions() backfills semesters that exist
+    // only as classes.semester text — data older than the terms calendar.
+    // It used to take EVERY distinct value, so an archived term walked straight
+    // back in through here the moment any class still carried its name, and
+    // archiving could never shorten this list. Known-archived names are now
+    // held back; unfamiliar legacy names still come through, so nothing that
+    // has no term of its own is ever stranded.
+    const extras = classes
+      .map(c => String(c.semester || '').trim())
+      .filter(n => n && (showArchived || !archivedNames.has(n)))
+    const names = semesterOptions(visibleTerms, extras)
+    return names.map(n => ({ ...parseSemester(n), name: n, archived: archivedNames.has(n) }))
+  }, [terms, classes, archivedNames, showArchived])
   const classesBySemester = useMemo(() => {
     const m = new Map()
     for (const c of classes) {
@@ -98,7 +120,10 @@ export function useSemesterOptions() {
    *  Empty until the class list has loaded, so the first schedule load never runs with no classes. */
   const defaultSemester = useMemo(() => {
     if (loading || termsLoading) return ''
-    const cur = pickCurrentTerm(terms)
+    // Only consider terms that are actually in the dropdown — otherwise
+    // archiving the current term would open the page on a semester hidden from
+    // its own selector, which looks like the schedule failed to load.
+    const cur = pickCurrentTerm(showArchived ? terms : terms.filter(t => t.status !== 'Archived'))
     if (cur) return cur.name
     if (!semesters.length) return ''
     const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -109,9 +134,25 @@ export function useSemesterOptions() {
       if (b.start && b.start > today && (!upcoming || b.start < upcoming.start)) upcoming = { start: b.start, name: s.name }
     }
     return upcoming ? upcoming.name : semesters[0].name
-  }, [terms, semesters, classesBySemester, loading, termsLoading])
+  }, [terms, semesters, classesBySemester, loading, termsLoading, showArchived])
 
-  return { classes, semesters, classesBySemester, defaultSemester, loading: loading || termsLoading, refresh: load }
+  // How many semesters the archive filter is currently hiding — lets the page
+  // offer the toggle only when it would actually reveal something.
+  const archivedHiddenCount = useMemo(() => {
+    if (showArchived) return 0
+    const shown = new Set(semesters.map(s => s.name))
+    const candidates = new Set([
+      ...terms.filter(t => t.status === 'Archived').map(t => String(t.name || '').trim()),
+      ...classes.map(c => String(c.semester || '').trim()),
+    ])
+    return [...candidates].filter(n => n && archivedNames.has(n) && !shown.has(n)).length
+  }, [terms, classes, semesters, archivedNames, showArchived])
+
+  return {
+    classes, semesters, classesBySemester, defaultSemester,
+    archivedHiddenCount,
+    loading: loading || termsLoading, refresh: load,
+  }
 }
 
 // ─── Doc ↔ rows ───────────────────────────────────────────────────────────────

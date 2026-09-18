@@ -3,6 +3,7 @@ import { Field as UiField } from '@/components/ui'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import { usePermissions } from '@/hooks/usePermissions'
 import {
   X, ChevronRight, ChevronLeft, Plus, Trash2,
   BookOpen, Printer, Save, Check, AlertCircle,
@@ -17,6 +18,9 @@ import { useAcademicTerms } from '@/hooks/useAcademicTerms'
 import { semesterOptions, parseTermName, inferRuns, classMatchesTerm, fmtDate as fmtTermDate,
          RUNS, datesForRuns, calendarFromTerm } from '@/lib/academicTerms'
 import { normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
+// Shared with the Syllabus Library so both write paths sanitise dates the same
+// way — '' is valid in a form but Postgres rejects it for a date column.
+import { withNullDates } from '@/lib/syllabusTemplates'
 import ConfirmDialog from '@/components/ConfirmDialog'
 
 // ─── Step Definitions ──────────────────────────────────────────────────────────
@@ -51,27 +55,6 @@ export function getDefaultSemester(today = new Date()) {
   if (m === 1) return `Spring ${y}`
   if (m < 9 || (m === 9 && d <= 7)) return `Fall ${y}`
   return `Spring ${y + 1}`
-}
-
-// ─── Date sanitising ───────────────────────────────────────────────────────────
-// Form state uses '' for an empty date input; Postgres rejects '' for a date
-// column ("invalid input syntax for type date"). EVERY write to
-// syllabus_templates has to go through withNullDates() first.
-//
-// handleSave did this inline. handleDuplicate did not — it set eight date
-// fields to '' and upserted them straight through, so "Duplicate to New
-// Semester" failed every time it was used. Hoisted here so the two paths
-// cannot drift apart again.
-const SYLLABUS_DATE_FIELDS = [
-  'begin_date', 'end_date', 'last_drop_date', 'last_withdraw_date',
-  'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end', 'revised_date',
-]
-export function withNullDates(obj) {
-  const out = { ...obj }
-  // Only '' is rewritten — a missing key stays missing so an upsert never
-  // blanks a column the caller didn't mean to touch.
-  for (const f of SYLLABUS_DATE_FIELDS) if (out[f] === '') out[f] = null
-  return out
 }
 
 // ─── Default State ─────────────────────────────────────────────────────────────
@@ -667,6 +650,32 @@ function CreateCMSSClassModal({ syllabusData, onClose, terms = [] }) {
 
   // Class fields — pre-filled from syllabus data
   const semLen = syllabusData.semester_length || '16'
+  // Which part of the term the syllabus says this runs.
+  const declaredRuns = ['full', 'first', 'second'].includes(syllabusData.runs)
+    ? syllabusData.runs
+    : (semLen === '8' ? 'first' : 'full')
+
+  // A syllabus can carry dates that contradict its own length — full-term dates
+  // on a section marked Second 8 Weeks, say. Copying those verbatim would create
+  // a full-term class for an 8-week course, so when the term is known the dates
+  // for the DECLARED half win. Without a term there is nothing better to use, so
+  // the syllabus's own dates stand.
+  const d10 = (v) => String(v || '').substring(0, 10)
+  const termCal = term
+    ? { ...datesForRuns(term, declaredRuns), ...calendarFromTerm(term, { runs: declaredRuns }) }
+    : null
+  const syllabusDatesMatchRuns = !termCal
+    || (d10(syllabusData.begin_date) === d10(termCal.start_date)
+        && d10(syllabusData.end_date) === d10(termCal.end_date))
+  const correctedFromTerm = !!termCal && !syllabusDatesMatchRuns && !!termCal.start_date
+  const seed = correctedFromTerm
+    ? { start_date: d10(termCal.start_date), end_date: d10(termCal.end_date),
+        spring_break_start: d10(termCal.spring_break_start), spring_break_end: d10(termCal.spring_break_end),
+        finals_start: d10(termCal.finals_start), finals_end: d10(termCal.finals_end) }
+    : { start_date: syllabusData.begin_date || '', end_date: syllabusData.end_date || '',
+        spring_break_start: syllabusData.spring_break_start || '', spring_break_end: syllabusData.spring_break_end || '',
+        finals_start: syllabusData.finals_start || '', finals_end: syllabusData.finals_end || '' }
+
   const [classData, setClassData] = useState({
     course_id: syllabusData.course_id || '',
     course_name: syllabusData.course_name || '',
@@ -674,12 +683,7 @@ function CreateCMSSClassModal({ syllabusData, onClose, terms = [] }) {
     instructor: syllabusData.instructor_name || '',
     semester: syllabusData.semester || getDefaultSemester(),
     status: 'Active',
-    start_date: syllabusData.begin_date || '',
-    end_date: syllabusData.end_date || '',
-    spring_break_start: syllabusData.spring_break_start || '',
-    spring_break_end: syllabusData.spring_break_end || '',
-    finals_start: syllabusData.finals_start || '',
-    finals_end: syllabusData.finals_end || '',
+    ...seed,
   })
 
   const upd = (k, v) => setClassData(p => ({ ...p, [k]: v }))
@@ -714,7 +718,10 @@ function CreateCMSSClassModal({ syllabusData, onClose, terms = [] }) {
           break
         }
 
-        const runs = inferRuns(classData, term)
+        // The syllabus records `runs` outright, so use it. inferRuns() only
+        // guesses from the dates, and returns 'full' when they're still blank —
+        // which would create a first-8-week course as a full-term class.
+        const runs = declaredRuns
         const { data: rows, error } = await supabase.from('classes').insert({
           class_id:           classId,
           course_id:          classData.course_id,
@@ -858,9 +865,18 @@ function CreateCMSSClassModal({ syllabusData, onClose, terms = [] }) {
             <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-3">
               Pre-filled from your syllabus — verify before creating
               <span className={`ml-2 px-2 py-0.5 rounded-full font-semibold normal-case tracking-normal ${semLen === '8' ? 'bg-amber-100 text-amber-700' : 'bg-brand-50 text-brand-600'}`}>
-                {semLen}-week class
+                {RUNS[declaredRuns] || `${semLen}-week class`}
               </span>
             </p>
+            {/* Never correct the dates silently — say so and name both sides. */}
+            {correctedFromTerm && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3" role="status">
+                The syllabus has {fmtTermDate(syllabusData.begin_date)} – {fmtTermDate(syllabusData.end_date)}, which
+                aren't {RUNS[declaredRuns].toLowerCase()} dates. Using {term.name}'s{' '}
+                {RUNS[declaredRuns].toLowerCase()} dates below instead — change them if that's wrong, and fix the
+                syllabus on the Dates step so the two agree.
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label htmlFor="ccm-course-id" className="block text-xs font-semibold text-surface-600 uppercase tracking-wide mb-1">Course ID</label>
@@ -1313,11 +1329,36 @@ function Step2Instructor({ data, update, commonSections, instructorProfile, cls,
 
   const fullName = (p) => `${p?.first_name || ''} ${p?.last_name || ''}`.trim()
 
-  // Selected profile: whoever the syllabus names, else the class's instructor.
+  // Whoever the syllabus itself names — nothing else.
+  //
+  // This used to fall back to `instructorProfile` (the class's linked
+  // instructor) when the syllabus named no one. That made "Someone else"
+  // impossible to hold: choosing it cleared instructor_email, the fallback
+  // immediately resolved to the class's instructor again, and the dropdown
+  // snapped back to them — while the fill-blanks pass below re-typed the name
+  // and email that had just been cleared. The class's instructor is a SEED for
+  // an empty syllabus (see below), never a substitute for what it holds now.
   const selectedProfile = useMemo(
-    () => profileFor(data.instructor_email) || instructorProfile || null,
-    [data.instructor_email, instructorList, instructorProfile]
+    () => profileFor(data.instructor_email),
+    [data.instructor_email, instructorList]
   )
+
+  // Seed an empty syllabus from the class's instructor, once per course +
+  // semester. Guarded by a ref rather than by "is it still empty", so clearing
+  // the fields on purpose can never trigger a re-seed.
+  const seededFor = useRef(null)
+  useEffect(() => {
+    if (!instructorProfile) return                    // not loaded yet — try again when it is
+    const key = `${data.course_id}|${data.semester}`
+    if (seededFor.current === key) return
+    seededFor.current = key
+    if ((data.instructor_email || '').trim() || (data.instructor_name || '').trim()) return
+    update('instructor_name',  fullName(instructorProfile))
+    update('instructor_email', instructorProfile.email || '')
+    update('instructor_phone', instructorProfile.phone || '')
+    update('instructor_office', instructorProfile.office || '')
+    update('instructor_office_hours', instructorProfile.office_hours || '')
+  }, [instructorProfile, data.course_id, data.semester]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Instructor contact from the selected profile (Users page).
   const expected = useMemo(() => {
@@ -1330,14 +1371,28 @@ function Step2Instructor({ data, update, commonSections, instructorProfile, cls,
         instructor_office_hours: selectedProfile.office_hours || '',
       }
     }
-    if (cls?.instructor) return { instructor_name: cls.instructor }   // ad-hoc instructor: name only
+    // Class names someone with no CMMS profile — suggest the name, but stop
+    // once something has been typed, or an ad-hoc instructor gets nagged to
+    // "use" a name they deliberately replaced.
+    if (cls?.instructor && !(data.instructor_name || '').trim()) return { instructor_name: cls.instructor }
     return null
-  }, [selectedProfile, cls])
+  }, [selectedProfile, cls, data.instructor_name])
 
   // Picking someone from the dropdown overwrites all five contact fields —
   // an explicit choice, unlike the fill-blanks pass below.
   const pickInstructor = (email) => {
-    if (email === '__other__') { update('instructor_email', ''); update('instructor_name', ''); return }
+    if (email === '__other__') {
+      // Already on "Someone else" — picking it again must not wipe what's been
+      // typed. Only switching AWAY from a profile clears, and it clears all
+      // five, so a new person never inherits the last one's phone and office.
+      if (!selectedProfile) return
+      update('instructor_name', '')
+      update('instructor_email', '')
+      update('instructor_phone', '')
+      update('instructor_office', '')
+      update('instructor_office_hours', '')
+      return
+    }
     const p = profileFor(email)
     if (!p) return
     update('instructor_name', fullName(p))
@@ -1930,7 +1985,7 @@ const TERM_DATE_MAP = [
   ['finals_end', 'finals_end', 'Finals Week End', false],
 ]
 
-function Step4Dates({ data, update, term, cls, onApplyToClass }) {
+function Step4Dates({ data, update, term, cls, onApplyToClass, onCreateClass }) {
   const runs = data.runs || ((data.semester_length || '16') === '8' ? 'first' : 'full')
 
   // What the calendar says each date should be: the class's own start/end
@@ -1970,36 +2025,58 @@ function Step4Dates({ data, update, term, cls, onApplyToClass }) {
     ? `${cls.course_id} (class)`
     : term ? `${term.name} (term${runs === 'full' ? '' : ` · ${RUNS[runs]}`})` : ''
 
+  // A class can hold dates that contradict its own Runs setting. The usual
+  // cause is "Override term dates" being on in Settings → Classes: the Runs
+  // dropdown there only recomputes dates when the class is NOT overriding and
+  // its term is known, so switching First ⇄ Second silently leaves the old
+  // dates in place. The class's dates win on this step, so the syllabus would
+  // quietly inherit, say, second-half dates for a first-half section.
+  const classRunsMismatch = useMemo(() => {
+    if (!cls?.start_date || !cls?.end_date) return null
+    const declared = ['full', 'first', 'second'].includes(cls.runs) ? cls.runs : null
+    if (!declared) return null
+    const implied = inferRuns(cls, term)
+    return implied === declared ? null : { declared, implied }
+  }, [cls, term])
+
+  // What the term says this class's declared runs should be — the fix to offer.
+  const termDatesForClassRuns = useMemo(
+    () => (term && classRunsMismatch ? datesForRuns(term, classRunsMismatch.declared) : null),
+    [term, classRunsMismatch]
+  )
+
   // First visit with blank dates: fill from the calendar so nothing is retyped.
   useEffect(() => {
     if (!expected) return
     for (const [f] of TERM_DATE_MAP) if (!data[f] && expected[f]) update(f, expected[f])
   }, [expected]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Changing the section length on step 3 moves these dates with it — but only
-  // when they still match exactly what the PREVIOUS setting produced. If any
-  // date was hand-edited, nothing is touched and the banner's "Use calendar
-  // dates" button stays the way to opt in. Dates never change silently under
-  // an edit someone made on purpose.
-  const prevRuns = useRef(runs)
+  // Dates filled from the calendar under a DIFFERENT length get moved to the
+  // current one; anything hand-typed is left alone.
+  //
+  // This detects the stale length by matching the dates against the term,
+  // rather than by watching `runs` change. The Runs control lives on step 3, so
+  // by the time this step mounts the change has already happened — a "did it
+  // change since last render?" ref is re-initialised on mount and always says
+  // no, which is why the earlier version of this never fired in practice.
+  const d10 = (v) => String(v || '').substring(0, 10)
   useEffect(() => {
-    const before = prevRuns.current
-    prevRuns.current = runs
-    if (before === runs || !term || cls || !expected) return
-    const old = { ...datesForRuns(term, before), ...calendarFromTerm(term, { runs: before }) }
-    const wasFromCalendar = {
-      begin_date: old.start_date, end_date: old.end_date,
-      spring_break_start: old.spring_break_start, spring_break_end: old.spring_break_end,
-      finals_start: old.finals_start, finals_end: old.finals_end,
-    }
-    const d10 = (v) => String(v || '').substring(0, 10)
-    const untouched = Object.entries(wasFromCalendar)
-      .every(([f, v]) => d10(data[f]) === d10(v))
-    if (!untouched) return
-    for (const f of Object.keys(wasFromCalendar)) {
+    if (!term || cls || !expected) return
+    if (!data.begin_date || !data.end_date) return          // blanks are the fill-blanks pass's job
+    const cameFromAnotherLength = ['full', 'first', 'second'].some(r => {
+      if (r === runs) return false
+      const d = datesForRuns(term, r)
+      const c = calendarFromTerm(term, { runs: r })
+      return d10(data.begin_date) === d10(d.start_date)
+        && d10(data.end_date) === d10(d.end_date)
+        && d10(data.spring_break_start) === d10(c.spring_break_start)
+        && d10(data.finals_start) === d10(c.finals_start)
+    })
+    if (!cameFromAnotherLength) return
+    for (const f of ['begin_date', 'end_date', 'spring_break_start', 'spring_break_end', 'finals_start', 'finals_end']) {
       if (d10(data[f]) !== d10(expected[f])) update(f, expected[f] || '')
     }
-  }, [runs]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [runs, term, cls]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const differs = expected ? TERM_DATE_MAP.filter(([f]) => expected[f] && data[f] && data[f] !== expected[f]) : []
   const useAll = () => { for (const [f] of TERM_DATE_MAP) if (expected[f]) update(f, expected[f]) }
@@ -2035,18 +2112,59 @@ function Step4Dates({ data, update, term, cls, onApplyToClass }) {
         <p className="text-sm text-surface-500">No term calendar for {data.semester || 'this semester'} yet — add it under Settings → Terms and these dates fill in automatically. Spring break and finals are optional.</p>
       )}
 
+      {/* The class contradicts itself — surface it here rather than silently
+          copying dates that don't match the half the class says it runs. */}
+      {classRunsMismatch && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" role="status">
+          <AlertCircle size={15} className="text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-amber-800">
+              Class {cls.course_id} is set to <strong>{RUNS[classRunsMismatch.declared]}</strong>, but its saved dates
+              ({fmtTermDate(cls.start_date)} – {fmtTermDate(cls.end_date)}) are {RUNS[classRunsMismatch.implied].toLowerCase()} dates.
+            </p>
+            <p className="text-[11px] text-amber-700 mt-0.5">
+              Changing "Runs" in Settings → Classes only moves the dates when that class isn't on its own
+              calendar — if <strong>Override term dates</strong> is ticked there, the dates stay put. Fix it on the
+              class so the schedule and this syllabus agree
+              {termDatesForClassRuns?.start_date
+                ? <>, or take the term's {RUNS[classRunsMismatch.declared].toLowerCase()} dates here
+                    ({fmtTermDate(termDatesForClassRuns.start_date)} – {fmtTermDate(termDatesForClassRuns.end_date)}).</>
+                : <>.</>}
+            </p>
+          </div>
+          {termDatesForClassRuns?.start_date && (
+            <button type="button"
+              onClick={() => {
+                update('begin_date', String(termDatesForClassRuns.start_date).substring(0, 10))
+                update('end_date', String(termDatesForClassRuns.end_date).substring(0, 10))
+              }}
+              className="shrink-0 px-3 py-2 min-h-[44px] text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              Use term dates
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Drop and withdraw live on the class record, not the term — so with no
           class scheduled for this course + semester there is nothing to pull
           them from. Say so rather than leaving two required fields blank. */}
       {!cls && (
         <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3" role="status">
           <AlertCircle size={15} className="text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
-          <p className="text-xs text-amber-800">
-            <strong>No CMMS class scheduled for {data.course_id || 'this course'} · {data.semester || 'this semester'} yet.</strong>{' '}
-            Begin and end dates come from the term above, but <strong>Last Day to Drop</strong> and{' '}
-            <strong>Last Day to Withdraw</strong> are stored per class — type them here for now. Once the
-            class is created under Settings → Classes, this syllabus picks them up and the two stay in sync.
-          </p>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-amber-800">
+              <strong>No CMMS class for {data.course_id || 'this course'} · {data.semester || 'this semester'} yet.</strong>{' '}
+              Begin and end dates come from the term above, but <strong>Last Day to Drop</strong> and{' '}
+              <strong>Last Day to Withdraw</strong> are stored per class. Create the class and it picks up
+              everything on this syllabus — delivery, credits, hours and these dates — and the two stay in sync.
+            </p>
+          </div>
+          {onCreateClass && (
+            <button type="button" onClick={onCreateClass}
+              className="shrink-0 px-3 py-2 min-h-[44px] text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 inline-flex items-center gap-1.5">
+              <PlusCircle size={13} aria-hidden="true" /> Create class
+            </button>
+          )}
         </div>
       )}
 
@@ -2935,7 +3053,7 @@ function Step7Grading({ data, update }) {
 }
 
 // ─── Step 8: Preview ──────────────────────────────────────────────────────────
-function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving, docxBusy, onCreateClass, onJumpToStep }) {
+function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving, docxBusy, onCreateClass, onJumpToStep, cls }) {
   const totalPoints = (data.assessments||[]).reduce((s, a) => s + (parseInt(a.points)||0), 0)
   const blobRef = useRef(null)
   const [previewUrl, setPreviewUrl] = useState('')
@@ -3073,14 +3191,19 @@ function Step8Review({ data, commonSections, onGenerate, onDownloadDocx, saving,
             <Printer size={15} aria-hidden="true" />{saving ? 'Saving…' : 'Print PDF (browser — not fully accessible)'}
           </button>
 
-          {/* CMMS class prompt — only shown after at least one PDF has been generated */}
-          {data.pdf_generated_at && (
+          {/* CMMS class prompt. This used to require a PDF to have been
+              generated first, which hid the ONLY route to creating a class
+              behind an unrelated step — a syllabus written from scratch and
+              saved never revealed it. It now shows whenever no class exists for
+              this course + semester, and hides once one does. */}
+          {!cls && (
             <div className="border border-emerald-200 rounded-xl bg-emerald-50 p-3 space-y-2">
               <p className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
                 <GraduationCap size={13} aria-hidden="true" /> Add to CMMS?
               </p>
               <p className="text-xs text-emerald-700 leading-snug">
-                Create a class entry in the CMMS so students can be enrolled for <strong>{data.semester}</strong>.
+                No class exists for <strong>{data.course_id} · {data.semester}</strong> yet. Create one so it can be
+                scheduled and students enrolled.
               </p>
               <button
                 onClick={onCreateClass}
@@ -3156,6 +3279,10 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
   // Wizard shell is a modal dialog: focus trap, Escape closes (same as the X button), focus restored on close.
   const wizardDialogRef = useDialogA11y(true, onClose)
   const { user } = useAuth()
+  // Classes live under Settings, which Instructor Tools does not imply — saving
+  // the syllabus pushes to the class only for someone allowed to edit classes.
+  const { hasPerm: hasSettingsPerm } = usePermissions('Settings')
+  const canManageClasses = hasSettingsPerm('manage_classes')
   const [step, setStep] = useState(initialStep)
   const [catalogRefreshKey, setCatalogRefreshKey] = useState(0)
   const [data, setData] = useState(() => ({
@@ -3177,6 +3304,15 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
   // dropdown and the dates, not the default.
   // The CMMS class for this course + semester, if one exists (its dates win in Step 4).
   const [cmmsClass, setCmmsClass] = useState(null)
+  // Pulled out of the effect so it can be re-run after a class is created from
+  // inside the wizard, without waiting for course_id/semester to change.
+  const reloadCmmsClass = useCallback(async () => {
+    if (!data.course_id || !data.semester) { setCmmsClass(null); return }
+    const { data: rows } = await supabase.from('classes')
+      .select('class_id, course_id, course_name, semester, instructor, instructor_email, delivery, credits_lecture, credits_lab, required_hours, start_date, end_date, spring_break_start, spring_break_end, finals_start, finals_end, runs, override_term_dates, last_drop_date, last_withdraw_date')
+      .eq('course_id', data.course_id).eq('semester', data.semester).limit(1)
+    setCmmsClass(rows?.[0] || null)
+  }, [data.course_id, data.semester])
   useEffect(() => {
     if (!data.course_id || !data.semester) { setCmmsClass(null); return }
     let cancelled = false
@@ -3233,7 +3369,12 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
         // marked 'full' would leave the two disagreeing the moment anything
         // re-derives the class calendar from its term.
         : { runs: ['full', 'first', 'second'].includes(data.runs) ? data.runs : 'full', start_date: data.begin_date || null, end_date: data.end_date || null, spring_break_start: data.spring_break_start || null, spring_break_end: data.spring_break_end || null, finals_start: data.finals_start || null, finals_end: data.finals_end || null, last_drop_date: data.last_drop_date || null, last_withdraw_date: data.last_withdraw_date || null, override_term_dates: true }
-      const { data: rows, error } = await supabase.from('classes').update({ ...upd, updated_at: new Date().toISOString() }).eq('class_id', cmmsClass.class_id).select()
+      // No updated_at: the classes table has no such column (it appears in
+      // neither convention in TIMESTAMP_CONVENTIONS.md, and every other write
+      // here omits it). Sending it failed the whole update with
+      // "Could not find the 'updated_at' column of 'classes' in the schema
+      // cache". The audit_log entry below is what records who changed what.
+      const { data: rows, error } = await supabase.from('classes').update(upd).eq('class_id', cmmsClass.class_id).select()
       if (error) throw error
       if (!rows || !rows.length) throw new Error('Update was blocked — you may not have permission to edit classes')
       await supabase.from('audit_log').insert({ user_email: user?.email, user_name: user?.email, action: 'Update', entity_type: 'classes', entity_id: cmmsClass.class_id,
@@ -3333,6 +3474,69 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     })
   }, [data.course_id, data.semester])
 
+  /**
+   * Push what the syllabus knows onto its CMMS class, after a successful save.
+   *
+   * Only fields the syllabus actually has a value for, and only where the class
+   * differs — so this never blanks a class field the syllabus happens to leave
+   * empty. Dates are skipped when the class overrides term dates, since that
+   * flag exists precisely to keep a class on its own calendar.
+   *
+   * Silent when nothing differs. Names what changed when something does, rather
+   * than editing a live class invisibly.
+   */
+  const syncClassFromSyllabus = useCallback(async () => {
+    if (!cmmsClass || !canManageClasses) return
+    const d10 = (v) => String(v || '').substring(0, 10)
+    const next = {}
+    const changes = []
+    const put = (col, val, label, current) => {
+      if (val == null || val === '') return          // syllabus has nothing to say
+      if (String(current ?? '') === String(val)) return
+      next[col] = val
+      changes.push(label)
+    }
+
+    put('instructor', (data.instructor_name || '').trim(), 'instructor', cmmsClass.instructor)
+    put('instructor_email',
+        (data.instructor_email || '').trim().toLowerCase() || null,
+        'instructor email', (cmmsClass.instructor_email || '').toLowerCase())
+    put('delivery', normalizeDelivery(COURSE_TYPE_TO_DELIVERY[data.course_type] || ''), 'delivery', normalizeDelivery(cmmsClass.delivery))
+    put('credits_lecture', parseFloat(data.credits_lecture), 'lecture credits', cmmsClass.credits_lecture == null ? '' : parseFloat(cmmsClass.credits_lecture))
+    put('credits_lab', parseFloat(data.credits_lab), 'lab credits', cmmsClass.credits_lab == null ? '' : parseFloat(cmmsClass.credits_lab))
+    put('required_hours', parseFloat(data.required_hours_per_week), 'hours/wk', cmmsClass.required_hours == null ? '' : parseFloat(cmmsClass.required_hours))
+    put('runs', ['full', 'first', 'second'].includes(data.runs) ? data.runs : '', 'length', cmmsClass.runs || 'full')
+
+    // A class on its own calendar keeps it.
+    if (!cmmsClass.override_term_dates) {
+      put('start_date', d10(data.begin_date), 'start date', d10(cmmsClass.start_date))
+      put('end_date', d10(data.end_date), 'end date', d10(cmmsClass.end_date))
+      put('spring_break_start', d10(data.spring_break_start), 'spring break', d10(cmmsClass.spring_break_start))
+      put('spring_break_end', d10(data.spring_break_end), 'spring break end', d10(cmmsClass.spring_break_end))
+      put('finals_start', d10(data.finals_start), 'finals', d10(cmmsClass.finals_start))
+      put('finals_end', d10(data.finals_end), 'finals end', d10(cmmsClass.finals_end))
+    }
+    put('last_drop_date', d10(data.last_drop_date), 'last day to drop', d10(cmmsClass.last_drop_date))
+    put('last_withdraw_date', d10(data.last_withdraw_date), 'last day to withdraw', d10(cmmsClass.last_withdraw_date))
+
+    if (!changes.length) return                      // already in step — say nothing
+
+    // No updated_at — the classes table has no such column.
+    const { data: rows, error } = await supabase.from('classes')
+      .update(next).eq('class_id', cmmsClass.class_id).select()
+    if (error) { toast.error(`Class not updated: ${error.message}`); return }
+    if (!rows || !rows.length) { toast.error('Class not updated — you may not have permission to edit classes.'); return }
+
+    await supabase.from('audit_log').insert({
+      user_email: user?.email, user_name: user?.email, action: 'Update',
+      entity_type: 'classes', entity_id: cmmsClass.class_id,
+      details: `Synced from ${data.course_id} · ${data.semester} syllabus: ${Object.entries(next).map(([k, v]) => `${k}=${v ?? '—'}`).join(', ')}`,
+    })
+    setCmmsClass(rows[0])
+    const uniq = [...new Set(changes)]
+    toast.success(`Class ${cmmsClass.course_id} updated — ${uniq.join(', ')}`)
+  }, [cmmsClass, canManageClasses, data, user])
+
   const handleSave = useCallback(async (extraFields = {}) => {
     if (!data.course_id) { toast.error('Select a course first'); return false }
     setSaving(true)
@@ -3358,8 +3562,12 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
     }
     setSavedExists(true)
     toast.success(`Draft saved for ${data.course_id} · ${data.semester}`)
+    // The syllabus is the place these values are edited, so saving it carries
+    // the changes onto the CMMS class — which is what the Class Schedule,
+    // Settings → Classes and everything keyed off the class then show.
+    await syncClassFromSyllabus()
     return true
-  }, [data, user])
+  }, [data, user, syncClassFromSyllabus])
 
   const [docxBusy, setDocxBusy] = useState(false)
 
@@ -3458,11 +3666,11 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
       case 1: return <Step1CourseSelect data={data} update={update} courseCatalog={courseCatalog} setCatalog={setCourseCatalog} savedExists={savedExists} otherSemesters={otherSemesters} onDuplicate={handleDuplicate} semesters={semesterList} cls={cmmsClass} />
       case 2: return <Step2Instructor data={data} update={update} commonSections={commonSections} instructorProfile={instructorProfile} cls={cmmsClass} instructorList={instructorList} />
       case 3: return <Step3CourseInfo data={data} update={update} cls={cmmsClass} onApplyToClass={setApplyToClass} />
-      case 4: return <Step4Dates data={data} update={update} term={term} cls={cmmsClass} onApplyToClass={setApplyToClass} />
+      case 4: return <Step4Dates data={data} update={update} term={term} cls={cmmsClass} onApplyToClass={setApplyToClass} onCreateClass={() => setShowCreateClass(true)} />
       case 5: return <Step5Materials data={data} update={update} catalogRefreshKey={catalogRefreshKey} />
       case 6: return <Step6Description data={data} update={update} />
       case 7: return <Step7Grading data={data} update={update} />
-      case 8: return <Step8Review data={data} commonSections={commonSections} onGenerate={handleGenerate} onDownloadDocx={handleDownloadDocx} saving={saving} docxBusy={docxBusy} onCreateClass={() => setShowCreateClass(true)} onJumpToStep={setStep} />
+      case 8: return <Step8Review data={data} commonSections={commonSections} onGenerate={handleGenerate} onDownloadDocx={handleDownloadDocx} saving={saving} docxBusy={docxBusy} onCreateClass={() => setShowCreateClass(true)} onJumpToStep={setStep} cls={cmmsClass} />
       default: return null
     }
   }
@@ -3542,7 +3750,8 @@ export default function SyllabusWizard({ onClose, initialCourseId = null, initia
 
       {/* Post-PDF: offer to create CMMS class */}
       {showCreateClass && (
-        <CreateCMSSClassModal syllabusData={data} onClose={() => setShowCreateClass(false)} terms={terms} />
+        <CreateCMSSClassModal syllabusData={data} terms={terms}
+          onClose={() => { setShowCreateClass(false); reloadCmmsClass() }} />
       )}
       <ConfirmDialog
         open={!!applyToClass}

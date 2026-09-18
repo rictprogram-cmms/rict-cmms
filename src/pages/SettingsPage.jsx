@@ -4873,6 +4873,16 @@ function ClassesSection() {
               const term = termById.get(form.term_id)
               const locked = !!term && !form.override_term_dates
               const diverges = !!term && form.override_term_dates && !classMatchesTerm(form, term)
+              // applyTermDates() is a no-op while overriding or with no term, so
+              // changing "Runs" leaves the dates untouched and nothing says so —
+              // a class ends up claiming First 8 weeks while holding second-half
+              // dates. Flag it where the choice is made.
+              const runsVsDates = (() => {
+                const declared = ['full', 'first', 'second'].includes(form.runs) ? form.runs : null
+                if (!declared || !form.start_date || !form.end_date) return null
+                const implied = inferRuns(form, term)
+                return implied === declared ? null : { declared, implied }
+              })()
               return (
                 <>
                   <div className="flex items-center gap-4 flex-wrap">
@@ -4889,6 +4899,32 @@ function ClassesSection() {
                     {locked && <span className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">Dates from {term.name} · {RUNS[form.runs || 'full']}</span>}
                     {diverges && <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">Differs from {term.name}</span>}
                   </div>
+
+                  {/* The dates below contradict the Runs value above. */}
+                  {runsVsDates && (
+                    <div className="flex items-start justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2" role="status">
+                      <p className="text-[11px] text-amber-800">
+                        Set to <strong>{RUNS[runsVsDates.declared]}</strong>, but the dates below are{' '}
+                        {RUNS[runsVsDates.implied].toLowerCase()} dates.{' '}
+                        {form.override_term_dates
+                          ? 'Because this class overrides term dates, changing "Runs" does not move them — edit the dates by hand or untick the override.'
+                          : term
+                            ? 'Re-pick "Runs" to pull the term\'s dates.'
+                            : 'No term calendar for this semester, so the dates are entered by hand.'}
+                      </p>
+                      {term && (
+                        <button type="button"
+                          onClick={() => setForm(f => ({
+                            ...f,
+                            ...datesForRuns(term, f.runs || 'full'),
+                            ...calendarFromTerm(term, { runs: f.runs || 'full' }),
+                          }))}
+                          className="shrink-0 px-2.5 py-1.5 min-h-[44px] text-[11px] font-semibold text-amber-800 border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                          Use {RUNS[runsVsDates.declared].toLowerCase()} dates
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                     <div>

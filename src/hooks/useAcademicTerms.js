@@ -204,7 +204,10 @@ export function useTermActions() {
           start_date: d.start_date || null, end_date: d.end_date || null,
           spring_break_start: cal.spring_break_start || null, spring_break_end: cal.spring_break_end || null,
           finals_start: cal.finals_start || null, finals_end: cal.finals_end || null,
-          semester: term.name, updated_at: nowIso,
+          // No updated_at — the classes table has no such column. Sending it
+          // made this whole loop fail on its first class, so applying a term
+          // calendar to classes never worked. The audit() call below records it.
+          semester: term.name,
         }).eq('class_id', c.class_id).select('class_id'), 'classes.update')
         if (error) throw error
         classesDone++
