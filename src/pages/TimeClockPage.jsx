@@ -918,7 +918,7 @@ export default function TimeClockPage() {
           if (newMode === 'planned_maintenance') fetchLabMode()
         }
       )
-    , { client: supabase, tag: 'TimeClock' })
+    , { client: supabase, tag: 'TimeClock', onReconnect: fetchLabMode })   // don't wait up to 5 min for the poll
   }, [fetchLabMode])
 
   // Cache classes data for course name lookups
@@ -970,27 +970,44 @@ export default function TimeClockPage() {
   useEffect(() => {
     if (screen !== 'punch-out' || !punchRecord?.record_id) return
 
-    return subscribeWithReconnect(`timeclock-kiosk-${punchRecord.record_id}`, ch => ch
+    // Shared by the realtime handler and the reconnect re-read below
+    const showIfPunchedOut = (updated) => {
+      if (updated && updated.status === 'Punched Out') {
+        const totalHours = parseFloat(updated.total_hours) || 0
+        const flags = checkPunchOutFlags()
+        setSuccessMsg({
+          message: 'Punched Out!',
+          detail: `Total time: ${formatDuration(totalHours)}`,
+          type: 'out',
+          flags,
+        })
+        setScreen('success')
+      }
+    }
+    const recordId = punchRecord.record_id
+
+    return subscribeWithReconnect(`timeclock-kiosk-${recordId}`, ch => ch
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
         table: 'time_clock',
-        filter: `record_id=eq.${punchRecord.record_id}`,
-      }, (payload) => {
-        const updated = payload.new
-        if (updated && updated.status === 'Punched Out') {
-          const totalHours = parseFloat(updated.total_hours) || 0
-          const flags = checkPunchOutFlags()
-          setSuccessMsg({
-            message: 'Punched Out!',
-            detail: `Total time: ${formatDuration(totalHours)}`,
-            type: 'out',
-            flags,
-          })
-          setScreen('success')
-        }
-      })
-    , { client: supabase, tag: 'TimeClock' })
+        filter: `record_id=eq.${recordId}`,
+      }, (payload) => showIfPunchedOut(payload.new))
+    , {
+      client: supabase,
+      tag: 'TimeClock',
+      // If the punch-out happened elsewhere while the kiosk was offline, the
+      // UPDATE event is gone for good — re-read this one record on reconnect
+      // so the student isn't left on the punch-out screen.
+      onReconnect: async () => {
+        const { data, error } = await supabase
+          .from('time_clock')
+          .select('status, total_hours')
+          .eq('record_id', recordId)
+          .maybeSingle()
+        if (!error) showIfPunchedOut(data)
+      },
+    })
   }, [screen, punchRecord?.record_id, todaySignup, gracePeriod])
 
   function checkPunchInFlags(isVolunteer, isWorkStudy, isFirstPunchToday) {

@@ -465,7 +465,7 @@ export default function LabStatusPage() {
   useEffect(() => subscribeWithReconnect('lab-status-away-rt', ch => ch
     .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_away_mode' }, p => setInstructorAway(p.new?.setting_value === 'true'))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_return_time' }, p => setAwayReturnTime(p.new?.setting_value || ''))
-  , { tag: 'LabStatus' }), []);
+  , { tag: 'LabStatus', onReconnect: fetchAwayMode }), [fetchAwayMode]);
 
   const toggleAwayOff = useCallback(async () => {
     setAwayToggling(true);

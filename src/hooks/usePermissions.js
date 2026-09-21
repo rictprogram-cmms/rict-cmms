@@ -129,6 +129,34 @@ export function usePermissions(pageName) {
   useEffect(() => {
     if (!profile?.email || isSuperAdmin) return
 
+    // Re-load this user's temp permission grants. Named (it used to be inline
+    // in the handler) so the same reload can run after a reconnect: a grant
+    // approved or revoked while the connection was down is otherwise not
+    // noticed until some later change to temp_access_requests.
+    let cancelled = false
+    const reloadTempPerms = async () => {
+      try {
+        const tempPermObj = {}
+        const tempData = mustData(await supabase
+          .from('temp_access_requests')
+          .select('approved_permissions, expiry_date')
+          .eq('user_email', profile.email)
+          .eq('status', 'Active')
+          .eq('request_type', 'permissions'), 'temp_access_requests.select')
+
+        const now = new Date()
+        ;(tempData || []).forEach(grant => {
+          if (grant.expiry_date && new Date(grant.expiry_date) < now) return
+          ;(grant.approved_permissions || []).forEach(p => {
+            if (p.page === pageName) {
+              tempPermObj[p.feature] = true
+            }
+          })
+        })
+        if (!cancelled) setTempPerms(tempPermObj)
+      } catch {}
+    }
+
     const channel = subscribeWithReconnect(`perm-temp-${pageName}`, ch => ch
       .on(
         'postgres_changes',
@@ -136,36 +164,12 @@ export function usePermissions(pageName) {
         (payload) => {
           // Only re-check if it involves the effective user
           const email = payload.new?.user_email || payload.old?.user_email
-          if (email === profile.email) {
-            // Re-load temp permissions
-            ;(async () => {
-              try {
-                const tempPermObj = {}
-                const tempData = mustData(await supabase
-                  .from('temp_access_requests')
-                  .select('approved_permissions, expiry_date')
-                  .eq('user_email', profile.email)
-                  .eq('status', 'Active')
-                  .eq('request_type', 'permissions'), 'temp_access_requests.select')
-
-                const now = new Date()
-                ;(tempData || []).forEach(grant => {
-                  if (grant.expiry_date && new Date(grant.expiry_date) < now) return
-                  ;(grant.approved_permissions || []).forEach(p => {
-                    if (p.page === pageName) {
-                      tempPermObj[p.feature] = true
-                    }
-                  })
-                })
-                setTempPerms(tempPermObj)
-              } catch {}
-            })()
-          }
+          if (email === profile.email) reloadTempPerms()
         }
       )
-    )
+    , { onReconnect: reloadTempPerms })
 
-    return () => { channel() }
+    return () => { cancelled = true; channel() }
   }, [profile?.email, pageName, isSuperAdmin])
 
   /**
@@ -276,42 +280,44 @@ export function useMultiPagePermissions(pageNames = []) {
   useEffect(() => {
     if (!profile?.email || isSuperAdmin || pageNames.length === 0) return
 
+    // Named so the same reload can run after a reconnect (see usePermissions above)
+    let cancelled = false
+    const reloadTempPerms = async () => {
+      try {
+        const tempMap = {}
+        const tempData = mustData(await supabase
+          .from('temp_access_requests')
+          .select('approved_permissions, expiry_date')
+          .eq('user_email', profile.email)
+          .eq('status', 'Active')
+          .eq('request_type', 'permissions'), 'temp_access_requests.select')
+
+        const now = new Date()
+        ;(tempData || []).forEach(grant => {
+          if (grant.expiry_date && new Date(grant.expiry_date) < now) return
+          ;(grant.approved_permissions || []).forEach(p => {
+            if (pageNames.includes(p.page)) {
+              if (!tempMap[p.page]) tempMap[p.page] = {}
+              tempMap[p.page][p.feature] = true
+            }
+          })
+        })
+        if (!cancelled) setTempPermsMap(tempMap)
+      } catch {}
+    }
+
     const channel = subscribeWithReconnect(`multi-perm-temp-${pageNames.join('-')}`, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'temp_access_requests' },
         (payload) => {
           const email = payload.new?.user_email || payload.old?.user_email
-          if (email === profile.email) {
-            ;(async () => {
-              try {
-                const tempMap = {}
-                const tempData = mustData(await supabase
-                  .from('temp_access_requests')
-                  .select('approved_permissions, expiry_date')
-                  .eq('user_email', profile.email)
-                  .eq('status', 'Active')
-                  .eq('request_type', 'permissions'), 'temp_access_requests.select')
-
-                const now = new Date()
-                ;(tempData || []).forEach(grant => {
-                  if (grant.expiry_date && new Date(grant.expiry_date) < now) return
-                  ;(grant.approved_permissions || []).forEach(p => {
-                    if (pageNames.includes(p.page)) {
-                      if (!tempMap[p.page]) tempMap[p.page] = {}
-                      tempMap[p.page][p.feature] = true
-                    }
-                  })
-                })
-                setTempPermsMap(tempMap)
-              } catch {}
-            })()
-          }
+          if (email === profile.email) reloadTempPerms()
         }
       )
-    )
+    , { onReconnect: reloadTempPerms })
 
-    return () => { channel() }
+    return () => { cancelled = true; channel() }
   }, [profile?.email, pageNames.join(','), isSuperAdmin])
 
   const hasPerm = useCallback((page, feature) => {

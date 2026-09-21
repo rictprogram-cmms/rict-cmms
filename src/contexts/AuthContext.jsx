@@ -652,7 +652,21 @@ export function AuthProvider({ children }) {
           console.log('[LabAccessMode] Setting changed to:', newMode)
           setLabAccessMode(newMode || null)
         }
-      ))
+      ), {
+        // A lock (or unlock) flipped while the connection was down would be
+        // missed — the handler only applies the event payload. Re-read once on
+        // reconnect. Deliberately NOT fetchLabMode(): that clears the mode on
+        // any error, which would UNLOCK a locked lab on a flaky reconnect.
+        // This only ever applies a value it successfully read.
+        onReconnect: async () => {
+          const { data, error } = await supabase
+            .from('settings')
+            .select('setting_value')
+            .eq('setting_key', 'lab_access_mode')
+            .maybeSingle()
+          if (!error && data) setLabAccessMode(data.setting_value || null)
+        },
+      })
     return () => { channel() }
   }, [])
 

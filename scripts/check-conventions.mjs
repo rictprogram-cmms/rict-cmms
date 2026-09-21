@@ -53,6 +53,19 @@
  *       , TV_RT_OPTS, { onReconnect: loadSlides })        ← WRONG: ignored
  *       , { ...TV_RT_OPTS, onReconnect: loadSlides })     ← right
  *
+ * WARNINGS (never fail the build) — Edge Function sources
+ * ──────────────────────────────────────────────────────
+ *   The app deploys without these, so they must not block it; but they are how
+ *   a redeploy goes wrong, so every run prints them:
+ *   • a supabase/functions/<folder>/index.ts whose own header says it is a
+ *     DIFFERENT function ("File: supabase/functions/<other>/index.ts").
+ *     Found 2026-09-21: the send-rejection-email folder held the
+ *     send-closure-notification code — deploying it would have replaced
+ *     rejection emails with a function that rejects every rejection request.
+ *   • supabase.functions.invoke('<name>') in src/ with no
+ *     supabase/functions/<name>/ folder — deployed, but its source isn't in the
+ *     repo. Fix both with:  npx supabase functions download <name> --use-api
+ *
  * File: scripts/check-conventions.mjs
  */
 
@@ -247,6 +260,42 @@ export function checkSource(src, relPath) {
   return problems
 }
 
+// ─── Edge Function warnings (non-fatal) ───────────────────────────────────────
+
+/** Folder name vs the "File: supabase/functions/<name>/index.ts" line in the source's header. */
+export function functionHeaderMismatch(folder, source) {
+  const m = /File:\s*supabase\/functions\/([A-Za-z0-9_-]+)\/index\.ts/.exec(String(source || '').slice(0, 6000))
+  return m && m[1] !== folder ? m[1] : null
+}
+
+/** Names passed as a string literal to supabase.functions.invoke(…). Takes RAW source (masking blanks the name). */
+export function invokedFunctions(src) {
+  const out = new Set()
+  const re = /functions\s*\.\s*invoke\(\s*['"`]([A-Za-z0-9_-]+)['"`]/g
+  let m
+  while ((m = re.exec(src))) out.add(m[1])
+  return [...out]
+}
+
+function functionWarnings(srcFiles) {
+  const warnings = []
+  const dir = join(ROOT, 'supabase', 'functions')
+  let folders = []
+  try { folders = readdirSync(dir).filter(n => !n.startsWith('_') && !n.startsWith('.') && statSync(join(dir, n)).isDirectory()) } catch { return warnings }
+  for (const folder of folders) {
+    let source = ''
+    try { source = readFileSync(join(dir, folder, 'index.ts'), 'utf8') } catch { continue }
+    const actual = functionHeaderMismatch(folder, source)
+    if (actual) warnings.push(`supabase/functions/${folder}/index.ts says it is "${actual}". Deploying "${folder}" from the repo would upload the wrong code. Restore it:  npx supabase functions download ${folder} --use-api`)
+  }
+  const invoked = new Set()
+  for (const file of srcFiles) for (const name of invokedFunctions(readFileSync(file, 'utf8'))) invoked.add(name)
+  for (const name of [...invoked].sort()) {
+    if (!folders.includes(name)) warnings.push(`the app calls the Edge Function "${name}" but supabase/functions/${name}/ is not in the repo. Pull its source down:  npx supabase functions download ${name} --use-api`)
+  }
+  return warnings
+}
+
 // ─── Runner ───────────────────────────────────────────────────────────────────
 
 function walk(dir, files = []) {
@@ -278,7 +327,9 @@ function run() {
     console.error(`\n[check-conventions] FAILED — ${total} problem${total === 1 ? '' : 's'} (${summary}). Build stopped. See scripts/check-conventions.mjs for the rules.\n`)
     process.exit(1)
   }
-  console.log(`[check-conventions] OK — ${files.length} files, ${Date.now() - started} ms`)
+  const warnings = functionWarnings(files)
+  for (const w of warnings) console.warn(`  ⚠ ${w}`)
+  console.log(`[check-conventions] OK — ${files.length} files, ${Date.now() - started} ms${warnings.length ? ` (${warnings.length} warning${warnings.length === 1 ? '' : 's'} above — not blocking)` : ''}`)
 }
 
 // ─── Self-test ────────────────────────────────────────────────────────────────
@@ -331,6 +382,13 @@ function selfTest() {
   expect('spread into one options object', "subscribeWithReconnect('x', ch => ch.on('postgres_changes', { a: 1, b: [1, 2] }, (p) => g(p, 1)), { ...OPTS, onReconnect: f })", [])
   expect('two args / trailing comma / import line', "import { subscribeWithReconnect } from '@/lib/supabaseRealtime'\nsubscribeWithReconnect('x', bind)\nsubscribeWithReconnect('x', bind, opts,)", [])
   expect('both rules, right lines', BAD + "\nsupabase.channel('y')", ['mustdata-chain@4', 'raw-channel@5'])
+
+  // Edge Function warnings
+  const eq = (name, got, want) => { if (JSON.stringify(got) === JSON.stringify(want)) pass++; else { fail++; console.error(`  ✖ ${name}: got ${JSON.stringify(got)}`) } }
+  eq('misfiled function detected', functionHeaderMismatch('send-rejection-email', '/**\n * File: supabase/functions/send-closure-notification/index.ts\n */'), 'send-closure-notification')
+  eq('correctly filed function', functionHeaderMismatch('send-push', '/** File: supabase/functions/send-push/index.ts */'), null)
+  eq('no header is not a mismatch', functionHeaderMismatch('x', 'serve(() => {})'), null)
+  eq('invoked names', invokedFunctions("supabase.functions.invoke('send-push', {})\nawait supabase.functions.invoke(\n  \"send-x\", {})\nfunctions.invoke(name)"), ['send-push', 'send-x'])
 
   // masking must never change length or line count
   const sample = BAD + "\n/* x */ `a${b}` 'c' // d\n"

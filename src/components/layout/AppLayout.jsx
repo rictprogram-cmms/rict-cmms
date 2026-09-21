@@ -989,7 +989,26 @@ function HelpButton({ profile }) {
   // ── Realtime: stay in sync with instructor away mode changes ──
   useEffect(() => {
     if (!profile?.email || isInstructor) return
-    return subscribeWithReconnect('help-btn-away-' + profile.email, ch => ch
+    // The handlers below apply the event payload directly, so a change made
+    // while the connection was down would be missed. After a reconnect,
+    // re-read both keys (same query as the mount-time load above).
+    let cancelled = false
+    const reloadAwayMode = async () => {
+      try {
+        const data = mustData(await supabase
+          .from('settings')
+          .select('setting_key, setting_value')
+          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
+        if (cancelled) return
+        const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode')
+        const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time')
+        setInstructorAway(modeRow?.setting_value === 'true')
+        setAwayReturnTime(timeRow?.setting_value || '')
+      } catch {
+        // Non-fatal
+      }
+    }
+    const stopAwayRealtime = subscribeWithReconnect('help-btn-away-' + profile.email, ch => ch
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_away_mode',
@@ -1002,7 +1021,8 @@ function HelpButton({ profile }) {
       }, (p) => {
         setAwayReturnTime(p.new?.setting_value || '')
       })
-    , { tag: 'AppLayout' })
+    , { tag: 'AppLayout', onReconnect: reloadAwayMode })
+    return () => { cancelled = true; stopAwayRealtime() }
   }, [profile?.email, isInstructor])
 
   // ── Close picker on outside click ──
@@ -1556,7 +1576,7 @@ export default function AppLayout() {
         event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_return_time',
       }, (p) => { if (!cancelled) setAwayReturnTime(p.new?.setting_value || '') })
-    , { tag: 'AppLayout' })
+    , { tag: 'AppLayout', onReconnect: loadAwayMode })   // handlers apply the payload; after a drop, re-read both keys
 
     return () => { cancelled = true; stopRealtime() }
   }, [isInstructor])
@@ -1772,8 +1792,8 @@ export default function AppLayout() {
           }
         }
       )
-    , { tag: 'AppLayout' })
-  }, [])
+    , { tag: 'AppLayout', onReconnect: fetchVersion })
+  }, [fetchVersion])
 
   // ── Temp Access Request State (non-instructors) ──
   const [tempRequestOpen, setTempRequestOpen] = useState(false)

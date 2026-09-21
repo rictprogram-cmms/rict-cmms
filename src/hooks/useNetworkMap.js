@@ -87,8 +87,13 @@ export function useNetworkMap() {
   }, [])
 
   // ── Initial + refresh loader ────────────────────────────────────────────
-  const fetchAll = useCallback(async () => {
-    setLoading(true)
+  // `silent` reloads without flipping `loading` — the page swaps its whole body
+  // for a loading state, which would close an open device or request dialog.
+  // Only the reconnect refetch passes it. (Used as a click handler elsewhere,
+  // where the first argument is the event; `event.silent` is undefined → loud.)
+  const fetchAll = useCallback(async (opts) => {
+    const silent = !!(opts && opts.silent === true)
+    if (!silent) setLoading(true)
     setError(null)
     try {
       const [devRes, ncrRes, assetRes, printRes] = await Promise.all([
@@ -173,7 +178,7 @@ export function useNetworkMap() {
           return next
         })
       })
-  ), [])
+  , { tag: 'NetworkMap', onReconnect: () => fetchAll({ silent: true }) }), [fetchAll])   // handlers patch state from the payload; after a drop, reload quietly
 
   // ── Derived lookups ─────────────────────────────────────────────────────
   // Keyed by subnet/segment id. Every configured block (wired subnets and

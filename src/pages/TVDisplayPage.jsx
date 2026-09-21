@@ -302,7 +302,7 @@ export default function TVDisplayPage() {
         event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_return_time',
       }, (p) => { setAwayReturnTime(p.new?.setting_value || '') })
-    , TV_RT_OPTS)
+    , { ...TV_RT_OPTS, onReconnect: loadAwayMode })   // handlers apply the payload; after a drop, re-read both keys
   }, [])
 
   // ── TV slides + rotation setting ───────────────────────────────

@@ -1151,15 +1151,22 @@ export function useLabSignupActions() {
           const hour = parseInt(hourStr)
           const targetDate = new Date(dateStr + 'T12:00:00')
 
-          // Check if already exists
-          const existing = mustData(await supabase
+          // Check if already exists — match on EMAIL. This used to match on
+          // user_id, but every lab_signup row is written with user_id: null
+          // (see the insert below), so it could never find anything. Same fix
+          // as signUpStudent(): ilike is for case only ("_" and "%" are
+          // wildcards to it), so rows are pinned to the exact address after;
+          // and a list, not maybeSingle(), so rows that are ALREADY duplicated
+          // are skipped quietly instead of throwing "multiple rows".
+          const sameSlot = mustData(await supabase
             .from('lab_signup')
-            .select('signup_id')
-            .eq('user_id', profile.id || profile.user_id)
+            .select('signup_id, user_email')
+            .ilike('user_email', profile.email)
             .eq('date', targetDate.toISOString())
             .eq('start_time', `${String(hour).padStart(2, '0')}:00:00`)
-            .neq('status', 'Cancelled')
-            .maybeSingle(), 'lab_signup duplicate check')
+            .neq('status', 'Cancelled'), 'lab_signup duplicate check')
+          const myEmail = String(profile.email || '').toLowerCase().trim()
+          const existing = (sameSlot || []).some(r => String(r.user_email || '').toLowerCase().trim() === myEmail)
 
           if (existing) continue
           pending.push({ sel, classId, dateStr, hour, targetDate })

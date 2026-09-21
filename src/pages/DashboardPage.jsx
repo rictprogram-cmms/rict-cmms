@@ -70,6 +70,19 @@ import '@/styles/dashboard.css';
 // expand chevrons and the empty-state icon only need 3:1 (WCAG 1.4.11).
 const TEXT_MUTED = '#666f78';
 
+// Status colours for TEXT (tile numbers, scores, "In: 8:02 AM", days late).
+// Each is ≥ 4.5:1 on white AND on the tinted chip it is shown against
+// (good 6.1 / 5.3 on #d3f9d8 · warn 6.3 / 6.0 on #fff9db · bad 5.5 / 4.5 on
+// #ffe3e3 · info 6.1 / 5.5 on #e7f5ff), so they pass at any size — WCAG 1.4.3.
+// They replaced #40c057 (2.4:1), #fab005 (1.9:1), #fa5252 (3.3:1), #2f9e44
+// (3.5:1), #e67700 (3.0:1) and #fd7e14 (2.6:1) wherever those coloured text.
+// The bright originals are still used for NON-text — status and priority
+// dots, row borders, standalone icons — where they are decoration beside a
+// text label and the brighter hue reads better at a glance.
+const STATUS = { good: '#237032', warn: '#8a5300', bad: '#c92a2a', info: '#1864ab' };
+/** 90+ good · 70–89 warn · below bad. `nil` is returned for null / undefined scores. */
+const scoreTone = (v, nil = TEXT_MUTED) => (v == null ? nil : v >= 90 ? STATUS.good : v >= 70 ? STATUS.warn : STATUS.bad);
+
 // ─── Fun Facts ──────────────────────────────────────────────────────────
 const funFacts = [
   'A single autonomous vehicle generates approximately 4 terabytes of data per day from its cameras, LIDAR, and sensors.',
@@ -325,7 +338,7 @@ function AccountabilityMetrics({ navigate }) {
   const isLoading = volLoading || allDoneLoading || woLoading || attLoading || wocLoading;
   if (isLoading) return null;
 
-  const scoreColor = (v) => v >= 90 ? '#40c057' : v >= 70 ? '#fab005' : '#fa5252';
+  const scoreColor = (v) => scoreTone(v);
   const scoreBg = (v) => v >= 90 ? '#d3f9d8' : v >= 70 ? '#fff9db' : '#ffe3e3';
   const score = attendanceScore ?? 100;
 
@@ -334,7 +347,7 @@ function AccountabilityMetrics({ navigate }) {
       <div className="dash-metrics-grid">
         <button type="button" className="dash-metric-tile" onClick={() => navigate('/work-orders')}
           aria-label={`Work Orders: ${woCount}, ${woCount === 0 ? 'none assigned' : 'assigned to me'}`}>
-          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#228be6', background: '#e7f5ff' }}>assignment</span>
+          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: STATUS.info, background: '#e7f5ff' }}>assignment</span>
           <div className="dash-metric-value">{woCount}</div>
           <div className="dash-metric-label">Work Orders</div>
           <div className="dash-metric-sub">{woCount === 0 ? 'None assigned' : 'assigned to me'}</div>
@@ -364,7 +377,7 @@ function AccountabilityMetrics({ navigate }) {
           const woc = wocScore?.score ?? null;
           const rank = wocScore?.rank ?? null;
           const total = wocScore?.totalRanked ?? null;
-          const wocColor = woc === null ? TEXT_MUTED : woc >= 90 ? '#40c057' : woc >= 70 ? '#fab005' : '#fa5252';
+          const wocColor = scoreTone(woc);
           const wocBg   = woc === null ? '#f1f3f5' : woc >= 90 ? '#d3f9d8' : woc >= 70 ? '#fff9db' : '#ffe3e3';
           const wocLabel = woc === null
             ? 'WOC Score: not yet calculated'
@@ -672,8 +685,7 @@ function GradeCard({ card, navigate }) {
 
   // Score color is paired with bold weight so the meaning is conveyed by more
   // than hue alone (WCAG 2.1 SC 1.4.1 — Use of Color).
-  const scoreColor = (v) =>
-    v == null ? TEXT_MUTED : v >= 90 ? '#2f9e44' : v >= 70 ? '#e67700' : '#c92a2a';
+  const scoreColor = (v) => scoreTone(v);
 
   const finalsExcludedNote = classConfig.finals_start ? ' · finals excluded' : '';
 
@@ -903,7 +915,7 @@ function WhyAttendance({ weeks, score }) {
     const eM = e.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return `${sM}–${eM}`;
   };
-  const tone = (s) => s == null ? TEXT_MUTED : s >= 90 ? '#2f9e44' : s >= 70 ? '#e67700' : '#c92a2a';
+  const tone = (s) => scoreTone(s);
 
   return (
     <section aria-labelledby="why-attendance-h">
@@ -973,11 +985,11 @@ function WhyAttendance({ weeks, score }) {
 // specific WOs).
 
 const WOC_TYPE_META = {
-  personal_late: { label: 'Late on assigned work orders',     sign: '−', tone: '#c92a2a' },
-  team_late:     { label: 'Team late penalty (any open WO)',  sign: '−', tone: '#e67700' },
-  stale:         { label: 'Stale work orders (no updates)',   sign: '−', tone: '#c92a2a' },
-  early_share:   { label: 'Early-close bonuses',              sign: '+', tone: '#2f9e44' },
-  closer_ack:    { label: 'Closer acknowledgments',           sign: '+', tone: '#2f9e44' },
+  personal_late: { label: 'Late on assigned work orders',     sign: '−', tone: STATUS.bad },
+  team_late:     { label: 'Team late penalty (any open WO)',  sign: '−', tone: STATUS.warn },
+  stale:         { label: 'Stale work orders (no updates)',   sign: '−', tone: STATUS.bad },
+  early_share:   { label: 'Early-close bonuses',              sign: '+', tone: STATUS.good },
+  closer_ack:    { label: 'Closer acknowledgments',           sign: '+', tone: STATUS.good },
 };
 
 function WhyWOC({ result, score }) {
@@ -1728,12 +1740,12 @@ function InstructorOverview({ navigate }) {
             style={lateWOs.length > 0 ? { borderColor: '#ffe3e3' } : {}}
           >
             <span className="material-icons dash-metric-icon" aria-hidden="true" style={{
-              color: lateWOs.length > 0 ? '#fa5252' : '#40c057',
+              color: lateWOs.length > 0 ? STATUS.bad : STATUS.good,
               background: lateWOs.length > 0 ? '#ffe3e3' : '#d3f9d8',
             }}>
               {lateWOs.length > 0 ? 'warning' : 'check_circle'}
             </span>
-            <div className="dash-metric-value" style={{ color: lateWOs.length > 0 ? '#fa5252' : '#40c057' }}>
+            <div className="dash-metric-value" style={{ color: lateWOs.length > 0 ? STATUS.bad : STATUS.good }}>
               {woLoading ? '—' : lateWOs.length}
             </div>
             <div className="dash-metric-label">Late Work Orders</div>
@@ -1743,7 +1755,7 @@ function InstructorOverview({ navigate }) {
           {/* Expected tile */}
           <button type="button" className="dash-metric-tile" onClick={expandAndScrollDayView}
             aria-label={`Expected Today: ${dayLoading ? 'loading' : expectedCount}${expectedCount === 0 ? ', no signups' : ', open day view'}`}>
-            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#228be6', background: '#e7f5ff' }}>group</span>
+            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: STATUS.info, background: '#e7f5ff' }}>group</span>
             <div className="dash-metric-value">{dayLoading ? '—' : expectedCount}</div>
             <div className="dash-metric-label">Expected Today</div>
             <div className="dash-metric-sub">{expectedCount === 0 ? 'No signups' : 'tap to view'}</div>
@@ -1752,7 +1764,7 @@ function InstructorOverview({ navigate }) {
           {/* Punched In tile */}
           <button type="button" className="dash-metric-tile" onClick={expandAndScrollDayView}
             aria-label={`Punched In: ${dayLoading ? 'loading' : punchedInCount}${punchedInCount === 0 ? ', no one currently' : ', open day view'}`}>
-            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: '#40c057', background: '#d3f9d8' }}>login</span>
+            <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: STATUS.good, background: '#d3f9d8' }}>login</span>
             <div className="dash-metric-value">{dayLoading ? '—' : punchedInCount}</div>
             <div className="dash-metric-label">Punched In</div>
             <div className="dash-metric-sub">{punchedInCount === 0 ? 'No one currently' : 'tap to view'}</div>
@@ -1774,13 +1786,13 @@ function InstructorOverview({ navigate }) {
             style={overdueCheckoutCount > 0 ? { borderColor: '#ffe3e3' } : {}}
           >
             <span className="material-icons dash-metric-icon" aria-hidden="true" style={{
-              color: overdueCheckoutCount > 0 ? '#fa5252' : (outCount > 0 ? '#d9480f' : '#40c057'),
+              color: overdueCheckoutCount > 0 ? STATUS.bad : (outCount > 0 ? STATUS.warn : STATUS.good),
               background: overdueCheckoutCount > 0 ? '#ffe3e3' : (outCount > 0 ? '#fff4e6' : '#d3f9d8'),
             }}>
               {overdueCheckoutCount > 0 ? 'warning' : (outCount > 0 ? 'schedule' : 'check_circle')}
             </span>
             <div className="dash-metric-value" style={{
-              color: overdueCheckoutCount > 0 ? '#fa5252' : (outCount > 0 ? '#d9480f' : '#40c057'),
+              color: overdueCheckoutCount > 0 ? STATUS.bad : (outCount > 0 ? STATUS.warn : STATUS.good),
             }}>
               {checkoutLoading ? '—' : outCount}
             </div>
@@ -1805,9 +1817,9 @@ function InstructorOverview({ navigate }) {
             const none = owing === 0;
             const allMet = !none && short === 0;
             const tone = none ? { c: '#495057', bg: '#f1f3f5', icon: 'event_busy' }
-              : allMet ? { c: '#237032', bg: '#d3f9d8', icon: 'check_circle' }
-              : t.locked ? { c: '#c92a2a', bg: '#ffe3e3', icon: 'cancel' }
-              : { c: '#8a5300', bg: '#fff4e6', icon: 'pending_actions' };
+              : allMet ? { c: STATUS.good, bg: '#d3f9d8', icon: 'check_circle' }
+              : t.locked ? { c: STATUS.bad, bg: '#ffe3e3', icon: 'cancel' }
+              : { c: STATUS.warn, bg: '#fff4e6', icon: 'pending_actions' };
             const sub = weekStatusLoading ? ''
               : none ? 'No hours required'
               : allMet ? 'Everyone signed up'
@@ -1999,10 +2011,10 @@ function InstructorOverview({ navigate }) {
                           <span>{formatTime12(person.displayStart)} – {formatTime12(person.displayEnd)}</span>
                         )}
                         {isPunchedIn && punchInTime && (
-                          <span style={{ color: '#40c057' }}>In: {punchInTime}</span>
+                          <span style={{ color: STATUS.good }}>In: {punchInTime}</span>
                         )}
                         {isPunchedIn && hasSignup && person.displayEnd && (
-                          <span style={{ color: '#fd7e14' }}>Leaving ~{formatTime12(person.displayEnd)}</span>
+                          <span style={{ color: STATUS.warn }}>Leaving ~{formatTime12(person.displayEnd)}</span>
                         )}
                         {hasLeft && !isPunchedIn && (
                           <span style={{ color: TEXT_MUTED }}>Left: {formatTimestamp12(person.clockEntries.find(c => c.status === 'Punched Out')?.punch_out)}</span>
@@ -2160,7 +2172,7 @@ function InstructorOverview({ navigate }) {
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fa5252' }}>{daysLate(wo.due_date)}d</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: STATUS.bad }}>{daysLate(wo.due_date)}d</div>
                     <div style={{ fontSize: '0.68rem', color: TEXT_MUTED }}>late</div>
                   </div>
                 </button>

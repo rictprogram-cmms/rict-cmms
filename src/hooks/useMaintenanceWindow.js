@@ -133,9 +133,9 @@ export function useMaintenanceWindow() {
         const key = payload.new?.setting_key || payload.old?.setting_key
         if (!MAINTENANCE_KEYS.includes(key)) return
         setValues(prev => ({ ...prev, [key]: payload.eventType === 'DELETE' ? null : payload.new?.setting_value }))
-      }))
+      }), { onReconnect: fetchAll })   // handlers apply the payload; after a drop, re-read all four keys
     return () => { channel() }
-  }, [])
+  }, [fetchAll])
 
   // Once-a-minute tick so countdowns stay honest without flooding live regions
   useEffect(() => {
