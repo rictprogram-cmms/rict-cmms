@@ -14,7 +14,12 @@
  *   - Late Work Orders (click for detail modal)
  *   - Expected Today
  *   - Punched In Now
- *   - Day View: who is here / expected, with date nav arrows
+ *   - Day View: who is here / expected, with date nav arrows. Beside each
+ *     student's name: a green check when every class's required lab hours are
+ *     signed up for the week of the day being viewed, or a red X with
+ *     "signed/required" (e.g. 6/8) when not (src/lib/weeklySignupStatus.js —
+ *     same closure / finals / make-up rules as Lab Signup). People with no
+ *     requirement that week (Time Clock Only, lab staff) get no mark.
  *   - "Active Temp Access" card with History + Edit + Revoke
  *     (Edit opens EditTempAccessDialog; Edit/Revoke go through the
  *     edit_temp_access_request / revoke_temp_access_request RPCs so a
@@ -29,6 +34,7 @@ import { supabase } from '@/lib/supabase';
 import { mustData } from '@/lib/supabaseData';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mergeSignupSessions, pickSession, hasRemainingSession, nowMinutes } from '@/lib/labSessions';
+import { fetchWeeklySignupStatus, describeWeekStatus, weekRangeOf } from '@/lib/weeklySignupStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow';
@@ -1400,6 +1406,45 @@ function InstructorOverview({ navigate }) {
     , { tag: 'Dashboard' });
   }, [fetchDayData]);
 
+  // ── Weekly sign-up status (green check / red X beside each name) ──
+  // Keyed by the Monday of the week being VIEWED, so arrowing between days in
+  // the same week does not refetch, and arrowing into another week does.
+  // A failed read keeps the last good result for that week; marks are only
+  // rendered when the stored result belongs to the week on screen, so a stale
+  // week can never be shown against the wrong day.
+  const weekMondayKey = useMemo(() => weekRangeOf(dateStr).monday, [dateStr]);
+  const [weekStatus, setWeekStatus] = useState({ mondayKey: null, byEmail: new Map() });
+  const weekFetchSeq = React.useRef(0);
+
+  const fetchWeekStatus = useCallback(async () => {
+    if (!weekMondayKey) return;
+    const seq = ++weekFetchSeq.current;
+    try {
+      const result = await fetchWeeklySignupStatus({ dateStr: weekMondayKey });
+      if (seq === weekFetchSeq.current) setWeekStatus(result);
+    } catch (err) {
+      console.warn('Dashboard weekly sign-up status fetch failed (keeping last result):', err?.message || err);
+    }
+  }, [weekMondayKey]);
+
+  useEffect(() => { fetchWeekStatus(); }, [fetchWeekStatus]);
+
+  useEffect(() => {
+    // A student saving a week of sign-ups fires one event per row, and this
+    // fetch is five reads — debounce so a burst becomes a single refresh.
+    let timer = null;
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(fetchWeekStatus, 500); };
+    const stop = subscribeWithReconnect('dash-inst-week', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, schedule)
+    , { tag: 'Dashboard' });
+    window.addEventListener('supabase-reconnected', schedule);
+    return () => { clearTimeout(timer); window.removeEventListener('supabase-reconnected', schedule); stop(); };
+  }, [fetchWeekStatus]);
+
 
 
   // ── Fetch temp access ──
@@ -1778,6 +1823,14 @@ function InstructorOverview({ navigate }) {
                   const activeEntry = person.clockEntries.find(c => c.status === 'Punched In');
                   const punchInTime = activeEntry ? formatTimestamp12(activeEntry.punch_in) : null;
 
+                  // Weekly sign-up mark — only for the week on screen, and only
+                  // for people who owe hours that week (required > 0).
+                  const wk = weekStatus.mondayKey === weekMondayKey
+                    ? weekStatus.byEmail.get((person.user_email || '').toLowerCase())
+                    : null;
+                  const showWeekMark = !!wk && wk.required > 0;
+                  const wkText = showWeekMark ? describeWeekStatus(wk) : null;
+
                   let statusDot;
                   if (isPunchedIn) statusDot = '#40c057';
                   else if (hasLeft && !isReturning) statusDot = '#868e96';
@@ -1787,7 +1840,19 @@ function InstructorOverview({ navigate }) {
                     <div key={person.user_email || idx} className="dash-day-person" style={{ borderLeftColor: statusDot }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusDot, flexShrink: 0 }} />
-                        <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1a1a2e', flex: 1 }}>{person.user_name}</span>
+                        <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1a1a2e' }}>{person.user_name}</span>
+                        {showWeekMark && (
+                          <span
+                            className={`dash-week-mark ${wk.met ? 'is-met' : 'is-short'}`}
+                            title={wkText.long}
+                          >
+                            <span className="material-icons" aria-hidden="true">{wk.met ? 'check_circle' : 'cancel'}</span>
+                            {!wk.met && <span className="dash-week-mark-count" aria-hidden="true">{wkText.short}</span>}
+                            <span className="dash-sr-only">{wkText.long}</span>
+                          </span>
+                        )}
+                        {/* Spacer — keeps the status badges right-aligned now that the name no longer flexes */}
+                        <span style={{ flex: 1 }} />
                         {isWorkStudy && <span className="dash-badge-work-study">Work Study</span>}
                         {isWalkIn && <span className="dash-badge-walk-in">Walk-in</span>}
                         {isPunchedIn && <span className="dash-badge-in">In Lab</span>}

@@ -181,6 +181,20 @@
 }
 .dash-day-person:last-child { border-bottom: none; }
 
+/* ── Day View weekly sign-up mark (beside the name) ──────────────────────────
+   Green check = every class's required hours are signed up for the week;
+   red X + "6/8" = short. Meaning is carried by icon SHAPE + text (and a
+   screen-reader sentence), never colour alone (WCAG 1.4.1). Both colours are
+   ≥ 4.5:1 on white (#237032 6.1:1, #c92a2a 5.5:1). Not interactive. */
+.dash-week-mark {
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+  font-size: 0.78rem; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.dash-week-mark .material-icons { font-size: 1.15rem; }
+.dash-week-mark.is-met   { color: #237032; }
+.dash-week-mark.is-short { color: #c92a2a; }
+
 /* ── Status badges ───────────────────────────────────────────────────────── */
 .dash-badge-in         { font-size: 0.68rem; font-weight: 600; background: #d3f9d8; color: #2b8a3e; padding: 2px 8px; border-radius: 4px; }
 .dash-badge-left       { font-size: 0.68rem; font-weight: 600; background: #f1f3f5; color: #868e96; padding: 2px 8px; border-radius: 4px; }
