@@ -195,6 +195,38 @@
 .dash-week-mark.is-met   { color: #237032; }
 .dash-week-mark.is-short { color: #c92a2a; }
 
+/* Short student with a Pending post-deadline change request — "waiting on me" */
+.dash-badge-request {
+  font-size: 0.65rem; font-weight: 600; background: #e7f5ff; color: #1864ab;
+  padding: 1px 6px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;
+}
+
+/* ── Day View sign-up window strip (under the date nav row) ──────────────────
+   Open vs closed is carried by the lock icon + the words, not colour alone.
+   #495057 on #fafbfc = 7.9:1; #8a5300 on #fff9db = 6.0:1. */
+.dash-day-window {
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 6px 20px; font-size: 0.72rem; font-weight: 600;
+  border-bottom: 1px solid #f1f3f5; text-align: center;
+}
+.dash-day-window .material-icons { font-size: 0.95rem; }
+.dash-day-window.is-locked { background: #fafbfc; color: #495057; }
+.dash-day-window.is-open   { background: #fff9db; color: #8a5300; }
+
+/* ── "Short this week" list modal ─────────────────────────────────────────── */
+.dash-short-modal-note {
+  padding: 12px 20px; font-size: 0.8rem; line-height: 1.45; color: #495057;
+  background: #fafbfc; border-bottom: 1px solid #e9ecef;
+}
+.dash-short-table th[scope="row"] { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; background: transparent; text-transform: none; letter-spacing: 0; font-size: 0.85rem; }
+.dash-short-table td { vertical-align: middle; }
+.dash-short-open { gap: 2px; white-space: nowrap; }
+@media (max-width: 600px) {
+  /* Narrow screens: let the table scroll inside the modal body rather than
+     squeezing the 44px action button */
+  .dash-short-table { min-width: 460px; }
+}
+
 /* ── Status badges ───────────────────────────────────────────────────────── */
 .dash-badge-in         { font-size: 0.68rem; font-weight: 600; background: #d3f9d8; color: #2b8a3e; padding: 2px 8px; border-radius: 4px; }
 .dash-badge-left       { font-size: 0.68rem; font-weight: 600; background: #f1f3f5; color: #868e96; padding: 2px 8px; border-radius: 4px; }

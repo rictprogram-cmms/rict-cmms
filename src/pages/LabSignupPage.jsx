@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import {
@@ -56,6 +57,20 @@ export default function LabSignupPage() {
   const [activeTab, setActiveTab] = useState('signup')
   const tabs = isInstructor ? [...TABS, ...INSTRUCTOR_TABS] : TABS
 
+  // Deep link from the Dashboard's "Short This Week" list: router state
+  // { adminSignup: { email, name, classId, date, note, weekLabel } } opens the
+  // Admin Signup tab with that student pre-selected. Router state (not the
+  // URL) keeps the student's email out of the address bar and history.
+  // Permissions load after first render, so wait for isInstructor; apply once.
+  const location = useLocation()
+  const adminPreset = location.state?.adminSignup || null
+  const presetTabApplied = useRef(false)
+  useEffect(() => {
+    if (!adminPreset || !isInstructor || presetTabApplied.current) return
+    presetTabApplied.current = true
+    setActiveTab('adminsignup')
+  }, [adminPreset, isInstructor])
+
   return (
     <div className="p-4 lg:p-6 max-w-[1400px] mx-auto">
       {/* Tabs */}
@@ -85,7 +100,7 @@ export default function LabSignupPage() {
       {activeTab === 'mysignups' && <MySignupsTab />}
       {activeTab === 'calendar' && isInstructor && <LabCalendarTab />}
       {activeTab === 'roster' && isInstructor && <DailyRosterTab />}
-      {activeTab === 'adminsignup' && isInstructor && <AdminSignupTab />}
+      {activeTab === 'adminsignup' && isInstructor && <AdminSignupTab preset={adminPreset} />}
     </div>
   )
 }
@@ -2026,13 +2041,33 @@ function DailyRosterTab() {
 // TAB 5: ADMIN SIGNUP (Instructor Override)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function AdminSignupTab() {
+function AdminSignupTab({ preset = null }) {
   const { students, loading: studentsLoading } = useStudentsList()
   const { signUpStudent, saving } = useInstructorSignup()
 
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [selectedClass, setSelectedClass] = useState('')
   const [dateStr, setDateStr] = useState(formatDateKey(new Date()))
+
+  // Pre-fill from the Dashboard's "Short This Week" list (see LabSignupPage).
+  // Applied ONCE, after the student list has loaded, so it never fights the
+  // instructor's own choices afterwards. Nothing is saved — this only fills
+  // the form; the instructor still picks a slot and presses Sign Up Student.
+  const presetApplied = useRef(false)
+  const [presetNote, setPresetNote] = useState(null) // { found, name, note, weekLabel }
+  useEffect(() => {
+    if (!preset || presetApplied.current || studentsLoading) return
+    presetApplied.current = true
+    const want = String(preset.email || '').toLowerCase().trim()
+    const match = students.find(st => String(st.email || '').toLowerCase().trim() === want) || null
+    if (match) {
+      setSelectedStudent(match)
+      const theirs = (match.classes || '').split(',').map(c => c.trim()).filter(Boolean)
+      setSelectedClass(preset.classId && theirs.includes(preset.classId) ? preset.classId : '')
+      if (/^\d{4}-\d{2}-\d{2}$/.test(preset.date || '')) setDateStr(preset.date)
+    }
+    setPresetNote({ found: !!match, name: preset.name || preset.email || 'this student', note: preset.note || '', weekLabel: preset.weekLabel || '' })
+  }, [preset, students, studentsLoading])
   const [slots, setSlots] = useState([])
   const [selectedSlot, setSelectedSlot] = useState('')
   const [loadingSlots, setLoadingSlots] = useState(false)
@@ -2126,6 +2161,18 @@ function AdminSignupTab() {
           <Info size={16} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
           <span>This bypasses the Sunday midnight deadline. Use when a student needs to sign up after the deadline has passed.</span>
         </div>
+
+        {/* Opened from the Dashboard's "Short This Week" list */}
+        {presetNote && (
+          <div role="status" className="flex items-start gap-3 p-3 bg-brand-50 border border-brand-200 rounded-lg text-xs text-surface-800">
+            <Info size={16} className="flex-shrink-0 mt-0.5 text-brand-600" aria-hidden="true" />
+            <span>
+              {presetNote.found
+                ? <><strong>{presetNote.name}</strong>{presetNote.weekLabel ? ` · week of ${presetNote.weekLabel}` : ''}. {presetNote.note} Student{selectedClass ? ', class' : ''} and date are filled in below — pick a time slot to sign them up.</>
+                : <><strong>{presetNote.name}</strong> is not in the student list below (Time Clock Only and archived users are left out), so nothing was filled in.</>}
+            </span>
+          </div>
+        )}
 
         {/* Student */}
         <label className="block text-xs font-medium text-surface-600">

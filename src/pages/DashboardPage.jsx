@@ -19,7 +19,13 @@
  *     signed up for the week of the day being viewed, or a red X with
  *     "signed/required" (e.g. 6/8) when not (src/lib/weeklySignupStatus.js —
  *     same closure / finals / make-up rules as Lab Signup). People with no
- *     requirement that week (Time Clock Only, lab staff) get no mark.
+ *     requirement that week (Time Clock Only, lab staff) get no mark. A line
+ *     under the date says whether that week's sign-up is still open or closed,
+ *     and a short student with a Pending change request is tagged.
+ *   - Short This Week / Short Next Week tiles: "3 of 14" across EVERY student
+ *     who owes hours (not just those in the Day View — someone who signed up
+ *     for nothing never appears there). Click for the full list; each row
+ *     links to Lab Signup → Admin Signup with that student pre-selected.
  *   - "Active Temp Access" card with History + Edit + Revoke
  *     (Edit opens EditTempAccessDialog; Edit/Revoke go through the
  *     edit_temp_access_request / revoke_temp_access_request RPCs so a
@@ -34,7 +40,10 @@ import { supabase } from '@/lib/supabase';
 import { mustData } from '@/lib/supabaseData';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mergeSignupSessions, pickSession, hasRemainingSession, nowMinutes } from '@/lib/labSessions';
-import { fetchWeeklySignupStatus, describeWeekStatus, weekRangeOf } from '@/lib/weeklySignupStatus';
+import {
+  fetchWeeklySignupStatuses, describeWeekStatus, weekRangeOf, addWeeks,
+  summarizeWeek, describeSignupWindow, formatWeekLabel, formatHoursShort,
+} from '@/lib/weeklySignupStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow';
@@ -1406,36 +1415,57 @@ function InstructorOverview({ navigate }) {
     , { tag: 'Dashboard' });
   }, [fetchDayData]);
 
-  // ── Weekly sign-up status (green check / red X beside each name) ──
-  // Keyed by the Monday of the week being VIEWED, so arrowing between days in
-  // the same week does not refetch, and arrowing into another week does.
-  // A failed read keeps the last good result for that week; marks are only
-  // rendered when the stored result belongs to the week on screen, so a stale
-  // week can never be shown against the wrong day.
+  // ── Weekly sign-up status ──
+  // Three weeks matter: the week being VIEWED (marks beside each name) plus
+  // THIS week and NEXT week (the two "Short" tiles). They usually overlap, so
+  // the set is de-duplicated — arrowing between days inside a loaded week does
+  // not refetch. A failed read keeps the last good results, and everything
+  // below looks a week up by its Monday key, so a stale week can never be
+  // shown against the wrong day.
+  //
+  // `clockTick` keeps "this week" and the open/closed wording right across
+  // Sunday midnight on a dashboard left open (the minute tick above only runs
+  // while today is on screen).
+  const [clockTick, setClockTick] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setClockTick(Date.now()), 5 * 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const weekMondayKey = useMemo(() => weekRangeOf(dateStr).monday, [dateStr]);
-  const [weekStatus, setWeekStatus] = useState({ mondayKey: null, byEmail: new Map() });
+  const thisMondayKey = useMemo(() => weekRangeOf(toLocalDateStr(new Date(clockTick))).monday, [clockTick]);
+  const nextMondayKey = useMemo(() => addWeeks(thisMondayKey, 1), [thisMondayKey]);
+  const weekKeysSig = useMemo(
+    () => [...new Set([weekMondayKey, thisMondayKey, nextMondayKey].filter(Boolean))].sort().join(','),
+    [weekMondayKey, thisMondayKey, nextMondayKey]
+  );
+
+  const [weekStatuses, setWeekStatuses] = useState(() => new Map());
+  const [weekStatusLoading, setWeekStatusLoading] = useState(true);
   const weekFetchSeq = React.useRef(0);
 
   const fetchWeekStatus = useCallback(async () => {
-    if (!weekMondayKey) return;
+    if (!weekKeysSig) return;
     const seq = ++weekFetchSeq.current;
     try {
-      const result = await fetchWeeklySignupStatus({ dateStr: weekMondayKey });
-      if (seq === weekFetchSeq.current) setWeekStatus(result);
+      const result = await fetchWeeklySignupStatuses({ mondays: weekKeysSig.split(',') });
+      if (seq === weekFetchSeq.current) setWeekStatuses(result);
     } catch (err) {
       console.warn('Dashboard weekly sign-up status fetch failed (keeping last result):', err?.message || err);
     }
-  }, [weekMondayKey]);
+    if (seq === weekFetchSeq.current) setWeekStatusLoading(false);
+  }, [weekKeysSig]);
 
   useEffect(() => { fetchWeekStatus(); }, [fetchWeekStatus]);
 
   useEffect(() => {
     // A student saving a week of sign-ups fires one event per row, and this
-    // fetch is five reads — debounce so a burst becomes a single refresh.
+    // fetch is several reads — debounce so a burst becomes a single refresh.
     let timer = null;
     const schedule = () => { clearTimeout(timer); timer = setTimeout(fetchWeekStatus, 500); };
     const stop = subscribeWithReconnect('dash-inst-week', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup_requests' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
@@ -1444,6 +1474,47 @@ function InstructorOverview({ navigate }) {
     window.addEventListener('supabase-reconnected', schedule);
     return () => { clearTimeout(timer); window.removeEventListener('supabase-reconnected', schedule); stop(); };
   }, [fetchWeekStatus]);
+
+  // Roll-ups for the two tiles and their list
+  const thisWeekSummary = useMemo(() => summarizeWeek(weekStatuses.get(thisMondayKey)?.byEmail), [weekStatuses, thisMondayKey]);
+  const nextWeekSummary = useMemo(() => summarizeWeek(weekStatuses.get(nextMondayKey)?.byEmail), [weekStatuses, nextMondayKey]);
+  // Open / closed wording for the week on screen (Day View) — recomputed on the clock tick
+  const viewedWindow = useMemo(() => describeSignupWindow(weekMondayKey, new Date(clockTick)), [weekMondayKey, clockTick]);
+
+  // "Short" list modal — holds the Monday key of the week it is showing
+  const [shortModalWeek, setShortModalWeek] = useState(null);
+  const closeShortModal = useCallback(() => setShortModalWeek(null), []);
+  const shortModalRef = useDialogA11y(!!shortModalWeek, closeShortModal);
+  const shortModalSummary = shortModalWeek === nextMondayKey ? nextWeekSummary
+    : shortModalWeek === thisMondayKey ? thisWeekSummary
+    : null;
+  const shortModalWindow = useMemo(
+    () => (shortModalWeek ? describeSignupWindow(shortModalWeek, new Date(clockTick)) : null),
+    [shortModalWeek, clockTick]
+  );
+
+  // Row action in the list: Lab Signup → Admin Signup with the student, their
+  // first short class and a date in that week pre-selected. Router state, not
+  // the URL, so a student's email never lands in the address bar or history.
+  const openAdminSignupFor = (row, mondayKey) => {
+    const firstShort = (row.perClass || []).find(c => c.required > 0 && !c.met);
+    const { sunday } = weekRangeOf(mondayKey);
+    const today = toLocalDateStr(new Date());
+    const date = today >= mondayKey && today <= sunday ? today : mondayKey;
+    setShortModalWeek(null);
+    navigate('/lab-signup', {
+      state: {
+        adminSignup: {
+          email: row.email,
+          name: row.name,
+          classId: firstShort?.courseId || firstShort?.classId || '',
+          date,
+          note: describeWeekStatus(row).long,
+          weekLabel: formatWeekLabel(mondayKey),
+        },
+      },
+    });
+  };
 
 
 
@@ -1713,6 +1784,51 @@ function InstructorOverview({ navigate }) {
             </div>
           </button>
 
+          {/* Short This Week / Short Next Week — every student who owes hours,
+              not just those in the Day View. This week is LOCKED (red when
+              anyone is short); next week is still the students' to fix, so it
+              is amber, never red — most of next week looks short on a Monday. */}
+          {[
+            { key: thisMondayKey, label: 'Short This Week', summary: thisWeekSummary, locked: true },
+            { key: nextMondayKey, label: 'Short Next Week', summary: nextWeekSummary, locked: false },
+          ].map(t => {
+            const { owing, short, pending } = t.summary;
+            const none = owing === 0;
+            const allMet = !none && short === 0;
+            const tone = none ? { c: '#495057', bg: '#f1f3f5', icon: 'event_busy' }
+              : allMet ? { c: '#237032', bg: '#d3f9d8', icon: 'check_circle' }
+              : t.locked ? { c: '#c92a2a', bg: '#ffe3e3', icon: 'cancel' }
+              : { c: '#8a5300', bg: '#fff4e6', icon: 'pending_actions' };
+            const sub = weekStatusLoading ? ''
+              : none ? 'No hours required'
+              : allMet ? 'Everyone signed up'
+              : pending > 0 ? `${pending} request${pending === 1 ? '' : 's'} pending`
+              : t.locked ? 'Sign-up closed' : 'Still open';
+            return (
+              <button
+                key={t.label}
+                type="button"
+                className="dash-metric-tile"
+                onClick={() => setShortModalWeek(t.key)}
+                aria-haspopup="dialog"
+                aria-label={
+                  weekStatusLoading ? `${t.label}, loading`
+                  : none ? `${t.label}, week of ${formatWeekLabel(t.key)}: no students owe lab hours. Open list`
+                  : `${t.label}, week of ${formatWeekLabel(t.key)}: ${short} of ${owing} students have not signed up for all required hours${pending > 0 ? `, ${pending} with a change request pending` : ''}. ${t.locked ? 'Sign-up closed' : 'Sign-up still open'}. Open list`
+                }
+                style={!weekStatusLoading && t.locked && short > 0 ? { borderColor: '#ffe3e3' } : {}}
+              >
+                <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: tone.c, background: tone.bg }}>{tone.icon}</span>
+                <div className="dash-metric-value" style={{ color: tone.c }}>
+                  {weekStatusLoading ? '—' : none ? '0' : <>{short}<span style={{ fontSize: '0.95rem', fontWeight: 600, color: '#495057' }}> of {owing}</span></>}
+                </div>
+                <div className="dash-metric-label">{t.label}</div>
+                {/* #495057 (8.2:1) rather than the shared sub colour — this line carries real information */}
+                <div className="dash-metric-sub" style={{ color: '#495057' }}>{formatWeekLabel(t.key)}{sub ? ` · ${sub}` : ''}</div>
+              </button>
+            );
+          })}
+
         </div>
       </div>
 
@@ -1794,6 +1910,16 @@ function InstructorOverview({ navigate }) {
             </div>
           )}
 
+          {/* Is the viewed week still the students' to fix, or locked? A red X
+              means something different in each case. Plain text, not a live
+              region — the date label above already announces day changes. */}
+          {dayViewExpanded && viewedWindow.text && (
+            <div className={`dash-day-window ${viewedWindow.locked ? 'is-locked' : 'is-open'}`}>
+              <span className="material-icons" aria-hidden="true">{viewedWindow.locked ? 'lock' : 'lock_open'}</span>
+              <span>Week of {formatWeekLabel(weekMondayKey)} · {viewedWindow.text}</span>
+            </div>
+          )}
+
           {dayViewExpanded && (
             <div
               id="dash-day-view-body"
@@ -1825,9 +1951,7 @@ function InstructorOverview({ navigate }) {
 
                   // Weekly sign-up mark — only for the week on screen, and only
                   // for people who owe hours that week (required > 0).
-                  const wk = weekStatus.mondayKey === weekMondayKey
-                    ? weekStatus.byEmail.get((person.user_email || '').toLowerCase())
-                    : null;
+                  const wk = weekStatuses.get(weekMondayKey)?.byEmail.get((person.user_email || '').toLowerCase()) || null;
                   const showWeekMark = !!wk && wk.required > 0;
                   const wkText = showWeekMark ? describeWeekStatus(wk) : null;
 
@@ -1850,6 +1974,9 @@ function InstructorOverview({ navigate }) {
                             {!wk.met && <span className="dash-week-mark-count" aria-hidden="true">{wkText.short}</span>}
                             <span className="dash-sr-only">{wkText.long}</span>
                           </span>
+                        )}
+                        {showWeekMark && wk.requestPending && (
+                          <span className="dash-badge-request" aria-hidden="true">Request pending</span>
                         )}
                         {/* Spacer — keeps the status badges right-aligned now that the name no longer flexes */}
                         <span style={{ flex: 1 }} />
@@ -2030,6 +2157,82 @@ function InstructorOverview({ navigate }) {
                   </div>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Short This Week / Next Week Modal ── */}
+      {shortModalWeek && shortModalSummary && (
+        <div className="dash-modal-overlay" onClick={e => e.target === e.currentTarget && closeShortModal()}>
+          <div className="dash-modal" ref={shortModalRef} role="dialog" aria-modal="true" aria-labelledby="short-modal-title" aria-describedby="short-modal-desc" style={{ maxWidth: 640 }}>
+            <div className="dash-modal-header">
+              <h4 id="short-modal-title">
+                <span className="material-icons" aria-hidden="true" style={{ color: '#228be6', fontSize: '1.1rem' }}>fact_check</span>
+                Lab sign-ups · {formatWeekLabel(shortModalWeek)}
+              </h4>
+              <button className="dash-modal-close" aria-label="Close" onClick={closeShortModal}>&times;</button>
+            </div>
+            <div id="short-modal-desc" className="dash-short-modal-note">
+              <strong>{shortModalSummary.short} of {shortModalSummary.owing}</strong> short
+              {shortModalSummary.pending > 0 && <> · {shortModalSummary.pending} with a change request pending</>}
+              {' · '}{shortModalWindow?.text}.{' '}
+              {shortModalWindow?.locked
+                ? 'Students can no longer change this week themselves — it takes an approved change request or Admin Signup.'
+                : 'Students can still fix this week themselves.'}
+            </div>
+            <div className="dash-modal-body" style={{ maxHeight: 440, overflowY: 'auto', padding: 0 }}>
+              {shortModalSummary.rows.length === 0 ? (
+                <p style={{ textAlign: 'center', color: '#495057', padding: 24, margin: 0 }}>No students owe lab hours this week.</p>
+              ) : (
+                <table className="dash-table dash-short-table">
+                  <caption className="dash-sr-only">
+                    Students who owe lab hours for the week of {formatWeekLabel(shortModalWeek)}, short first
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Student</th>
+                      <th scope="col">Signed up</th>
+                      <th scope="col">Short in</th>
+                      <th scope="col"><span className="dash-sr-only">Action</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shortModalSummary.rows.map(row => {
+                      const shortIn = row.perClass
+                        .filter(c => c.required > 0 && !c.met)
+                        .map(c => `${c.courseId || c.classId} ${formatHoursShort(Math.min(c.signed, c.required))} of ${formatHoursShort(c.required)}`);
+                      return (
+                        <tr key={row.email}>
+                          <th scope="row" style={{ fontWeight: 600, color: '#1a1a2e', textAlign: 'left' }}>{row.name}</th>
+                          <td>
+                            <span className={`dash-week-mark ${row.met ? 'is-met' : 'is-short'}`}>
+                              <span className="material-icons" aria-hidden="true">{row.met ? 'check_circle' : 'cancel'}</span>
+                              <span>{formatHoursShort(row.counted)}/{formatHoursShort(row.required)}</span>
+                              <span className="dash-sr-only">{row.met ? ' — met' : ' — short'}</span>
+                            </span>
+                          </td>
+                          <td style={{ color: '#495057' }}>
+                            {row.met ? <span aria-hidden="true">—</span> : shortIn.join('; ')}
+                            {row.requestPending && <span className="dash-badge-request" style={{ marginLeft: 6 }}>Request pending</span>}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              className="dash-btn-sm dash-short-open"
+                              onClick={() => openAdminSignupFor(row, shortModalWeek)}
+                              aria-label={`Open Lab Signup for ${row.name}`}
+                            >
+                              Lab Signup
+                              <span className="material-icons" aria-hidden="true" style={{ fontSize: '1rem' }}>chevron_right</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>

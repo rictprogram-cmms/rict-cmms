@@ -28,12 +28,31 @@
  * whose start..end/finals window overlaps the week. Both course_id and
  * class_id formats are accepted everywhere (dual-format rule).
  *
+ * SIGN-UP WINDOW
+ *   Students can only change a week until 11:59 PM on the SUNDAY THAT STARTS
+ *   IT (isDeadlinePassed() in useLabSignup.js — Lab Signup weeks are
+ *   Sunday-anchored; this engine is Monday-anchored, so the deadline for the
+ *   week of Monday M is M − 1 day, 23:59:59). The week you are IN is therefore
+ *   always locked: a red X there can only be fixed by an approved
+ *   post-deadline change request (lab_signup_requests) or by an instructor
+ *   through Lab Signup → Admin Signup. A red X on a FUTURE week is still the
+ *   student's to fix. `requestPending` marks a short student who has a
+ *   Pending change request for that week — "short and waiting on me" rather
+ *   than "short and doing nothing". It never changes `met`.
+ *
  * Exports
  *   weekRangeOf(dateStr)                       → { monday, sunday }
+ *   addWeeks(mondayKey, n)                     → mondayKey
  *   classesForWeek(classRows, monday, sunday)  → rows in session that week
+ *   signupDeadlineFor(mondayKey)               → Date (local)
+ *   describeSignupWindow(mondayKey, now)       → { locked, text, deadline }    (pure)
+ *   requestWeekMonday(weekStart)               → mondayKey for a lab_signup_requests.week_start
  *   computeWeeklySignupStatus({...})           → Map<emailLower, WeekStatus>   (pure)
+ *   summarizeWeek(byEmail)                     → { owing, short, pending, rows } (pure)
  *   formatHoursShort(n)                        → '8' | '6.4'
+ *   formatWeekLabel(mondayKey)                 → 'Sep 21 – 27'
  *   describeWeekStatus(status)                 → { short, long }               (pure)
+ *   fetchWeeklySignupStatuses({ mondays })     → Promise<Map<mondayKey, { mondayKey, byEmail }>>
  *   fetchWeeklySignupStatus({ dateStr })       → Promise<{ mondayKey, byEmail }>
  *
  * Conventions honored
@@ -65,6 +84,70 @@ export function weekRangeOf(dateStr) {
   return { monday, sunday: toKey(d) }
 }
 
+/** Monday key n weeks after (or before) mondayKey. */
+export function addWeeks(mondayKey, n) {
+  const monday = mondayKeyOf(mondayKey)
+  if (!monday) return null
+  const d = new Date(monday + 'T00:00:00')
+  d.setDate(d.getDate() + 7 * (Number(n) || 0))
+  return toKey(d)
+}
+
+// ─── Sign-up window ───────────────────────────────────────────────────────────
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * Last moment a student can change the week of `mondayKey` themselves:
+ * 11:59:59 PM local on the Sunday before that Monday. Mirrors
+ * isDeadlinePassed() in useLabSignup.js.
+ */
+export function signupDeadlineFor(mondayKey) {
+  const monday = mondayKeyOf(mondayKey)
+  if (!monday) return null
+  const d = new Date(monday + 'T00:00:00')
+  d.setDate(d.getDate() - 1)
+  d.setHours(23, 59, 59, 999)
+  return d
+}
+
+/** { locked, deadline, text } — text is ready to show, e.g. "Sign-up closed Sun, Sep 20". */
+export function describeSignupWindow(mondayKey, now = new Date()) {
+  const deadline = signupDeadlineFor(mondayKey)
+  if (!deadline) return { locked: false, deadline: null, text: '' }
+  const locked = now > deadline
+  const day = `Sun, ${MONTHS[deadline.getMonth()]} ${deadline.getDate()}`
+  return {
+    locked, deadline,
+    text: locked ? `Sign-up closed ${day}` : `Sign-up open until ${day}, 11:59 PM`,
+  }
+}
+
+/** 'Sep 21 – 27' / 'Sep 28 – Oct 4' for the Mon–Sun week. */
+export function formatWeekLabel(mondayKey) {
+  const { monday, sunday } = weekRangeOf(mondayKey)
+  if (!monday) return ''
+  const a = new Date(monday + 'T00:00:00')
+  const b = new Date(sunday + 'T00:00:00')
+  const left = `${MONTHS[a.getMonth()]} ${a.getDate()}`
+  const right = a.getMonth() === b.getMonth() ? `${b.getDate()}` : `${MONTHS[b.getMonth()]} ${b.getDate()}`
+  return `${left} – ${right}`
+}
+
+/**
+ * lab_signup_requests.week_start is the SUNDAY that starts the Lab Signup
+ * week. That Sunday belongs to the Monday-week that FOLLOWS it here, so a
+ * Sunday maps forward one day; any other day maps to its own Monday.
+ */
+export function requestWeekMonday(weekStart) {
+  const key = dateOnly(weekStart)
+  if (!key) return null
+  const d = new Date(key + 'T00:00:00')
+  if (isNaN(d.getTime())) return null
+  if (d.getDay() === 0) { d.setDate(d.getDate() + 1); return toKey(d) }
+  return mondayKeyOf(key)
+}
+
 /**
  * Active class offerings in session during [monday, sunday]. A class counts
  * when it has started by Sunday and its last day (end_date or finals_end,
@@ -92,6 +175,9 @@ export function formatHoursShort(n) {
  * @property {number}  counted    hours that count toward it — each class capped at its own requirement
  * @property {number}  signed     every hour booked for their classes (uncapped)
  * @property {boolean} met        every class with a requirement is fully booked
+ * @property {string}  email      as stored on the profile
+ * @property {string}  name       'First Last' (falls back to the email)
+ * @property {boolean} requestPending  short AND has a Pending post-deadline change request for this week
  * @property {Array<{courseId:string, classId:string, required:number, signed:number, met:boolean, makeup:number}>} perClass
  */
 
@@ -100,14 +186,15 @@ export function formatHoursShort(n) {
  *
  * @param {Object}   p
  * @param {string}   p.mondayKey
- * @param {Array}    p.people          [{ email, classes }]  classes = profiles.classes string
+ * @param {Array}    p.people          [{ email, classes, first_name?, last_name? }]  classes = profiles.classes string
+ * @param {Array}    [p.pendingRequests] Pending lab_signup_requests rows [{ user_email, week_start }] (any week; filtered here)
  * @param {Array}    p.classRows       classes rows (any status/dates; filtered here)
  * @param {Array}    p.signups         Confirmed lab_signup rows for the week [{ user_email, class_id, date }]
  * @param {Object}   p.closureOverlay  from fetchClosureOverlay / buildClosureOverlay
  * @param {Object}   [p.makeupOverlay] from fetchMakeupOverlay
  * @returns {Map<string, WeekStatus>}  keyed by lowercased email
  */
-export function computeWeeklySignupStatus({ mondayKey, people, classRows, signups, closureOverlay, makeupOverlay } = {}) {
+export function computeWeeklySignupStatus({ mondayKey, people, classRows, signups, closureOverlay, makeupOverlay, pendingRequests } = {}) {
   const out = new Map()
   const { monday, sunday } = weekRangeOf(mondayKey)
   if (!monday || !closureOverlay) return out
@@ -125,6 +212,15 @@ export function computeWeeklySignupStatus({ mondayKey, people, classRows, signup
     if (!signedBy.has(email)) signedBy.set(email, new Map())
     const m = signedBy.get(email)
     m.set(id, (m.get(id) || 0) + 1) // one row = one hour
+  })
+
+  // Students with a Pending change request for THIS week
+  const pendingEmails = new Set()
+  ;(pendingRequests || []).forEach(r => {
+    if (r.status && r.status !== 'Pending') return
+    if (requestWeekMonday(r.week_start) !== monday) return
+    const email = lower(r.user_email)
+    if (email) pendingEmails.add(email)
   })
 
   ;(people || []).forEach(person => {
@@ -166,10 +262,40 @@ export function computeWeeklySignupStatus({ mondayKey, people, classRows, signup
     const counted = round2(perClass.reduce((s, c) => s + Math.min(c.signed, c.required), 0))
     const signed = perClass.reduce((s, c) => s + c.signed, 0)
     const met = perClass.every(c => c.required <= 0 || c.met)
-    out.set(email, { required, counted, signed, met, perClass })
+    const name = `${person.first_name || ''} ${person.last_name || ''}`.trim() || person.email
+    out.set(email, {
+      required, counted, signed, met, perClass,
+      email: person.email, name,
+      requestPending: !met && required > 0 && pendingEmails.has(email),
+    })
   })
 
   return out
+}
+
+/**
+ * Roll a week up for the "Short This Week" tiles and their list. Only people
+ * who owe hours count. Rows: short first (furthest behind first), then met,
+ * each group by name.
+ *
+ * @returns {{ owing:number, short:number, pending:number, rows:WeekStatus[] }}
+ */
+export function summarizeWeek(byEmail) {
+  const rows = Array.from((byEmail || new Map()).values()).filter(s => s.required > 0)
+  rows.sort((a, b) => {
+    if (a.met !== b.met) return a.met ? 1 : -1
+    if (!a.met) {
+      const gap = (b.required - b.counted) - (a.required - a.counted)
+      if (gap !== 0) return gap
+    }
+    return String(a.name || '').localeCompare(String(b.name || ''))
+  })
+  return {
+    owing: rows.length,
+    short: rows.filter(s => !s.met).length,
+    pending: rows.filter(s => s.requestPending).length,
+    rows,
+  }
 }
 
 /**
@@ -190,52 +316,93 @@ export function describeWeekStatus(status) {
     .map(c => `${c.courseId || c.classId} ${formatHoursShort(Math.min(c.signed, c.required))} of ${formatHoursShort(c.required)}`)
   return {
     short,
-    long: `Signed up for ${formatHoursShort(status.counted)} of ${formatHoursShort(status.required)} required lab hours this week. Short: ${shortClasses.join('; ')}.`,
+    long: `Signed up for ${formatHoursShort(status.counted)} of ${formatHoursShort(status.required)} required lab hours this week. Short: ${shortClasses.join('; ')}.${status.requestPending ? ' A schedule change request is pending.' : ''}`,
   }
 }
 
 // ─── Data access ──────────────────────────────────────────────────────────────
 
 /**
- * Load everything for the week containing `dateStr` and compute every active
- * student's status. Throws when a required read fails (mustData), so the
- * caller keeps its last good result instead of showing a wrong mark.
+ * Load one or more weeks in one pass and compute every active student's
+ * status for each. Profiles, classes, the closure overlay and the Pending
+ * change requests are read ONCE and shared; sign-ups and make-up hours are
+ * read per week (the viewed week can be far from this week, so one wide
+ * range would drag in months of sign-ups).
  *
- * @returns {Promise<{ mondayKey: string, byEmail: Map<string, WeekStatus> }>}
+ * Throws when a required read fails (mustData), so the caller keeps its last
+ * good result instead of showing a wrong mark.
+ *
+ * @param {Object}   p
+ * @param {string[]} p.mondays   any dates; each is normalised to its Monday and de-duplicated
+ * @returns {Promise<Map<string, { mondayKey: string, byEmail: Map<string, WeekStatus> }>>}
  */
-export async function fetchWeeklySignupStatus({ dateStr } = {}) {
-  const { monday, sunday } = weekRangeOf(dateStr)
-  if (!monday) return { mondayKey: null, byEmail: new Map() }
+export async function fetchWeeklySignupStatuses({ mondays } = {}) {
+  const weeks = [...new Set((mondays || []).map(m => mondayKeyOf(m)).filter(Boolean))].sort()
+  const out = new Map()
+  if (weeks.length === 0) return out
 
-  const [profRes, classRes, signupRes, closureOverlay] = await Promise.all([
+  const first = weeks[0]
+  const lastSunday = weekRangeOf(weeks[weeks.length - 1]).sunday
+
+  const [profRes, classRes, reqRes, closureOverlay] = await Promise.all([
     supabase.from('profiles')
-      .select('email, role, classes')
+      .select('email, first_name, last_name, role, classes')
       .eq('status', 'Active')
       .in('role', ['Student', 'Work Study']),
     supabase.from('classes')
       .select('class_id, course_id, required_hours, start_date, end_date, finals_start, finals_end, status')
       .eq('status', 'Active'),
-    supabase.from('lab_signup')
-      .select('user_email, class_id, date')
-      .eq('status', 'Confirmed')
-      .gte('date', monday)
-      .lte('date', sunday + 'T23:59:59'),
-    fetchClosureOverlay({ rangeStart: monday, rangeEnd: sunday }),
+    // Pending only — a handful of rows at most (the notification bell reads the same set)
+    supabase.from('lab_signup_requests')
+      .select('user_email, week_start, status')
+      .eq('status', 'Pending'),
+    // Closed days only, so a wide range is still a tiny read
+    fetchClosureOverlay({ rangeStart: first, rangeEnd: lastSunday }),
   ])
 
   const people = mustData(profRes, 'profiles.weekStatus') || []
   const classRows = mustData(classRes, 'classes.weekStatus') || []
-  const signups = mustData(signupRes, 'lab_signup.weekStatus') || []
+  // The pending tag is a decoration on top of the marks: if this read fails
+  // the marks and counts are still right, so log it and carry on without tags
+  // rather than throwing away the whole result.
+  let pendingRequests = []
+  if (reqRes.error) console.warn('weeklySignupStatus: pending change requests unavailable:', reqRes.error.message)
+  else pendingRequests = reqRes.data || []
 
-  // Make-up hours: index by this week's offerings so a make-up that lands
-  // after a class has ended is dropped (same policy as Lab Signup).
-  const classesById = {}
-  classesForWeek(classRows, monday, sunday).forEach(c => {
-    if (c.course_id) classesById[c.course_id] = c
-    if (c.class_id) classesById[c.class_id] = c
-  })
-  const makeupOverlay = await fetchMakeupOverlay({ rangeStart: monday, rangeEnd: sunday, classesById })
+  await Promise.all(weeks.map(async (monday) => {
+    const { sunday } = weekRangeOf(monday)
 
-  const byEmail = computeWeeklySignupStatus({ mondayKey: monday, people, classRows, signups, closureOverlay, makeupOverlay })
-  return { mondayKey: monday, byEmail }
+    // Make-up hours: index by this week's offerings so a make-up that lands
+    // after a class has ended is dropped (same policy as Lab Signup).
+    const classesById = {}
+    classesForWeek(classRows, monday, sunday).forEach(c => {
+      if (c.course_id) classesById[c.course_id] = c
+      if (c.class_id) classesById[c.class_id] = c
+    })
+
+    const [signupRes, makeupOverlay] = await Promise.all([
+      supabase.from('lab_signup')
+        .select('user_email, class_id, date')
+        .eq('status', 'Confirmed')
+        .gte('date', monday)
+        .lte('date', sunday + 'T23:59:59'),
+      fetchMakeupOverlay({ rangeStart: monday, rangeEnd: sunday, classesById }),
+    ])
+    const signups = mustData(signupRes, 'lab_signup.weekStatus') || []
+
+    out.set(monday, {
+      mondayKey: monday,
+      byEmail: computeWeeklySignupStatus({ mondayKey: monday, people, classRows, signups, closureOverlay, makeupOverlay, pendingRequests }),
+    })
+  }))
+
+  return out
+}
+
+/** Single-week convenience wrapper (week containing `dateStr`). */
+export async function fetchWeeklySignupStatus({ dateStr } = {}) {
+  const { monday } = weekRangeOf(dateStr)
+  if (!monday) return { mondayKey: null, byEmail: new Map() }
+  const all = await fetchWeeklySignupStatuses({ mondays: [monday] })
+  return all.get(monday) || { mondayKey: monday, byEmail: new Map() }
 }
