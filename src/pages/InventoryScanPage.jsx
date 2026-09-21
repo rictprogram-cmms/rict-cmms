@@ -23,6 +23,7 @@ import { assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 
 export default function InventoryScanPage() {
@@ -94,8 +95,7 @@ export default function InventoryScanPage() {
   useEffect(() => {
     if (!partId) return
 
-    const channel = supabase
-      .channel(`cycle-count-${partId}`)
+    return subscribeWithReconnect(`cycle-count-${partId}`, ch => ch
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
@@ -119,9 +119,7 @@ export default function InventoryScanPage() {
           })
         }
       })
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'InventoryScan' })
   }, [partId])
 
   // ── Auto-open camera on first load when no partId ─────────────────

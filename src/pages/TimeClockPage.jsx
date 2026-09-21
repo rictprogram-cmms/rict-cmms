@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { mustData } from '@/lib/supabaseData'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { createClient } from '@supabase/supabase-js'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
@@ -900,8 +901,7 @@ export default function TimeClockPage() {
   // Realtime: respond instantly when an instructor flips the toggle
   // This means the kiosk updates in seconds rather than waiting for the next poll
   useEffect(() => {
-    const channel = supabase
-      .channel('timeclock-lab-access-mode')
+    return subscribeWithReconnect('timeclock-lab-access-mode', ch => ch
       .on(
         'postgres_changes',
         {
@@ -918,8 +918,7 @@ export default function TimeClockPage() {
           if (newMode === 'planned_maintenance') fetchLabMode()
         }
       )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { client: supabase, tag: 'TimeClock' })
   }, [fetchLabMode])
 
   // Cache classes data for course name lookups
@@ -971,8 +970,7 @@ export default function TimeClockPage() {
   useEffect(() => {
     if (screen !== 'punch-out' || !punchRecord?.record_id) return
 
-    const channel = supabase
-      .channel(`timeclock-kiosk-${punchRecord.record_id}`)
+    return subscribeWithReconnect(`timeclock-kiosk-${punchRecord.record_id}`, ch => ch
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
@@ -992,9 +990,7 @@ export default function TimeClockPage() {
           setScreen('success')
         }
       })
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    , { client: supabase, tag: 'TimeClock' })
   }, [screen, punchRecord?.record_id, todaySignup, gracePeriod])
 
   function checkPunchInFlags(isVolunteer, isWorkStudy, isFirstPunchToday) {

@@ -30,6 +30,7 @@
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 
@@ -315,8 +316,7 @@ export function useAuditLog() {
     if (permsLoading || !canView) return
 
     const channelName = 'audit-log-rt-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'audit_log' },
@@ -325,9 +325,7 @@ export function useAuditLog() {
           setNewEntriesCount(c => c + 1)
         }
       )
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AuditLog' })
   }, [canView, canViewOwnOnly, permsLoading, profile?.email])
 
 

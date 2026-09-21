@@ -1004,8 +1004,11 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
         const profilesData = mustData(await supabase
           .from('profiles')
           .select('user_id, first_name, last_name, email, classes, role, id, time_clock_only')
-          .eq('status', 'Active'), 'profiles.select')
-          .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
+          .eq('status', 'Active')
+          // utility admin never appears in people lists. (This filter used to sit
+          // OUTSIDE mustData(), so it ran on the returned array and threw a
+          // TypeError every time.)
+          .neq('email', SUPER_ADMIN_EMAIL), 'profiles.select')
 
         // Check profile enrollment
         const enrolledByProfile = new Set(

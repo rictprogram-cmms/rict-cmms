@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
@@ -57,11 +58,9 @@ export function useLabClasses() {
 
   // Real-time: refresh when classes change
   useEffect(() => {
-    const channel = supabase
-      .channel('lab-classes-changes')
+    return subscribeWithReconnect('lab-classes-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'WeeklyLabs' })
   }, [fetch])
 
   return { classes, loading }
@@ -171,8 +170,11 @@ export function useLabReport(className) {
       const profilesData = mustData(await supabase
         .from('profiles')
         .select('id, first_name, last_name, email, classes, role, time_clock_only')
-        .eq('status', 'Active'), 'profiles.select')
-        .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in people lists
+        .eq('status', 'Active')
+        // utility admin never appears in people lists. (This filter used to sit
+        // OUTSIDE mustData(), so it ran on the returned array and threw a
+        // TypeError every time.)
+        .neq('email', SUPER_ADMIN_EMAIL), 'profiles.select')
 
       const enrolledStudents = (profilesData || []).filter(p => {
         if (p.role === 'Instructor') return false
@@ -234,13 +236,11 @@ export function useLabReport(className) {
   // Real-time: refresh when weekly_lab_tracker or profiles change
   useEffect(() => {
     if (!className) return
-    const channel = supabase
-      .channel(`lab-report-${className}`)
+    return subscribeWithReconnect(`lab-report-${className}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'WeeklyLabs' })
   }, [className, fetch])
 
   return { report, loading, refresh: fetch }
@@ -336,12 +336,10 @@ export function useStudentLabReport() {
   // Real-time: refresh when weekly_lab_tracker changes
   useEffect(() => {
     if (!profile) return
-    const channel = supabase
-      .channel('student-lab-report-changes')
+    return subscribeWithReconnect('student-lab-report-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'WeeklyLabs' })
   }, [profile, fetch])
 
   return { report, loading, refresh: fetch }

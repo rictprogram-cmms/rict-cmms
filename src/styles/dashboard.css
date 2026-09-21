@@ -91,7 +91,8 @@
 }
 .dash-metric-value { font-size: 1.6rem; font-weight: 700; color: #1a1a2e; line-height: 1.2; }
 .dash-metric-label { font-size: 0.78rem; font-weight: 600; color: #495057; margin-top: 2px; }
-.dash-metric-sub   { font-size: 0.68rem; color: #868e96; margin-top: 2px; }
+/* #6c757d = 4.7:1 on white (was #868e96 = 3.3:1, below WCAG 1.4.3 for small text) */
+.dash-metric-sub   { font-size: 0.68rem; color: #6c757d; margin-top: 2px; }
 
 /* ── Card / collapsible sections ─────────────────────────────────────────── */
 .dash-card {

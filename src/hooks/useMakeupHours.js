@@ -33,6 +33,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -232,11 +233,9 @@ export function useMakeupOverlay({ emails, rangeStart, rangeEnd, enabled = true 
 
   useEffect(() => {
     if (!enabled) return undefined
-    const channel = supabase
-      .channel(`makeup-overlay-${makeChannelSuffix()}`)
+    return subscribeWithReconnect(`makeup-overlay-${makeChannelSuffix()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, refresh)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'MakeupHours' })
   }, [enabled, refresh])
 
   return { overlay, loading, refresh }

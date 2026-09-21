@@ -1823,8 +1823,7 @@ function InstructorOverview({ navigate }) {
                   {weekStatusLoading ? '—' : none ? '0' : <>{short}<span style={{ fontSize: '0.95rem', fontWeight: 600, color: '#495057' }}> of {owing}</span></>}
                 </div>
                 <div className="dash-metric-label">{t.label}</div>
-                {/* #495057 (8.2:1) rather than the shared sub colour — this line carries real information */}
-                <div className="dash-metric-sub" style={{ color: '#495057' }}>{formatWeekLabel(t.key)}{sub ? ` · ${sub}` : ''}</div>
+                <div className="dash-metric-sub">{formatWeekLabel(t.key)}{sub ? ` · ${sub}` : ''}</div>
               </button>
             );
           })}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { generateSafeWoId } from '@/utils/generateSafeWoId'
@@ -144,11 +145,9 @@ export function usePMSchedules() {
 
   // Real-time: refresh when pm_schedules change
   useEffect(() => {
-    const channel = supabase
-      .channel('pm-schedules-changes')
+    return subscribeWithReconnect('pm-schedules-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pm_schedules' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'PMSchedules' })
   }, [fetch])
 
   return { schedules, loading, refresh: fetch }
@@ -328,16 +327,14 @@ export function usePMGlobalPause() {
 
   // Real-time: refresh when settings change (another user might toggle pause)
   useEffect(() => {
-    const channel = supabase
-      .channel('pm-pause-setting-changes')
+    return subscribeWithReconnect('pm-pause-setting-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, (payload) => {
         // Only refetch if the pm_generation_paused setting changed
         if (payload.new?.setting_key === 'pm_generation_paused' || payload.old?.setting_key === 'pm_generation_paused') {
           fetch()
         }
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'PMSchedules' })
   }, [fetch])
 
   return { paused, loading, saving, toggle, resume, refresh: fetch }

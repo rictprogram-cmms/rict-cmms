@@ -42,6 +42,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { withNetworkRetry, warmSession } from '@/lib/supabaseRetry'
@@ -208,11 +209,9 @@ export function useAssetCheckouts() {
   // Realtime — unique channel name per project rule (timestamp suffix)
   useEffect(() => {
     const channelName = `asset-checkouts-list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, fetchCheckouts)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AssetCheckouts' })
   }, [fetchCheckouts])
 
   // Refetch when tab becomes visible
@@ -257,13 +256,11 @@ export function useAssetCheckoutHistory(assetId) {
   useEffect(() => {
     if (!assetId) return
     const channelName = `asset-checkout-hist-${assetId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'asset_checkouts', filter: `asset_id=eq.${assetId}` },
         refresh)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AssetCheckouts' })
   }, [assetId, refresh])
 
   // "Open" = anything that still reserves the asset (returned_at IS NULL).
@@ -345,13 +342,11 @@ export function useUserPendingAcknowledgments(userEmail) {
   useEffect(() => {
     if (!normalizedEmail) return
     const channelName = `pending-ack-${normalizedEmail}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'asset_checkouts', filter: `user_email=eq.${normalizedEmail}` },
         refresh)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AssetCheckouts' })
   }, [normalizedEmail, refresh])
 
   // Tick the clock every 30 seconds for live countdowns
@@ -442,13 +437,11 @@ export function usePooledCheckouts(assetId = POOLED_SCANNER_ASSET_ID) {
   useEffect(() => {
     if (!assetId) return
     const channelName = `pooled-${assetId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'asset_checkouts', filter: `asset_id=eq.${assetId}` },
         refresh)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AssetCheckouts' })
   }, [assetId, refresh])
 
   useEffect(() => {

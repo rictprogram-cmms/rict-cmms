@@ -14,6 +14,8 @@ import { prorationForWeek, prorateHours, useClosureOverlay, mondayKeyOf, buildCl
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
+import { fetchStudentWeek, describeWeekStatus, describeSignupWindow, formatWeekLabel, formatHoursShort, weekRangeOf } from '@/lib/weeklySignupStatus'
 import toast from 'react-hot-toast'
 import {
   Calendar, Clock, ChevronLeft, ChevronRight, Plus, X, Trash2,
@@ -2041,6 +2043,148 @@ function DailyRosterTab() {
 // TAB 5: ADMIN SIGNUP (Instructor Override)
 // ═══════════════════════════════════════════════════════════════════════════
 
+/**
+ * Admin Signup → "This student's week". Read-only. Shows, for the week of the
+ * date chosen in the form: the overall check / X (same engine and numbers as
+ * the Dashboard and the student's own class tiles), a count per class, whether
+ * sign-up is still open, and their sign-ups as merged blocks. Refreshes live
+ * (and therefore right after "Sign Up Student"), and announces the new count.
+ */
+function StudentWeekPanel({ student, dateStr }) {
+  const email = student?.email || ''
+  const classes = student?.classes || ''
+  const firstName = student?.firstName || ''
+  const lastName = student?.lastName || ''
+  // Key on the WEEK, not the day — picking another day in the same week must not refetch
+  const mondayKey = useMemo(() => (dateStr ? weekRangeOf(dateStr).monday : null), [dateStr])
+
+  const [week, setWeek] = useState(null)      // { mondayKey, status, blocks, email }
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const seq = useRef(0)
+
+  const load = useCallback(async () => {
+    // The form blanks its date for a moment after a sign-up to refresh slots;
+    // keep what is on screen rather than flashing empty.
+    if (!email || !mondayKey) return
+    const id = ++seq.current
+    setLoading(true)
+    try {
+      const result = await fetchStudentWeek({ student: { email, classes, firstName, lastName }, dateStr: mondayKey })
+      if (id === seq.current) { setWeek({ ...result, email }); setFailed(false) }
+    } catch (err) {
+      console.error('[LabSignup] student week load failed (keeping last result):', err)
+      if (id === seq.current) setFailed(true)
+    }
+    if (id === seq.current) setLoading(false)
+  }, [email, classes, firstName, lastName, mondayKey])
+
+  useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (!email) return undefined
+    let timer = null
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(load, 400) }
+    const stop = subscribeWithReconnect('admin-signup-student-week', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup_requests' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
+    , { tag: 'LabSignup' })
+    return () => { clearTimeout(timer); stop() }
+  }, [email, load])
+
+  if (!student) return null
+
+  // Never show one student's numbers under another's name while a switch is loading
+  const current = week && week.email === email && week.mondayKey === mondayKey ? week : null
+  const status = current?.status || null
+  const owes = !!status && status.required > 0
+  const win = mondayKey ? describeSignupWindow(mondayKey) : null
+  const headingId = 'admin-student-week-heading'
+
+  const byDay = []
+  ;(current?.blocks || []).forEach(b => {
+    const last = byDay[byDay.length - 1]
+    if (last && last.date === b.date) last.blocks.push(b)
+    else byDay.push({ date: b.date, blocks: [b] })
+  })
+  const totalHours = (current?.blocks || []).reduce((n, b) => n + b.hours, 0)
+
+  return (
+    <section aria-labelledby={headingId} className="border border-surface-200 rounded-lg overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 bg-surface-50 border-b border-surface-200">
+        <h4 id={headingId} className="text-xs font-semibold text-surface-900">
+          {firstName || 'This student'}’s week{mondayKey ? ` · ${formatWeekLabel(mondayKey)}` : ''}
+        </h4>
+        {win?.text && (
+          <span className="text-[11px] font-medium text-surface-600">{win.text}</span>
+        )}
+        {loading && <Loader2 size={14} className="animate-spin text-surface-500" aria-hidden="true" />}
+      </div>
+
+      <div className="p-3 space-y-3">
+        {/* Overall + per class. role=status so the new count is announced after a sign-up. */}
+        <div role="status" className="text-xs text-surface-700">
+          {!current && loading && <span>Loading this student’s week…</span>}
+          {!current && !loading && failed && <span className="text-red-700">Could not load this student’s week. The sign-up form below still works.</span>}
+          {current && !owes && (
+            <span>No lab hours are required of {firstName || 'this student'} this week{totalHours > 0 ? `, and they have ${totalHours} hour${totalHours === 1 ? '' : 's'} signed up` : ''}.</span>
+          )}
+          {current && owes && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center gap-1 font-semibold ${status.met ? 'text-emerald-700' : 'text-red-700'}`}>
+                {status.met
+                  ? <CheckCircle2 size={16} aria-hidden="true" />
+                  : <XCircle size={16} aria-hidden="true" />}
+                <span aria-hidden="true">{formatHoursShort(status.counted)}/{formatHoursShort(status.required)} {status.met ? 'met' : 'short'}</span>
+                <span className="sr-only">{describeWeekStatus(status).long}</span>
+              </span>
+              {status.requestPending && (
+                <span className="px-1.5 py-0.5 rounded bg-brand-50 text-brand-800 text-[11px] font-semibold">Request pending</span>
+              )}
+              <ul className="flex flex-wrap gap-1.5" aria-label="Hours by class">
+                {status.perClass.filter(c => c.required > 0 || c.signed > 0).map(c => (
+                  <li key={c.classId || c.courseId}
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-medium ${c.met ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'}`}>
+                    {c.met ? <CheckCircle2 size={12} aria-hidden="true" /> : <XCircle size={12} aria-hidden="true" />}
+                    <span>{c.courseId || c.classId} {formatHoursShort(c.signed)}/{formatHoursShort(c.required)}</span>
+                    {c.makeup > 0 && <span className="font-normal">(incl. {formatHoursShort(c.makeup)} make-up)</span>}
+                    <span className="sr-only">{c.met ? ', met' : ', short'}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Their sign-ups, merged into blocks */}
+        {current && (
+          byDay.length === 0 ? (
+            <p className="text-xs text-surface-600">Nothing signed up this week.</p>
+          ) : (
+            <ul className="text-xs text-surface-800 divide-y divide-surface-100 border border-surface-100 rounded-md" aria-label={`Sign-ups for the week of ${formatWeekLabel(mondayKey)}`}>
+              {byDay.map(day => (
+                <li key={day.date} className="flex flex-wrap gap-x-3 gap-y-0.5 px-2.5 py-2">
+                  <span className="font-semibold w-20 flex-shrink-0">{formatShortDay(day.date)}</span>
+                  <span className="flex flex-wrap gap-x-3 gap-y-0.5">
+                    {day.blocks.map((b, i) => (
+                      <span key={i}>
+                        {formatHour(parseInt(b.start, 10))} – {formatHour(parseInt(b.end, 10))}
+                        <span className="text-surface-600"> · {b.classId || 'no class'} · {b.hours} hr{b.hours === 1 ? '' : 's'}{b.isMakeup ? ' · make-up' : ''}</span>
+                      </span>
+                    ))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        )}
+      </div>
+    </section>
+  )
+}
+
 function AdminSignupTab({ preset = null }) {
   const { students, loading: studentsLoading } = useStudentsList()
   const { signUpStudent, saving } = useInstructorSignup()
@@ -2192,6 +2336,9 @@ function AdminSignupTab({ preset = null }) {
             ))}
           </select>
         </label>
+
+        {/* This student's week — follows the Date field below */}
+        {selectedStudent && <StudentWeekPanel student={selectedStudent} dateStr={dateStr} />}
 
         {/* Class */}
         <label className="block text-xs font-medium text-surface-600">

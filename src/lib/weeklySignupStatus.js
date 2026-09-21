@@ -54,6 +54,9 @@
  *   describeWeekStatus(status)                 → { short, long }               (pure)
  *   fetchWeeklySignupStatuses({ mondays })     → Promise<Map<mondayKey, { mondayKey, byEmail }>>
  *   fetchWeeklySignupStatus({ dateStr })       → Promise<{ mondayKey, byEmail }>
+ *   mergeSignupBlocks(rows)                    → [{ date, start, end, classId, hours, isMakeup }] (pure)
+ *   fetchStudentWeek({ student, dateStr })     → Promise<{ mondayKey, status, blocks }>
+ *                                                one student's week for Lab Signup → Admin Signup
  *
  * Conventions honored
  *   - Date-only strings parsed with 'T00:00:00' (local); never toISOString()
@@ -405,4 +408,89 @@ export async function fetchWeeklySignupStatus({ dateStr } = {}) {
   if (!monday) return { mondayKey: null, byEmail: new Map() }
   const all = await fetchWeeklySignupStatuses({ mondays: [monday] })
   return all.get(monday) || { mondayKey: monday, byEmail: new Map() }
+}
+
+// ─── One student's week (Lab Signup → Admin Signup) ───────────────────────────
+
+function hhmm(t) { return String(t || '').substring(0, 5) }
+
+/**
+ * Collapse one-hour lab_signup rows into readable blocks: back-to-back hours
+ * on the same day for the same class become one line (8:00–11:00, 3 hours).
+ * A change of class or a gap starts a new block. Pure.
+ *
+ * @param {Array} rows [{ date, start_time, end_time, class_id, is_makeup }]
+ * @returns {Array<{ date:string, start:string, end:string, classId:string, hours:number, isMakeup:boolean }>}
+ */
+export function mergeSignupBlocks(rows) {
+  const sorted = (rows || [])
+    .map(r => ({ date: dateOnly(r.date), start: hhmm(r.start_time), end: hhmm(r.end_time), classId: String(r.class_id || '').trim(), isMakeup: !!r.is_makeup }))
+    .filter(r => r.date && r.start)
+    .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))
+  const out = []
+  sorted.forEach(r => {
+    const last = out[out.length - 1]
+    if (last && last.date === r.date && last.classId === r.classId && last.end === r.start && last.isMakeup === r.isMakeup) {
+      last.end = r.end
+      last.hours += 1
+    } else {
+      out.push({ ...r, hours: 1 })
+    }
+  })
+  return out
+}
+
+/**
+ * Everything Admin Signup needs to show a student's week: the same WeekStatus
+ * the Dashboard uses (so 6/8 here is 6/8 there) plus their sign-ups as blocks.
+ * Works for ANY person in the Admin Signup picker — it takes the profile row's
+ * email + classes directly rather than re-filtering profiles by role.
+ *
+ * Throws when a required read fails; the pending-request read is soft, as in
+ * fetchWeeklySignupStatuses().
+ *
+ * @param {Object} p
+ * @param {{ email:string, classes:string, firstName?:string, lastName?:string }} p.student
+ * @param {string} p.dateStr  any date in the week
+ */
+export async function fetchStudentWeek({ student, dateStr } = {}) {
+  const { monday, sunday } = weekRangeOf(dateStr)
+  const email = String(student?.email || '').trim()
+  if (!monday || !email) return { mondayKey: monday || null, status: null, blocks: [] }
+
+  const [classRes, signupRes, reqRes, closureOverlay] = await Promise.all([
+    supabase.from('classes')
+      .select('class_id, course_id, required_hours, start_date, end_date, finals_start, finals_end, status')
+      .eq('status', 'Active'),
+    supabase.from('lab_signup')
+      .select('user_email, class_id, date, start_time, end_time, is_makeup')
+      .eq('status', 'Confirmed')
+      .ilike('user_email', email)
+      .gte('date', monday)
+      .lte('date', sunday + 'T23:59:59'),
+    supabase.from('lab_signup_requests')
+      .select('user_email, week_start, status')
+      .eq('status', 'Pending')
+      .ilike('user_email', email),
+    fetchClosureOverlay({ rangeStart: monday, rangeEnd: sunday }),
+  ])
+  const classRows = mustData(classRes, 'classes.studentWeek') || []
+  // ilike is only there for case-insensitivity; "_" and "%" in an address are
+  // wildcards to it, so pin the result to the exact address afterwards.
+  const mine = r => lower(r.user_email) === lower(email)
+  const signups = (mustData(signupRes, 'lab_signup.studentWeek') || []).filter(mine)
+  let pendingRequests = []
+  if (reqRes.error) console.warn('weeklySignupStatus: pending change requests unavailable:', reqRes.error.message)
+  else pendingRequests = (reqRes.data || []).filter(mine)
+
+  const classesById = {}
+  classesForWeek(classRows, monday, sunday).forEach(c => {
+    if (c.course_id) classesById[c.course_id] = c
+    if (c.class_id) classesById[c.class_id] = c
+  })
+  const makeupOverlay = await fetchMakeupOverlay({ emails: [email], rangeStart: monday, rangeEnd: sunday, classesById })
+
+  const person = { email, classes: student.classes || '', first_name: student.firstName || student.first_name || '', last_name: student.lastName || student.last_name || '' }
+  const byEmail = computeWeeklySignupStatus({ mondayKey: monday, people: [person], classRows, signups, closureOverlay, makeupOverlay, pendingRequests })
+  return { mondayKey: monday, status: byEmail.get(lower(email)) || null, blocks: mergeSignupBlocks(signups) }
 }

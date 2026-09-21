@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -108,11 +109,9 @@ export function useBugRequests() {
 
   // Real-time: refresh when bug_tracker changes
   useEffect(() => {
-    const channel = supabase
-      .channel('bug-tracker-changes')
+    return subscribeWithReconnect('bug-tracker-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bug_tracker' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'BugTracker' })
   }, [fetch])
 
   return { requests, loading, refresh: fetch }
@@ -838,11 +837,9 @@ export function useChangelog() {
 
   // Real-time: refresh when changelog changes
   useEffect(() => {
-    const channel = supabase
-      .channel('changelog-changes')
+    return subscribeWithReconnect('changelog-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'changelog' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'BugTracker' })
   }, [fetch])
 
   return { entries, loading, refresh: fetch }

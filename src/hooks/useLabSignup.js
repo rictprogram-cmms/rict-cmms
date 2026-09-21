@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
@@ -556,11 +557,9 @@ export function useLabCalendar(year, month) {
 
   // Real-time: refresh when lab_calendar changes
   useEffect(() => {
-    const channel = supabase
-      .channel('lab-calendar-changes')
+    return subscribeWithReconnect('lab-calendar-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'LabSignup' })
   }, [fetch])
 
   return { entries, loading, refresh: fetch }
@@ -1117,12 +1116,10 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
   // Real-time: refresh when lab_signup or lab_calendar changes
   useEffect(() => {
     if (!weekStart || !profile) return
-    const channel = supabase
-      .channel('lab-signup-data-changes')
+    return subscribeWithReconnect('lab-signup-data-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'LabSignup' })
   }, [weekStart, profile, fetch])
 
   return { ...data, loading, refresh: fetch }
@@ -1379,11 +1376,9 @@ export function useMySignups() {
   // Real-time: refresh when lab_signup changes
   useEffect(() => {
     if (!profile) return
-    const channel = supabase
-      .channel('my-signups-changes')
+    return subscribeWithReconnect('my-signups-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'LabSignup' })
   }, [profile, fetch])
 
   return { signups, loading, refresh: fetch }
@@ -1417,11 +1412,9 @@ export function useDailyRoster(dateStr) {
   // Real-time: refresh when lab_signup changes
   useEffect(() => {
     if (!dateStr) return
-    const channel = supabase
-      .channel(`daily-roster-${dateStr}`)
+    return subscribeWithReconnect(`daily-roster-${dateStr}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'LabSignup' })
   }, [dateStr, fetch])
 
   return { signups, loading, refresh: fetch }
@@ -1458,11 +1451,9 @@ export function useStudentsList() {
 
   // Real-time: refresh when profiles change (new students, class assignments)
   useEffect(() => {
-    const channel = supabase
-      .channel('lab-students-list-changes')
+    return subscribeWithReconnect('lab-students-list-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'LabSignup' })
   }, [fetch])
 
   return { students, loading }

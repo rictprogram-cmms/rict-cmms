@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // usePOBudgetSummary
@@ -144,12 +145,10 @@ export function usePOBudgetSummary(ayStartYear) {
   // selected year gets its own subscription scope cleanly.
   useEffect(() => {
     if (ayStartYear == null) return
-    const channel = supabase
-      .channel(`po-budget-summary-${ayStartYear}`)
+    return subscribeWithReconnect(`po-budget-summary-${ayStartYear}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => fetch())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'POBudgetSummary' })
   }, [ayStartYear, fetch])
 
   return {

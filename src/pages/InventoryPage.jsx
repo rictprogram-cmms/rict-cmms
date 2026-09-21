@@ -20,6 +20,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mustData } from '@/lib/supabaseData';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -136,8 +137,7 @@ export default function InventoryPage() {
 
   // Realtime subscription — updates from Cycle Count page, other users, etc.
   useEffect(() => {
-    const channel = supabase
-      .channel('inventory-page-changes')
+    return subscribeWithReconnect('inventory-page-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
         if (hasLoadedRef.current) {
           loadInventory(); // silent refresh — no spinner
@@ -150,8 +150,7 @@ export default function InventoryPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, () => {
         if (hasLoadedRef.current) loadInventory();
       })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    , { tag: 'Inventory' });
   }, []);
 
   const loadDropdowns = async () => {

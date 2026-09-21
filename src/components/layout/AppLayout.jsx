@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { cn } from '@/lib/utils'
 import NotificationBell from '@/components/NotificationBell'
 import WhatsNewModal from '@/components/WhatsNewModal'
@@ -988,8 +989,7 @@ function HelpButton({ profile }) {
   // ── Realtime: stay in sync with instructor away mode changes ──
   useEffect(() => {
     if (!profile?.email || isInstructor) return
-    const channel = supabase
-      .channel('help-btn-away-' + profile.email)
+    return subscribeWithReconnect('help-btn-away-' + profile.email, ch => ch
       .on('postgres_changes', {
         event: '*', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_away_mode',
@@ -1002,8 +1002,7 @@ function HelpButton({ profile }) {
       }, (p) => {
         setAwayReturnTime(p.new?.setting_value || '')
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AppLayout' })
   }, [profile?.email, isInstructor])
 
   // ── Close picker on outside click ──
@@ -1066,15 +1065,13 @@ function HelpButton({ profile }) {
   // ── Realtime subscription ──
   useEffect(() => {
     if (!profile?.email || isInstructor) return
-    const channel = supabase
-      .channel('help-button-' + profile.email)
+    return subscribeWithReconnect('help-button-' + profile.email, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'help_requests' },
         () => { loadHelpStatus() }
       )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AppLayout' })
   }, [profile?.email, loadHelpStatus, isInstructor])
 
   // ── Auto-expire timer for acknowledged status ──
@@ -1550,8 +1547,7 @@ export default function AppLayout() {
     }
     loadAwayMode()
 
-    const channel = supabase
-      .channel('layout-away-mode')
+    const stopRealtime = subscribeWithReconnect('layout-away-mode', ch => ch
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_away_mode',
@@ -1560,9 +1556,9 @@ export default function AppLayout() {
         event: 'UPDATE', schema: 'public', table: 'settings',
         filter: 'setting_key=eq.instructor_return_time',
       }, (p) => { if (!cancelled) setAwayReturnTime(p.new?.setting_value || '') })
-      .subscribe()
+    , { tag: 'AppLayout' })
 
-    return () => { cancelled = true; supabase.removeChannel(channel) }
+    return () => { cancelled = true; stopRealtime() }
   }, [isInstructor])
 
   // ── Load view_page permissions from DB for sidebar filtering ──
@@ -1761,8 +1757,7 @@ export default function AppLayout() {
 
   // Also subscribe to realtime settings changes (covers manual edits on Settings page)
   useEffect(() => {
-    const channel = supabase
-      .channel('app-version-watch')
+    return subscribeWithReconnect('app-version-watch', ch => ch
       .on(
         'postgres_changes',
         {
@@ -1777,9 +1772,7 @@ export default function AppLayout() {
           }
         }
       )
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AppLayout' })
   }, [])
 
   // ── Temp Access Request State (non-instructors) ──
@@ -1826,8 +1819,7 @@ export default function AppLayout() {
   // Realtime: refresh temp access status when requests change
   useEffect(() => {
     if (isInstructor || !profile?.email) return
-    const channel = supabase
-      .channel('sidebar-temp-access')
+    return subscribeWithReconnect('sidebar-temp-access', ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'temp_access_requests' },
@@ -1842,8 +1834,7 @@ export default function AppLayout() {
           }
         }
       )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'AppLayout' })
   }, [loadTempAccessStatus, loadTempPermPages, isInstructor, profile?.email])
 
   // Polling fallback: if realtime doesn't fire (table not in publication), poll every 15s

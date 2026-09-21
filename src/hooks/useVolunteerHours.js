@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { resolveVolunteerWindow } from '@/lib/volunteerWindow'
@@ -223,16 +224,14 @@ export function useVolunteerSettings() {
 
   // Real-time: refresh when volunteer settings change
   useEffect(() => {
-    const channel = supabase
-      .channel('volunteer-settings-changes')
+    return subscribeWithReconnect('volunteer-settings-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, (payload) => {
         const key = payload.new?.setting_key || payload.old?.setting_key || ''
         if (key.startsWith('volunteer_')) {
           fetchSettings()
         }
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'VolunteerHours' })
   }, [fetchSettings])
 
   return { settings, loading, refresh: fetchSettings }
@@ -329,12 +328,10 @@ export function useVolunteerData() {
   // Real-time: refresh when time_clock or time_entry_requests change
   useEffect(() => {
     if (!profile?.email) return
-    const channel = supabase
-      .channel('volunteer-data-changes')
+    return subscribeWithReconnect('volunteer-data-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { fetchData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => { fetchData() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'VolunteerHours' })
   }, [profile?.email, fetchData])
 
   // ── Computed stats ──
@@ -803,13 +800,11 @@ export function useVolunteerOverview() {
   // Real-time: refresh when time_clock, time_entry_requests, or profiles change
   useEffect(() => {
     if (!isInstructor) return
-    const channel = supabase
-      .channel('volunteer-overview-changes')
+    return subscribeWithReconnect('volunteer-overview-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { fetchOverview() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => { fetchOverview() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetchOverview() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'VolunteerHours' })
   }, [isInstructor, fetchOverview])
 
   const summary = useMemo(() => {
@@ -892,12 +887,10 @@ export function useStudentVolunteerDetail(studentEmail) {
   // Real-time: refresh when time_clock or time_entry_requests change for this student
   useEffect(() => {
     if (!studentEmail) return
-    const channel = supabase
-      .channel(`volunteer-detail-${studentEmail}`)
+    return subscribeWithReconnect(`volunteer-detail-${studentEmail}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { fetchDetail() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => { fetchDetail() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'VolunteerHours' })
   }, [studentEmail, fetchDetail])
 
   // ── Instructor: directly edit a time_clock volunteer entry (no approval needed) ──

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 
 /**
  * useLabDays — single source of truth for the `lab_visible_days` setting.
@@ -175,19 +176,18 @@ export function useLabVisibleDays() {
       if (mountedRef.current) setLoaded(true)
     })
 
-    const channelName = `lab-days-${Math.random().toString(36).slice(2)}-${Date.now()}`
-    const channel = supabase
-      .channel(channelName)
+    // subscribeWithReconnect appends its own unique suffix per (re)connect
+    const stopRealtime = subscribeWithReconnect('lab-days', ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' },
         () => { fetchLabVisibleDays().then(apply) }
       )
-      .subscribe()
+    , { tag: 'LabDays' })
 
     return () => {
       mountedRef.current = false
-      supabase.removeChannel(channel)
+      stopRealtime()
     }
   }, [])
 

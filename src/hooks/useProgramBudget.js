@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 
@@ -273,12 +274,10 @@ export function useBudgetOverview(schoolYear) {
 
   // Real-time: refresh when program_budget or orders change
   useEffect(() => {
-    const channel = supabase
-      .channel('budget-overview-changes')
+    return subscribeWithReconnect('budget-overview-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'ProgramBudget' })
   }, [fetch])
 
   return { overview, availableYears, loading, refresh: fetch }
@@ -368,12 +367,10 @@ export function useBudgetTransactions(schoolYear) {
 
   // Real-time: refresh when program_budget or orders change
   useEffect(() => {
-    const channel = supabase
-      .channel('budget-transactions-changes')
+    return subscribeWithReconnect('budget-transactions-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'ProgramBudget' })
   }, [fetch])
 
   return { transactions, loading, refresh: fetch }
@@ -686,12 +683,10 @@ export function useBudgetYearSummary() {
 
   // Real-time: refresh when program_budget or orders change
   useEffect(() => {
-    const channel = supabase
-      .channel('budget-year-summary-changes')
+    return subscribeWithReconnect('budget-year-summary-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'ProgramBudget' })
   }, [fetch])
 
   return { summaries, loading, refresh: fetch }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
@@ -120,12 +121,10 @@ export function useEquipmentList() {
   useEffect(() => { fetch() }, [fetch])
 
   useEffect(() => {
-    const channel = supabase
-      .channel('equipment-list-changes')
+    return subscribeWithReconnect('equipment-list-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },        () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Equipment' })
   }, [fetch])
 
   return { equipment, loading, refresh: fetch }
@@ -162,12 +161,10 @@ export function useAllEquipmentList() {
   useEffect(() => { fetch() }, [fetch])
 
   useEffect(() => {
-    const channel = supabase
-      .channel('all-equipment-list-changes')
+    return subscribeWithReconnect('all-equipment-list-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },        () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Equipment' })
   }, [fetch])
 
   return { equipment, loading, refresh: fetch }
@@ -209,12 +206,10 @@ export function useAssetPickerData() {
   useEffect(() => { fetch() }, [fetch])
 
   useEffect(() => {
-    const channel = supabase
-      .channel('asset-picker-changes')
+    return subscribeWithReconnect('asset-picker-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },        () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Equipment' })
   }, [fetch])
 
   return { assets, usedAssetIds, loading, refresh: fetch }
@@ -582,14 +577,12 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
 
   useEffect(() => {
     if (!weekStart || !profile) return
-    const channel = supabase
-      .channel('equipment-bookings-data-changes')
+    return subscribeWithReconnect('equipment-bookings-data-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment_bookings' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' },      () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },             () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' },       () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Equipment' })
   }, [weekStart, profile, fetch])
 
   return { ...data, loading, refresh: fetch }
@@ -858,12 +851,10 @@ export function useMyEquipmentBookings() {
 
   useEffect(() => {
     if (!profile) return
-    const channel = supabase
-      .channel('my-equipment-bookings-changes')
+    return subscribeWithReconnect('my-equipment-bookings-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment_bookings' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },             () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Equipment' })
   }, [profile, fetch])
 
   return { bookings, loading, refresh: fetch }
@@ -928,12 +919,10 @@ export function useAllEquipmentBookings(dateStr) {
 
   useEffect(() => {
     if (!dateStr) return
-    const channel = supabase
-      .channel(`all-equipment-bookings-${dateStr}`)
+    return subscribeWithReconnect(`all-equipment-bookings-${dateStr}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment_bookings' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },             () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Equipment' })
   }, [dateStr, fetch])
 
   return { bookings, loading, refresh: fetch }

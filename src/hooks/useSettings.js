@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
@@ -42,11 +43,9 @@ export function useSettings() {
 
   // Real-time: refresh when settings change (unique channel per mount)
   useEffect(() => {
-    const channel = supabase
-      .channel(channelIdRef.current)
+    return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Settings' })
   }, [fetch])
 
   return { settings, loading, refresh: fetch }
@@ -146,11 +145,9 @@ export function useLookupTable(tableName, idColumn, nameColumn, orderColumn) {
 
   // Real-time: refresh when the lookup table changes (unique channel per mount)
   useEffect(() => {
-    const channel = supabase
-      .channel(channelIdRef.current)
+    return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: tableName }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Settings' })
   }, [tableName, fetch])
 
   return { items, loading, refresh: fetch }
@@ -462,11 +459,9 @@ export function useWeeklyReminders() {
   useEffect(() => { fetch() }, [fetch])
 
   useEffect(() => {
-    const channel = supabase
-      .channel(channelIdRef.current)
+    return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_reminders' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Settings' })
   }, [fetch])
 
   return { reminders, loading, refresh: fetch }
@@ -681,11 +676,9 @@ export function useReminderHistory(scopeFilter = 'all') {
   useEffect(() => { fetch() }, [fetch])
 
   useEffect(() => {
-    const channel = supabase
-      .channel(channelIdRef.current)
+    return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reminder_history' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Settings' })
   }, [fetch])
 
   return { history, loading, refresh: fetch }

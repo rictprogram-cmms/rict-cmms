@@ -22,6 +22,7 @@ import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { generateSafeAssetId } from '@/lib/generateSafeAssetId'
 import { findSegmentForIp, subnetMaskForIp, gatewayForIp } from '@/lib/networkConfig'
 import { useAuth } from '@/contexts/AuthContext'
@@ -195,12 +196,14 @@ export default function AssetsPage() {
       })
       setAssetSopCounts(counts)
     }
-    const ch = supabase
-      .channel('assets-page-sop-links')
+    // sopChannelRef used to hold the raw channel object; nothing ever read it.
+    // subscribeWithReconnect owns the channel now (and rebuilds it after a drop),
+    // so the ref holds the stop function instead.
+    const stop = subscribeWithReconnect('assets-page-sop-links', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_assets' }, refreshCounts)
-      .subscribe()
-    sopChannelRef.current = ch
-    return () => { supabase.removeChannel(ch) }
+    , { tag: 'Assets' })
+    sopChannelRef.current = stop
+    return () => { sopChannelRef.current = null; stop() }
   }, [profile?.role])
 
   /* ── Checkout map: who currently has each asset ────────────────── */
@@ -209,10 +212,13 @@ export default function AssetsPage() {
       const data = mustData(await supabase
         .from('asset_checkouts')
         .select('checkout_id, asset_id, user_email, user_name, checked_out_at, expected_return')
-        .is('returned_at', null), 'asset_checkouts.select')
+        .is('returned_at', null)
         // The pooled scanner has many simultaneous sign-outs on one asset
         // record; it must not show a single "Out" indicator here.
-        .neq('asset_id', POOLED_SCANNER_ASSET_ID)
+        // (This filter used to sit OUTSIDE mustData(), i.e. it was called on
+        // the returned array — a TypeError every time, swallowed by the catch
+        // below, so the checkout map never loaded.)
+        .neq('asset_id', POOLED_SCANNER_ASSET_ID), 'asset_checkouts.select')
       const map = {}
       const now = new Date()
       ;(data || []).forEach(c => {
@@ -236,11 +242,9 @@ export default function AssetsPage() {
     if (!profile?.role) return
     refreshOpenCheckouts()
     const channelName = `assets-page-checkouts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, refreshOpenCheckouts)
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Assets' })
   }, [profile?.role, refreshOpenCheckouts])
 
   /* ── Fetch SOPs linked to a specific asset (for view modal) ─────── */

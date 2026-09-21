@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 
@@ -34,11 +35,9 @@ export function useAllUsers() {
 
   // Real-time: refresh when profiles change
   useEffect(() => {
-    const channel = supabase
-      .channel('all-users-changes')
+    return subscribeWithReconnect('all-users-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Users' })
   }, [fetch])
 
   return { users, loading, refresh: fetch }
@@ -324,11 +323,9 @@ export function useAccessRequests() {
 
   // Real-time: refresh when access_requests change
   useEffect(() => {
-    const channel = supabase
-      .channel('access-requests-changes')
+    return subscribeWithReconnect('access-requests-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'access_requests' }, () => { fetch() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Users' })
   }, [fetch])
 
   return { requests, loading, refresh: fetch }

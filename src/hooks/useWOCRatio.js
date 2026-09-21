@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import { parseLabVisibleDays, DEFAULT_LAB_DAYS } from '@/hooks/useLabDays'
@@ -1215,8 +1216,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
   useEffect(() => {
     if (!profile) return
     const channelName = `woc-ratio-changes-${Date.now()}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, () => { fetchData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders_closed' }, () => { fetchData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_order_assignments' }, () => { fetchData() })
@@ -1228,8 +1228,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
           fetchData()
         }
       })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'WOCRatio' })
   }, [profile, fetchData])
 
   return {

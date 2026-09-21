@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
 import { Wrench, Eye, EyeOff, Loader2, CheckCircle, ArrowLeft, Clock, Mail, Lock, ShieldCheck, RefreshCw } from 'lucide-react'
 
@@ -161,8 +162,7 @@ export default function LoginPage() {
     const userEmail = user?.email
     if (!userEmail) return
 
-    const channel = supabase
-      .channel('approval-watch')
+    return subscribeWithReconnect('approval-watch', ch => ch
       .on(
         'postgres_changes',
         {
@@ -178,9 +178,7 @@ export default function LoginPage() {
           }
         }
       )
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Login' })
   }, [showPendingScreen, user?.email])
 
   // ═══════════════════════════════════════════════════════════════════════════

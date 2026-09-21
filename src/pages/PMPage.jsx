@@ -6,6 +6,7 @@ import { useDialogA11y } from '@/hooks/useDialogA11y'
 import toast from 'react-hot-toast'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
 import {
   usePMSchedules, usePMActions, useActiveAssets, usePMGlobalPause, calculateNextDueDate
@@ -102,11 +103,9 @@ export default function PMPage() {
       } catch {}
     }
     loadSopLinkedPMs()
-    const channel = supabase
-      .channel('sop-pm-schedules-pm-page')
+    return subscribeWithReconnect('sop-pm-schedules-pm-page', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_pm_schedules' }, () => loadSopLinkedPMs())
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'PM' })
   }, []) // own lifecycle — no dependency on schedules
 
   const filtered = useMemo(() => {

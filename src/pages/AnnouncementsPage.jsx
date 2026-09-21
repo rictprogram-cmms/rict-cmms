@@ -3,6 +3,7 @@ import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
+import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import toast from 'react-hot-toast'
 import {
   Megaphone, Search, Send, Trash2, RotateCcw, X, Loader2,
@@ -272,15 +273,13 @@ function InboxTab({ refreshKey, canReply = false, onReply }) {
   // Realtime: auto-refresh when announcements change (new message, read status, etc.)
   useEffect(() => {
     if (!profile?.email) return
-    const channel = supabase
-      .channel('inbox-realtime')
+    return subscribeWithReconnect('inbox-realtime', ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'announcements', filter: `recipient_email=eq.${profile.email.toLowerCase()}` },
         () => { loadMessages(true) }
       )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Announcements' })
   }, [profile?.email, loadMessages])
 
   const markRead = async (msg) => {
@@ -1142,15 +1141,13 @@ function SentHistoryTab({ refreshKey, viewMode = 'all' }) {
   // mount simultaneously (per project convention, e.g. inbox-realtime is also unique-per-mount).
   useEffect(() => {
     const channelName = `sent-realtime-${ownOnly ? 'own' : 'all'}-${Math.random().toString(36).slice(2, 9)}`
-    const channel = supabase
-      .channel(channelName)
+    return subscribeWithReconnect(channelName, ch => ch
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'announcements' },
         () => { loadHistory(true) }
       )
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Announcements' })
   }, [loadHistory, ownOnly])
 
   const filtered = useMemo(() => {
@@ -1759,11 +1756,9 @@ function TVSlidesTab() {
 
   // Realtime — unique channel per mount
   useEffect(() => {
-    const channel = supabase
-      .channel(`tv-slides-tab-${Date.now()}`)
+    return subscribeWithReconnect(`tv-slides-tab-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tv_slides' }, () => { load() })
-      .subscribe()
-    return () => { supabase.removeChannel(channel) }
+    , { tag: 'Announcements' })
   }, [load])
 
   const audit = async (action, slideId, details) => {
