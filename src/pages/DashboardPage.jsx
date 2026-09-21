@@ -19,7 +19,10 @@
  *     signed up for the week of the day being viewed, or a red X with
  *     "signed/required" (e.g. 6/8) when not (src/lib/weeklySignupStatus.js —
  *     same closure / finals / make-up rules as Lab Signup). People with no
- *     requirement that week (Time Clock Only, lab staff) get no mark. A line
+ *     requirement that week (Time Clock Only, lab staff) get no mark. An
+ *     instructor All Done swipe closes the week: green check + "All Done"
+ *     (the swipe cancels the rest of the week's sign-ups, so the count would
+ *     otherwise read 0/8). A line
  *     under the date says whether that week's sign-up is still open or closed,
  *     and a short student with a Pending change request is tagged.
  *   - Short This Week / Short Next Week tiles: "3 of 14" across EVERY student
@@ -42,7 +45,7 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mergeSignupSessions, pickSession, hasRemainingSession, nowMinutes } from '@/lib/labSessions';
 import {
   fetchWeeklySignupStatuses, describeWeekStatus, weekRangeOf, addWeeks,
-  summarizeWeek, describeSignupWindow, formatWeekLabel, formatHoursShort,
+  summarizeWeek, describeSignupWindow, formatWeekLabel, formatHoursShort, formatDayShort,
 } from '@/lib/weeklySignupStatus';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -1486,6 +1489,7 @@ function InstructorOverview({ navigate }) {
     const stop = subscribeWithReconnect('dash-inst-week', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup_requests' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, schedule)   // All Done markers
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
@@ -1822,7 +1826,7 @@ function InstructorOverview({ navigate }) {
               : { c: STATUS.warn, bg: '#fff4e6', icon: 'pending_actions' };
             const sub = weekStatusLoading ? ''
               : none ? 'No hours required'
-              : allMet ? 'Everyone signed up'
+              : allMet ? (t.summary.allDone > 0 ? `Everyone signed up · ${t.summary.allDone} all done` : 'Everyone signed up')
               : pending > 0 ? `${pending} request${pending === 1 ? '' : 's'} pending`
               : t.locked ? 'Sign-up closed' : 'Still open';
             return (
@@ -1835,7 +1839,7 @@ function InstructorOverview({ navigate }) {
                 aria-label={
                   weekStatusLoading ? `${t.label}, loading`
                   : none ? `${t.label}, week of ${formatWeekLabel(t.key)}: no students owe lab hours. Open list`
-                  : `${t.label}, week of ${formatWeekLabel(t.key)}: ${short} of ${owing} students have not signed up for all required hours${pending > 0 ? `, ${pending} with a change request pending` : ''}. ${t.locked ? 'Sign-up closed' : 'Sign-up still open'}. Open list`
+                  : `${t.label}, week of ${formatWeekLabel(t.key)}: ${short} of ${owing} students have not signed up for all required hours${pending > 0 ? `, ${pending} with a change request pending` : ''}${t.summary.allDone > 0 ? `, ${t.summary.allDone} marked all done` : ''}. ${t.locked ? 'Sign-up closed' : 'Sign-up still open'}. Open list`
                 }
                 style={!weekStatusLoading && t.locked && short > 0 ? { borderColor: '#ffe3e3' } : {}}
               >
@@ -1994,6 +1998,9 @@ function InstructorOverview({ navigate }) {
                             {!wk.met && <span className="dash-week-mark-count" aria-hidden="true">{wkText.short}</span>}
                             <span className="dash-sr-only">{wkText.long}</span>
                           </span>
+                        )}
+                        {showWeekMark && wk.allDone && (
+                          <span className="dash-badge-all-done" aria-hidden="true">All Done</span>
                         )}
                         {showWeekMark && wk.requestPending && (
                           <span className="dash-badge-request" aria-hidden="true">Request pending</span>
@@ -2196,6 +2203,7 @@ function InstructorOverview({ navigate }) {
             <div id="short-modal-desc" className="dash-short-modal-note">
               <strong>{shortModalSummary.short} of {shortModalSummary.owing}</strong> short
               {shortModalSummary.pending > 0 && <> · {shortModalSummary.pending} with a change request pending</>}
+              {shortModalSummary.allDone > 0 && <> · {shortModalSummary.allDone} all done</>}
               {' · '}{shortModalWindow?.text}.{' '}
               {shortModalWindow?.locked
                 ? 'Students can no longer change this week themselves — it takes an approved change request or Admin Signup.'
@@ -2227,9 +2235,11 @@ function InstructorOverview({ navigate }) {
                           <th scope="row" style={{ fontWeight: 600, color: '#1a1a2e', textAlign: 'left' }}>{row.name}</th>
                           <td>
                             <span className={`dash-week-mark ${row.met ? 'is-met' : 'is-short'}`}>
-                              <span className="material-icons" aria-hidden="true">{row.met ? 'check_circle' : 'cancel'}</span>
-                              <span>{formatHoursShort(row.counted)}/{formatHoursShort(row.required)}</span>
-                              <span className="dash-sr-only">{row.met ? ' — met' : ' — short'}</span>
+                              <span className="material-icons" aria-hidden="true">{row.allDone ? 'verified' : row.met ? 'check_circle' : 'cancel'}</span>
+                              {row.allDone
+                                ? <span>All Done <span style={{ fontWeight: 500 }}>{formatDayShort(row.allDoneDate)}</span></span>
+                                : <span>{formatHoursShort(row.counted)}/{formatHoursShort(row.required)}</span>}
+                              <span className="dash-sr-only">{row.allDone ? ' — instructor confirmed hours complete' : row.met ? ' — met' : ' — short'}</span>
                             </span>
                           </td>
                           <td style={{ color: '#495057' }}>

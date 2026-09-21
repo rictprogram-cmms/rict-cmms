@@ -198,6 +198,12 @@
 .dash-week-mark.is-met   { color: #237032; }
 .dash-week-mark.is-short { color: #c92a2a; }
 
+/* Instructor All Done swipe — the week's hours are complete (sign-ups were cancelled by the swipe) */
+.dash-badge-all-done {
+  font-size: 0.65rem; font-weight: 600; background: #d3f9d8; color: #237032;
+  padding: 1px 6px; border-radius: 4px; white-space: nowrap; flex-shrink: 0;
+}
+
 /* Short student with a Pending post-deadline change request — "waiting on me" */
 .dash-badge-request {
   font-size: 0.65rem; font-weight: 600; background: #e7f5ff; color: #1864ab;

@@ -15,7 +15,7 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
-import { fetchStudentWeek, mergeSignupBlocks, describeWeekStatus, describeSignupWindow, formatWeekLabel, formatHoursShort, weekRangeOf } from '@/lib/weeklySignupStatus'
+import { fetchStudentWeek, mergeSignupBlocks, describeWeekStatus, describeSignupWindow, formatWeekLabel, formatHoursShort, formatDayShort, weekRangeOf } from '@/lib/weeklySignupStatus'
 import toast from 'react-hot-toast'
 import {
   Calendar, Clock, ChevronLeft, ChevronRight, Plus, X, Trash2,
@@ -484,7 +484,14 @@ function WeeklySignupTab() {
     // Process new signups
     if (Object.values(weekNewSelections).some(arr => arr.length > 0)) {
       const result = await signUpBatchMultiClass(weekNewSelections, makeupTags)
-      if (!result.success) return
+      if (!result.success) {
+        // An hour in the batch was already booked (another tab, a double tap):
+        // nothing was saved. Reload so the grid shows what is really held —
+        // the hour that clashed turns into an existing sign-up and drops out
+        // of the pending selection on the next save.
+        if (result.duplicate) refresh()
+        return
+      }
     }
 
     // Clear selections for this week
@@ -2228,6 +2235,7 @@ function StudentWeekPanel({ student, dateStr }) {
     const stop = subscribeWithReconnect('admin-signup-student-week', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup_requests' }, schedule)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, schedule)   // All Done markers
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
     , { tag: 'LabSignup', onReconnect: schedule })
@@ -2333,9 +2341,18 @@ function StudentWeekPanel({ student, dateStr }) {
                 {status.met
                   ? <CheckCircle2 size={16} aria-hidden="true" />
                   : <XCircle size={16} aria-hidden="true" />}
-                <span aria-hidden="true">{formatHoursShort(status.counted)}/{formatHoursShort(status.required)} {status.met ? 'met' : 'short'}</span>
+                <span aria-hidden="true">
+                  {status.allDone
+                    ? <>All Done {formatDayShort(status.allDoneDate)}</>
+                    : <>{formatHoursShort(status.counted)}/{formatHoursShort(status.required)} {status.met ? 'met' : 'short'}</>}
+                </span>
                 <span className="sr-only">{describeWeekStatus(status).long}</span>
               </span>
+              {status.allDone && (
+                <span className="text-surface-700">
+                  An instructor confirmed the week complete; the swipe cancelled the rest of that week's sign-ups.
+                </span>
+              )}
               {status.requestPending && (
                 <span className="px-1.5 py-0.5 rounded bg-brand-50 text-brand-800 text-[11px] font-semibold">Request pending</span>
               )}

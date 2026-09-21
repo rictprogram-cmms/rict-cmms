@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
-import { mustData, assertWrite } from '@/lib/supabaseData'
+import { mustData, assertWrite, isUniqueViolation, LAB_SIGNUP_UNIQUE_HOUR } from '@/lib/supabaseData'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { fetchMakeupOverlay, getMakeupInfo, mondayKeyOf, firstTwoLabDays } from '@/hooks/useMakeupHours'
@@ -1224,6 +1224,14 @@ export function useLabSignupActions() {
       }
       return { success: true, count: rows.length }
     } catch (err) {
+      // The database now refuses a second Confirmed row for the same student
+      // and hour. The check above makes that rare (two tabs, a double tap),
+      // but the grid saves as ONE insert, so a single clash rejects the whole
+      // batch — say exactly that, and that nothing was saved.
+      if (isUniqueViolation(err, LAB_SIGNUP_UNIQUE_HOUR)) {
+        toast.error('One of those hours is already booked for you, so nothing was saved. The grid will refresh — pick again.', { duration: 7000 })
+        return { success: false, duplicate: true }
+      }
       toast.error('Error: ' + err.message)
       return { success: false }
     } finally {
@@ -1530,6 +1538,10 @@ export function useInstructorSignup() {
       toast.success(`Signed up ${userName} (Instructor Override)`)
       return { success: true }
     } catch (err) {
+      if (isUniqueViolation(err, LAB_SIGNUP_UNIQUE_HOUR)) {
+        toast.error('Student already signed up for this slot')
+        return { success: false, duplicate: true }
+      }
       toast.error('Error: ' + err.message)
       return { success: false }
     } finally {

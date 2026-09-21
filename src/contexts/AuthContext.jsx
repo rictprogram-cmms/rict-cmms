@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
+import { classifyFreshProfile, mergeProfile } from '@/lib/profileFreshness'
 
 const AuthContext = createContext(null)
 
@@ -596,6 +597,69 @@ export function AuthProvider({ children }) {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [])
 
+  // ── Keeping the held profile fresh ─────────────────────────────────
+  // ONE place decides what a fresher copy of the profile row means, whether it
+  // arrived as a realtime UPDATE or from the re-read after a reconnect. The
+  // decision itself is pure (src/lib/profileFreshness.js):
+  //   deactivated → the same outcome loadProfile() gives on the next page
+  //                 load, but NOW: an account archived while its owner is
+  //                 online no longer keeps working until they refresh.
+  //   unchanged   → only last_seen / last_login moved (our own 5-minute
+  //                 heartbeat). Keep the SAME object in state so the 43
+  //                 effects that depend on `profile` don't all refetch.
+  //   changed     → apply it (role, classes, name, …).
+  // Refs, not closures, so a long-lived channel never compares against a
+  // stale copy.
+  const realProfileRef = useRef(realProfile)
+  useEffect(() => { realProfileRef.current = realProfile }, [realProfile])
+  const emulatedProfileRef = useRef(emulatedProfile)
+  useEffect(() => { emulatedProfileRef.current = emulatedProfile }, [emulatedProfile])
+
+  const applyFreshProfile = useCallback((row, source) => {
+    const prev = realProfileRef.current
+    const verdict = classifyFreshProfile(prev, row)
+    if (verdict === 'ignore') return verdict
+    if (verdict === 'deactivated') {
+      console.warn(`[Auth] Profile is no longer Active (status: ${row.status}, via ${source}) — ending the session view`)
+      realProfileRef.current = null
+      setRealProfile(null)
+      setCachedProfile(null)
+      setAccountIssue('deactivated')
+      return verdict
+    }
+    const merged = mergeProfile(prev, row)
+    if (verdict === 'unchanged') {
+      setCachedProfile(merged)          // cache keeps the newer last_seen; React state is left alone
+      return verdict
+    }
+    if (import.meta.env.DEV) console.log(`[Auth] Profile changed (via ${source}):`, merged.role)
+    realProfileRef.current = merged
+    setRealProfile(merged)
+    setCachedProfile(merged)
+    setAccountIssue(null)
+    // Role may have changed — re-read the lab lock setting alongside it
+    fetchLabMode()
+    return verdict
+  }, [fetchLabMode])
+
+  // Re-read the profile after a reconnect / tab return. QUIET by design: an
+  // error or an empty result changes nothing (same "keep the cache on a blip"
+  // rule loadProfile() follows). Only a row that was actually read can log
+  // anyone out, and only if it says the account is not Active.
+  const refreshProfileQuietly = useCallback(async () => {
+    const email = realProfileRef.current?.email
+    if (!email) return
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', email)
+        .maybeSingle()
+      if (error || !data) return
+      applyFreshProfile(data, 'reconnect')
+    } catch { /* keep what we have */ }
+  }, [applyFreshProfile])
+
   // ── Realtime: auto-refresh real profile when it changes ────────────
   useEffect(() => {
     if (!realProfile?.email) return
@@ -603,18 +667,41 @@ export function AuthProvider({ children }) {
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `email=eq.${realProfile.email}` },
-        (payload) => {
-          console.log('Real profile updated via realtime:', payload.new?.role)
-          setRealProfile(payload.new)
-          setCachedProfile(payload.new)
-          // Re-evaluate lock if role changed — memo will pick up the new role
-          // automatically; we only need to re-fetch the setting in case it
-          // changed while we were disconnected.
-          fetchLabMode()
-        }
-      ))
+        (payload) => { applyFreshProfile(payload.new, 'realtime') }
+      ), {
+        // Fires after a rebuilt channel AND on `supabase-reconnected` (a tab
+        // hidden 30 s+ came back), so a role change, temp-access grant or
+        // deactivation made while this device was asleep is picked up at once.
+        onReconnect: refreshProfileQuietly,
+      })
     return () => { channel() }
-  }, [realProfile?.email, fetchLabMode])
+  }, [realProfile?.email, applyFreshProfile, refreshProfileQuietly])
+
+  // ── Emulated profile: same freshness rules, minus deactivation ─────
+  // The emulated user's own heartbeat would otherwise replace this object
+  // every five minutes too. A target who is deactivated mid-emulation is just
+  // refreshed — emulation is only ever ended by the Super Admin.
+  const applyFreshEmulated = useCallback((row) => {
+    const prev = emulatedProfileRef.current
+    const verdict = classifyFreshProfile(prev, row)
+    if (verdict === 'ignore') return
+    const merged = mergeProfile(prev, row)
+    if (verdict === 'unchanged') { setCachedEmulation(merged); return }
+    if (import.meta.env.DEV) console.log('[Auth] Emulated profile changed:', merged.role)
+    emulatedProfileRef.current = merged
+    setEmulatedProfile(merged)
+    setCachedEmulation(merged)
+  }, [])
+
+  const refreshEmulatedQuietly = useCallback(async () => {
+    const email = emulatedProfileRef.current?.email
+    if (!email) return
+    try {
+      const { data, error } = await supabase.from('profiles').select('*').eq('email', email).maybeSingle()
+      if (error || !data) return
+      applyFreshEmulated(data)
+    } catch { /* keep what we have */ }
+  }, [applyFreshEmulated])
 
   // ── Realtime: auto-refresh emulated profile when it changes ────────
   useEffect(() => {
@@ -623,14 +710,10 @@ export function AuthProvider({ children }) {
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `email=eq.${emulatedProfile.email}` },
-        (payload) => {
-          console.log('Emulated profile updated via realtime:', payload.new?.role)
-          setEmulatedProfile(payload.new)
-          setCachedEmulation(payload.new)
-        }
-      ))
+        (payload) => { applyFreshEmulated(payload.new) }
+      ), { onReconnect: refreshEmulatedQuietly })
     return () => { channel() }
-  }, [emulatedProfile?.email])
+  }, [emulatedProfile?.email, applyFreshEmulated, refreshEmulatedQuietly])
 
   // ── Realtime: watch lab_access_mode setting changes ─────────────────
   // When an instructor flips the toggle, all affected users (Students /
@@ -757,7 +840,18 @@ export function AuthProvider({ children }) {
           console.log('[SessionTimeout] Setting updated to:', hours, 'hours')
           sessionTimeoutHoursRef.current = hours
         }
-      ))
+      ), {
+        // Deliberately NOT fetchTimeoutSetting(): that sets 0 (= never time
+        // out) on any error. This only applies a value it successfully read.
+        onReconnect: async () => {
+          const { data, error } = await supabase
+            .from('settings')
+            .select('setting_value')
+            .eq('setting_key', 'session_timeout_hours')
+            .maybeSingle()
+          if (!error && data) sessionTimeoutHoursRef.current = parseFloat(data.setting_value) || 0
+        },
+      })
     return () => { channel() }
   }, [])
 

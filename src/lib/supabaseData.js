@@ -46,6 +46,25 @@ export function mustData(result, label = 'query') {
   return result.data
 }
 
+/**
+ * True when the error is a Postgres unique violation (23505) — optionally on
+ * ONE named index/constraint. Pass the name whenever the table has more than
+ * one unique rule: on lab_signup a 23505 can also be a signup_id primary-key
+ * collision, which means something entirely different from "already booked".
+ */
+export function isUniqueViolation(err, constraintName) {
+  const e = err?.cause || err
+  if (!e) return false
+  const code = String(e.code || err?.code || '')
+  const text = `${e.message || ''} ${e.details || ''} ${err?.message || ''}`
+  const is23505 = code === '23505' || /duplicate key value violates unique constraint/i.test(text)
+  if (!is23505) return false
+  return constraintName ? text.includes(constraintName) : true
+}
+
+/** Name of the partial unique index that stops one student holding two Confirmed sign-ups for the same hour (20260921_lab_signup_unique_hour.sql). */
+export const LAB_SIGNUP_UNIQUE_HOUR = 'lab_signup_one_confirmed_per_hour'
+
 /** True when the error looks like an RLS / permission denial rather than a network problem. */
 export function isRlsBlock(err) {
   const code = err?.code || err?.cause?.code

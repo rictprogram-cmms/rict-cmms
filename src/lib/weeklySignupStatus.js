@@ -22,6 +22,14 @@
  *   - A person whose total requirement is 0 (Time Clock Only, lab staff, all
  *     online classes, week before/after their classes, fully closed week) has
  *     NO status — `required === 0` — and the UI shows nothing for them.
+ *   - ALL DONE (2026-09-21). An instructor's All Done swipe records that the
+ *     student has completed the week's lab hours. It writes a zero-length
+ *     time_clock row (entry_type = 'All Done') — the only record of it now the
+ *     weekly tracker is retired — and CANCELS the student's remaining sign-ups
+ *     for the week, which is exactly why they used to show as 0/8 short. Time
+ *     Cards already treats one swipe as closing out every class for that
+ *     Monday–Sunday week; this engine does the same: `allDone` is set, `met` is
+ *     true for every class, and the UI says "All Done" instead of a count.
  *
  * Enrollment follows Lab Signup exactly: profiles.classes (the cache the
  * class_enrollments trigger maintains), matched to the Active class offering
@@ -52,6 +60,7 @@
  *   formatHoursShort(n)                        → '8' | '6.4'
  *   formatWeekLabel(mondayKey)                 → 'Sep 21 – 27'
  *   describeWeekStatus(status)                 → { short, long }               (pure)
+ *   formatDayShort('2026-09-22')               → 'Tue, Sep 22'
  *   fetchWeeklySignupStatuses({ mondays })     → Promise<Map<mondayKey, { mondayKey, byEmail }>>
  *   fetchWeeklySignupStatus({ dateStr })       → Promise<{ mondayKey, byEmail }>
  *   mergeSignupBlocks(rows)                    → [{ date, start, end, classId, hours, isMakeup }] (pure)
@@ -181,6 +190,8 @@ export function formatHoursShort(n) {
  * @property {string}  email      as stored on the profile
  * @property {string}  name       'First Last' (falls back to the email)
  * @property {boolean} requestPending  short AND has a Pending post-deadline change request for this week
+ * @property {boolean} allDone     an instructor All Done swipe this week — hours complete regardless of sign-ups
+ * @property {string}  allDoneDate 'YYYY-MM-DD' of the (first) swipe, '' when none
  * @property {Array<{courseId:string, classId:string, required:number, signed:number, met:boolean, makeup:number}>} perClass
  */
 
@@ -191,13 +202,14 @@ export function formatHoursShort(n) {
  * @param {string}   p.mondayKey
  * @param {Array}    p.people          [{ email, classes, first_name?, last_name? }]  classes = profiles.classes string
  * @param {Array}    [p.pendingRequests] Pending lab_signup_requests rows [{ user_email, week_start }] (any week; filtered here)
+ * @param {Array}    [p.allDoneRows]     time_clock rows with entry_type 'All Done' [{ user_email, punch_in }] (any week; filtered here)
  * @param {Array}    p.classRows       classes rows (any status/dates; filtered here)
  * @param {Array}    p.signups         Confirmed lab_signup rows for the week [{ user_email, class_id, date }]
  * @param {Object}   p.closureOverlay  from fetchClosureOverlay / buildClosureOverlay
  * @param {Object}   [p.makeupOverlay] from fetchMakeupOverlay
  * @returns {Map<string, WeekStatus>}  keyed by lowercased email
  */
-export function computeWeeklySignupStatus({ mondayKey, people, classRows, signups, closureOverlay, makeupOverlay, pendingRequests } = {}) {
+export function computeWeeklySignupStatus({ mondayKey, people, classRows, signups, closureOverlay, makeupOverlay, pendingRequests, allDoneRows } = {}) {
   const out = new Map()
   const { monday, sunday } = weekRangeOf(mondayKey)
   if (!monday || !closureOverlay) return out
@@ -226,6 +238,17 @@ export function computeWeeklySignupStatus({ mondayKey, people, classRows, signup
     if (email) pendingEmails.add(email)
   })
 
+  // All Done swipes THIS week: email → date of the first one
+  const allDoneBy = new Map()
+  ;(allDoneRows || []).forEach(r => {
+    if (r.entry_type && r.entry_type !== 'All Done') return
+    const d = dateOnly(r.punch_in)
+    if (!d || d < monday || d > sunday) return
+    const email = lower(r.user_email)
+    if (!email) return
+    if (!allDoneBy.has(email) || d < allDoneBy.get(email)) allDoneBy.set(email, d)
+  })
+
   ;(people || []).forEach(person => {
     const email = lower(person.email)
     if (!email) return
@@ -246,6 +269,7 @@ export function computeWeeklySignupStatus({ mondayKey, people, classRows, signup
     if (mine.length === 0) return
 
     const mySigned = signedBy.get(email) || new Map()
+    const allDoneDate = allDoneBy.get(email) || ''
     const perClass = mine.map(c => {
       const base = weekBaseRequirement(closureOverlay, { baseHours: c.required_hours, mondayKey: monday, cls: c })
       const makeup = getMakeupHours(makeupOverlay, email, monday, c.course_id)
@@ -257,7 +281,7 @@ export function computeWeeklySignupStatus({ mondayKey, people, classRows, signup
       return {
         courseId: c.course_id || '', classId: c.class_id || '',
         required, signed, makeup: round2(makeup),
-        met: signed >= required,
+        met: !!allDoneDate || signed >= required,
       }
     })
 
@@ -270,6 +294,8 @@ export function computeWeeklySignupStatus({ mondayKey, people, classRows, signup
       required, counted, signed, met, perClass,
       email: person.email, name,
       requestPending: !met && required > 0 && pendingEmails.has(email),
+      allDone: !!allDoneDate,
+      allDoneDate,
     })
   })
 
@@ -297,6 +323,7 @@ export function summarizeWeek(byEmail) {
     owing: rows.length,
     short: rows.filter(s => !s.met).length,
     pending: rows.filter(s => s.requestPending).length,
+    allDone: rows.filter(s => s.allDone).length,
     rows,
   }
 }
@@ -305,8 +332,24 @@ export function summarizeWeek(byEmail) {
  * Text for the UI. `short` is what shows beside the X ("6/8"); `long` is the
  * full sentence for screen readers / tooltip, naming the classes that are short.
  */
+/** 'Tue, Sep 22' for a 'YYYY-MM-DD' key (local parse). */
+export function formatDayShort(dateStr) {
+  const key = dateOnly(dateStr)
+  if (!key) return ''
+  const d = new Date(key + 'T00:00:00')
+  if (isNaN(d.getTime())) return key
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
 export function describeWeekStatus(status) {
   if (!status || !(status.required > 0)) return { short: '', long: '' }
+  if (status.allDone) {
+    const before = status.counted > 0 ? ` ${formatHoursShort(status.counted)} of ${formatHoursShort(status.required)} hours were signed up before the swipe cancelled the rest.` : ''
+    return {
+      short: '',
+      long: `All Done — an instructor confirmed the week's lab hours complete on ${formatDayShort(status.allDoneDate)}.${before}`,
+    }
+  }
   if (status.met) {
     return {
       short: '',
@@ -347,11 +390,18 @@ export async function fetchWeeklySignupStatuses({ mondays } = {}) {
   const first = weeks[0]
   const lastSunday = weekRangeOf(weeks[weeks.length - 1]).sunday
 
-  const [profRes, classRes, reqRes, closureOverlay] = await Promise.all([
+  const [profRes, allDoneRes, classRes, reqRes, closureOverlay] = await Promise.all([
     supabase.from('profiles')
       .select('email, first_name, last_name, role, classes')
       .eq('status', 'Active')
       .in('role', ['Student', 'Work Study']),
+    // All Done markers across the whole span — one small read shared by every
+    // week (punch_in is fake-UTC, so the date prefix is the local day)
+    supabase.from('time_clock')
+      .select('user_email, punch_in')
+      .eq('entry_type', 'All Done')
+      .gte('punch_in', first + 'T00:00:00')
+      .lte('punch_in', lastSunday + 'T23:59:59'),
     supabase.from('classes')
       .select('class_id, course_id, required_hours, start_date, end_date, finals_start, finals_end, status')
       .eq('status', 'Active'),
@@ -365,6 +415,9 @@ export async function fetchWeeklySignupStatuses({ mondays } = {}) {
 
   const people = mustData(profRes, 'profiles.weekStatus') || []
   const classRows = mustData(classRes, 'classes.weekStatus') || []
+  // An All Done that isn't seen turns a done student into a red X — a wrong
+  // mark in the direction that causes a chase — so this read is required.
+  const allDoneRows = mustData(allDoneRes, 'time_clock.allDone') || []
   // The pending tag is a decoration on top of the marks: if this read fails
   // the marks and counts are still right, so log it and carry on without tags
   // rather than throwing away the whole result.
@@ -395,7 +448,7 @@ export async function fetchWeeklySignupStatuses({ mondays } = {}) {
 
     out.set(monday, {
       mondayKey: monday,
-      byEmail: computeWeeklySignupStatus({ mondayKey: monday, people, classRows, signups, closureOverlay, makeupOverlay, pendingRequests }),
+      byEmail: computeWeeklySignupStatus({ mondayKey: monday, people, classRows, signups, closureOverlay, makeupOverlay, pendingRequests, allDoneRows }),
     })
   }))
 
@@ -464,7 +517,7 @@ export async function fetchStudentWeek({ student, dateStr } = {}) {
   const email = String(student?.email || '').trim()
   if (!monday || !email) return { mondayKey: monday || null, status: null, blocks: [] }
 
-  const [classRes, signupRes, reqRes, closureOverlay] = await Promise.all([
+  const [classRes, signupRes, reqRes, allDoneRes, closureOverlay] = await Promise.all([
     supabase.from('classes')
       .select('class_id, course_id, required_hours, start_date, end_date, finals_start, finals_end, status')
       .eq('status', 'Active'),
@@ -478,6 +531,12 @@ export async function fetchStudentWeek({ student, dateStr } = {}) {
       .select('user_email, week_start, status')
       .eq('status', 'Pending')
       .ilike('user_email', email),
+    supabase.from('time_clock')
+      .select('user_email, punch_in')
+      .eq('entry_type', 'All Done')
+      .ilike('user_email', email)
+      .gte('punch_in', monday + 'T00:00:00')
+      .lte('punch_in', sunday + 'T23:59:59'),
     fetchClosureOverlay({ rangeStart: monday, rangeEnd: sunday }),
   ])
   const classRows = mustData(classRes, 'classes.studentWeek') || []
@@ -485,6 +544,7 @@ export async function fetchStudentWeek({ student, dateStr } = {}) {
   // wildcards to it, so pin the result to the exact address afterwards.
   const mine = r => lower(r.user_email) === lower(email)
   const signups = (mustData(signupRes, 'lab_signup.studentWeek') || []).filter(mine)
+  const allDoneRows = (mustData(allDoneRes, 'time_clock.studentWeek') || []).filter(mine)
   let pendingRequests = []
   if (reqRes.error) console.warn('weeklySignupStatus: pending change requests unavailable:', reqRes.error.message)
   else pendingRequests = (reqRes.data || []).filter(mine)
@@ -497,6 +557,6 @@ export async function fetchStudentWeek({ student, dateStr } = {}) {
   const makeupOverlay = await fetchMakeupOverlay({ emails: [email], rangeStart: monday, rangeEnd: sunday, classesById })
 
   const person = { email, classes: student.classes || '', first_name: student.firstName || student.first_name || '', last_name: student.lastName || student.last_name || '' }
-  const byEmail = computeWeeklySignupStatus({ mondayKey: monday, people: [person], classRows, signups, closureOverlay, makeupOverlay, pendingRequests })
+  const byEmail = computeWeeklySignupStatus({ mondayKey: monday, people: [person], classRows, signups, closureOverlay, makeupOverlay, pendingRequests, allDoneRows })
   return { mondayKey: monday, status: byEmail.get(lower(email)) || null, blocks: mergeSignupBlocks(signups) }
 }

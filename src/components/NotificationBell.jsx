@@ -8,7 +8,7 @@
  *        volunteer punch approvals
  */
 
-import { mustData, assertWrite } from '@/lib/supabaseData';
+import { mustData, assertWrite, isUniqueViolation, LAB_SIGNUP_UNIQUE_HOUR } from '@/lib/supabaseData';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
@@ -1400,7 +1400,15 @@ export default function NotificationBell() {
       fetchNotifications();
     } catch (e) {
       console.error('confirmApproveLab error:', e);
-      showToast('Error: ' + e.message, 'error');
+      // The database refuses a second Confirmed sign-up for the same student
+      // and hour. Held hours are skipped above, so this is a race (the student
+      // or another instructor booked one a moment ago). The request is still
+      // Pending — approving again will skip the hour that now exists.
+      if (isUniqueViolation(e, LAB_SIGNUP_UNIQUE_HOUR)) {
+        showToast('One of the requested hours was just booked for this student, so nothing was added. Approve again — it will skip that hour.', 'error');
+      } else {
+        showToast('Error: ' + e.message, 'error');
+      }
     }
     setActionLoading(null);
   };
