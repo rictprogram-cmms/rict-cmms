@@ -121,7 +121,7 @@ export default function AllDoneSection() {
     if (!profile?.email) return undefined
     return subscribeWithReconnect(`all-done-${uid}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, refreshStatus)
-    , { tag: 'AllDoneSection' })
+    , { tag: 'AllDoneSection', onReconnect: refreshStatus })
   }, [profile?.email, uid, refreshStatus])
 
   if (!profile) return null

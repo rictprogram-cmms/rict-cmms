@@ -56,7 +56,7 @@ export function useAcademicTerms() {
   useEffect(() => { load() }, [load])
   useEffect(() => subscribeWithReconnect(`academic-terms-${Math.random().toString(36).slice(2)}`, ch => ch
     .on('postgres_changes', { event: '*', schema: 'public', table: 'academic_terms' }, load)
-  , { tag: 'AcademicTerms' }), [load])
+  , { tag: 'AcademicTerms', onReconnect: load }), [load])
 
   const current = useMemo(() => currentTerm(terms), [terms])
   const active = useMemo(() => terms.filter(t => t.status !== 'Archived'), [terms])

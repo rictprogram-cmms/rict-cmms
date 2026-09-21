@@ -696,7 +696,7 @@ export default function LabStatusPage() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, fetchData)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchData)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, fetchData)
-  , { tag: 'LabStatus' }), [fetchData]);
+  , { tag: 'LabStatus', onReconnect: fetchData }), [fetchData]);
 
   // ── Touch interactions ──
   const acknowledgeRequest = useCallback(async (requestId) => {

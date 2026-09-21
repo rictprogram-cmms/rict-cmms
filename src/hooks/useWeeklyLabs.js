@@ -60,7 +60,7 @@ export function useLabClasses() {
   useEffect(() => {
     return subscribeWithReconnect('lab-classes-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, () => { fetch() })
-    , { tag: 'WeeklyLabs' })
+    , { tag: 'WeeklyLabs', onReconnect: fetch })
   }, [fetch])
 
   return { classes, loading }
@@ -240,7 +240,7 @@ export function useLabReport(className) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, () => { fetch() })
-    , { tag: 'WeeklyLabs' })
+    , { tag: 'WeeklyLabs', onReconnect: fetch })
   }, [className, fetch])
 
   return { report, loading, refresh: fetch }
@@ -339,7 +339,7 @@ export function useStudentLabReport() {
     return subscribeWithReconnect('student-lab-report-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, () => { fetch() })
-    , { tag: 'WeeklyLabs' })
+    , { tag: 'WeeklyLabs', onReconnect: fetch })
   }, [profile, fetch])
 
   return { report, loading, refresh: fetch }

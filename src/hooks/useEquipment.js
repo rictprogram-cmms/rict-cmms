@@ -124,7 +124,7 @@ export function useEquipmentList() {
     return subscribeWithReconnect('equipment-list-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },        () => { fetch() })
-    , { tag: 'Equipment' })
+    , { tag: 'Equipment', onReconnect: fetch })
   }, [fetch])
 
   return { equipment, loading, refresh: fetch }
@@ -164,7 +164,7 @@ export function useAllEquipmentList() {
     return subscribeWithReconnect('all-equipment-list-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },        () => { fetch() })
-    , { tag: 'Equipment' })
+    , { tag: 'Equipment', onReconnect: fetch })
   }, [fetch])
 
   return { equipment, loading, refresh: fetch }
@@ -209,7 +209,7 @@ export function useAssetPickerData() {
     return subscribeWithReconnect('asset-picker-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },        () => { fetch() })
-    , { tag: 'Equipment' })
+    , { tag: 'Equipment', onReconnect: fetch })
   }, [fetch])
 
   return { assets, usedAssetIds, loading, refresh: fetch }
@@ -582,7 +582,7 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_equipment' },      () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },             () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' },       () => { fetch() })
-    , { tag: 'Equipment' })
+    , { tag: 'Equipment', onReconnect: fetch })
   }, [weekStart, profile, fetch])
 
   return { ...data, loading, refresh: fetch }
@@ -854,7 +854,7 @@ export function useMyEquipmentBookings() {
     return subscribeWithReconnect('my-equipment-bookings-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment_bookings' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },             () => { fetch() })
-    , { tag: 'Equipment' })
+    , { tag: 'Equipment', onReconnect: fetch })
   }, [profile, fetch])
 
   return { bookings, loading, refresh: fetch }
@@ -922,7 +922,7 @@ export function useAllEquipmentBookings(dateStr) {
     return subscribeWithReconnect(`all-equipment-bookings-${dateStr}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipment_bookings' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' },             () => { fetch() })
-    , { tag: 'Equipment' })
+    , { tag: 'Equipment', onReconnect: fetch })
   }, [dateStr, fetch])
 
   return { bookings, loading, refresh: fetch }

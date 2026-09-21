@@ -150,7 +150,7 @@ export default function InventoryPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, () => {
         if (hasLoadedRef.current) loadInventory();
       })
-    , { tag: 'Inventory' });
+    , { tag: 'Inventory', onReconnect: () => { if (hasLoadedRef.current) loadInventory() } });
   }, []);
 
   const loadDropdowns = async () => {

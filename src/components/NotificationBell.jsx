@@ -935,7 +935,7 @@ export default function NotificationBell() {
         );
       });
       return ch;
-    }, { tag: 'NotificationBell' });
+    }, { tag: 'NotificationBell', onReconnect: fetchNotifications });
 
     return () => {
       console.log('[NotificationBell] Cleaning up realtime channel');

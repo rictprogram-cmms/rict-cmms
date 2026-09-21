@@ -45,7 +45,7 @@ export function useSettings() {
   useEffect(() => {
     return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => { fetch() })
-    , { tag: 'Settings' })
+    , { tag: 'Settings', onReconnect: fetch })
   }, [fetch])
 
   return { settings, loading, refresh: fetch }
@@ -147,7 +147,7 @@ export function useLookupTable(tableName, idColumn, nameColumn, orderColumn) {
   useEffect(() => {
     return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: tableName }, () => { fetch() })
-    , { tag: 'Settings' })
+    , { tag: 'Settings', onReconnect: fetch })
   }, [tableName, fetch])
 
   return { items, loading, refresh: fetch }
@@ -461,7 +461,7 @@ export function useWeeklyReminders() {
   useEffect(() => {
     return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_reminders' }, () => { fetch() })
-    , { tag: 'Settings' })
+    , { tag: 'Settings', onReconnect: fetch })
   }, [fetch])
 
   return { reminders, loading, refresh: fetch }
@@ -678,7 +678,7 @@ export function useReminderHistory(scopeFilter = 'all') {
   useEffect(() => {
     return subscribeWithReconnect(channelIdRef.current, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reminder_history' }, () => { fetch() })
-    , { tag: 'Settings' })
+    , { tag: 'Settings', onReconnect: fetch })
   }, [fetch])
 
   return { history, loading, refresh: fetch }

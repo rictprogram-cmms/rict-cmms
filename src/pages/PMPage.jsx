@@ -105,7 +105,7 @@ export default function PMPage() {
     loadSopLinkedPMs()
     return subscribeWithReconnect('sop-pm-schedules-pm-page', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_pm_schedules' }, () => loadSopLinkedPMs())
-    , { tag: 'PM' })
+    , { tag: 'PM', onReconnect: loadSopLinkedPMs })
   }, []) // own lifecycle — no dependency on schedules
 
   const filtered = useMemo(() => {

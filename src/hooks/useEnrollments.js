@@ -56,7 +56,7 @@ export function useEnrollmentCounts() {
   useEffect(() => subscribeWithReconnect(`enrollment-counts-${Math.random().toString(36).slice(2)}`, ch => ch
     .on('postgres_changes', { event: '*', schema: 'public', table: 'class_enrollments' }, load)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, load)
-  , { tag: 'Enrollments' }), [load])
+  , { tag: 'Enrollments', onReconnect: load }), [load])
 
   return { byClass, loading, refresh: load }
 }
@@ -91,7 +91,7 @@ export function useClassRoster(classId) {
     if (!classId) return undefined
     return subscribeWithReconnect(`roster-${classId}-${Math.random().toString(36).slice(2)}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'class_enrollments', filter: `class_id=eq.${classId}` }, load)
-    , { tag: 'Enrollments' })
+    , { tag: 'Enrollments', onReconnect: load })
   }, [classId, load])
 
   return { roster, loading, refresh: load }

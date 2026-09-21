@@ -1046,19 +1046,20 @@ export default function ProgramCostPage() {
     }
 
     const chTools = subscribeWithReconnect('program_cost_tools_rt', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, refetchTools))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, refetchTools), { onReconnect: refetchTools })
     const chTemplates = subscribeWithReconnect('program_cost_syllabi_rt', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'syllabus_templates' }, refetchTemplates))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'syllabus_templates' }, refetchTemplates), { onReconnect: refetchTemplates })
 
     // A dropped socket can silently miss events; re-pull on reconnect so the
-    // page never sits on stale numbers (same pattern as InstructorToolsPage).
-    const onReconnect = () => { refetchTools(); refetchTemplates() }
-    window.addEventListener('supabase-reconnected', onReconnect)
+    // page never sits on stale numbers. Each channel passes its own refetch as
+    // `onReconnect`, which subscribeWithReconnect calls after a channel rebuild
+    // AND on AuthContext's `supabase-reconnected` (tab return) — that replaces
+    // the window listener this page used to add itself, which only covered
+    // tab return.
 
     return () => {
       chTools()
       chTemplates()
-      window.removeEventListener('supabase-reconnected', onReconnect)
     }
   }, [])
 

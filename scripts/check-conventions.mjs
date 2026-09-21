@@ -45,6 +45,14 @@
  *   with this comment on the same line or the line above:
  *       // check-conventions: allow-raw-channel — <why>
  *
+ * RULE 3 — subscribeWithReconnect(name, bind, options) takes three arguments
+ * ─────────────────────────────────────────────────────────────────────────
+ *   A fourth argument is silently ignored, so options written there do
+ *   nothing. The easy way to do it is adding to a call whose options are a
+ *   shared constant:
+ *       , TV_RT_OPTS, { onReconnect: loadSlides })        ← WRONG: ignored
+ *       , { ...TV_RT_OPTS, onReconnect: loadSlides })     ← right
+ *
  * File: scripts/check-conventions.mjs
  */
 
@@ -209,6 +217,33 @@ export function checkSource(src, relPath) {
     }
   }
 
+  // Rule 3 — more than three arguments to subscribeWithReconnect(
+  const subRe = /(^|[^A-Za-z0-9_$.])subscribeWithReconnect\s*\(/g
+  while ((m = subRe.exec(code))) {
+    const open = m.index + m[0].length - 1
+    const close = matchingParen(code, open)
+    if (close < 0) continue
+    let depth = 0
+    let args = 1
+    let sawContent = false
+    for (let k = open + 1; k < close; k++) {
+      const ch = code[k]
+      if (ch === '(' || ch === '[' || ch === '{') depth++
+      else if (ch === ')' || ch === ']' || ch === '}') depth--
+      else if (ch === ',' && depth === 0) args++
+      if (!/\s/.test(ch)) sawContent = true
+    }
+    // a trailing comma is not an argument
+    if (/,\s*$/.test(code.slice(open + 1, close))) args--
+    if (sawContent && args > 3) {
+      problems.push({
+        rule: 'reconnect-args',
+        line: lineOf(src, m.index + m[0].length - 1),
+        message: `subscribeWithReconnect(name, bind, options) was given ${args} arguments — everything after the third is silently ignored. Merge into one options object, e.g. { ...SHARED_OPTS, onReconnect: fetchData }.`,
+      })
+    }
+  }
+
   return problems
 }
 
@@ -292,6 +327,9 @@ function selfTest() {
   expect("JSX apostrophes don't swallow code", "<p>Don't worry, the student's hours</p>\nconst c = supabase.channel('x')", ['raw-channel@2'])
   expect('regex literal with quotes does not derail strings', "const re = /['\"]/g\nconst c = supabase.channel('x')", ['raw-channel@2'])
   expect('division is not a regex', "const r = a / b / c\nconst c = supabase.channel('x')", ['raw-channel@2'])
+  expect('4th argument is ignored', "subscribeWithReconnect('x', ch => ch\n  .on('postgres_changes', {}, f)\n, OPTS, { onReconnect: f })", ['reconnect-args@1'])
+  expect('spread into one options object', "subscribeWithReconnect('x', ch => ch.on('postgres_changes', { a: 1, b: [1, 2] }, (p) => g(p, 1)), { ...OPTS, onReconnect: f })", [])
+  expect('two args / trailing comma / import line', "import { subscribeWithReconnect } from '@/lib/supabaseRealtime'\nsubscribeWithReconnect('x', bind)\nsubscribeWithReconnect('x', bind, opts,)", [])
   expect('both rules, right lines', BAD + "\nsupabase.channel('y')", ['mustdata-chain@4', 'raw-channel@5'])
 
   // masking must never change length or line count

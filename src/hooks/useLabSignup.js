@@ -559,7 +559,7 @@ export function useLabCalendar(year, month) {
   useEffect(() => {
     return subscribeWithReconnect('lab-calendar-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { fetch() })
-    , { tag: 'LabSignup' })
+    , { tag: 'LabSignup', onReconnect: fetch })
   }, [fetch])
 
   return { entries, loading, refresh: fetch }
@@ -1119,7 +1119,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
     return subscribeWithReconnect('lab-signup-data-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { fetch() })
-    , { tag: 'LabSignup' })
+    , { tag: 'LabSignup', onReconnect: fetch })
   }, [weekStart, profile, fetch])
 
   return { ...data, loading, refresh: fetch }
@@ -1378,7 +1378,7 @@ export function useMySignups() {
     if (!profile) return
     return subscribeWithReconnect('my-signups-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { fetch() })
-    , { tag: 'LabSignup' })
+    , { tag: 'LabSignup', onReconnect: fetch })
   }, [profile, fetch])
 
   return { signups, loading, refresh: fetch }
@@ -1414,7 +1414,7 @@ export function useDailyRoster(dateStr) {
     if (!dateStr) return
     return subscribeWithReconnect(`daily-roster-${dateStr}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { fetch() })
-    , { tag: 'LabSignup' })
+    , { tag: 'LabSignup', onReconnect: fetch })
   }, [dateStr, fetch])
 
   return { signups, loading, refresh: fetch }
@@ -1453,7 +1453,7 @@ export function useStudentsList() {
   useEffect(() => {
     return subscribeWithReconnect('lab-students-list-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
-    , { tag: 'LabSignup' })
+    , { tag: 'LabSignup', onReconnect: fetch })
   }, [fetch])
 
   return { students, loading }
@@ -1471,14 +1471,22 @@ export function useInstructorSignup() {
       const targetDate = new Date(dateStr + 'T12:00:00')
       const hourNum = parseInt(hour)
 
-      const existing = mustData(await supabase
+      // Match on EMAIL. This used to match on user_id = student.userId, but every
+      // lab_signup row is written with user_id: null (see the insert below), so
+      // that check could never find anything and the same student could be
+      // booked twice into one hour. ilike is for case only — "_" and "%" are
+      // wildcards to it — so the rows are pinned to the exact address after.
+      const sameSlot = mustData(await supabase
         .from('lab_signup')
-        .select('signup_id')
-        .eq('user_id', student.userId)
+        .select('signup_id, user_email')
+        .ilike('user_email', student.email)
         .eq('date', targetDate.toISOString())
         .eq('start_time', `${String(hourNum).padStart(2, '0')}:00:00`)
-        .neq('status', 'Cancelled')
-        .maybeSingle(), 'lab_signup duplicate check')
+        .neq('status', 'Cancelled'), 'lab_signup duplicate check')
+      // A list, not maybeSingle(): if duplicates already exist, maybeSingle()
+      // would throw "multiple rows" instead of simply saying they're booked.
+      const wantEmail = String(student.email || '').toLowerCase().trim()
+      const existing = (sameSlot || []).some(r => String(r.user_email || '').toLowerCase().trim() === wantEmail)
 
       if (existing) {
         toast.error('Student already signed up for this slot')
@@ -1522,5 +1530,159 @@ export function useInstructorSignup() {
     }
   }
 
-  return { signUpStudent, saving }
+  // ── Edit a student's existing sign-ups (Admin Signup → "This student's week") ──
+  // `slots` are the hours picked in the panel:
+  //   [{ id, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', classId, isMakeup }]
+  // Both actions, like the rest of Admin Signup, ignore the Sunday deadline.
+  // Both ALWAYS audit, one row per hour (entity_id = the signup), naming the
+  // instructor and the student — unlike the student's own cancelSignup(), which
+  // only audits when AUDIT_STUDENT_SIGNUPS is on.
+
+  const slotLabel = (s) => `${formatDateLabel(s.date)} ${formatTimeLabel(s.start)}–${formatTimeLabel(s.end)}`
+  const studentLabel = (student) => `${student.firstName || ''} ${(student.lastName || '').charAt(0)}.`.trim() || student.email
+
+  /**
+   * Remove hours. Returns { success, changed: slots that were actually removed }.
+   * An hour someone else cancelled a moment ago simply isn't in `changed`.
+   */
+  const cancelStudentSignups = async (student, slots) => {
+    const ids = [...new Set((slots || []).map(s => s.id).filter(Boolean))]
+    if (!student?.email || ids.length === 0) return { success: false, changed: [] }
+    setSaving(true)
+    try {
+      const { data: updated, error } = await supabase
+        .from('lab_signup')
+        .update({ status: 'Cancelled' })
+        .in('signup_id', ids)
+        .eq('status', 'Confirmed')
+        .select('signup_id')
+      if (error) throw error
+      if (!updated || updated.length === 0) {
+        throw new Error('Nothing was removed — no rows changed (already cancelled, or check permissions)')
+      }
+      const done = new Set(updated.map(r => r.signup_id))
+      const changed = slots.filter(s => done.has(s.id))
+      const who = studentLabel(student)
+
+      await writeAudit(profile, changed.map(s => ({
+        action: 'Instructor Cancel Signup',
+        entity_type: 'Lab Signup',
+        entity_id: s.id,
+        field_changed: 'status',
+        old_value: 'Confirmed',
+        new_value: 'Cancelled',
+        details: `Removed ${who} (${student.email}) from ${slotLabel(s)}${s.classId ? ` (${s.classId})` : ' (no class)'}${s.isMakeup ? ' — make-up slot' : ''} — instructor override`,
+      })))
+
+      if (changed.length < ids.length) {
+        toast(`Removed ${changed.length} of ${ids.length} hours — the rest had already changed`)
+      } else {
+        toast.success(`Removed ${changed.length} hour${changed.length === 1 ? '' : 's'} for ${who}`)
+      }
+      return { success: true, changed }
+    } catch (err) {
+      toast.error('Error: ' + err.message)
+      return { success: false, changed: [] }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /**
+   * Move hours to another of the student's classes — one UPDATE of class_id.
+   * Same rows, same time, same signup_id: nothing is freed or re-claimed in
+   * the lab's capacity and it cannot half-finish. Make-up hours are refused
+   * here: their tag points at a request for a specific class.
+   */
+  const changeSignupClass = async (student, slots, newClassId) => {
+    const target = String(newClassId || '').trim()
+    const eligible = (slots || []).filter(s => s.id && !s.isMakeup && s.classId !== target)
+    const ids = [...new Set(eligible.map(s => s.id))]
+    if (!student?.email || !target || ids.length === 0) return { success: false, changed: [] }
+    setSaving(true)
+    try {
+      const { data: updated, error } = await supabase
+        .from('lab_signup')
+        .update({ class_id: target })
+        .in('signup_id', ids)
+        .eq('status', 'Confirmed')
+        .select('signup_id')
+      if (error) throw error
+      if (!updated || updated.length === 0) {
+        throw new Error('Nothing was changed — no rows updated (already cancelled, or check permissions)')
+      }
+      const done = new Set(updated.map(r => r.signup_id))
+      const changed = eligible.filter(s => done.has(s.id))
+      const who = studentLabel(student)
+
+      await writeAudit(profile, changed.map(s => ({
+        action: 'Instructor Change Signup Class',
+        entity_type: 'Lab Signup',
+        entity_id: s.id,
+        field_changed: 'class_id',
+        old_value: s.classId || '',
+        new_value: target,
+        details: `Moved ${who} (${student.email}) ${slotLabel(s)} from ${s.classId || 'no class'} to ${target} — instructor override`,
+      })))
+
+      if (changed.length < ids.length) {
+        toast(`Moved ${changed.length} of ${ids.length} hours to ${target} — the rest had already changed`)
+      } else {
+        toast.success(`Moved ${changed.length} hour${changed.length === 1 ? '' : 's'} to ${target} for ${who}`)
+      }
+      return { success: true, changed: changed.map(s => ({ ...s, toClassId: target })) }
+    } catch (err) {
+      toast.error('Error: ' + err.message)
+      return { success: false, changed: [] }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /**
+   * Email the student about a change just made (send-schedule-change-email).
+   * Never throws and never undoes the change: the edit is already saved and
+   * audited, so a failed email is reported, recorded in audit_log, and left.
+   *
+   * @param {Object} p
+   * @param {Object} p.student
+   * @param {Array}  p.changes   [{ type:'removed'|'class_changed', date, startTime, endTime, classId, fromClassId, toClassId, isMakeup }]
+   * @param {string} [p.weekLabel] [p.note] [p.statusLine]
+   * @returns {Promise<{ sent:boolean, error?:string }>}
+   */
+  const notifyScheduleChange = async ({ student, changes, weekLabel, note, statusLine }) => {
+    if (!student?.email || !Array.isArray(changes) || changes.length === 0) return { sent: false, error: 'Nothing to send' }
+    let sent = false
+    let errorText = ''
+    try {
+      const { data, error } = await supabase.functions.invoke('send-schedule-change-email', {
+        body: { studentEmail: student.email, weekLabel: weekLabel || '', note: note || '', statusLine: statusLine || '', changes },
+      })
+      if (error) {
+        // FunctionsHttpError carries the function's own JSON in .context
+        let detail = ''
+        try { detail = (await error.context?.json?.())?.error || '' } catch { /* ignore */ }
+        errorText = detail || error.message || 'Email function failed'
+      } else if (data?.sent) {
+        sent = true
+      } else {
+        errorText = data?.error || 'Email was not sent'
+      }
+    } catch (err) {
+      errorText = err?.message || 'Email function unreachable'
+    }
+
+    await writeAudit(profile, {
+      action: sent ? 'Schedule Change Email Sent' : 'Schedule Change Email Failed',
+      entity_type: 'Lab Signup',
+      entity_id: changes[0]?.signupId || '',
+      details: `${sent ? 'Emailed' : 'Could NOT email'} ${studentLabel(student)} (${student.email}) about ${changes.length} changed hour${changes.length === 1 ? '' : 's'}${weekLabel ? `, week of ${weekLabel}` : ''}${sent ? '' : ` — ${errorText}`}`,
+    })
+
+    if (sent) toast.success(`Emailed ${studentLabel(student)}`)
+    else toast.error(`Change saved, but the email to ${studentLabel(student)} was not sent: ${errorText}`, { duration: 8000 })
+    return sent ? { sent } : { sent, error: errorText }
+  }
+
+  return { signUpStudent, cancelStudentSignups, changeSignupClass, notifyScheduleChange, saving }
 }

@@ -37,7 +37,7 @@ export function useAllUsers() {
   useEffect(() => {
     return subscribeWithReconnect('all-users-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
-    , { tag: 'Users' })
+    , { tag: 'Users', onReconnect: fetch })
   }, [fetch])
 
   return { users, loading, refresh: fetch }
@@ -325,7 +325,7 @@ export function useAccessRequests() {
   useEffect(() => {
     return subscribeWithReconnect('access-requests-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'access_requests' }, () => { fetch() })
-    , { tag: 'Users' })
+    , { tag: 'Users', onReconnect: fetch })
   }, [fetch])
 
   return { requests, loading, refresh: fetch }

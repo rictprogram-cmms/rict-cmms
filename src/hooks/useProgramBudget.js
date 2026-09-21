@@ -277,7 +277,7 @@ export function useBudgetOverview(schoolYear) {
     return subscribeWithReconnect('budget-overview-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
-    , { tag: 'ProgramBudget' })
+    , { tag: 'ProgramBudget', onReconnect: fetch })
   }, [fetch])
 
   return { overview, availableYears, loading, refresh: fetch }
@@ -370,7 +370,7 @@ export function useBudgetTransactions(schoolYear) {
     return subscribeWithReconnect('budget-transactions-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
-    , { tag: 'ProgramBudget' })
+    , { tag: 'ProgramBudget', onReconnect: fetch })
   }, [fetch])
 
   return { transactions, loading, refresh: fetch }
@@ -686,7 +686,7 @@ export function useBudgetYearSummary() {
     return subscribeWithReconnect('budget-year-summary-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
-    , { tag: 'ProgramBudget' })
+    , { tag: 'ProgramBudget', onReconnect: fetch })
   }, [fetch])
 
   return { summaries, loading, refresh: fetch }

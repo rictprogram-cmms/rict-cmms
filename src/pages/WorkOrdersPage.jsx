@@ -829,7 +829,20 @@ export default function WorkOrdersPage() {
           fetchLinkedSops(wo.wo_id);
         }
       })
-    );
+    , {
+      // After a reconnect, redo what the handlers above would have done for
+      // anything missed: the list (whichever view is showing), the request
+      // queue, and the open work order if its detail modal is up.
+      onReconnect: () => {
+        scheduleListRefresh();
+        loadRequests();
+        const wo = currentWORef.current;
+        if (wo && !wo.isClosed && showViewModalRef.current) {
+          loadWODetailSilent(wo.wo_id);
+          fetchLinkedSops(wo.wo_id);
+        }
+      },
+    });
 
     return () => { channel(); };
   }, [user?.id]);

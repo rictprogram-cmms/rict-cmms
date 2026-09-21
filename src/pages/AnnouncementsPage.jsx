@@ -279,7 +279,7 @@ function InboxTab({ refreshKey, canReply = false, onReply }) {
         { event: '*', schema: 'public', table: 'announcements', filter: `recipient_email=eq.${profile.email.toLowerCase()}` },
         () => { loadMessages(true) }
       )
-    , { tag: 'Announcements' })
+    , { tag: 'Announcements', onReconnect: () => loadMessages(true) })
   }, [profile?.email, loadMessages])
 
   const markRead = async (msg) => {
@@ -1147,7 +1147,7 @@ function SentHistoryTab({ refreshKey, viewMode = 'all' }) {
         { event: '*', schema: 'public', table: 'announcements' },
         () => { loadHistory(true) }
       )
-    , { tag: 'Announcements' })
+    , { tag: 'Announcements', onReconnect: () => loadHistory(true) })
   }, [loadHistory, ownOnly])
 
   const filtered = useMemo(() => {
@@ -1758,7 +1758,7 @@ function TVSlidesTab() {
   useEffect(() => {
     return subscribeWithReconnect(`tv-slides-tab-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tv_slides' }, () => { load() })
-    , { tag: 'Announcements' })
+    , { tag: 'Announcements', onReconnect: load })
   }, [load])
 
   const audit = async (action, slideId, details) => {

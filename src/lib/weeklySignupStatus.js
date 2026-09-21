@@ -419,22 +419,28 @@ function hhmm(t) { return String(t || '').substring(0, 5) }
  * on the same day for the same class become one line (8:00–11:00, 3 hours).
  * A change of class or a gap starts a new block. Pure.
  *
- * @param {Array} rows [{ date, start_time, end_time, class_id, is_makeup }]
- * @returns {Array<{ date:string, start:string, end:string, classId:string, hours:number, isMakeup:boolean }>}
+ * Each block keeps its individual hours in `slots` (with the signup_id), so
+ * Admin Signup can remove or re-class single hours out of a merged block.
+ *
+ * @param {Array} rows [{ signup_id, date, start_time, end_time, class_id, is_makeup }]
+ * @returns {Array<{ date:string, start:string, end:string, classId:string, hours:number, isMakeup:boolean,
+ *                   slots:Array<{ id:string, date:string, start:string, end:string, classId:string, isMakeup:boolean }> }>}
  */
 export function mergeSignupBlocks(rows) {
   const sorted = (rows || [])
-    .map(r => ({ date: dateOnly(r.date), start: hhmm(r.start_time), end: hhmm(r.end_time), classId: String(r.class_id || '').trim(), isMakeup: !!r.is_makeup }))
+    .map(r => ({ id: r.signup_id || '', date: dateOnly(r.date), start: hhmm(r.start_time), end: hhmm(r.end_time), classId: String(r.class_id || '').trim(), isMakeup: !!r.is_makeup }))
     .filter(r => r.date && r.start)
     .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))
   const out = []
   sorted.forEach(r => {
     const last = out[out.length - 1]
+    const slot = { id: r.id, date: r.date, start: r.start, end: r.end, classId: r.classId, isMakeup: r.isMakeup }
     if (last && last.date === r.date && last.classId === r.classId && last.end === r.start && last.isMakeup === r.isMakeup) {
       last.end = r.end
       last.hours += 1
+      last.slots.push(slot)
     } else {
-      out.push({ ...r, hours: 1 })
+      out.push({ date: r.date, start: r.start, end: r.end, classId: r.classId, isMakeup: r.isMakeup, hours: 1, slots: [slot] })
     }
   })
   return out
@@ -463,7 +469,7 @@ export async function fetchStudentWeek({ student, dateStr } = {}) {
       .select('class_id, course_id, required_hours, start_date, end_date, finals_start, finals_end, status')
       .eq('status', 'Active'),
     supabase.from('lab_signup')
-      .select('user_email, class_id, date, start_time, end_time, is_makeup')
+      .select('signup_id, user_email, class_id, date, start_time, end_time, is_makeup')
       .eq('status', 'Confirmed')
       .ilike('user_email', email)
       .gte('date', monday)

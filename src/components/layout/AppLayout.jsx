@@ -1071,7 +1071,7 @@ function HelpButton({ profile }) {
         { event: '*', schema: 'public', table: 'help_requests' },
         () => { loadHelpStatus() }
       )
-    , { tag: 'AppLayout' })
+    , { tag: 'AppLayout', onReconnect: loadHelpStatus })
   }, [profile?.email, loadHelpStatus, isInstructor])
 
   // ── Auto-expire timer for acknowledged status ──
@@ -1834,7 +1834,7 @@ export default function AppLayout() {
           }
         }
       )
-    , { tag: 'AppLayout' })
+    , { tag: 'AppLayout', onReconnect: () => { loadTempAccessStatus(); loadTempPermPages() } })
   }, [loadTempAccessStatus, loadTempPermPages, isInstructor, profile?.email])
 
   // Polling fallback: if realtime doesn't fire (table not in publication), poll every 15s

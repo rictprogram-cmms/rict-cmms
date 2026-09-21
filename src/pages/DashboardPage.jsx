@@ -62,6 +62,14 @@ import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal'
 import EditTempAccessDialog from '@/components/EditTempAccessDialog';
 import '@/styles/dashboard.css';
 
+// ─── Colours ────────────────────────────────────────────────────────────
+// Muted TEXT. #666f78 is ≥ 4.5:1 on every light surface this page uses
+// (white 5.1, #fafbfc 4.9, #f8f9fa 4.9, #f1f3f5 4.6) — WCAG 1.4.3. It replaced
+// #868e96 (3.3:1) and #adb5bd (2.1:1) wherever they coloured text.
+// #868e96 is still used, on purpose, for NON-text: status / priority dots,
+// expand chevrons and the empty-state icon only need 3:1 (WCAG 1.4.11).
+const TEXT_MUTED = '#666f78';
+
 // ─── Fun Facts ──────────────────────────────────────────────────────────
 const funFacts = [
   'A single autonomous vehicle generates approximately 4 terabytes of data per day from its cameras, LIDAR, and sensors.',
@@ -216,7 +224,7 @@ function AccountabilityMetrics({ navigate }) {
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
     const unsubscribe = subscribeWithReconnect('dash-wo-count', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, fetchWOs)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: fetchWOs });
     return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email]);
 
@@ -292,7 +300,7 @@ function AccountabilityMetrics({ navigate }) {
     const unsubscribe = subscribeWithReconnect('dash-attendance', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchAttendance)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchAttendance)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: fetchAttendance });
     return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email, profile?.user_id, profile?.classes]);
 
@@ -310,7 +318,7 @@ function AccountabilityMetrics({ navigate }) {
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
     const unsubscribe = subscribeWithReconnect('dash-all-done', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, load)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: load });
     return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email]);
 
@@ -356,7 +364,7 @@ function AccountabilityMetrics({ navigate }) {
           const woc = wocScore?.score ?? null;
           const rank = wocScore?.rank ?? null;
           const total = wocScore?.totalRanked ?? null;
-          const wocColor = woc === null ? '#868e96' : woc >= 90 ? '#40c057' : woc >= 70 ? '#fab005' : '#fa5252';
+          const wocColor = woc === null ? TEXT_MUTED : woc >= 90 ? '#40c057' : woc >= 70 ? '#fab005' : '#fa5252';
           const wocBg   = woc === null ? '#f1f3f5' : woc >= 90 ? '#d3f9d8' : woc >= 70 ? '#fff9db' : '#ffe3e3';
           const wocLabel = woc === null
             ? 'WOC Score: not yet calculated'
@@ -595,7 +603,7 @@ function GradeRelevantScores() {
         >
           My Grade-Relevant Scores
         </h3>
-        <p style={{ margin: '4px 0 0', fontSize: '0.78rem', color: '#868e96', lineHeight: 1.5 }}>
+        <p style={{ margin: '4px 0 0', fontSize: '0.78rem', color: TEXT_MUTED, lineHeight: 1.5 }}>
           The values your instructor uses for your grade. They update as the class
           progresses and freeze with a “Final” badge once the class ends.
         </p>
@@ -633,7 +641,7 @@ function GradeRelevantScores() {
         style={{
           margin: '12px 0 0',
           fontSize: '0.7rem',
-          color: '#868e96',
+          color: TEXT_MUTED,
           fontStyle: 'italic',
           lineHeight: 1.5,
         }}
@@ -665,7 +673,7 @@ function GradeCard({ card, navigate }) {
   // Score color is paired with bold weight so the meaning is conveyed by more
   // than hue alone (WCAG 2.1 SC 1.4.1 — Use of Color).
   const scoreColor = (v) =>
-    v == null ? '#868e96' : v >= 90 ? '#2f9e44' : v >= 70 ? '#e67700' : '#c92a2a';
+    v == null ? TEXT_MUTED : v >= 90 ? '#2f9e44' : v >= 70 ? '#e67700' : '#c92a2a';
 
   const finalsExcludedNote = classConfig.finals_start ? ' · finals excluded' : '';
 
@@ -715,7 +723,7 @@ function GradeCard({ card, navigate }) {
               style={{
                 margin: '2px 0 0',
                 fontSize: '0.72rem',
-                color: '#868e96',
+                color: TEXT_MUTED,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -724,7 +732,7 @@ function GradeCard({ card, navigate }) {
               {classConfig.course_name}
             </p>
           )}
-          <p style={{ margin: '4px 0 0', fontSize: '0.68rem', color: '#adb5bd' }}>
+          <p style={{ margin: '4px 0 0', fontSize: '0.68rem', color: TEXT_MUTED }}>
             {formatShort(startDate)} – {formatShort(endDate)}{finalsExcludedNote}
           </p>
         </div>
@@ -827,7 +835,7 @@ function GradeCard({ card, navigate }) {
           flexWrap: 'wrap',
         }}
       >
-        <span style={{ fontSize: '0.66rem', color: '#adb5bd' }}>
+        <span style={{ fontSize: '0.66rem', color: TEXT_MUTED }}>
           As of {new Date(asOf).toLocaleString()}
         </span>
         <button
@@ -895,7 +903,7 @@ function WhyAttendance({ weeks, score }) {
     const eM = e.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     return `${sM}–${eM}`;
   };
-  const tone = (s) => s == null ? '#868e96' : s >= 90 ? '#2f9e44' : s >= 70 ? '#e67700' : '#c92a2a';
+  const tone = (s) => s == null ? TEXT_MUTED : s >= 90 ? '#2f9e44' : s >= 70 ? '#e67700' : '#c92a2a';
 
   return (
     <section aria-labelledby="why-attendance-h">
@@ -924,10 +932,10 @@ function WhyAttendance({ weeks, score }) {
         </caption>
         <thead>
           <tr style={{ borderBottom: '1px solid #f1f3f5' }}>
-            <th scope="col" style={{ textAlign: 'left', padding: '3px 6px 3px 0', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Wk</th>
-            <th scope="col" style={{ textAlign: 'left', padding: '3px 6px', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Dates</th>
-            <th scope="col" style={{ textAlign: 'right', padding: '3px 6px', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Score</th>
-            <th scope="col" style={{ textAlign: 'left', padding: '3px 0 3px 6px', fontWeight: 600, color: '#868e96', fontSize: '0.65rem', textTransform: 'uppercase' }}>Notes</th>
+            <th scope="col" style={{ textAlign: 'left', padding: '3px 6px 3px 0', fontWeight: 600, color: TEXT_MUTED, fontSize: '0.65rem', textTransform: 'uppercase' }}>Wk</th>
+            <th scope="col" style={{ textAlign: 'left', padding: '3px 6px', fontWeight: 600, color: TEXT_MUTED, fontSize: '0.65rem', textTransform: 'uppercase' }}>Dates</th>
+            <th scope="col" style={{ textAlign: 'right', padding: '3px 6px', fontWeight: 600, color: TEXT_MUTED, fontSize: '0.65rem', textTransform: 'uppercase' }}>Score</th>
+            <th scope="col" style={{ textAlign: 'left', padding: '3px 0 3px 6px', fontWeight: 600, color: TEXT_MUTED, fontSize: '0.65rem', textTransform: 'uppercase' }}>Notes</th>
           </tr>
         </thead>
         <tbody>
@@ -938,7 +946,7 @@ function WhyAttendance({ weeks, score }) {
                 <th scope="row" style={{ textAlign: 'left', padding: '3px 6px 3px 0', fontWeight: 600, color: '#495057', whiteSpace: 'nowrap' }}>
                   W{wk.weekNumber}
                 </th>
-                <td style={{ padding: '3px 6px', color: '#868e96', whiteSpace: 'nowrap' }}>
+                <td style={{ padding: '3px 6px', color: TEXT_MUTED, whiteSpace: 'nowrap' }}>
                   {formatRange(wk.startDate, wk.endDate)}
                 </td>
                 <td style={{ padding: '3px 6px', textAlign: 'right', fontWeight: 700, color: tone(wScore), whiteSpace: 'nowrap' }}>
@@ -1032,7 +1040,7 @@ function WhyWOC({ result, score }) {
       )}
 
       {groupKeys.length === 0 ? (
-        <p style={{ margin: 0, fontSize: '0.7rem', color: '#868e96', fontStyle: 'italic' }}>
+        <p style={{ margin: 0, fontSize: '0.7rem', color: TEXT_MUTED, fontStyle: 'italic' }}>
           No specific work orders to flag for this period.
         </p>
       ) : (
@@ -1081,7 +1089,7 @@ function WhyWOC({ result, score }) {
                         {e.woId}
                       </span>
                       {e.description ? (
-                        <span style={{ color: '#868e96' }}> — {e.description}</span>
+                        <span style={{ color: TEXT_MUTED }}> — {e.description}</span>
                       ) : null}
                       {/* Per-entry context: days late, days stale, % of work for early-share, etc. */}
                       <WOCDetailExtra entry={e} type={key} />
@@ -1118,7 +1126,7 @@ function WOCDetailExtra({ entry, type }) {
   }
   if (!text) return null;
   return (
-    <span style={{ display: 'block', fontSize: '0.62rem', color: '#adb5bd', marginLeft: 0 }}>
+    <span style={{ display: 'block', fontSize: '0.62rem', color: TEXT_MUTED, marginLeft: 0 }}>
       {text}
     </span>
   );
@@ -1144,7 +1152,7 @@ function ScoreCell({ label, value, suffix, formatter, color }) {
       <dt
         style={{
           fontSize: '0.6rem',
-          color: '#868e96',
+          color: TEXT_MUTED,
           textTransform: 'uppercase',
           letterSpacing: '0.05em',
           fontWeight: 600,
@@ -1347,7 +1355,7 @@ function InstructorOverview({ navigate }) {
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
     return subscribeWithReconnect('dash-inst-late', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, fetchLateWOs)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: fetchLateWOs });
   }, [fetchLateWOs]);
 
   // ── Fetch asset checkouts (open & overdue) ──
@@ -1372,7 +1380,7 @@ function InstructorOverview({ navigate }) {
     fetchCheckoutCounts();
     return subscribeWithReconnect('dash-inst-checkouts', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, fetchCheckoutCounts)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: fetchCheckoutCounts });
   }, [fetchCheckoutCounts]);
 
   // ── Fetch day signups + clock ──
@@ -1412,7 +1420,7 @@ function InstructorOverview({ navigate }) {
     return subscribeWithReconnect('dash-inst-day', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchDayData)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchDayData)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: fetchDayData });
   }, [fetchDayData]);
 
   // ── Weekly sign-up status ──
@@ -1470,9 +1478,10 @@ function InstructorOverview({ navigate }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, schedule)
-    , { tag: 'Dashboard' });
-    window.addEventListener('supabase-reconnected', schedule);
-    return () => { clearTimeout(timer); window.removeEventListener('supabase-reconnected', schedule); stop(); };
+    , { tag: 'Dashboard', onReconnect: schedule });
+    // `onReconnect: schedule` above covers both a channel rebuild and
+    // AuthContext's `supabase-reconnected` (tab return).
+    return () => { clearTimeout(timer); stop(); };
   }, [fetchWeekStatus]);
 
   // Roll-ups for the two tiles and their list
@@ -1537,7 +1546,7 @@ function InstructorOverview({ navigate }) {
     // Unique channel name per mount — prevents collision when dashboard is open in two tabs
     return subscribeWithReconnect('dash-inst-temp', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'temp_access_requests' }, loadActiveTempAccess)
-    , { tag: 'Dashboard' });
+    , { tag: 'Dashboard', onReconnect: loadActiveTempAccess });
   }, [loadActiveTempAccess]);
 
   const loadTempHistory = async () => {
@@ -1854,7 +1863,7 @@ function InstructorOverview({ navigate }) {
               <span className="material-icons" aria-hidden="true" style={{ color: '#228be6', flexShrink: 0 }}>calendar_today</span>
               <strong>Day View</strong>
               {!dayViewExpanded && !dayLoading && (
-                <span style={{ fontSize: '0.78rem', color: '#868e96', fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                <span style={{ fontSize: '0.78rem', color: TEXT_MUTED, fontWeight: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                   {!isToday && `— ${formatDateLabel(selectedDate)}, `}
                   {isToday && peopleList.length > 0 && '— '}
                   {peopleList.length} {peopleList.length === 1 ? 'person' : 'people'}
@@ -1928,11 +1937,11 @@ function InstructorOverview({ navigate }) {
               onTouchEnd={onDayBodyTouchEnd}
             >
               {dayLoading ? (
-                <p style={{ color: '#868e96', textAlign: 'center', padding: 20 }}>Loading...</p>
+                <p style={{ color: TEXT_MUTED, textAlign: 'center', padding: 20 }}>Loading...</p>
               ) : peopleList.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '24px 20px' }}>
                   <span className="material-icons" aria-hidden="true" style={{ fontSize: '2rem', color: '#868e96', display: 'block', marginBottom: 8 }}>event_busy</span>
-                  <p style={{ color: '#868e96', margin: 0, fontSize: '0.9rem' }}>No one expected or checked in</p>
+                  <p style={{ color: TEXT_MUTED, margin: 0, fontSize: '0.9rem' }}>No one expected or checked in</p>
                 </div>
               ) : (
                 peopleList.map((person, idx) => {
@@ -1996,7 +2005,7 @@ function InstructorOverview({ navigate }) {
                           <span style={{ color: '#fd7e14' }}>Leaving ~{formatTime12(person.displayEnd)}</span>
                         )}
                         {hasLeft && !isPunchedIn && (
-                          <span style={{ color: '#868e96' }}>Left: {formatTimestamp12(person.clockEntries.find(c => c.status === 'Punched Out')?.punch_out)}</span>
+                          <span style={{ color: TEXT_MUTED }}>Left: {formatTimestamp12(person.clockEntries.find(c => c.status === 'Punched Out')?.punch_out)}</span>
                         )}
                       </div>
                     </div>
@@ -2031,7 +2040,7 @@ function InstructorOverview({ navigate }) {
                 </span>
               )}
               {!tempAccessExpanded && !tempAccessLoading && activeTempAccess.length === 0 && (
-                <span style={{ fontSize: '0.78rem', color: '#868e96', fontWeight: 400 }}>— None active</span>
+                <span style={{ fontSize: '0.78rem', color: TEXT_MUTED, fontWeight: 400 }}>— None active</span>
               )}
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2048,9 +2057,9 @@ function InstructorOverview({ navigate }) {
           {tempAccessExpanded && (
           <div id="dash-temp-access-body" className="dash-card-body">
             {tempAccessLoading ? (
-              <p style={{ color: '#868e96', textAlign: 'center', padding: 20 }}>Loading...</p>
+              <p style={{ color: TEXT_MUTED, textAlign: 'center', padding: 20 }}>Loading...</p>
             ) : activeTempAccess.length === 0 ? (
-              <p style={{ color: '#868e96', textAlign: 'center', padding: 20 }}>No active temp access</p>
+              <p style={{ color: TEXT_MUTED, textAlign: 'center', padding: 20 }}>No active temp access</p>
             ) : (
               activeTempAccess.map(a => {
                 const isPermType = a.request_type === 'permissions';
@@ -2065,7 +2074,7 @@ function InstructorOverview({ navigate }) {
                             <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 4, fontSize: '0.7rem', fontWeight: 600, background: '#f3e8ff', color: '#7c3aed' }}>
                               {approvedPerms.length} Permission{approvedPerms.length !== 1 ? 's' : ''}
                             </span>
-                            <span style={{ color: '#868e96', fontSize: '0.8rem', marginLeft: 8 }}>(role unchanged: {a.user_current_role})</span>
+                            <span style={{ color: TEXT_MUTED, fontSize: '0.8rem', marginLeft: 8 }}>(role unchanged: {a.user_current_role})</span>
                           </p>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 4 }}>
                             {approvedPerms.slice(0, 5).map((p, i) => (
@@ -2073,19 +2082,19 @@ function InstructorOverview({ navigate }) {
                                 {p.page}: {p.feature.replace(/_/g, ' ')}
                               </span>
                             ))}
-                            {approvedPerms.length > 5 && <span style={{ fontSize: '0.65rem', color: '#868e96' }}>+{approvedPerms.length - 5} more</span>}
+                            {approvedPerms.length > 5 && <span style={{ fontSize: '0.65rem', color: TEXT_MUTED }}>+{approvedPerms.length - 5} more</span>}
                           </div>
                         </>
                       ) : (
                         <p style={{ margin: '4px 0', fontSize: '0.82rem' }}>
                           <span className={`dash-role-badge ${a.approved_role === 'Instructor' ? 'role-inst' : 'role-ws'}`}>{a.approved_role}</span>
-                          <span style={{ color: '#868e96', fontSize: '0.8rem', marginLeft: 8 }}>(was {a.original_role || a.user_current_role})</span>
+                          <span style={{ color: TEXT_MUTED, fontSize: '0.8rem', marginLeft: 8 }}>(was {a.original_role || a.user_current_role})</span>
                         </p>
                       )}
                       <small style={{ color: '#2b8a3e' }}>
                         Expires: {fmtDate(a.expiry_date)}
                         {a.edited_by && (
-                          <span style={{ color: '#868e96', marginLeft: 8 }}>· edited by {a.edited_by} {fmtDate(a.edited_date)}</span>
+                          <span style={{ color: TEXT_MUTED, marginLeft: 8 }}>· edited by {a.edited_by} {fmtDate(a.edited_date)}</span>
                         )}
                       </small>
                     </div>
@@ -2141,18 +2150,18 @@ function InstructorOverview({ navigate }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
                       <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#495057' }}>{wo.wo_id}</span>
                       <span aria-hidden="true" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: priorityColor(wo.priority), flexShrink: 0 }} title={wo.priority} />
-                      <span style={{ fontSize: '0.72rem', color: '#868e96' }}>{wo.status}</span>
+                      <span style={{ fontSize: '0.72rem', color: TEXT_MUTED }}>{wo.status}</span>
                     </div>
                     <div style={{ fontSize: '0.85rem', color: '#1a1a2e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {wo.description}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: '#868e96', marginTop: 2 }}>
+                    <div style={{ fontSize: '0.75rem', color: TEXT_MUTED, marginTop: 2 }}>
                       {wo.assigned_to || 'Unassigned'}{wo.asset_name ? ` · ${wo.asset_name}` : ''}
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
                     <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fa5252' }}>{daysLate(wo.due_date)}d</div>
-                    <div style={{ fontSize: '0.68rem', color: '#868e96' }}>late</div>
+                    <div style={{ fontSize: '0.68rem', color: TEXT_MUTED }}>late</div>
                   </div>
                 </button>
               ))}
@@ -2247,9 +2256,9 @@ function InstructorOverview({ navigate }) {
             </div>
             <div className="dash-modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
               {tempHistoryLoading ? (
-                <p style={{ textAlign: 'center', color: '#868e96', padding: 20 }}>Loading...</p>
+                <p style={{ textAlign: 'center', color: TEXT_MUTED, padding: 20 }}>Loading...</p>
               ) : tempHistory.length === 0 ? (
-                <p style={{ textAlign: 'center', color: '#868e96', padding: 20 }}>No history found</p>
+                <p style={{ textAlign: 'center', color: TEXT_MUTED, padding: 20 }}>No history found</p>
               ) : (
                 <table className="dash-table">
                   <thead>
@@ -2264,7 +2273,7 @@ function InstructorOverview({ navigate }) {
                           <td>
                             {h.user_name || h.user_email}
                             {h.edited_by && (
-                              <span style={{ display: 'block', fontSize: '0.68rem', color: '#868e96' }}>
+                              <span style={{ display: 'block', fontSize: '0.68rem', color: TEXT_MUTED }}>
                                 Edited{h.edit_count > 1 ? ` ×${h.edit_count}` : ''} by {h.edited_by} · {fmtDate(h.edited_date)}
                               </span>
                             )}
@@ -2282,7 +2291,7 @@ function InstructorOverview({ navigate }) {
                             )}
                           </td>
                           <td><span className={`dash-status-badge status-${(h.status || '').toLowerCase()}`}>{h.status}</span></td>
-                          <td style={{ fontSize: '0.8rem', color: '#868e96' }}>{fmtDate(h.submitted_date || h.created_at)}</td>
+                          <td style={{ fontSize: '0.8rem', color: TEXT_MUTED }}>{fmtDate(h.submitted_date || h.created_at)}</td>
                         </tr>
                       );
                     })}
@@ -2307,11 +2316,11 @@ function InstructorOverview({ navigate }) {
                 Revoke temporary access for <strong>{confirmRevoke.user_name}</strong>?
               </p>
               {confirmRevoke.request_type === 'permissions' ? (
-                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#868e96' }}>
+                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: TEXT_MUTED }}>
                   Their <strong>{(confirmRevoke.approved_permissions || []).length} temporary permission(s)</strong> will be removed immediately. Their role ({confirmRevoke.user_current_role}) stays unchanged.
                 </p>
               ) : (
-                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#868e96' }}>
+                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: TEXT_MUTED }}>
                   Their role will revert from <strong>{confirmRevoke.approved_role}</strong> back to <strong>{confirmRevoke.original_role || confirmRevoke.user_current_role || 'Student'}</strong> immediately.
                 </p>
               )}

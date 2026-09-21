@@ -183,7 +183,7 @@ export function useLabVisibleDays() {
         { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' },
         () => { fetchLabVisibleDays().then(apply) }
       )
-    , { tag: 'LabDays' })
+    , { tag: 'LabDays', onReconnect: () => { fetchLabVisibleDays().then(apply) } })
 
     return () => {
       mountedRef.current = false

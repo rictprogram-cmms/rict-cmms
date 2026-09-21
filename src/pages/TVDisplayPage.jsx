@@ -358,7 +358,7 @@ export default function TVDisplayPage() {
         const v = parseInt(p.new?.setting_value, 10)
         if (!isNaN(v) && v >= 5) setRotationSeconds(v)
       })
-    , TV_RT_OPTS)
+    , { ...TV_RT_OPTS, onReconnect: loadSlides })
 
     // Date windows are checked against "today" — re-evaluate every 10 minutes
     // so slides expire / appear on schedule without a reboot.

@@ -202,7 +202,7 @@ export default function SOPsPage() {
   useEffect(() => { fetchTemplate() }, [fetchTemplate])
 
   useEffect(() => {
-    const ch = subscribeWithReconnect('sops-page', ch => ch.on('postgres_changes', { event: '*', schema: 'public', table: 'sops' }, () => fetchSOPs()))
+    const ch = subscribeWithReconnect('sops-page', ch => ch.on('postgres_changes', { event: '*', schema: 'public', table: 'sops' }, () => fetchSOPs()), { onReconnect: fetchSOPs })
     return () => { ch() }
   }, [fetchSOPs])
 

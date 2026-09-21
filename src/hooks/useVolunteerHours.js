@@ -231,7 +231,7 @@ export function useVolunteerSettings() {
           fetchSettings()
         }
       })
-    , { tag: 'VolunteerHours' })
+    , { tag: 'VolunteerHours', onReconnect: fetchSettings })
   }, [fetchSettings])
 
   return { settings, loading, refresh: fetchSettings }
@@ -331,7 +331,7 @@ export function useVolunteerData() {
     return subscribeWithReconnect('volunteer-data-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { fetchData() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => { fetchData() })
-    , { tag: 'VolunteerHours' })
+    , { tag: 'VolunteerHours', onReconnect: fetchData })
   }, [profile?.email, fetchData])
 
   // ── Computed stats ──
@@ -804,7 +804,7 @@ export function useVolunteerOverview() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { fetchOverview() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => { fetchOverview() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetchOverview() })
-    , { tag: 'VolunteerHours' })
+    , { tag: 'VolunteerHours', onReconnect: fetchOverview })
   }, [isInstructor, fetchOverview])
 
   const summary = useMemo(() => {
@@ -890,7 +890,7 @@ export function useStudentVolunteerDetail(studentEmail) {
     return subscribeWithReconnect(`volunteer-detail-${studentEmail}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { fetchDetail() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => { fetchDetail() })
-    , { tag: 'VolunteerHours' })
+    , { tag: 'VolunteerHours', onReconnect: fetchDetail })
   }, [studentEmail, fetchDetail])
 
   // ── Instructor: directly edit a time_clock volunteer entry (no approval needed) ──

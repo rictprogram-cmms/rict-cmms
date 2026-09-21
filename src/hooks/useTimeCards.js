@@ -703,7 +703,7 @@ export function useUsersForReports({ canViewAll = false } = {}) {
     if (!canViewAll) return
     return subscribeWithReconnect('tc-users-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
-    )
+    , { onReconnect: fetch })
   }, [canViewAll, fetch])
 
   return { users, loading }
@@ -1506,7 +1506,15 @@ export function useTimeCardData() {
           fetchTimeCard(userId, startDate, endDate)
         }
       })
-  ), [fetchTimeCard])
+  , {
+    // Same refetch the handlers do — runs once after a reconnect
+    onReconnect: () => {
+      if (lastFetchParamsRef.current) {
+        const { userId, startDate, endDate } = lastFetchParamsRef.current
+        fetchTimeCard(userId, startDate, endDate)
+      }
+    },
+  }), [fetchTimeCard])
 
   return {
     entries, classSummary, totalHours, loading,
@@ -1788,7 +1796,15 @@ export function useClassWeeklyReport() {
           fetchReport(courseId, startDate, endDate)
         }
       })
-  ), [fetchReport])
+  , {
+    // Same refetch the handlers do — runs once after a reconnect
+    onReconnect: () => {
+      if (lastFetchParamsRef.current) {
+        const { courseId, startDate, endDate } = lastFetchParamsRef.current
+        fetchReport(courseId, startDate, endDate)
+      }
+    },
+  }), [fetchReport])
 
   return { students, classInfo, loading, fetchReport }
 }
@@ -2382,7 +2398,7 @@ export function usePendingTimeRequests({ enabled = false } = {}) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entry_requests' }, () => {
         fetchRequests()
       })
-    )
+    , { onReconnect: fetchRequests })
   }, [enabled, fetchRequests])
 
   return { requests, loading, refresh: fetchRequests }

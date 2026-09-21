@@ -235,7 +235,7 @@ export function useMakeupOverlay({ emails, rangeStart, rangeEnd, enabled = true 
     if (!enabled) return undefined
     return subscribeWithReconnect(`makeup-overlay-${makeChannelSuffix()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, refresh)
-    , { tag: 'MakeupHours' })
+    , { tag: 'MakeupHours', onReconnect: refresh })
   }, [enabled, refresh])
 
   return { overlay, loading, refresh }

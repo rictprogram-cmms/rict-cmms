@@ -418,7 +418,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
         { event: '*', schema: 'public', table: 'absence_requests' },
         () => fetchRequests() // silent refresh — loading spinner only on first load
       )
-    )
+    , { onReconnect: fetchRequests })
 
     return () => {
       mountedRef.current = false
@@ -905,7 +905,7 @@ export function useAbsenceRequestNotes({ enabled = false } = {}) {
         { event: '*', schema: 'public', table: 'absence_request_notes' },
         () => fetchNotes()
       )
-    )
+    , { onReconnect: fetchNotes })
     return () => {
       mountedRef.current = false
       unsubscribe()

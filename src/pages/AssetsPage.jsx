@@ -201,7 +201,7 @@ export default function AssetsPage() {
     // so the ref holds the stop function instead.
     const stop = subscribeWithReconnect('assets-page-sop-links', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'sop_assets' }, refreshCounts)
-    , { tag: 'Assets' })
+    , { tag: 'Assets', onReconnect: refreshCounts })
     sopChannelRef.current = stop
     return () => { sopChannelRef.current = null; stop() }
   }, [profile?.role])
@@ -244,7 +244,7 @@ export default function AssetsPage() {
     const channelName = `assets-page-checkouts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, refreshOpenCheckouts)
-    , { tag: 'Assets' })
+    , { tag: 'Assets', onReconnect: refreshOpenCheckouts })
   }, [profile?.role, refreshOpenCheckouts])
 
   /* ── Fetch SOPs linked to a specific asset (for view modal) ─────── */

@@ -445,7 +445,7 @@ export function useClosureOverlay({ rangeStart, rangeEnd, enabled = true } = {})
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.lab_visible_days' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.finals_required_hours' }, refresh)
-    )
+    , { onReconnect: refresh })
   }, [enabled, refresh])
 
   return { overlay, loading, refresh }

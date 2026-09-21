@@ -148,7 +148,7 @@ export function useMyActiveHolds() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'student_holds' },
         () => { load(true) }
-      ))
+      ), { onReconnect: () => load(true) })
 
     return () => { channel() }
   }, [profile?.email, load, instanceId])
@@ -222,7 +222,7 @@ export function useAllHolds(options = {}) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'student_hold_targets' },
         () => { load(true) }
-      ))
+      ), { onReconnect: () => load(true) })
 
     return () => { channel() }
   }, [load, includeClosed, instanceId])

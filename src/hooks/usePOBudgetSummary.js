@@ -148,7 +148,7 @@ export function usePOBudgetSummary(ayStartYear) {
     return subscribeWithReconnect(`po-budget-summary-${ayStartYear}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => fetch())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
-    , { tag: 'POBudgetSummary' })
+    , { tag: 'POBudgetSummary', onReconnect: fetch })
   }, [ayStartYear, fetch])
 
   return {

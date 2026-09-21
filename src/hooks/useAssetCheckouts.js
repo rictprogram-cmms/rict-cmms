@@ -211,7 +211,7 @@ export function useAssetCheckouts() {
     const channelName = `asset-checkouts-list-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     return subscribeWithReconnect(channelName, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'asset_checkouts' }, fetchCheckouts)
-    , { tag: 'AssetCheckouts' })
+    , { tag: 'AssetCheckouts', onReconnect: fetchCheckouts })
   }, [fetchCheckouts])
 
   // Refetch when tab becomes visible
@@ -260,7 +260,7 @@ export function useAssetCheckoutHistory(assetId) {
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'asset_checkouts', filter: `asset_id=eq.${assetId}` },
         refresh)
-    , { tag: 'AssetCheckouts' })
+    , { tag: 'AssetCheckouts', onReconnect: refresh })
   }, [assetId, refresh])
 
   // "Open" = anything that still reserves the asset (returned_at IS NULL).
@@ -346,7 +346,7 @@ export function useUserPendingAcknowledgments(userEmail) {
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'asset_checkouts', filter: `user_email=eq.${normalizedEmail}` },
         refresh)
-    , { tag: 'AssetCheckouts' })
+    , { tag: 'AssetCheckouts', onReconnect: refresh })
   }, [normalizedEmail, refresh])
 
   // Tick the clock every 30 seconds for live countdowns
@@ -441,7 +441,7 @@ export function usePooledCheckouts(assetId = POOLED_SCANNER_ASSET_ID) {
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'asset_checkouts', filter: `asset_id=eq.${assetId}` },
         refresh)
-    , { tag: 'AssetCheckouts' })
+    , { tag: 'AssetCheckouts', onReconnect: refresh })
   }, [assetId, refresh])
 
   useEffect(() => {

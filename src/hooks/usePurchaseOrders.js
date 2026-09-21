@@ -103,7 +103,7 @@ export function usePODashboard(viewAll = true) {
   // Realtime: refresh dashboard when orders change
   useEffect(() => {
     const channel = subscribeWithReconnect('po-dashboard', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch()))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch()), { onReconnect: fetch })
     const onPOUpdate = () => fetch()
     window.addEventListener('po-updated', onPOUpdate)
     return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }
@@ -200,7 +200,7 @@ export function usePOList(statusFilter = 'all', viewAll = true) {
   useEffect(() => {
     const channel = subscribeWithReconnect('po-list', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, () => fetch()))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, () => fetch()), { onReconnect: fetch })
     const onPOUpdate = () => fetch()
     window.addEventListener('po-updated', onPOUpdate)
     return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }
@@ -258,7 +258,7 @@ export function usePODetail(orderId) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'order_line_items' }, (payload) => {
         if (payload.new?.order_id === orderId || payload.old?.order_id === orderId) fetch()
-      }))
+      }), { onReconnect: fetch })
     const onPOUpdate = (e) => { if (!e.detail?.orderId || e.detail.orderId === orderId) fetch() }
     window.addEventListener('po-updated', onPOUpdate)
     return () => { channel(); window.removeEventListener('po-updated', onPOUpdate) }

@@ -82,7 +82,7 @@ export function useSemesterOptions({ showArchived = false } = {}) {
   useEffect(() => { load() }, [load])
   useEffect(() => subscribeWithReconnect(`class-sched-classes-${Date.now()}`, ch => ch
     .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, load)
-  , { tag: 'ClassSchedule' }), [load])
+  , { tag: 'ClassSchedule', onReconnect: load }), [load])
 
   // Names of terms that have been archived in Settings → Terms.
   const archivedNames = useMemo(
@@ -430,7 +430,7 @@ export function useClassSchedule(semester, { canEdit = false, classes: semesterC
     return subscribeWithReconnect(`class-sched-${id}-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'class_schedule_items', filter: `schedule_id=eq.${id}` }, onRemote)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'class_schedules', filter: `schedule_id=eq.${id}` }, onRemote)
-    , { tag: 'ClassSchedule' })
+    , { tag: 'ClassSchedule', onReconnect: onRemote })
   }, [doc?.scheduleId, load])
 
   const setPaused = useCallback((v) => { pauseRef.current = !!v }, [])

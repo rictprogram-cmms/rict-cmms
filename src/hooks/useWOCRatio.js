@@ -1228,7 +1228,7 @@ export function useWOCRatio({ canViewAll = false, startDate = null, endDate = nu
           fetchData()
         }
       })
-    , { tag: 'WOCRatio' })
+    , { tag: 'WOCRatio', onReconnect: fetchData })
   }, [profile, fetchData])
 
   return {

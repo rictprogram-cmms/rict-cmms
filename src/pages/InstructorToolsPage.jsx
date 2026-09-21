@@ -690,11 +690,14 @@ function RequiredToolsPanel({ onBack }) {
   useEffect(() => {
     setLoading(true)
     Promise.all([loadTools(), loadUsage()]).finally(() => setLoading(false))
+    // Usage comes from syllabus_templates, which has no channel here, so a
+    // reconnect re-pulls both. subscribeWithReconnect calls this after a channel
+    // rebuild AND on `supabase-reconnected` (tab return) — it replaces the
+    // window listener this page used to add itself, which only covered tab return.
+    const refetchAll = () => { loadTools(); loadUsage() }
     const ch = subscribeWithReconnect('program_tools_rt', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, loadTools))
-    const onReconnect = () => { loadTools(); loadUsage() }
-    window.addEventListener('supabase-reconnected', onReconnect)
-    return () => { ch(); window.removeEventListener('supabase-reconnected', onReconnect) }
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'program_tools' }, loadTools), { onReconnect: refetchAll })
+    return () => { ch() }
   }, [loadTools, loadUsage])
 
   const filtered = useMemo(() => {

@@ -111,7 +111,7 @@ export function useBugRequests() {
   useEffect(() => {
     return subscribeWithReconnect('bug-tracker-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'bug_tracker' }, () => { fetch() })
-    , { tag: 'BugTracker' })
+    , { tag: 'BugTracker', onReconnect: fetch })
   }, [fetch])
 
   return { requests, loading, refresh: fetch }
@@ -839,7 +839,7 @@ export function useChangelog() {
   useEffect(() => {
     return subscribeWithReconnect('changelog-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'changelog' }, () => { fetch() })
-    , { tag: 'BugTracker' })
+    , { tag: 'BugTracker', onReconnect: fetch })
   }, [fetch])
 
   return { entries, loading, refresh: fetch }

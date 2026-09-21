@@ -15,7 +15,7 @@ import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
-import { fetchStudentWeek, describeWeekStatus, describeSignupWindow, formatWeekLabel, formatHoursShort, weekRangeOf } from '@/lib/weeklySignupStatus'
+import { fetchStudentWeek, mergeSignupBlocks, describeWeekStatus, describeSignupWindow, formatWeekLabel, formatHoursShort, weekRangeOf } from '@/lib/weeklySignupStatus'
 import toast from 'react-hot-toast'
 import {
   Calendar, Clock, ChevronLeft, ChevronRight, Plus, X, Trash2,
@@ -2043,12 +2043,142 @@ function DailyRosterTab() {
 // TAB 5: ADMIN SIGNUP (Instructor Override)
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Selected hours → readable lines ("Tue 9/22 · 8:00 AM – 11:00 AM · RICT1610 · 3 hrs"). */
+function describeSlots(slots) {
+  return mergeSignupBlocks((slots || []).map(sl => ({
+    signup_id: sl.id, date: sl.date, start_time: sl.start, end_time: sl.end, class_id: sl.classId, is_makeup: sl.isMakeup,
+  }))).map(b => ({
+    key: `${b.date}_${b.start}_${b.classId}_${b.isMakeup}`,
+    text: `${formatShortDay(b.date)} · ${formatHour(parseInt(b.start, 10))} – ${formatHour(parseInt(b.end, 10))} · ${b.classId || 'no class'} · ${b.hours} hr${b.hours === 1 ? '' : 's'}${b.isMakeup ? ' · make-up' : ''}`,
+  }))
+}
+
 /**
- * Admin Signup → "This student's week". Read-only. Shows, for the week of the
+ * Confirm dialog for the two edits in "This student's week": remove hours, or
+ * move them to another class. Own component (not ConfirmDialog) because it
+ * holds form controls — class picker, "email the student" and a note.
+ * Same look and the same a11y contract as ConfirmDialog: useDialogA11y (focus
+ * trap, Esc, focus restore, stacked-dialog aware), role="dialog", aria-modal,
+ * labelled + described, 44px targets, focus-visible rings.
+ */
+function StudentWeekActionDialog({ mode, student, slots, classOptions, busy, onConfirm, onClose }) {
+  const dialogRef = useDialogA11y(true, busy ? () => {} : onClose)
+  const isRemove = mode === 'remove'
+  const firstName = student?.firstName || 'this student'
+  const [toClass, setToClass] = useState('')
+  const [sendEmail, setSendEmail] = useState(true)
+  const [note, setNote] = useState('')
+
+  // Change class: make-up hours stay put (their tag points at a request for a
+  // specific class), and hours already in the chosen class need nothing.
+  const makeupSkipped = isRemove ? [] : slots.filter(sl => sl.isMakeup)
+  const alreadyThere = isRemove || !toClass ? [] : slots.filter(sl => !sl.isMakeup && sl.classId === toClass)
+  const affected = isRemove ? slots : slots.filter(sl => !sl.isMakeup && (!toClass || sl.classId !== toClass))
+  const lines = describeSlots(affected)
+  const canConfirm = !busy && affected.length > 0 && (isRemove || !!toClass)
+  const n = affected.length
+
+  return (
+    <div
+      className="fixed inset-0 z-[9100] flex items-center justify-center bg-black/50 p-4"
+      onClick={e => { if (e.target === e.currentTarget && !busy) onClose() }}
+    >
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="sw-action-title" aria-describedby="sw-action-desc"
+        className="bg-white rounded-xl w-full max-w-md shadow-xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-surface-200">
+          <h3 id="sw-action-title" className="text-sm font-semibold text-surface-900">
+            {isRemove ? `Remove ${n} hour${n === 1 ? '' : 's'} for ${firstName}?` : `Move ${firstName}’s hours to another class`}
+          </h3>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Close"
+            className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-lg text-surface-500 hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50">
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3 overflow-y-auto text-sm text-surface-700">
+          <p id="sw-action-desc">
+            {isRemove
+              ? <>These sign-ups will be cancelled. This works after the Sunday deadline and is recorded in the audit log under your name.</>
+              : <>The time stays the same — only the class the hours count toward changes. Recorded in the audit log under your name.</>}
+          </p>
+
+          {!isRemove && (
+            <label className="block text-xs font-medium text-surface-600">
+              Move to class <span aria-hidden="true" className="text-red-700">*</span>
+              <select value={toClass} onChange={e => setToClass(e.target.value)} required aria-required="true"
+                className="mt-1 w-full px-3 py-2.5 min-h-[44px] border border-surface-200 rounded-lg text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                <option value="">— Select class —</option>
+                {classOptions.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+          )}
+
+          <div>
+            <p className="text-xs font-medium text-surface-600 mb-1">{isRemove ? 'Removing' : 'Moving'} {n} hour{n === 1 ? '' : 's'}:</p>
+            {lines.length === 0
+              ? <p className="text-xs text-surface-600">Nothing to change with this choice.</p>
+              : <ul className="text-xs text-surface-800 border border-surface-100 rounded-md divide-y divide-surface-100">
+                  {lines.map(l => <li key={l.key} className="px-2.5 py-1.5">{l.text}</li>)}
+                </ul>}
+            {makeupSkipped.length > 0 && (
+              <p className="mt-1.5 text-xs text-amber-800">
+                {makeupSkipped.length} make-up hour{makeupSkipped.length === 1 ? ' is' : 's are'} left where {makeupSkipped.length === 1 ? 'it is' : 'they are'} — a make-up hour is tied to the class it makes up for.
+              </p>
+            )}
+            {alreadyThere.length > 0 && (
+              <p className="mt-1.5 text-xs text-surface-600">
+                {alreadyThere.length} selected hour{alreadyThere.length === 1 ? ' is' : 's are'} already under {toClass}.
+              </p>
+            )}
+          </div>
+
+          <div className="border-t border-surface-100 pt-3 space-y-2">
+            <label className="flex items-center gap-2.5 min-h-[44px] text-sm text-surface-800 cursor-pointer">
+              <input type="checkbox" checked={sendEmail} onChange={e => setSendEmail(e.target.checked)}
+                className="w-5 h-5 rounded border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1" />
+              <span>Email {firstName} about this change</span>
+            </label>
+            {sendEmail && (
+              <label className="block text-xs font-medium text-surface-600">
+                Note to include <span className="font-normal">(optional)</span>
+                <textarea value={note} onChange={e => setNote(e.target.value.slice(0, 500))} rows={2} maxLength={500}
+                  aria-describedby="sw-action-note-help"
+                  className="mt-1 w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <span id="sw-action-note-help" className="font-normal text-surface-600">{500 - note.length} characters left. The email lists the hours above and names you.</span>
+              </label>
+            )}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 px-4 py-3 border-t border-surface-200">
+          <button type="button" onClick={onClose} disabled={busy}
+            className="px-4 min-h-[44px] rounded-lg text-sm font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="button" disabled={!canConfirm}
+            onClick={() => onConfirm({ slots: affected, toClass, sendEmail, note: note.trim() })}
+            className={`px-4 min-h-[44px] rounded-lg text-sm font-semibold text-white inline-flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:bg-surface-300 disabled:cursor-not-allowed ${isRemove ? 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-500' : 'bg-brand-600 hover:bg-brand-700 focus-visible:ring-brand-500'}`}>
+            {busy && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
+            {isRemove ? `Remove ${n} hour${n === 1 ? '' : 's'}` : `Move ${n} hour${n === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Admin Signup → "This student's week". Shows, for the week of the
  * date chosen in the form: the overall check / X (same engine and numbers as
  * the Dashboard and the student's own class tiles), a count per class, whether
  * sign-up is still open, and their sign-ups as merged blocks. Refreshes live
  * (and therefore right after "Sign Up Student"), and announces the new count.
+ *
+ * "Edit sign-ups" turns the blocks into individual hours with checkboxes.
+ * Picked hours can be REMOVED or MOVED TO ANOTHER CLASS (the fix for hours
+ * filed under the wrong class — one UPDATE, the time doesn't change). Both go
+ * through StudentWeekActionDialog, always audit, and can email the student
+ * (send-schedule-change-email). Off by default: the panel opens read-only.
  */
 function StudentWeekPanel({ student, dateStr }) {
   const email = student?.email || ''
@@ -2062,6 +2192,16 @@ function StudentWeekPanel({ student, dateStr }) {
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
   const seq = useRef(0)
+
+  // Editing
+  const { cancelStudentSignups, changeSignupClass, notifyScheduleChange, saving: editSaving } = useInstructorSignup()
+  const [editing, setEditing] = useState(false)
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [action, setAction] = useState(null)   // 'remove' | 'class' | null
+  const [working, setWorking] = useState(false)
+  const classOptions = useMemo(() => classes.split(',').map(c => c.trim()).filter(Boolean), [classes])
+  // Another student or another week: leave edit mode, drop the selection
+  useEffect(() => { setEditing(false); setSelectedIds(new Set()); setAction(null) }, [email, mondayKey])
 
   const load = useCallback(async () => {
     // The form blanks its date for a moment after a sign-up to refresh slots;
@@ -2090,7 +2230,7 @@ function StudentWeekPanel({ student, dateStr }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup_requests' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, schedule)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'absence_requests' }, schedule)
-    , { tag: 'LabSignup' })
+    , { tag: 'LabSignup', onReconnect: schedule })
     return () => { clearTimeout(timer); stop() }
   }, [email, load])
 
@@ -2111,6 +2251,55 @@ function StudentWeekPanel({ student, dateStr }) {
   })
   const totalHours = (current?.blocks || []).reduce((n, b) => n + b.hours, 0)
 
+  // Every individual hour on screen; the selection only ever counts hours that still exist
+  const allSlots = (current?.blocks || []).flatMap(b => b.slots || [])
+  const selectedSlots = allSlots.filter(sl => selectedIds.has(sl.id))
+  const selCount = selectedSlots.length
+  const toggleSlot = (id) => setSelectedIds(prev => {
+    const next = new Set(prev)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+  const allSelected = allSlots.length > 0 && selCount === allSlots.length
+
+  const runAction = async ({ slots, toClass, sendEmail, note }) => {
+    setWorking(true)
+    try {
+      const result = action === 'remove'
+        ? await cancelStudentSignups(student, slots)
+        : await changeSignupClass(student, slots, toClass)
+      if (!result.success) return
+      setAction(null)
+      setSelectedIds(new Set())
+
+      // Fresh numbers — for the panel, and for the "where that leaves you" line
+      let after = null
+      try {
+        after = await fetchStudentWeek({ student: { email, classes, firstName, lastName }, dateStr: mondayKey })
+        seq.current++
+        setWeek({ ...after, email }); setFailed(false)
+      } catch (err) {
+        console.error('[LabSignup] student week reload after edit failed:', err)
+      }
+
+      if (sendEmail && result.changed.length > 0) {
+        const weekLabel = formatWeekLabel(mondayKey)
+        const sentence = after?.status && after.status.required > 0 ? describeWeekStatus(after.status).long : ''
+        await notifyScheduleChange({
+          student,
+          weekLabel,
+          note,
+          statusLine: sentence.replace(' this week.', ` for the week of ${weekLabel}.`),
+          changes: result.changed.map(sl => (action === 'remove'
+            ? { type: 'removed', signupId: sl.id, date: sl.date, startTime: sl.start, endTime: sl.end, classId: sl.classId, isMakeup: sl.isMakeup }
+            : { type: 'class_changed', signupId: sl.id, date: sl.date, startTime: sl.start, endTime: sl.end, fromClassId: sl.classId, toClassId: sl.toClassId })),
+        })
+      }
+    } finally {
+      setWorking(false)
+    }
+  }
+
   return (
     <section aria-labelledby={headingId} className="border border-surface-200 rounded-lg overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 bg-surface-50 border-b border-surface-200">
@@ -2121,6 +2310,13 @@ function StudentWeekPanel({ student, dateStr }) {
           <span className="text-[11px] font-medium text-surface-600">{win.text}</span>
         )}
         {loading && <Loader2 size={14} className="animate-spin text-surface-500" aria-hidden="true" />}
+        {current && allSlots.length > 0 && (
+          <button type="button" aria-pressed={editing}
+            onClick={() => { setEditing(v => !v); setSelectedIds(new Set()) }}
+            className={`ml-auto px-3 min-h-[44px] rounded-lg text-xs font-semibold border focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${editing ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-surface-700 border-surface-200 hover:bg-surface-50'}`}>
+            {editing ? 'Done editing' : 'Edit sign-ups'}
+          </button>
+        )}
       </div>
 
       <div className="p-3 space-y-3">
@@ -2158,8 +2354,65 @@ function StudentWeekPanel({ student, dateStr }) {
           )}
         </div>
 
+        {/* Edit mode: every hour on its own, with a checkbox */}
+        {current && editing && allSlots.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button"
+                onClick={() => setSelectedIds(allSelected ? new Set() : new Set(allSlots.map(sl => sl.id)))}
+                className="px-3 min-h-[44px] rounded-lg text-xs font-medium border border-surface-200 bg-white text-surface-700 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                {allSelected ? 'Clear selection' : `Select all ${allSlots.length} hours`}
+              </button>
+              <span role="status" className="text-xs text-surface-700">
+                {selCount === 0 ? 'Pick the hours to change.' : `${selCount} hour${selCount === 1 ? '' : 's'} selected.`}
+              </span>
+            </div>
+            <fieldset className="border border-surface-100 rounded-md divide-y divide-surface-100">
+              <legend className="sr-only">{firstName || 'This student'}’s sign-ups for the week of {formatWeekLabel(mondayKey)}, one hour each</legend>
+              {byDay.map(day => (
+                <div key={day.date} className="px-2.5 py-1.5">
+                  <p className="text-xs font-semibold text-surface-900 pt-1">{formatShortDay(day.date)}</p>
+                  {day.blocks.flatMap(b => b.slots).map(sl => (
+                    <label key={sl.id} className="flex items-center gap-2.5 min-h-[44px] text-xs text-surface-800 cursor-pointer">
+                      <input type="checkbox" checked={selectedIds.has(sl.id)} onChange={() => toggleSlot(sl.id)}
+                        className="w-5 h-5 rounded border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1" />
+                      <span>
+                        <span className="sr-only">{formatShortDay(sl.date)}, </span>
+                        {formatHour(parseInt(sl.start, 10))} – {formatHour(parseInt(sl.end, 10))}
+                        <span className="text-surface-600"> · {sl.classId || 'no class'}{sl.isMakeup ? ' · make-up' : ''}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ))}
+            </fieldset>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={selCount === 0 || working || editSaving} onClick={() => setAction('class')}
+                className="px-3 min-h-[44px] rounded-lg text-xs font-semibold bg-brand-600 text-white hover:bg-brand-700 disabled:bg-surface-300 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                Change class…
+              </button>
+              <button type="button" disabled={selCount === 0 || working || editSaving} onClick={() => setAction('remove')}
+                className="px-3 min-h-[44px] rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:bg-surface-300 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-1 inline-flex items-center gap-1.5">
+                <Trash2 size={14} aria-hidden="true" /> Remove…
+              </button>
+            </div>
+          </div>
+        )}
+
+        {action && selCount > 0 && (
+          <StudentWeekActionDialog
+            mode={action}
+            student={student}
+            slots={selectedSlots}
+            classOptions={classOptions}
+            busy={working || editSaving}
+            onConfirm={runAction}
+            onClose={() => { if (!working) setAction(null) }}
+          />
+        )}
+
         {/* Their sign-ups, merged into blocks */}
-        {current && (
+        {current && !editing && (
           byDay.length === 0 ? (
             <p className="text-xs text-surface-600">Nothing signed up this week.</p>
           ) : (

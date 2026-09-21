@@ -147,7 +147,7 @@ export function usePMSchedules() {
   useEffect(() => {
     return subscribeWithReconnect('pm-schedules-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pm_schedules' }, () => { fetch() })
-    , { tag: 'PMSchedules' })
+    , { tag: 'PMSchedules', onReconnect: fetch })
   }, [fetch])
 
   return { schedules, loading, refresh: fetch }
@@ -334,7 +334,7 @@ export function usePMGlobalPause() {
           fetch()
         }
       })
-    , { tag: 'PMSchedules' })
+    , { tag: 'PMSchedules', onReconnect: fetch })
   }, [fetch])
 
   return { paused, loading, saving, toggle, resume, refresh: fetch }
