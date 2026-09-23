@@ -1995,6 +1995,12 @@ function InstructorOverview({ navigate }) {
                   const isWalkIn = !hasSignup && person.clockEntries.length > 0 && !isWorkStudy;
                   const activeEntry = person.clockEntries.find(c => c.status === 'Punched In');
                   const punchInTime = activeEntry ? formatTimestamp12(activeEntry.punch_in) : null;
+                  // Most recent punch-out today (entries are ordered by punch_in,
+                  // so .find() returned the FIRST one for multi-punch days).
+                  // ISO timestamps in the same format compare correctly as strings.
+                  const latestPunchOut = person.clockEntries
+                    .filter(c => c.status === 'Punched Out' && c.punch_out)
+                    .reduce((max, c) => (!max || String(c.punch_out) > String(max) ? c.punch_out : max), null);
 
                   // Weekly sign-up mark — only for the week on screen, and only
                   // for people who owe hours that week (required > 0).
@@ -2049,7 +2055,7 @@ function InstructorOverview({ navigate }) {
                           <span style={{ color: STATUS.warn }}>Leaving ~{formatTime12(person.displayEnd)}</span>
                         )}
                         {hasLeft && !isPunchedIn && (
-                          <span style={{ color: TEXT_MUTED }}>Left: {formatTimestamp12(person.clockEntries.find(c => c.status === 'Punched Out')?.punch_out)}</span>
+                          <span style={{ color: TEXT_MUTED }}>Left: {formatTimestamp12(latestPunchOut)}</span>
                         )}
                       </div>
                     </div>

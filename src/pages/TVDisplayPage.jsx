@@ -27,7 +27,7 @@ import { createClient } from '@supabase/supabase-js'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
-import { mergeSignupSessions, pickSession, minutesToDate, nowMinutes } from '@/lib/labSessions'
+import { mergeSignupSessions, pickSession, minutesToDate, nowMinutes, fakeUtcMinutes, leftSessionEarly, minutesToTime12 } from '@/lib/labSessions'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -474,7 +474,7 @@ export default function TVDisplayPage() {
       // ---------- 1. Open Work Orders ----------
       // Run the five board queries in parallel (was sequential) and fail the
       // whole cycle if any of them errors, so partial state is never shown.
-      const [wosRes, usersRes, tcRes, signupRes, helpRes] = await Promise.all([
+      const [wosRes, usersRes, tcRes, signupRes, helpRes, outRes] = await Promise.all([
         supabase
           .from('work_orders')
           .select('wo_id, description, priority, status, asset_name, assigned_to, due_date, created_at')
@@ -502,6 +502,16 @@ export default function TVDisplayPage() {
           .select('*')
           .in('status', ['pending', 'acknowledged'])
           .order('requested_at', { ascending: true }),
+        // Today's completed punches — so a student who punched out partway
+        // through a running block shows "Left Early" instead of "Missing"
+        // (same rule as Lab Status / Dashboard). Non-fatal: on error the board
+        // falls back to the previous behavior.
+        supabase
+          .from('time_clock')
+          .select('user_email, punch_in, punch_out, is_break_punch_out')
+          .eq('status', 'Punched Out')
+          .gte('punch_in', todayStr + 'T00:00:00')
+          .lte('punch_in', todayStr + 'T23:59:59'),
       ])
       if (seq !== loadSeqRef.current) return // a newer load superseded this one
       const wos      = mustData(wosRes, 'work_orders')
@@ -509,6 +519,8 @@ export default function TVDisplayPage() {
       const tcRows   = mustData(tcRes, 'time_clock')
       const signups  = mustData(signupRes, 'lab_signup')
       const helpRows = mustData(helpRes, 'help_requests')
+      if (outRes.error) console.warn('[TVDisplay] punched-out query error (Left Early skipped):', outRes.error.message)
+      const outRows  = outRes.error ? [] : (outRes.data || [])
 
       let totalLateDays = 0
       let totalDaysOpen = 0
@@ -582,6 +594,18 @@ export default function TVDisplayPage() {
       }
       const nowMin = nowMinutes(now)
 
+      // Latest punch-out per email today. A break punch-out ("coming back")
+      // is not leaving early, so those students keep the previous behavior.
+      const lastOut = {}
+      ;(outRows || []).forEach(row => {
+        const email = (row.user_email || '').toLowerCase()
+        const min = fakeUtcMinutes(row.punch_out)
+        if (!email || min == null) return
+        if (!lastOut[email] || min > lastOut[email].min) {
+          lastOut[email] = { min, isBreak: !!row.is_break_punch_out }
+        }
+      })
+
       // ---------- 6. Build people list ----------
       const allPeople = {}
       for (const email in loggedIn) {
@@ -618,7 +642,13 @@ export default function TVDisplayPage() {
             status = p.isSignedUp ? 'good' : 'unexpected'
           }
         } else if (p.isSignedUp) {
-          if (curSession) {
+          const lo = lastOut[email]
+          const lastOutMin = lo && !lo.isBreak ? lo.min : null
+          if (leftSessionEarly(curSession, lastOutMin)) {
+            status = 'leftearly'
+            // Exact minute for the punch-out (formatTimeTv shows whole hours only)
+            timeRange = 'Left ' + minutesToTime12(lastOutMin) + ' · until ' + formatTimeTv(curSession.endMin)
+          } else if (curSession) {
             status = 'missing'
             timeRange = formatTimeTv(curSession.startMin) + ' – ' + formatTimeTv(curSession.endMin)
           } else if (nextSession) {
@@ -638,12 +668,12 @@ export default function TVDisplayPage() {
       }
 
       // Sort: earliest start time first, then by status as tiebreaker
-      const statusOrder = { missing: 0, expected: 1, unexpected: 2, good: 3 }
+      const statusOrder = { missing: 0, expected: 1, unexpected: 2, good: 3, leftearly: 4 }
       pplList.sort((a, b) => {
         const aTime = a.earliestStart ?? Infinity
         const bTime = b.earliestStart ?? Infinity
         if (aTime !== bTime) return aTime - bTime
-        return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4)
+        return (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5)
       })
       setPeople(pplList)
 
@@ -1100,7 +1130,10 @@ export default function TVDisplayPage() {
                 ) : (
                   <>
                     {[...people, ...(people.length > 6 ? people : [])].map((p, i) => {
+                      // Left Early: slate avatar (#64748b, white initials 4.8:1),
+                      // lighter slate text (#94a3b8) so it reads on the dark card.
                       const bg = p.status === 'good' ? '#22c55e'
+                        : p.status === 'leftearly' ? '#64748b'
                         : p.status === 'missing' ? '#ef4444'
                         : p.status === 'expected' ? '#f59e0b'
                         : '#f97316'
@@ -1108,14 +1141,16 @@ export default function TVDisplayPage() {
                         : p.status === 'unexpected' ? 'rgba(249,115,22,0.15)'
                         : p.status === 'expected' ? 'rgba(245,158,11,0.08)'
                         : 'transparent'
-                      const statusText = p.status === 'missing' ? 'Missing'
+                      const statusText = p.status === 'leftearly' ? 'Left Early'
+                        : p.status === 'missing' ? 'Missing'
                         : p.status === 'expected' ? 'Expected'
                         : p.status === 'unexpected' ? 'Walk-in' : 'Here'
                       const statusBg = p.status === 'good' ? '#22c55e20'
+                        : p.status === 'leftearly' ? '#94a3b820'
                         : p.status === 'missing' ? '#ef444420'
                         : p.status === 'expected' ? '#f59e0b20'
                         : '#f9731620'
-                      const statusColor = bg
+                      const statusColor = p.status === 'leftearly' ? '#94a3b8' : bg
 
                       return (
                         <div key={`${p.displayName}-${i}`} style={{
