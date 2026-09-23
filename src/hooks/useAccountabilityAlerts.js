@@ -11,8 +11,10 @@
  *     background when an instructor opens the Dashboard and the last sweep is
  *     older than `accountability_sweep_hours` (default 6), or on demand.
  *   • Acknowledge is shared (one conversation with the student, not one per
- *     instructor): it hides the row from the card but leaves it open, so a
- *     pattern that persists comes back as "still open, week N".
+ *     instructor): it hides the row from the card but leaves it open. If the
+ *     pattern is STILL firing RESURFACE_DAYS later the sweep drops the
+ *     acknowledgement and it comes back as "still open, week N"; if the
+ *     pattern stops, the sweep clears the alert and it disappears for good.
  *
  * The sweep uses loadStudentReport() with skipWoc so a 60-student pass
  * doesn't re-read every work order 60 times; work-order lateness for alerts
@@ -68,6 +70,8 @@ async function writeLastSweep(value) {
  * the sweep again (already-written alerts are simply refreshed).
  */
 const STALE_START_MIN = 20
+/** An acknowledged alert that is STILL firing this many days later comes back to the main list. */
+const RESURFACE_DAYS = 14
 export function parseSweepStamp(value) {
   const v = String(value || '')
   if (v.startsWith('started:')) return { iso: v.slice(8), running: true }
@@ -128,10 +132,15 @@ export async function runAlertSweep({ profile, onProgress } = {}) {
         seen.add(key)
         const existing = openByKey.get(key)
         if (existing) {
-          const { error } = await supabase.from('accountability_alerts').update({
+          const patch = {
             last_seen: now, weeks_seen: weeksBetween(existing.first_seen, now), detail: a.detail, tier: a.tier,
             class_ids: a.classIds || existing.class_ids, user_name: name, term_id: term.term_id,
-          }).eq('alert_id', existing.alert_id)
+          }
+          // Acknowledged, but the pattern has kept going for RESURFACE_DAYS → back on the list
+          if (existing.acknowledged_at && (Date.now() - new Date(existing.acknowledged_at).getTime()) > RESURFACE_DAYS * 86400000) {
+            patch.acknowledged_at = null; patch.acknowledged_by = null; patch.acknowledged_by_email = null
+          }
+          const { error } = await supabase.from('accountability_alerts').update(patch).eq('alert_id', existing.alert_id)
           if (error) console.warn('alert update failed:', error.message)
         } else {
           const { error } = await supabase.from('accountability_alerts').insert({
