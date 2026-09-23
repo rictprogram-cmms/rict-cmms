@@ -508,7 +508,7 @@ export default function TVDisplayPage() {
         // falls back to the previous behavior.
         supabase
           .from('time_clock')
-          .select('user_email, punch_in, punch_out, is_break_punch_out')
+          .select('user_name, user_email, punch_in, punch_out, is_break_punch_out')
           .eq('status', 'Punched Out')
           .gte('punch_in', todayStr + 'T00:00:00')
           .lte('punch_in', todayStr + 'T23:59:59'),
@@ -595,16 +595,25 @@ export default function TVDisplayPage() {
       const nowMin = nowMinutes(now)
 
       // Latest punch-out per email today. A break punch-out ("coming back")
-      // is not leaving early, so those students keep the previous behavior.
+      // is not leaving early — those students show On Break (below).
       const lastOut = {}
       ;(outRows || []).forEach(row => {
         const email = (row.user_email || '').toLowerCase()
         const min = fakeUtcMinutes(row.punch_out)
         if (!email || min == null) return
         if (!lastOut[email] || min > lastOut[email].min) {
-          lastOut[email] = { min, isBreak: !!row.is_break_punch_out }
+          lastOut[email] = { min, isBreak: !!row.is_break_punch_out, userName: row.user_name, punchOut: row.punch_out }
         }
       })
+
+      // On break: latest punch-out today was "Taking a break — coming back"
+      // and they have not punched back in. Matches Lab Status, which shows
+      // these students as On Break (signed up or not; time-clock-only excluded).
+      const onBreak = {}
+      for (const email in lastOut) {
+        if (!lastOut[email].isBreak || loggedIn[email] || tcoEmails.has(email)) continue
+        onBreak[email] = lastOut[email]
+      }
 
       // ---------- 6. Build people list ----------
       const allPeople = {}
@@ -612,6 +621,13 @@ export default function TVDisplayPage() {
         allPeople[email] = {
           userName: loggedIn[email].userName,
           isLoggedIn: true, isSignedUp: false, sessions: [],
+        }
+      }
+      for (const email in onBreak) {
+        allPeople[email] = {
+          userName: onBreak[email].userName,
+          isLoggedIn: false, isSignedUp: false, sessions: [],
+          breakSinceMin: onBreak[email].min,
         }
       }
       for (const email in signedUp) {
@@ -641,6 +657,11 @@ export default function TVDisplayPage() {
           } else {
             status = p.isSignedUp ? 'good' : 'unexpected'
           }
+        } else if (p.breakSinceMin != null) {
+          // Out on a break, expected back. Outranks Missing / Left Early.
+          status = 'onbreak'
+          timeRange = 'Since ' + minutesToTime12(p.breakSinceMin)
+          if (curSession) timeRange += ' · until ' + formatTimeTv(curSession.endMin)
         } else if (p.isSignedUp) {
           const lo = lastOut[email]
           const lastOutMin = lo && !lo.isBreak ? lo.min : null
@@ -668,12 +689,12 @@ export default function TVDisplayPage() {
       }
 
       // Sort: earliest start time first, then by status as tiebreaker
-      const statusOrder = { missing: 0, expected: 1, unexpected: 2, good: 3, leftearly: 4 }
+      const statusOrder = { missing: 0, expected: 1, onbreak: 2, unexpected: 3, good: 4, leftearly: 5 }
       pplList.sort((a, b) => {
         const aTime = a.earliestStart ?? Infinity
         const bTime = b.earliestStart ?? Infinity
         if (aTime !== bTime) return aTime - bTime
-        return (statusOrder[a.status] ?? 5) - (statusOrder[b.status] ?? 5)
+        return (statusOrder[a.status] ?? 6) - (statusOrder[b.status] ?? 6)
       })
       setPeople(pplList)
 
@@ -1134,6 +1155,7 @@ export default function TVDisplayPage() {
                       // lighter slate text (#94a3b8) so it reads on the dark card.
                       const bg = p.status === 'good' ? '#22c55e'
                         : p.status === 'leftearly' ? '#64748b'
+                        : p.status === 'onbreak' ? '#0e7490'
                         : p.status === 'missing' ? '#ef4444'
                         : p.status === 'expected' ? '#f59e0b'
                         : '#f97316'
@@ -1142,15 +1164,21 @@ export default function TVDisplayPage() {
                         : p.status === 'expected' ? 'rgba(245,158,11,0.08)'
                         : 'transparent'
                       const statusText = p.status === 'leftearly' ? 'Left Early'
+                        : p.status === 'onbreak' ? 'On Break'
                         : p.status === 'missing' ? 'Missing'
                         : p.status === 'expected' ? 'Expected'
                         : p.status === 'unexpected' ? 'Walk-in' : 'Here'
                       const statusBg = p.status === 'good' ? '#22c55e20'
                         : p.status === 'leftearly' ? '#94a3b820'
+                        : p.status === 'onbreak' ? '#22d3ee20'
                         : p.status === 'missing' ? '#ef444420'
                         : p.status === 'expected' ? '#f59e0b20'
                         : '#f9731620'
-                      const statusColor = p.status === 'leftearly' ? '#94a3b8' : bg
+                      // On Break: teal avatar (#0e7490, white initials ~5.4:1),
+                      // bright cyan text (#22d3ee) on the dark card — same hue as Lab Status.
+                      const statusColor = p.status === 'leftearly' ? '#94a3b8'
+                        : p.status === 'onbreak' ? '#22d3ee'
+                        : bg
 
                       return (
                         <div key={`${p.displayName}-${i}`} style={{
