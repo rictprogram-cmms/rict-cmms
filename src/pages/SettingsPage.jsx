@@ -270,6 +270,82 @@ const SETTING_META = {
     },
   },
 
+  // ── Accountability Report ──
+  late_cancel_hours: {
+    label: 'Accountability — Late Cancel Window (hours)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Cancelling a lab sign-up inside this many hours of its start counts as a late cancellation.',
+    details: {
+      what: 'How close to a booked slot a student may still cancel without it being flagged.',
+      where: 'Accountability Report → Lab sign-ups → Late cancellations.',
+      effect: '24 is the default. Cancels made by an instructor or a lab closure are never counted.',
+    },
+  },
+  standing_trend_weeks: {
+    label: 'Accountability — Trend Window (weeks)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'How many recent weeks the "getting worse / improving" trend compares against the semester.',
+    details: {
+      what: 'Recent-weeks average of events per week versus the whole term so far.',
+      where: 'Accountability Report summary strip and class table.',
+      effect: '3 is the default. Smaller windows react faster but swing more.',
+    },
+  },
+  alert_noshow_week: {
+    label: 'Alert — No-shows in one week (urgent)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag a student when they have this many no-shows inside a single week.',
+    details: { what: 'Signed-up lab hours with no punch, counted per Monday-week.', where: 'Dashboard → Students to check on.', effect: '2 is the default. 1 would flag almost everyone at some point.' },
+  },
+  alert_noshow_4wk: {
+    label: 'Alert — No-shows in the last 4 weeks',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag a student with this many no-shows across the last 4 weeks.',
+    details: { what: 'Rolling 4-week no-show count.', where: 'Dashboard → Students to check on.', effect: '3 is the default.' },
+  },
+  alert_late_of4: {
+    label: 'Alert — Late arrivals (of last 4 lab days)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag when this many of the last 4 attended lab days were late arrivals.',
+    details: { what: 'Only days the student actually attended count toward the 4.', where: 'Dashboard → Students to check on.', effect: '3 is the default; 4 means "every time".' },
+  },
+  alert_early_of4: {
+    label: 'Alert — Left early (of last 4 lab days)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag when this many of the last 4 attended lab days ended with an unexcused early departure.',
+    details: { what: 'Excused departures never count.', where: 'Dashboard → Students to check on.', effect: '3 is the default.' },
+  },
+  alert_short_weeks: {
+    label: 'Alert — Short on sign-ups (weeks in a row)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag when a student has been short on lab sign-ups this many consecutive completed weeks.',
+    details: { what: 'All Done weeks break the run.', where: 'Dashboard → Students to check on.', effect: '2 is the default.' },
+  },
+  alert_deadline_of4: {
+    label: 'Alert — Missed sign-up deadline (of last 4 weeks)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag when the Sunday deadline was missed this many of the last 4 weeks.',
+    details: { what: 'Hours on the books at 11:59 PM Sunday were short, even if fixed later.', where: 'Dashboard → Students to check on.', effect: '3 is the default.' },
+  },
+  alert_wo_late_days: {
+    label: 'Alert — Work order past due (days)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag when one of the student\'s own open work orders is this many calendar days past due.',
+    details: { what: 'Assigned open work orders vs their due date.', where: 'Dashboard → Students to check on.', effect: '3 is the default.' },
+  },
+  alert_gear_days: {
+    label: 'Alert — Equipment overdue (days)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Flag when checked-out equipment is still out this many days past its expected return.',
+    details: { what: 'Asset checkouts still in checked_out status.', where: 'Dashboard → Students to check on.', effect: '3 is the default.' },
+  },
+  accountability_sweep_hours: {
+    label: 'Alert check interval (hours)',
+    type: 'number', category: 'Accountability Report',
+    desc: 'Re-check every student for patterns when the last check is older than this. Runs in the background when an instructor opens the Dashboard.',
+    details: { what: 'How stale the alert list may get before it refreshes itself.', where: 'Dashboard → Students to check on ("Check now" forces it).', effect: '6 is the default. A full check reads every student\'s term data and takes about a minute for a whole program.' },
+  },
+
   // ── System ──
   app_version: {
     label: 'App Version',
@@ -1956,6 +2032,7 @@ function GeneralSettings() {
     'maintenance_notice_days', // → LabAccessModeCard → MaintenanceScheduler
     'instructor_away_mode',    // → InstructorAwayCard (top of tab)
     'instructor_return_time',  // → InstructorAwayCard (top of tab)
+    'accountability_last_sweep', // set automatically by the Dashboard alert sweep — not user-editable
   ])
   const groups = useMemo(() => {
     const g = {}

@@ -94,6 +94,7 @@ const ProgramPlannerPage = lazyPage(() => import('@/pages/ProgramPlannerPage'))
 const ProgramCostPage = lazyPage(() => import('@/pages/ProgramCostPage'))
 const CourseOutlineExportPage = lazyPage(() => import('@/pages/CourseOutlineExportPage'))
 const AttendanceReportsPage = lazyPage(() => import('@/pages/AttendanceReportsPage'))
+const AccountabilityReportPage = lazyPage(() => import('@/pages/AccountabilityReportPage'))
 const RequestHistoryPage = lazyPage(() => import('@/pages/RequestHistoryPage'))
 const NetworkMapPage = lazyPage(() => import('@/pages/NetworkMapPage'))
 const NetworkPrintPage = lazyPage(() => import('@/pages/NetworkPrintPage'))
@@ -500,6 +501,7 @@ function AppRoutes() {
             <Route path="/weekly-labs" element={<Navigate to="/time-cards" replace />} />
             <Route path="/volunteer-hours" element={<Lazy><VolunteerHoursPage /></Lazy>} />
             <Route path="/attendance-reports" element={<Lazy><AttendanceReportsPage /></Lazy>} />
+            <Route path="/accountability-report" element={<Lazy><AccountabilityReportPage /></Lazy>} />
             <Route path="/request-history" element={<Lazy><RequestHistoryPage /></Lazy>} />
 
             {/* Administration */}

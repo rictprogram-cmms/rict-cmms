@@ -2141,18 +2141,33 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
       // Retry-safe: idempotent update by record_id. This one matters most on
       // phones — a lost punch-out is the failure students actually notice.
+      //
+      // The instructor who closes a forgotten punch is stamped on the row
+      // (closed_by_email / closed_reason, migration 20260922) so the
+      // Accountability Report can count "forgot to punch out" without guessing.
+      // If the columns are not there yet the plain update still goes through.
+      const basePatch = {
+        punch_out: localToUtcIso(now),
+        total_hours: totalHours,
+        status: 'Punched Out',
+      }
+      const stampPatch = {
+        ...basePatch,
+        closed_by_email: (profile?.email || '').toLowerCase().trim() || null,
+        closed_reason: 'forgot_punch_out',
+      }
       await withNetworkRetry(async () => {
-        const { error } = assertWrite(
-      await supabase
+        let res = await supabase
           .from('time_clock')
-          .update({
-            punch_out: localToUtcIso(now),
-            total_hours: totalHours,
-            status: 'Punched Out',
-          })
-          .eq('record_id', recordId).select(),
-      'time_clock.update'
-    )
+          .update(stampPatch)
+          .eq('record_id', recordId).select()
+        if (res.error && /closed_by_email|closed_reason/i.test(res.error.message || '')) {
+          res = await supabase
+            .from('time_clock')
+            .update(basePatch)
+            .eq('record_id', recordId).select()
+        }
+        const { error } = assertWrite(res, 'time_clock.update')
         if (error) throw error
       }, {
         failureMessage: 'Connection problem — the punch-out was not saved. Please check your signal and try again.',

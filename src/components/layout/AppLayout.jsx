@@ -59,6 +59,7 @@ import {
   Network,
   History,
   BookOpen,
+  ClipboardCheck,
 } from 'lucide-react'
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
@@ -98,6 +99,7 @@ const navSections = [
       // Weekly Labs Tracker retired 2026-09 (labs tracked in D2L). All Done now lives on Time Cards.
       { name: 'Volunteer Hours', href: '/volunteer-hours', icon: Heart, permPage: 'Volunteer Hours', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Attendance Reports', href: '/attendance-reports', icon: BarChart3, permPage: null, roles: ['Instructor'] },
+      { name: 'Accountability Report', href: '/accountability-report', icon: ClipboardCheck, permPage: 'Accountability Report', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'WOC Ratio', href: '/woc-ratio', icon: PieChart, permPage: 'WOC Ratio', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Program Budget', href: '/program-budget', icon: Landmark, permPage: 'Program Budget', roles: ['Instructor'] },
       { name: 'Bug Tracker', href: '/bug-tracker', icon: Bug, permPage: 'Bug Tracker', roles: ['Student', 'Work Study', 'Instructor'] },
@@ -1156,17 +1158,34 @@ function HelpButton({ profile }) {
     setHelpLoading(false)
   }
 
-  // ── Cancel help ──
+  // ── Cancel / clear help ──
+  // A click on a PENDING request abandons it (status 'cancelled'). A click on
+  // an ACKNOWLEDGED request means "I've been helped": it is recorded as
+  // 'resolved' with a timestamp (migration 20260922_help_request_resolved)
+  // so the Accountability Report can measure acknowledged → cleared. If the
+  // new columns are not there yet the old 'cancelled' write still goes through.
   const cancelHelp = async () => {
     if (!helpRequest || helpLoading) return
     setHelpLoading(true)
+    const wasAcknowledged = helpStatus === 'acknowledged'
     try {
-      await supabase.from('help_requests')
-        .update({ status: 'cancelled' })
-        .eq('request_id', helpRequest.request_id)
+      let done = false
+      if (wasAcknowledged) {
+        const { error } = await supabase.from('help_requests')
+          .update({ status: 'resolved', resolved_at: new Date().toISOString(), resolved_by: 'student' })
+          .eq('request_id', helpRequest.request_id)
+        if (!error) done = true
+        else if (!/resolved_at|resolved_by|resolved|check constraint/i.test(error.message || '')) throw error
+      }
+      if (!done) {
+        const { error } = await supabase.from('help_requests')
+          .update({ status: 'cancelled' })
+          .eq('request_id', helpRequest.request_id)
+        if (error) throw error
+      }
       setHelpStatus('idle')
       setHelpRequest(null)
-      showHelpTooltip('Help request cancelled', 'info')
+      showHelpTooltip(wasAcknowledged ? 'Help request cleared' : 'Help request cancelled', 'info')
     } catch (e) {
       console.error('Cancel help error:', e)
       showHelpTooltip('Failed to cancel', 'error')

@@ -50,8 +50,9 @@ import {
   X, Timer, Send, Shield, LogIn, LogOut, Footprints,
   FileText, Calendar, ArrowLeft, BookOpen, BadgeCheck,
   ChevronDown, ChevronUp, FilePenLine, MessageCircle,
-  Download, GraduationCap
+  Download, GraduationCap, ClipboardCheck
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import PendingTimeRequestsPanel from '@/components/PendingTimeRequestsPanel'
 import AllDoneSection from '@/components/AllDoneSection'
 
@@ -941,6 +942,7 @@ export default function TimeCardsPage() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function ReportModal({ profile, isInstructor, users, classes, selectedUserId, onClose, onGenerate, showInactiveDefault = false }) {
+  const navigate = useNavigate()
   const today = toDateStr(new Date())
   const [reportMode, setReportMode] = useState('individual')
   const [reportStart, setReportStart] = useState(() => {
@@ -1212,7 +1214,21 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
             </div>
           )}
         </div>
-        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-2">
+        <div className="px-5 py-3 border-t border-surface-100 flex flex-wrap justify-end gap-2">
+          {/* Accountability Report: the same student, every check in one place */}
+          {reportMode === 'individual' && (
+            <button type="button"
+              onClick={() => {
+                const u = isInstructor ? (users || []).find(x => x.user_id === reportUserId) : profile
+                const email = u?.email || ''
+                onClose()
+                navigate(isInstructor && email ? `/accountability-report?student=${encodeURIComponent(email)}` : '/accountability-report')
+              }}
+              className="mr-auto px-3 py-2 rounded-lg text-sm text-brand-700 hover:bg-brand-50 border border-transparent inline-flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              <ClipboardCheck size={14} aria-hidden="true" />
+              Accountability Report
+            </button>
+          )}
           <button onClick={onClose}
             className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
             Cancel

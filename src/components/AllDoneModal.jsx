@@ -33,11 +33,12 @@
  * File: src/components/AllDoneModal.jsx
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
 import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
+import { mondayKeyOf } from '@/lib/closureProration'
 import {
   Loader2, CheckCircle2, X, AlertTriangle, ClipboardList, Clock, Star,
   BookOpen, UserCircle, RotateCcw,
@@ -181,6 +182,54 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
     loadMakeups()
     return () => { cancelled = true }
   }, [isOpen, studentEmail, weekStartDate, weekEndDate])
+
+  // ── Reminder acknowledgements persist (reminder_acknowledgements, migration
+  // 20260922). Before this they lived only in component state, so the
+  // Accountability Report could never tell who had actually read a reminder.
+  // Rows are keyed by student × reminder × Monday of the lab week; a tick
+  // inserts, an un-tick deletes. Both are best-effort: the checklist still
+  // works from local state if the table is missing or the write is blocked.
+  const ackWeekKey = useMemo(() => mondayKeyOf((weekStartDate || '').substring(0, 10)) || '', [weekStartDate])
+
+  useEffect(() => {
+    if (!isOpen || !studentEmail || !ackWeekKey) return
+    let cancelled = false
+    supabase
+      .from('reminder_acknowledgements')
+      .select('reminder_id')
+      .ilike('user_email', studentEmail)
+      .eq('week_start', ackWeekKey)
+      .then(({ data, error }) => {
+        if (cancelled) return
+        if (error) { console.warn('reminder_acknowledgements read skipped:', error.message); return }
+        const ids = (data || []).map(r => r.reminder_id).filter(Boolean)
+        if (ids.length) setAcknowledgedIds(prev => new Set([...prev, ...ids]))
+      })
+    return () => { cancelled = true }
+  }, [isOpen, studentEmail, ackWeekKey])
+
+  const persistAck = useCallback(async (reminder, acked) => {
+    if (!studentEmail || !ackWeekKey || !reminder?.id) return
+    try {
+      if (acked) {
+        const { error } = await supabase.from('reminder_acknowledgements').insert({
+          user_email: studentEmail,
+          reminder_id: reminder.id,
+          week_start: ackWeekKey,
+          class_id: reminder.class_id || null,
+          acknowledged_via: 'all_done_modal',
+        })
+        // 23505 = already acknowledged this week (unique index) — that's fine
+        if (error && error.code !== '23505') console.warn('reminder acknowledgement not saved:', error.message)
+      } else {
+        const { error } = await supabase.from('reminder_acknowledgements').delete()
+          .ilike('user_email', studentEmail).eq('week_start', ackWeekKey).eq('reminder_id', reminder.id)
+        if (error) console.warn('reminder acknowledgement not removed:', error.message)
+      }
+    } catch (e) {
+      console.warn('reminder acknowledgement write threw:', e?.message || e)
+    }
+  }, [studentEmail, ackWeekKey])
 
   // Fetch work orders when modal opens
   useEffect(() => {
@@ -860,12 +909,14 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
               {weeklyReminders.map(r => {
                 const acked = acknowledgedIds.has(r.id)
                 const toggle = () => {
+                  const nowAcked = !acknowledgedIds.has(r.id)
                   setAcknowledgedIds(prev => {
                     const next = new Set(prev)
                     if (next.has(r.id)) next.delete(r.id)
                     else next.add(r.id)
                     return next
                   })
+                  persistAck(r, nowAcked)
                 }
                 return (
                   <div

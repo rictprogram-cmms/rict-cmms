@@ -63,6 +63,7 @@ import {
 } from '@/hooks/useAssetCheckouts';
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
 import EditTempAccessDialog from '@/components/EditTempAccessDialog';
+import AccountabilityAlertsCard from '@/components/AccountabilityAlertsCard';
 import '@/styles/dashboard.css';
 
 // ─── Colours ────────────────────────────────────────────────────────────
@@ -853,22 +854,43 @@ function GradeCard({ card, navigate }) {
         <span style={{ fontSize: '0.66rem', color: TEXT_MUTED }}>
           As of {new Date(asOf).toLocaleString()}
         </span>
-        <button
-          type="button"
-          onClick={() => navigate('/time-cards')}
-          style={{
-            background: 'transparent',
-            border: '1px solid #dee2e6',
-            borderRadius: 6,
-            padding: '3px 8px',
-            fontSize: '0.7rem',
-            fontWeight: 500,
-            color: '#495057',
-            cursor: 'pointer',
-          }}
-        >
-          View time cards →
-        </button>
+        <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => navigate('/accountability-report')}
+            className="focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+            style={{
+              background: 'transparent',
+              border: '1px solid #dee2e6',
+              borderRadius: 6,
+              padding: '3px 8px',
+              minHeight: 44,
+              fontSize: '0.7rem',
+              fontWeight: 500,
+              color: '#495057',
+              cursor: 'pointer',
+            }}
+          >
+            My full report →
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/time-cards')}
+            style={{
+              background: 'transparent',
+              border: '1px solid #dee2e6',
+              borderRadius: 6,
+              padding: '3px 8px',
+              minHeight: 44,
+              fontSize: '0.7rem',
+              fontWeight: 500,
+              color: '#495057',
+              cursor: 'pointer',
+            }}
+          >
+            View time cards →
+          </button>
+        </span>
       </footer>
     </article>
   );
@@ -1855,6 +1877,9 @@ function InstructorOverview({ navigate }) {
 
         </div>
       </div>
+
+      {/* ── Students to check on (pattern alerts from the Accountability Report) ── */}
+      <AccountabilityAlertsCard />
 
       {/* ── Day View ── */}
       <div style={{ marginTop: 16 }} ref={dayViewRef}>

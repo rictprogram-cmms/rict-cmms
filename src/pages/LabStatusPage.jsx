@@ -707,12 +707,22 @@ export default function LabStatusPage() {
     } catch (err) { console.error('[LabStatus] Acknowledge error:', err); }
   }, [fetchData, selectedInstructor]);
 
+  // Resolve stamps WHEN and WHO (resolved_at / resolved_by, migration
+  // 20260922_help_request_resolved) so the Accountability Report can measure
+  // acknowledged → cleared. Falls back to the status-only write if the
+  // columns are not there yet.
   const resolveRequest = useCallback(async (requestId) => {
+    const responderName = selectedInstructor?.displayName || 'Instructor';
     try {
-      await supabase.from('help_requests').update({ status: 'resolved' }).eq('request_id', requestId).select();
+      const { error } = await supabase.from('help_requests')
+        .update({ status: 'resolved', resolved_at: new Date().toISOString(), resolved_by: responderName })
+        .eq('request_id', requestId).select();
+      if (error && /resolved_at|resolved_by/i.test(error.message || '')) {
+        await supabase.from('help_requests').update({ status: 'resolved' }).eq('request_id', requestId).select();
+      } else if (error) { throw error; }
       await fetchData();
     } catch (err) { console.error('[LabStatus] Resolve error:', err); }
-  }, [fetchData]);
+  }, [fetchData, selectedInstructor]);
 
   // ── Clock ──
   const [clockTime, setClockTime] = useState('');
