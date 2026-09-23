@@ -242,6 +242,8 @@
 /* "Left" was #868e96 on #f1f3f5 = 3.0:1. #495057 = 7.4:1; still reads as the quiet, greyed-out state. */
 .dash-badge-left       { font-size: 0.68rem; font-weight: 600; background: #f1f3f5; color: #495057; padding: 2px 8px; border-radius: 4px; }
 .dash-badge-expected   { font-size: 0.68rem; font-weight: 600; background: #fff9db; color: #664d03; padding: 2px 8px; border-radius: 4px; }
+/* No-show: signed up, block(s) over, never punched in. #a51111 on #ffe3e3 ≈ 6.4:1 (AA) */
+.dash-badge-no-show    { font-size: 0.68rem; font-weight: 600; background: #ffe3e3; color: #a51111; padding: 2px 8px; border-radius: 4px; }
 .dash-badge-walk-in    { font-size: 0.65rem; font-weight: 600; background: #fff4e6; color: #b23c0c; padding: 1px 6px; border-radius: 4px; }
 .dash-badge-work-study { font-size: 0.65rem; font-weight: 600; background: #dbeafe; color: #1d4ed8; padding: 1px 6px; border-radius: 4px; }
 

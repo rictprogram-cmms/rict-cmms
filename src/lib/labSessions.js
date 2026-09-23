@@ -161,3 +161,48 @@ export function hasRemainingSession(sessions, nowMin, lastPunchOutMin) {
   }
   return false;
 }
+
+/**
+ * Minute of day from a time_clock timestamp. time_clock stores Central wall
+ * time labelled as UTC ("fake UTC"), so read it with getUTC* — never local.
+ * Returns null for empty / unparseable input.
+ */
+export function fakeUtcMinutes(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
+/**
+ * Latest punch-out minute of the day across a person's completed punches.
+ * Pass only 'Punched Out' rows; rows without punch_out are ignored.
+ * Returns null if there is no punch-out.
+ */
+export function lastPunchOutMinute(rows) {
+  let last = null;
+  for (const r of rows || []) {
+    const m = fakeUtcMinutes(r?.punch_out);
+    if (m != null && (last == null || m > last)) last = m;
+  }
+  return last;
+}
+
+/**
+ * True when the person punched out partway through `session` — the block had
+ * already started when they left. Used so a student who left 20 minutes early
+ * is shown as "Left early", not "Missing".
+ */
+export function leftSessionEarly(session, lastPunchOutMin) {
+  return !!session && lastPunchOutMin != null && session.startMin < lastPunchOutMin;
+}
+
+/**
+ * True when every signed-up session today is over and the person never
+ * punched at all — a no-show. Someone with a later block still ahead is not a
+ * no-show yet (they are still Expected).
+ */
+export function isNoShow(sessions, nowMin, hasAnyPunch) {
+  if (hasAnyPunch || !sessions || sessions.length === 0) return false;
+  return sessions.every(s => s.endMin <= nowMin);
+}

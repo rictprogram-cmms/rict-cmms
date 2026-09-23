@@ -33,7 +33,7 @@ import { mustData } from '@/lib/supabaseData';
 import { useVersionCheck } from '@/hooks/useVersionCheck';
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { shortName } from '@/lib/utils';
-import { mergeSignupSessions, pickSession, minutesToTime12, minutesToDate, nowMinutes } from '@/lib/labSessions';
+import { mergeSignupSessions, pickSession, minutesToTime12, minutesToDate, nowMinutes, lastPunchOutMinute, leftSessionEarly } from '@/lib/labSessions';
 
 const SCROLL_THRESHOLD = 6;
 
@@ -71,6 +71,9 @@ const STATUS_CONFIG = {
   workstudy: { label: 'Work Study', color: '#74c0fc', bg: '#0d1f3a', border: '#1a3a5c', icon: 'work',           avatarBg: 'linear-gradient(135deg, #1a3a5c, #1565a8)' },
   // Punched out via the kiosk's "Taking a break — coming back" and not yet back.
   onbreak:   { label: 'On Break',   color: '#22d3ee', bg: '#083344', border: '#155e75', icon: 'local_cafe',     avatarBg: 'linear-gradient(135deg, #155e75, #0e7490)' },
+  // Punched out (not a break) partway through a signup block that is still
+  // running. They came and left — not the same as never showing up (Missing).
+  leftearly: { label: 'Left Early', color: '#94a3b8', bg: '#1e2433', border: '#334155', icon: 'logout',         avatarBg: 'linear-gradient(135deg, #1e2433, #334155)' },
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -276,7 +279,7 @@ function PersonRow({ person }) {
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{displayName}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1, flexWrap: 'wrap' }}>
           {person.courseId && <span style={{ fontSize: '0.68rem', color: '#6c757d' }}>{person.courseId}</span>}
-          {person.timeRange && <span style={{ fontSize: '0.65rem', color: '#6c757d' }}>{person.timeRange}</span>}
+          {person.timeRange && <span style={{ fontSize: '0.65rem', color: person.status === 'leftearly' ? '#94a3b8' : '#6c757d' }}>{person.timeRange}</span>}
           {person.status === 'onbreak' && person.breakSince && (
             <span style={{ fontSize: '0.65rem', color: '#67e8f9' }}>
               Since {formatTimestamp12(person.breakSince)} · {minutesAgo(person.breakSince)}
@@ -600,6 +603,18 @@ export default function LabStatusPage() {
       }
       for (const email in onBreak) { if (!onBreak[email].isBreak) delete onBreak[email]; }
 
+      // Latest punch-out minute per student today (any completed punch). Lets
+      // a student who left partway through a running block show "Left Early"
+      // instead of "Missing" — same rule the Dashboard Day View uses.
+      const outRowsByEmail = {};
+      for (const row of outData) {
+        const email = (row.user_email || '').toLowerCase();
+        if (!email) continue;
+        (outRowsByEmail[email] = outRowsByEmail[email] || []).push(row);
+      }
+      const lastOutMinByEmail = {};
+      for (const email in outRowsByEmail) lastOutMinByEmail[email] = lastPunchOutMinute(outRowsByEmail[email]);
+
       // Signup map with merged sessions (shared with DashboardPage via
       // src/lib/labSessions.js so both pages agree on who is expected).
       const signedUp = {};
@@ -649,7 +664,14 @@ export default function LabStatusPage() {
           status = 'onbreak';
           if (curSession) timeRange = 'Until ' + minutesToTime12(curSession.endMin);
         } else if (p.isSignedUp) {
-          if (curSession) { status = 'missing'; timeRange = minutesToTime12(curSession.startMin) + ' – ' + minutesToTime12(curSession.endMin); }
+          const lastOutMin = lastOutMinByEmail[email] ?? null;
+          if (leftSessionEarly(curSession, lastOutMin)) {
+            // Came in and punched out before this block ended.
+            status = 'leftearly';
+            timeRange = 'Left ' + minutesToTime12(lastOutMin) + ' · block until ' + minutesToTime12(curSession.endMin);
+            if (nextSession) timeRange += ' · back ' + minutesToTime12(nextSession.startMin);
+          }
+          else if (curSession) { status = 'missing'; timeRange = minutesToTime12(curSession.startMin) + ' – ' + minutesToTime12(curSession.endMin); }
           else if (nextSession) { status = 'expected'; timeRange = minutesToTime12(nextSession.startMin) + ' – ' + minutesToTime12(nextSession.endMin); }
         }
         if (!status) continue;
@@ -745,6 +767,7 @@ export default function LabStatusPage() {
   const expectedCount = peopleList.filter(p => p.status === 'expected').length;
   const missingCount = peopleList.filter(p => p.status === 'missing').length;
   const breakCount = peopleList.filter(p => p.status === 'onbreak').length;
+  const leftEarlyCount = peopleList.filter(p => p.status === 'leftearly').length;
 
   // ════════════════════════════════════════════════════════════════════════
   return (
@@ -873,6 +896,7 @@ export default function LabStatusPage() {
                     {breakCount > 0 && <span> · <span style={{ color: '#22d3ee' }}>{breakCount} on break</span></span>}
                     {expectedCount > 0 && <span> · <span style={{ color: '#fbbf24' }}>{expectedCount} expected</span></span>}
                     {missingCount > 0 && <span> · <span style={{ color: '#ef4444' }}>{missingCount} missing</span></span>}
+                    {leftEarlyCount > 0 && <span> · <span style={{ color: '#94a3b8' }}>{leftEarlyCount} left early</span></span>}
                   </span>
                 )}
               </div>

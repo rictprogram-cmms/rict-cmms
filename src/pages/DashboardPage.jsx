@@ -42,7 +42,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { mustData } from '@/lib/supabaseData';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
-import { mergeSignupSessions, pickSession, hasRemainingSession, nowMinutes } from '@/lib/labSessions';
+import { mergeSignupSessions, pickSession, hasRemainingSession, nowMinutes, lastPunchOutMinute, isNoShow } from '@/lib/labSessions';
 import {
   fetchWeeklySignupStatuses, describeWeekStatus, weekRangeOf, addWeeks,
   summarizeWeek, describeSignupWindow, formatWeekLabel, formatHoursShort, formatDayShort,
@@ -1655,13 +1655,7 @@ function InstructorOverview({ navigate }) {
       const hasPunchedOut = p.clockEntries.some(c => c.status === 'Punched Out');
 
       // Minute-of-day of the latest punch-out (fake-UTC timestamps → getUTC*).
-      let lastPunchOutMin = null;
-      p.clockEntries.forEach(c => {
-        if (c.status !== 'Punched Out' || !c.punch_out) return;
-        const d = new Date(c.punch_out);
-        const m = d.getUTCHours() * 60 + d.getUTCMinutes();
-        if (lastPunchOutMin == null || m > lastPunchOutMin) lastPunchOutMin = m;
-      });
+      const lastPunchOutMin = lastPunchOutMinute(p.clockEntries.filter(c => c.status === 'Punched Out'));
 
       // Which session to show on the row. Today: the one in progress, else
       // the next one up, else the last one (everything is over). Other days:
@@ -1670,6 +1664,7 @@ function InstructorOverview({ navigate }) {
       let displayEnd = p.expectedEnd;
       let isReturning = false; // left an earlier block, due back for a later one
       let isDone = false;      // left and nothing remains today
+      let noShow = false;      // today: every block is over and they never punched
       if (isToday && sessions.length > 0) {
         const { current, next, last } = pickSession(sessions, nowMin);
         const show = current || next || last;
@@ -1678,11 +1673,12 @@ function InstructorOverview({ navigate }) {
         const remaining = hasRemainingSession(sessions, nowMin, lastPunchOutMin);
         isReturning = hasPunchedOut && !isPunchedIn && remaining;
         isDone = hasPunchedOut && !isPunchedIn && !remaining;
+        noShow = isNoShow(sessions, nowMin, p.clockEntries.length > 0);
       } else if (isToday) {
         isDone = hasPunchedOut && !isPunchedIn;
       }
 
-      return { ...p, sessions, displayStart, displayEnd, isReturning, isDone };
+      return { ...p, sessions, displayStart, displayEnd, isReturning, isDone, noShow };
     });
 
     // For today: hide people who have punched out and have no later block —
@@ -1690,14 +1686,14 @@ function InstructorOverview({ navigate }) {
     if (isToday) list = list.filter(p => !p.isDone);
 
     // Sort: punched in first, then expected (incl. returning) by start time,
-    // then recently departed
+    // then recently departed and no-shows
     list.sort((a, b) => {
       const aIn = a.clockEntries.some(c => c.status === 'Punched In');
       const bIn = b.clockEntries.some(c => c.status === 'Punched In');
       if (aIn && !bIn) return -1;
       if (!aIn && bIn) return 1;
-      const aOut = a.clockEntries.some(c => c.status === 'Punched Out') && !a.isReturning;
-      const bOut = b.clockEntries.some(c => c.status === 'Punched Out') && !b.isReturning;
+      const aOut = (a.clockEntries.some(c => c.status === 'Punched Out') && !a.isReturning) || a.noShow;
+      const bOut = (b.clockEntries.some(c => c.status === 'Punched Out') && !b.isReturning) || b.noShow;
       if (!aOut && bOut) return -1;
       if (aOut && !bOut) return 1;
       if (a.displayStart && b.displayStart) return a.displayStart.localeCompare(b.displayStart);
@@ -1991,6 +1987,8 @@ function InstructorOverview({ navigate }) {
                   const hasSignup = person.signupSlots.length > 0;
                   // Left an earlier block but due back for a later one — treat as Expected
                   const isReturning = !!person.isReturning;
+                  // Today only: signed-up block(s) all over, never punched in
+                  const noShow = !!person.noShow;
                   const isWorkStudyPunch = person.clockEntries.some(c => c.entry_type === 'Work Study');
                   const isPersonTCO = tcoEmails.has((person.user_email || '').toLowerCase());
                   const isWorkStudy = isWorkStudyPunch || isPersonTCO;
@@ -2006,6 +2004,7 @@ function InstructorOverview({ navigate }) {
 
                   let statusDot;
                   if (isPunchedIn) statusDot = '#40c057';
+                  else if (noShow) statusDot = '#e03131';
                   else if (hasLeft && !isReturning) statusDot = '#868e96';
                   else statusDot = '#fab005';
 
@@ -2036,7 +2035,8 @@ function InstructorOverview({ navigate }) {
                         {isWalkIn && <span className="dash-badge-walk-in">Walk-in</span>}
                         {isPunchedIn && <span className="dash-badge-in">In Lab</span>}
                         {hasLeft && !isPunchedIn && !isReturning && <span className="dash-badge-left">Left</span>}
-                        {!isPunchedIn && (!hasLeft || isReturning) && hasSignup && <span className="dash-badge-expected">Expected</span>}
+                        {noShow && <span className="dash-badge-no-show">No-show</span>}
+                        {!isPunchedIn && !noShow && (!hasLeft || isReturning) && hasSignup && <span className="dash-badge-expected">Expected</span>}
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 4, marginLeft: 16, fontSize: '0.8rem', color: '#495057' }}>
                         {hasSignup && (
