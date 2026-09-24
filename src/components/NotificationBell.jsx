@@ -17,6 +17,7 @@ import { fetchWeekRequirement } from '@/lib/closureProration';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
+import { useRejectionNotification } from '@/hooks/useRejectionNotification';
 import { fetchSemesterEnd, semesterEndExpiry, semesterInfoFromEndStr, localTodayStr } from '@/lib/semesterEnd';
 import { formatCountdown } from '@/hooks/useAssetCheckouts';
 import { generateSafeTcId } from '@/utils/generateSafeTcId';
@@ -158,6 +159,10 @@ export default function NotificationBell() {
   // Reject reason modal
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [rejectSaving, setRejectSaving] = useState(false);
+  const [rejectError, setRejectError] = useState('');
+  // Every bell rejection now asks why and tells the requester (bell + email + audit).
+  const { sendRejectionNotification } = useRejectionNotification();
   // Lab partial-approval modal
   const [labModal, setLabModal] = useState(null);
   const [labApproveAdds, setLabApproveAdds] = useState({});    // slotKey → true/false
@@ -245,7 +250,10 @@ export default function NotificationBell() {
   const closeRoleModal   = useCallback(() => setRoleModal(null),   []);
   const closeTempModal   = useCallback(() => setTempModal(null),   []);
   const closeLabModal    = useCallback(() => setLabModal(null),    []);
-  const closeRejectModal = useCallback(() => setRejectModal(null), []);
+  // Don't let Escape / overlay click drop the dialog mid-save.
+  const rejectSavingRef = useRef(false);
+  useEffect(() => { rejectSavingRef.current = rejectSaving; }, [rejectSaving]);
+  const closeRejectModal = useCallback(() => { if (!rejectSavingRef.current) setRejectModal(null); }, []);
   const roleDialogRef    = useDialogA11y(!!roleModal,   closeRoleModal);
   const tempDialogRef    = useDialogA11y(!!tempModal,   closeTempModal);
   const labDialogRef     = useDialogA11y(!!labModal,    closeLabModal);
@@ -1109,11 +1117,14 @@ export default function NotificationBell() {
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
     setActionLoading(null);
   };
-  const rejectAccess = async (item) => {
-    setActionLoading(item.id);
-    try { await supabase.from('access_requests').update({ status: 'Rejected', processed_by: fullName(), processed_date: new Date().toISOString() }).eq('request_id', item.raw.request_id); showToast('Rejected', 'info'); fetchNotifications(); } catch (e) { showToast('Error: ' + e.message, 'error'); }
-    setActionLoading(null);
+  // Reject opens the shared reason dialog; the write + notification happen in
+  // confirmRejectWithReason so every type asks "why" and tells the requester.
+  const openReject = (item, rejectType) => {
+    setRejectModal({ ...item, rejectType });
+    setRejectReason('');
+    setRejectError('');
   };
+  const rejectAccess = (item) => openReject(item, 'access');
 
   // WO Requests — Approve lives on the Work Orders → Requests tab (assign,
   // priority, WO description built from the request, requester email). The
@@ -1124,11 +1135,7 @@ export default function NotificationBell() {
     setOpen(false);
     navigate('/work-orders', { state: { view: 'requests' } });
   };
-  const rejectWO = async (item) => {
-    setActionLoading(item.id);
-    try { await supabase.from('work_order_requests').update({ status: 'Rejected', processed_by: fullName(), processed_date: new Date().toISOString() }).eq('request_id', item.raw.request_id); showToast('Rejected', 'info'); fetchNotifications(); } catch (e) { showToast('Error: ' + e.message, 'error'); }
-    setActionLoading(null);
-  };
+  const rejectWO = (item) => openReject(item, 'wo');
 
   // Parts Orders
   const approveOrder = async (item) => {
@@ -1157,11 +1164,7 @@ export default function NotificationBell() {
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
     setActionLoading(null);
   };
-  const rejectOrder = async (item) => {
-    setActionLoading(item.id);
-    try { await supabase.from('orders').update({ status: 'Rejected' }).eq('order_id', item.raw.order_id); showToast('Rejected', 'info'); window.dispatchEvent(new CustomEvent('po-updated', { detail: { orderId: item.raw.order_id, action: 'rejected' } })); fetchNotifications(); } catch (e) { showToast('Error: ' + e.message, 'error'); }
-    setActionLoading(null);
-  };
+  const rejectOrder = (item) => openReject(item, 'parts');
 
   // Time Entry Requests (NEW)
   const approveTime = async (item) => {
@@ -1301,7 +1304,7 @@ export default function NotificationBell() {
     }
     setActionLoading(null);
   };
-  const openRejectTime = (item) => { setRejectModal({ ...item, rejectType: 'time' }); setRejectReason(''); };
+  const openRejectTime = (item) => openReject(item, 'time');
 
   // Lab Change Requests
   const openLabApproveModal = (item) => {
@@ -1413,10 +1416,7 @@ export default function NotificationBell() {
     setActionLoading(null);
   };
 
-  const openRejectLab = (item) => {
-    setRejectModal({ ...item, rejectType: 'lab' });
-    setRejectReason('');
-  };
+  const openRejectLab = (item) => openReject(item, 'lab');
 
   // Temp Access Requests
   const openApproveTempAccess = (item) => {
@@ -1589,68 +1589,225 @@ export default function NotificationBell() {
     } catch (e) { showToast('Error: ' + e.message, 'error'); }
     setActionLoading(null);
   };
-  const rejectTempAccess = async (item) => {
-    setActionLoading(item.id);
-    try { await supabase.from('temp_access_requests').update({ status: 'Rejected', reviewed_by: fullName(), review_date: new Date().toISOString() }).eq('request_id', item.raw.request_id); showToast('Rejected', 'info'); fetchNotifications(); } catch (e) { showToast('Error: ' + e.message, 'error'); }
-    setActionLoading(null);
+  const rejectTempAccess = (item) => openReject(item, 'temp');
+
+  // ── Reject with reason — every bell reject type lands here ─────────────────
+  // 1. Save the reason on the request (row-count validated — RLS fails silently).
+  // 2. Tell the requester why: bell notification + email + audit log, via the
+  //    same sendRejectionNotification() the Time Cards / Work Orders / Users /
+  //    Purchase Orders pages use. A notification failure never undoes the reject.
+  const MIN_REJECT_REASON = 5;
+  const fmtDay = (d) => {
+    if (!d) return '';
+    const dt = new Date(String(d).slice(0, 10) + 'T00:00:00');
+    return Number.isNaN(dt.getTime()) ? String(d) : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
-
-  // Volunteer Punch Approval
-  // Reject with reason (for time entries)
+  const expectRows = (res, label) => {
+    if (res?.error) throw res.error;
+    if (!res?.data || res.data.length === 0) {
+      throw new Error(`${label} was not updated — it may already have been reviewed, or you may not have permission.`);
+    }
+  };
   const confirmRejectWithReason = async () => {
-    if (!rejectModal) return;
-    if (!rejectReason.trim()) { showToast('Reason is required', 'error'); return; }
-    const item = rejectModal; setRejectModal(null); setActionLoading(item.id);
+    if (!rejectModal || rejectSaving) return;
+    const reason = rejectReason.trim();
+    if (reason.length < MIN_REJECT_REASON) {
+      setRejectError(`Please enter a reason of at least ${MIN_REJECT_REASON} characters so the student knows why.`);
+      return;
+    }
+    const item = rejectModal;
+    const req = item.raw || {};
+    const now = new Date().toISOString();
+    setRejectSaving(true); setRejectError(''); setActionLoading(item.id);
+    // { recipientEmail, recipientName, requestType, requestId, extraDetails } — null = nobody to tell
+    let notice = null;
+    let noRecipientMsg = '';
     try {
-      if (item.rejectType === 'time') {
-        await supabase.from('time_entry_requests').update({
-          status: 'Rejected',
-          rejection_reason: rejectReason.trim(),
-          reviewed_by: fullName(),
-          review_date: new Date().toISOString()
-        }).eq('request_id', item.raw.request_id);
-      } else if (item.rejectType === 'lab') {
-        const req = item.raw;
-        // 1. Mark the request rejected with the reason
-        await supabase.from('lab_signup_requests').update({
-          status: 'Rejected',
-          reviewed_by: fullName(),
-          reviewed_date: new Date().toISOString(),
-          review_notes: rejectReason.trim(),
-        }).eq('request_id', req.request_id);
-
-        // 2. Send an in-app announcement to the student explaining why
-        const weekLabel = req.week_start
-          ? new Date(req.week_start + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-          : req.week_start || 'Unknown week';
-        const { data: annRows, error: annErr } = await supabase.from('announcements').insert({
-          recipient_email: (req.user_email || '').toLowerCase(),
-          sender_email: profile.email,
-          sender_name: fullName(),
-          subject: `Lab Schedule Change Rejected — Week of ${weekLabel}`,
-          body: `Your lab schedule change request for the week of ${weekLabel} (${req.course_id || req.class_id || ''}) was not approved.\n\nReason: ${rejectReason.trim()}\n\nIf you have questions, please speak with your instructor.`,
-          read: false,
-          created_at: new Date().toISOString(),
-        }).select();
-        if (annErr) throw new Error('Announcement failed: ' + annErr.message);
-        if (!annRows || annRows.length === 0) throw new Error('Announcement insert returned no rows — check RLS policy on announcements table');
-
-        // 3. Audit log
-        try {
-          await supabase.from('audit_log').insert({
-            user_email: profile.email,
-            user_name: fullName(),
-            action: 'Reject Lab Change',
-            entity_type: 'Lab Signup Request',
-            entity_id: req.request_id,
-            details: `Rejected lab change for ${req.user_name} (week ${req.week_start}). Reason: ${rejectReason.trim()}`
-          });
-        } catch {}
+      switch (item.rejectType) {
+        case 'time': {
+          expectRows(await supabase.from('time_entry_requests').update({
+            status: 'Rejected',
+            rejection_reason: reason,
+            reviewed_by: fullName(),
+            review_date: now,
+          }).eq('request_id', req.request_id).select(), 'The time entry request');
+          const cls = req.course_id || req.class_id || '';
+          notice = {
+            recipientEmail: req.user_email,
+            recipientName: req.user_name || req.user_email,
+            requestType: 'Time Entry Request',
+            requestId: req.request_id,
+            extraDetails: `Request details: ${req.entry_type || 'Time'} entry${cls ? ` for ${cls}` : ''}${req.requested_date ? ` on ${fmtDay(req.requested_date)}` : ''}`,
+          };
+          break;
+        }
+        case 'lab': {
+          expectRows(await supabase.from('lab_signup_requests').update({
+            status: 'Rejected',
+            reviewed_by: fullName(),
+            reviewed_date: now,
+            review_notes: reason,
+          }).eq('request_id', req.request_id).select(), 'The lab schedule change request');
+          const cls = req.course_id || req.class_id || '';
+          notice = {
+            recipientEmail: req.user_email,
+            recipientName: req.user_name || req.user_email,
+            requestType: 'Lab Signup Request',
+            requestId: req.request_id,
+            extraDetails: `Week of ${req.week_start ? fmtDay(req.week_start) : 'unknown week'}${cls ? ` (${cls})` : ''}`,
+          };
+          break;
+        }
+        case 'access': {
+          expectRows(await supabase.from('access_requests').update({
+            status: 'Rejected',
+            processed_by: fullName(),
+            processed_date: now,
+            notes: reason,
+          }).eq('request_id', req.request_id).select(), 'The account request');
+          notice = {
+            recipientEmail: req.email,
+            recipientName: `${req.first_name || ''} ${req.last_name || ''}`.trim() || req.email,
+            requestType: 'Access Request',
+            requestId: req.request_id,
+          };
+          break;
+        }
+        case 'wo': {
+          expectRows(await supabase.from('work_order_requests').update({
+            status: 'Rejected',
+            rejection_reason: reason,
+            processed_by: fullName(),
+            processed_date: now,
+          }).eq('request_id', req.request_id).select(), 'The work order request');
+          notice = {
+            recipientEmail: req.email,
+            recipientName: req.name || req.created_by || req.email,
+            requestType: 'Work Order Request',
+            requestId: req.request_id,
+            extraDetails: req.asset_name
+              ? `Asset: ${req.asset_name}\nDescription: ${req.description || ''}`
+              : (req.description || ''),
+          };
+          if (!req.email) noRecipientMsg = 'This request has no email on file, so nobody was notified.';
+          break;
+        }
+        case 'parts': {
+          // Mirrors usePurchaseOrders.rejectOrder(): release the "on order" flag on
+          // linked inventory parts unless another open PO still covers them.
+          const orderId = req.order_id;
+          try {
+            const lines = mustData(await supabase.from('order_line_items')
+              .select('inventory_part_id').eq('order_id', orderId), 'order_line_items.select');
+            const partIds = [...new Set((lines || []).map(l => l.inventory_part_id).filter(Boolean))];
+            for (const partId of partIds) {
+              const other = mustData(await supabase.from('order_line_items')
+                .select('order_id').eq('inventory_part_id', partId).neq('order_id', orderId).limit(1), 'order_line_items.select');
+              let hasOtherActive = false;
+              if (other && other.length > 0) {
+                const otherOrder = mustData(await supabase.from('orders')
+                  .select('status').eq('order_id', other[0].order_id).single(), 'orders.select');
+                hasOtherActive = otherOrder && !['Received', 'Cancelled', 'Rejected'].includes(otherOrder.status);
+              }
+              if (!hasOtherActive) {
+                await supabase.from('inventory').update({ order_date: null }).eq('part_id', partId);
+              }
+            }
+          } catch (invErr) {
+            console.warn('Inventory order-date cleanup failed (non-fatal):', invErr.message);
+          }
+          const notes = req.notes ? `${req.notes} | Rejection: ${reason}` : `Rejection: ${reason}`;
+          expectRows(await supabase.from('orders').update({
+            status: 'Rejected',
+            approved_by: uName(),
+            approved_date: now,
+            notes,
+          }).eq('order_id', orderId).select(), 'The purchase order');
+          window.dispatchEvent(new CustomEvent('po-updated', { detail: { orderId, action: 'rejected' } }));
+          // orders stores only the "First L." name — resolve it to an email the
+          // same way PurchaseOrdersPage does.
+          let creatorEmail = '';
+          if (req.ordered_by) {
+            try {
+              const firstName = (req.ordered_by || '').split(' ')[0] || '';
+              const people = mustData(await supabase.from('profiles')
+                .select('email, first_name, last_name').ilike('first_name', firstName)
+                .eq('status', 'Active').limit(5), 'profiles.select');
+              const match = (people || []).find(p => `${p.first_name} ${(p.last_name || '').charAt(0)}.` === req.ordered_by);
+              creatorEmail = match?.email || '';
+            } catch (lookupErr) {
+              console.warn('PO creator lookup failed:', lookupErr.message);
+            }
+          }
+          if (creatorEmail) {
+            notice = {
+              recipientEmail: creatorEmail,
+              recipientName: req.ordered_by,
+              requestType: 'Purchase Order',
+              requestId: orderId,
+              extraDetails: `Vendor: ${req.vendor_name || req.other_vendor || ''}`,
+            };
+          } else {
+            noRecipientMsg = `Couldn't find an account for "${req.ordered_by || 'the requester'}", so nobody was notified.`;
+          }
+          break;
+        }
+        case 'temp': {
+          // temp_access_requests timestamps are REAL UTC (Convention B), so
+          // toISOString() is correct here. Pending-only so a reject can't land
+          // on a request another instructor already approved.
+          const base = { status: 'Rejected', reviewed_by: fullName(), review_date: now };
+          let res = await supabase.from('temp_access_requests')
+            .update({ ...base, review_notes: reason })
+            .eq('request_id', req.request_id).eq('status', 'Pending').select();
+          if (res.error && /review_notes/i.test(res.error.message || '')) {
+            // Column not added yet (see 20260924_temp_access_review_notes.sql) —
+            // still reject; the reason goes out in the notification.
+            console.warn('temp_access_requests.review_notes missing — rejecting without storing the reason');
+            res = await supabase.from('temp_access_requests')
+              .update(base).eq('request_id', req.request_id).eq('status', 'Pending').select();
+          }
+          expectRows(res, 'The temporary access request');
+          const isPermType = req.request_type === 'permissions';
+          const permCount = (req.requested_permissions || []).length;
+          notice = {
+            recipientEmail: req.user_email,
+            recipientName: req.user_name || req.user_email,
+            requestType: 'Temp Access Request',
+            requestId: req.request_id,
+            extraDetails: isPermType
+              ? `Requested: ${permCount} permission${permCount !== 1 ? 's' : ''} ${tempDurationLabel(req)}`
+              : `Requested: ${req.requested_role || 'role'} access ${tempDurationLabel(req)}`,
+          };
+          break;
+        }
+        default:
+          throw new Error('Unknown request type');
       }
-      showToast('Rejected — student has been notified', 'info');
+
+      // The reject is saved — close the dialog, then notify.
+      setRejectModal(null);
+      setRejectReason('');
+      let sent = false;
+      if (notice?.recipientEmail) {
+        sent = await sendRejectionNotification({ ...notice, reason });
+      }
+      if (sent) {
+        showToast('Rejected — the student has been notified with your reason', 'info');
+      } else if (noRecipientMsg) {
+        showToast(`Rejected. ${noRecipientMsg}`, 'info', 6000);
+      } else {
+        showToast('Rejected, but the notification did not go out — please let them know directly.', 'error', 7000);
+      }
       fetchNotifications();
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
-    setActionLoading(null);
+    } catch (e) {
+      // Keep the dialog open so the reason isn't lost; the error is announced
+      // by the dialog's live region.
+      setRejectError(e?.message || 'Reject failed. Please try again.');
+    } finally {
+      setRejectSaving(false);
+      setActionLoading(null);
+    }
   };
 
   // Help Request — Acknowledge
@@ -2341,27 +2498,64 @@ export default function NotificationBell() {
         );
       })()}
 
-      {/* Reject with Reason Modal */}
-      {rejectModal && (
-        <div className="nbell-modal-overlay" onClick={e => e.target === e.currentTarget && setRejectModal(null)}>
-          <div className="nbell-modal" ref={rejectDialogRef} role="dialog" aria-modal="true" aria-labelledby="reject-modal-title">
-            <div className="nbell-modal-header"><h4 id="reject-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#fa5252' }}>close</span> {rejectModal.rejectType === 'lab' ? 'Reject Lab Change' : 'Reject'}</h4><button className="nbell-modal-close" aria-label="Close" onClick={() => setRejectModal(null)}>&times;</button></div>
-            <div className="nbell-modal-body">
-              {rejectModal.rejectType === 'lab' ? (
-                <p>Provide a reason for rejecting <strong>{rejectModal.raw?.user_name}</strong>'s lab schedule change. This reason will be sent to the student as a notification.</p>
-              ) : (
-                <p>Provide a reason for rejecting this {rejectModal.rejectType === 'time' ? 'time entry' : 'request'}.</p>
-              )}
-              <label className="nbell-label" htmlFor="reject-modal-reason">Reason <span style={{ color: '#fa5252' }} aria-hidden="true">*</span><span className="sr-only"> required</span></label>
-              <textarea id="reject-modal-reason" className="nbell-select" rows={3} required aria-required="true" style={{ resize: 'vertical', fontFamily: 'inherit' }} placeholder={rejectModal.rejectType === 'lab' ? 'e.g., Slots are fully booked, please choose different times...' : 'Enter reason...'} value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
-            </div>
-            <div className="nbell-modal-footer">
-              <button className="nbtn nbtn-secondary min-h-[44px]" onClick={() => setRejectModal(null)}>Cancel</button>
-              <button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={confirmRejectWithReason}><span className="material-icons" aria-hidden="true">close</span>Reject {rejectModal.rejectType === 'lab' ? '& Notify Student' : ''}</button>
+      {/* Reject with Reason Modal — used by every Reject button in the bell */}
+      {rejectModal && (() => {
+        const t = rejectModal.rejectType;
+        const r = rejectModal.raw || {};
+        const REJECT_COPY = {
+          time:   { title: 'Reject Time Entry',           what: 'time entry request',            who: r.user_name,  placeholder: 'e.g., These hours are outside your scheduled lab time — please resubmit with the correct times.' },
+          lab:    { title: 'Reject Lab Change',           what: 'lab schedule change',           who: r.user_name,  placeholder: 'e.g., Slots are fully booked, please choose different times.' },
+          access: { title: 'Reject Account Request',      what: 'account registration request',  who: `${r.first_name || ''} ${r.last_name || ''}`.trim() || r.email, placeholder: 'e.g., Please register with your SCTCC student email address.' },
+          wo:     { title: 'Reject Work Order Request',   what: 'work order request',            who: r.name || r.created_by || r.email, placeholder: 'e.g., This is already covered by an open work order.' },
+          parts:  { title: 'Reject Purchase Order',       what: 'purchase order',                who: r.ordered_by, placeholder: 'e.g., We have these parts in stock — check cabinet B.' },
+          temp:   { title: 'Reject Temporary Access',     what: 'temporary access request',      who: r.user_name || r.user_email, placeholder: 'e.g., Please complete the safety training before requesting this access.' },
+        };
+        const copy = REJECT_COPY[t] || { title: 'Reject Request', what: 'request', who: '', placeholder: 'Enter reason...' };
+        const tooShort = rejectReason.trim().length < MIN_REJECT_REASON;
+        return (
+          <div className="nbell-modal-overlay" onClick={e => e.target === e.currentTarget && closeRejectModal()}>
+            <div className="nbell-modal" ref={rejectDialogRef} role="dialog" aria-modal="true" aria-labelledby="reject-modal-title" aria-describedby="reject-modal-desc" aria-busy={rejectSaving}>
+              <div className="nbell-modal-header"><h4 id="reject-modal-title"><span className="material-icons" aria-hidden="true" style={{ color: '#fa5252' }}>close</span> {copy.title}</h4><button className="nbell-modal-close min-h-[44px] min-w-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" aria-label="Close" disabled={rejectSaving} onClick={closeRejectModal}>&times;</button></div>
+              <div className="nbell-modal-body">
+                <p id="reject-modal-desc">
+                  Tell {copy.who ? <strong>{copy.who}</strong> : 'the requester'} why this {copy.what} is being rejected.
+                  Your reason is sent to them as a notification and an email, and is saved with the request.
+                </p>
+                <label className="nbell-label" htmlFor="reject-modal-reason">Reason <span style={{ color: '#fa5252' }} aria-hidden="true">*</span><span className="sr-only"> required</span></label>
+                <textarea
+                  id="reject-modal-reason"
+                  className="nbell-select focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  rows={3}
+                  required
+                  aria-required="true"
+                  aria-invalid={!!rejectError}
+                  aria-describedby="reject-modal-hint reject-modal-error"
+                  maxLength={1000}
+                  disabled={rejectSaving}
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                  placeholder={copy.placeholder}
+                  value={rejectReason}
+                  onChange={e => { setRejectReason(e.target.value); if (rejectError) setRejectError(''); }}
+                />
+                <p id="reject-modal-hint" style={{ fontSize: '0.78rem', color: '#495057', margin: '4px 0 0' }}>
+                  At least {MIN_REJECT_REASON} characters. {rejectReason.trim().length}/1000
+                </p>
+                <div id="reject-modal-error" role="alert" aria-live="assertive" style={{ color: '#c92a2a', fontSize: '0.85rem', marginTop: rejectError ? 6 : 0 }}>
+                  {rejectError}
+                </div>
+                <span className="sr-only" role="status" aria-live="polite">{rejectSaving ? 'Rejecting and notifying…' : ''}</span>
+              </div>
+              <div className="nbell-modal-footer">
+                <button className="nbtn nbtn-secondary min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1" disabled={rejectSaving} onClick={closeRejectModal}>Cancel</button>
+                <button className="nbtn nbtn-reject focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={rejectSaving || tooShort} aria-disabled={rejectSaving || tooShort} onClick={confirmRejectWithReason}>
+                  <span className="material-icons" aria-hidden="true">{rejectSaving ? 'hourglass_empty' : 'close'}</span>
+                  {rejectSaving ? 'Rejecting…' : 'Reject & Notify'}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Pending Asset-Checkout Acknowledgment Modal — student e-signature flow.
           Opened from the bell's "Sign Now" button. Closes itself on success;
