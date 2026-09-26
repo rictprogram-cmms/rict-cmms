@@ -2265,6 +2265,8 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
 
 function ClassWeeklyContent({ students, classInfo, dateRange }) {
   const metCount = students.filter(s => s.metRequirement).length
+  // Students counted as met only because the week was closed (All Done), not by hours
+  const allDoneCount = students.filter(s => s.weekClosed && !s.hoursMet).length
   const totalStudents = students.length
   const totalLate = students.reduce((s, st) => s + st.lateCount, 0)
   const totalEarly = students.reduce((s, st) => s + st.earlyCount, 0)
@@ -2280,7 +2282,7 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
 
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-6">
         <div className="text-center p-3 bg-surface-50 rounded-xl"><div className="text-2xl font-bold text-surface-900">{totalStudents}</div><div className="text-[10px] text-surface-500 uppercase">Enrolled</div></div>
-        <div className="text-center p-3 bg-green-50 rounded-xl"><div className="text-2xl font-bold text-green-600">{metCount}</div><div className="text-[10px] text-surface-500 uppercase">Met Hours</div></div>
+        <div className="text-center p-3 bg-green-50 rounded-xl"><div className="text-2xl font-bold text-green-600">{metCount}</div><div className="text-[10px] text-surface-500 uppercase">Met Hours</div>{allDoneCount > 0 && <div className="text-[10px] text-emerald-700 mt-0.5">incl. {allDoneCount} All Done</div>}</div>
         <div className="text-center p-3 bg-amber-50 rounded-xl"><div className="text-2xl font-bold text-amber-600">{totalStudents - metCount}</div><div className="text-[10px] text-surface-500 uppercase">Below Hours</div></div>
         <div className="text-center p-3 bg-red-50 rounded-xl"><div className="text-2xl font-bold text-red-600">{totalLate}</div><div className="text-[10px] text-surface-500 uppercase">Late</div></div>
         <div className="text-center p-3 bg-amber-50 rounded-xl"><div className="text-2xl font-bold text-amber-600">{totalEarly}</div><div className="text-[10px] text-surface-500 uppercase">Left Early</div></div>
@@ -2298,7 +2300,7 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Role</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Hours</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Required</th>
-                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Hours</th>
+                <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Status</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Late</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Early</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-center">Walk-in</th>
@@ -2316,8 +2318,14 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                     <MakeupBadge hours={s.makeupHours} className="ml-1" />
                   </td>
                   <td className="px-3 py-2.5">
-                    {s.metRequirement ? (
+                    {s.hoursMet ? (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} aria-hidden="true" /> Complete</span>
+                    ) : s.weekClosed ? (
+                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full"
+                        title="Instructor swiped All Done — week closed regardless of hours">
+                        <BadgeCheck size={11} aria-hidden="true" /> Complete · All Done
+                        <span className="sr-only"> (week closed by instructor regardless of hours)</span>
+                      </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={11} aria-hidden="true" /> Behind</span>
                     )}

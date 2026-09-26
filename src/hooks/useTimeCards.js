@@ -1626,6 +1626,50 @@ export function useClassWeeklyReport() {
         if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10
       } catch {}
 
+      // Week-closed signal from weekly_lab_tracker (all_done / required_hours_met)
+      // for THIS class — same rule the Individual Time Card uses. Tracker rows
+      // often have empty date columns, so match by week_number against this
+      // class's own calendar, falling back to the row's dates when present.
+      const isYes = (v) => v === 'Yes' || v === true
+      const trackerClosedUsers = new Set()   // keys: user_id and user_email
+      if (userIds.length > 0) {
+        try {
+          const weekEndOffset = weekEndOffsetFromDays(await fetchLabVisibleDays())
+          const overlapNums = new Set()
+          if (classData?.start_date && classData?.end_date) {
+            buildClassWeeks({
+              startDate: classData.start_date, endDate: classData.end_date,
+              springBreakStart: classData.spring_break_start, springBreakEnd: classData.spring_break_end,
+              finalsStart: classData.finals_start, finalsEnd: classData.finals_end,
+            }, weekEndOffset).forEach(wk => {
+              const ws = (wk.startDate || '').substring(0, 10)
+              const we = (wk.endDate || '').substring(0, 10)
+              if (ws && we && we >= startDate && ws <= endDate) overlapNums.add(wk.weekNumber)
+            })
+          }
+          const ltData = mustData(await supabase
+            .from('weekly_lab_tracker')
+            .select('user_id, user_email, course_id, class_id, week_number, week_start_date, week_end_date, all_done, required_hours_met')
+            .or(`course_id.eq.${courseId},class_id.eq.${classId}`), 'weekly_lab_tracker.select') || []
+          ltData.forEach(lt => {
+            if (!isYes(lt.all_done) && !isYes(lt.required_hours_met)) return
+            const wkNum = parseInt(lt.week_number)
+            const matchedByWeekNum = !isNaN(wkNum) && overlapNums.has(wkNum)
+            let matchedByDate = false
+            if (lt.week_start_date && lt.week_end_date) {
+              const ws = String(lt.week_start_date).substring(0, 10)
+              const we = String(lt.week_end_date).substring(0, 10)
+              matchedByDate = we >= startDate && ws <= endDate
+            }
+            if (!matchedByWeekNum && !matchedByDate) return
+            if (lt.user_id) trackerClosedUsers.add(lt.user_id)
+            if (lt.user_email) trackerClosedUsers.add(lt.user_email)
+          })
+        } catch (err) {
+          console.warn('Class weekly report — lab tracker fetch:', err)
+        }
+      }
+
       const studentList = enrolled.map(u => {
         // IMPORTANT: Filter records to only this class for hours calculation
         const userRecords = tcRecords.filter(r =>
@@ -1747,6 +1791,13 @@ export function useClassWeeklyReport() {
         const earlyPenalized = earlyWaived ? 0 : earlyCount
 
         const userMakeup = makeupHoursInRange(makeupOverlay, u.email, courseId, classId, startDate, endDate)
+        // Hours met on their own vs. week closed by the instructor. An All Done
+        // swipe in ANY class that period (cross-class propagation, matching the
+        // Individual Time Card) or a tracker all_done / required_hours_met flag
+        // closes the week — the student is not "Behind" regardless of hours.
+        const hoursMet = totalHours >= requiredHours + userMakeup.hours
+        const weekClosed = periodClosed ||
+          trackerClosedUsers.has(u.user_id) || (!!u.email && trackerClosedUsers.has(u.email))
         return {
           userId: u.user_id,
           name: `${u.first_name} ${(u.last_name || '').charAt(0)}.`,
@@ -1762,7 +1813,9 @@ export function useClassWeeklyReport() {
           closure,
           closureLabel,
           makeupHours: userMakeup.hours,
-          metRequirement: totalHours >= requiredHours + userMakeup.hours,
+          hoursMet,                                   // hours alone reached the requirement
+          weekClosed,                                 // All Done / instructor closed the week
+          metRequirement: hoursMet || weekClosed,     // not behind (drives tiles + row status)
           entryCount: userRecords.length,
           lateCount,
           earlyCount: earlyPenalized,        // deducted
@@ -1791,6 +1844,13 @@ export function useClassWeeklyReport() {
       })
       // Lab Calendar closures prorate the week's required hours
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => {
+        if (lastFetchParamsRef.current) {
+          const { courseId, startDate, endDate } = lastFetchParamsRef.current
+          fetchReport(courseId, startDate, endDate)
+        }
+      })
+      // Tracker all_done / required_hours_met flags close a student's week
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'weekly_lab_tracker' }, () => {
         if (lastFetchParamsRef.current) {
           const { courseId, startDate, endDate } = lastFetchParamsRef.current
           fetchReport(courseId, startDate, endDate)
