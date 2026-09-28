@@ -983,6 +983,30 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
         })
       })
 
+      // 3c. After-hours rows. Instructors can book a student outside lab
+      // hours on an Open day (Admin Sign Up — e.g. a meeting after class).
+      // Those hours aren't in the calendar's open range, so without this the
+      // grid would have no row for them and the booking would be invisible.
+      // Students get a row only for their OWN after-hours bookings;
+      // instructors get a row for anyone's. The row never makes the hour
+      // bookable — see isAfterHours on each slot below.
+      {
+        const instructorView = profile.role === 'Instructor'
+        const myEmail = String(profile.email || '').toLowerCase().trim()
+        let added = false
+        ;(signupData || []).forEach(row => {
+          const hr = getHourFromTime(row.start_time)
+          if (hr === null || allHoursSet.has(hr)) return
+          const dk = typeof row.date === 'string' && row.date.length >= 10 ? row.date.substring(0, 10) : formatDateKey(new Date(row.date))
+          if (!calByDate[dk]?.isOpen) return
+          if (!visibleDays.includes(new Date(dk + 'T00:00:00').getDay())) return
+          if (!instructorView && String(row.user_email || '').toLowerCase().trim() !== myEmail) return
+          allHoursSet.add(hr)
+          added = true
+        })
+        if (added) allHours = Array.from(allHoursSet).sort((a, b) => a - b)
+      }
+
       // 4. Build weeks
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
       const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -1051,6 +1075,10 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
               : null
             const withinDayHours = hour >= day.startHour && hour < day.endHour
             const isHourClosed = !!closureReason
+            // Outside this Open day's lab hours — only instructors can book
+            // these (Admin Sign Up). Never selectable on the grid; an existing
+            // booking here is still shown (see LabSignupPage).
+            const isAfterHours = day.isOpen && !withinDayHours
 
             slots[key] = {
               date: dateKey,
@@ -1062,6 +1090,7 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
               // isOpen now also requires that the hour is NOT inside a closure
               isOpen: day.isOpen && withinDayHours && !isHourClosed,
               isLunch,
+              isAfterHours,
               isHourClosed,
               closureReason: closureReason || '',
               mySignupId,
@@ -1480,7 +1509,9 @@ export function useInstructorSignup() {
   const { profile } = useAuth()
   const [saving, setSaving] = useState(false)
 
-  const signUpStudent = async (student, dateStr, hour, classId) => {
+  // opts.kind: 'lab' (default) | 'lunch' | 'after' — only changes the audit
+  // wording so lunch / after-hours bookings are easy to find later.
+  const signUpStudent = async (student, dateStr, hour, classId, opts = {}) => {
     setSaving(true)
     try {
       const targetDate = new Date(dateStr + 'T12:00:00')
@@ -1532,10 +1563,10 @@ export function useInstructorSignup() {
         action: 'Instructor Sign Up',
         entity_type: 'Lab Signup',
         entity_id: signupId,
-        details: `Signed up ${userName} (${student.email}) for ${formatDateLabel(dateStr)} ${formatHour(hourNum)}${classId ? ` (${classId})` : ''} — instructor override`,
+        details: `Signed up ${userName} (${student.email}) for ${formatDateLabel(dateStr)} ${formatHour(hourNum)}${classId ? ` (${classId})` : ''}${opts.kind === 'after' ? ' — after lab hours' : opts.kind === 'lunch' ? ' — lunch hour' : ''} — instructor override`,
       })
 
-      toast.success(`Signed up ${userName} (Instructor Override)`)
+      toast.success(`Signed up ${userName} (Instructor Override${opts.kind === 'after' ? ', after lab hours' : opts.kind === 'lunch' ? ', lunch hour' : ''})`)
       return { success: true }
     } catch (err) {
       if (isUniqueViolation(err, LAB_SIGNUP_UNIQUE_HOUR)) {

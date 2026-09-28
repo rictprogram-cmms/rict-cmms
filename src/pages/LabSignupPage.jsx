@@ -167,7 +167,7 @@ function WeeklySignupTab() {
   const openSlotDetail = useCallback(async (dateKey, hour, slot) => {
     const dt = new Date(dateKey + 'T12:00:00')
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-    const label = `${dayNames[dt.getDay()]}, ${dt.getMonth() + 1}/${dt.getDate()} — ${formatHour(hour)}`
+    const label = `${dayNames[dt.getDay()]}, ${dt.getMonth() + 1}/${dt.getDate()} — ${formatHour(hour)}${slot.isAfterHours ? ' (after lab hours)' : ''}`
     setSlotDetail({ label, maxStudents: slot.maxStudents, currentSignups: slot.currentSignups, students: [], loading: true })
 
     try {
@@ -776,6 +776,11 @@ function WeeklySignupTab() {
 
                         const isLunch = slot.isLunch
                         const isMine = !!slot.mySignupId
+                        // An instructor booked this hour outside lab hours (Admin
+                        // Sign Up). Shown so the student / instructors can see it;
+                        // never selectable for new sign-ups (canSelect uses isOpen).
+                        const afterHoursBooked = !!slot.isAfterHours && (isMine || (isInstructor && slot.currentSignups > 0))
+                        const cellOpen = slot.isOpen || afterHoursBooked
                         const isMarkedCancel = isMine && cancellations.includes(slot.mySignupId)
                         const owningClass = classForSlot(key)
                         const isSelected = !!owningClass
@@ -806,11 +811,15 @@ function WeeklySignupTab() {
                           <span className="absolute top-0.5 right-0.5 text-[6px] font-bold bg-orange-400 text-white px-1 rounded leading-tight">LUNCH</span>
                         ) : null
                         // Helper: make-up badge overlay (top-left so it doesn't collide with LUNCH)
+                        // Helper: after-hours badge overlay (top-right; lunch and after-hours never overlap)
+                        const afterHoursBadge = afterHoursBooked ? (
+                          <span className="absolute top-0.5 right-0.5 text-[6px] font-bold bg-indigo-600 text-white px-1 rounded leading-tight">AFTER HRS</span>
+                        ) : null
                         const makeupBadge = isMakeupSlot ? (
                           <span className="absolute top-0.5 left-0.5 text-[6px] font-bold bg-violet-500 text-white px-1 rounded leading-tight">MU</span>
                         ) : null
 
-                        if (!slot.isOpen) {
+                        if (!cellOpen) {
                           // Distinguish a within-day closure (e.g. faculty meeting
                           // 2-3pm) from the day being closed entirely. Both render
                           // non-interactive, but the closure case shows the reason.
@@ -835,6 +844,10 @@ function WeeklySignupTab() {
                         } else if (isSelected) {
                           cellClass += 'bg-brand-600 text-white cursor-pointer shadow-sm hover:bg-brand-700'
                           cellContent = owningClass === '__instructor__' ? '✓' : courseLabel(owningClass)
+                        } else if (afterHoursBooked) {
+                          // Instructor view of someone else's after-hours booking
+                          cellClass += 'bg-indigo-50 border border-indigo-300 text-indigo-700 cursor-pointer hover:bg-indigo-100'
+                          cellContent = <><span>{slot.currentSignups}</span><span className="font-normal text-[7px] opacity-70">booked</span></>
                         } else if (slot.isFull) {
                           cellClass += 'bg-red-50 text-red-400 cursor-default'
                           cellContent = 'FULL'
@@ -853,7 +866,7 @@ function WeeklySignupTab() {
                         }
 
                         const handleClick = () => {
-                          if (!slot.isOpen) return
+                          if (!cellOpen) return
                           // Instructor: open detail popup showing who's signed up
                           if (isInstructor) {
                             openSlotDetail(day.date, hour, slot)
@@ -875,12 +888,13 @@ function WeeklySignupTab() {
 
                         // Build accessible label that surfaces closure reason for screen readers
                         const titleText =
-                          !slot.isOpen
+                          !cellOpen
                             ? (slot.isHourClosed
                                 ? `Closed: ${slot.closureReason}`
                                 : 'Lab closed')
-                          : isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up — click for details`
+                          : isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up${afterHoursBooked ? ' after lab hours' : ''} — click for details`
                           : isMarkedCancel ? 'Click to undo cancel'
+                          : isMine && afterHoursBooked ? 'After lab hours, booked by your instructor — click to cancel'
                           : isMine && isLunch ? 'Lunch hour — click to cancel'
                           : isMine ? `Click to cancel this signup${isMakeupSlot ? ' (make-up hour)' : ''}`
                           : isSelected ? `${owningClass}${isMakeupSlot ? ' make-up hour' : ''} — click to deselect`
@@ -895,9 +909,10 @@ function WeeklySignupTab() {
                               onClick={handleClick}
                               title={titleText}
                               aria-label={`${day.dayName} ${formatHour(hour)} — ${titleText}`}
-                              disabled={!slot.isOpen}
+                              disabled={!cellOpen}
                             >
                               {lunchBadge}
+                              {afterHoursBadge}
                               {makeupBadge}
                               {cellContent}
                             </button>
@@ -2455,6 +2470,13 @@ function StudentWeekPanel({ student, dateStr }) {
   )
 }
 
+// Admin Sign Up can book outside the day's lab hours (e.g. a meeting after
+// class). Students can never book these — their grid only offers the lab
+// calendar's open hours. Slots are 1 hour: 7 AM is the first start, 8 PM the
+// last (ends 9 PM). Only on days the lab calendar marks Open.
+const INSTRUCTOR_FIRST_HOUR = 7
+const INSTRUCTOR_LAST_END_HOUR = 21
+
 function AdminSignupTab({ preset = null }) {
   const { students, loading: studentsLoading } = useStudentsList()
   const { signUpStudent, saving } = useInstructorSignup()
@@ -2482,9 +2504,13 @@ function AdminSignupTab({ preset = null }) {
     }
     setPresetNote({ found: !!match, name: preset.name || preset.email || 'this student', note: preset.note || '', weekLabel: preset.weekLabel || '' })
   }, [preset, students, studentsLoading])
-  const [slots, setSlots] = useState([])
+  const [slots, setSlots] = useState([]) // [{ hour, display, available, maxStudents, kind: 'lab'|'lunch'|'after' }]
+  const [dayClosed, setDayClosed] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState('')
   const [loadingSlots, setLoadingSlots] = useState(false)
+  const labSlots = useMemo(() => slots.filter(s => s.kind !== 'after'), [slots])
+  const afterSlots = useMemo(() => slots.filter(s => s.kind === 'after'), [slots])
+  const selectedSlotInfo = useMemo(() => slots.find(s => String(s.hour) === String(selectedSlot)) || null, [slots, selectedSlot])
 
   // Get student's classes when selected
   const studentClasses = useMemo(() => {
@@ -2509,10 +2535,13 @@ function AdminSignupTab({ preset = null }) {
           .maybeSingle(), 'lab_calendar')
 
         if (!calData || calData.status !== 'Open') {
+          setDayClosed(true)
           setSlots([])
+          setSelectedSlot('')
           setLoadingSlots(false)
           return
         }
+        setDayClosed(false)
 
         const startH = getHourFromTime(calData.start_time) ?? 8
         const endH = getHourFromTime(calData.end_time) ?? 16
@@ -2533,19 +2562,28 @@ function AdminSignupTab({ preset = null }) {
           if (hr !== null) counts[hr] = (counts[hr] || 0) + 1
         })
 
+        // Lab hours (including lunch — instructors can book it, as students
+        // already can on their grid) plus instructor-only hours before the
+        // lab opens / after it closes. Capacity applies to every hour.
         const available = []
-        for (let h = startH; h < endH; h++) {
-          if (lunchH !== null && h === lunchH) continue
+        const firstH = Math.min(INSTRUCTOR_FIRST_HOUR, startH)
+        const lastEnd = Math.max(INSTRUCTOR_LAST_END_HOUR, endH)
+        for (let h = firstH; h < lastEnd; h++) {
+          const inLab = h >= startH && h < endH
+          const kind = !inLab ? 'after' : (lunchH !== null && h === lunchH) ? 'lunch' : 'lab'
           const count = counts[h] || 0
           if (count < maxStudents) {
-            available.push({ hour: h, display: formatHour(h), available: maxStudents - count, maxStudents })
+            available.push({ hour: h, display: formatHour(h), available: maxStudents - count, maxStudents, kind })
           }
         }
         setSlots(available)
+        // Keep the picked hour only if it is still offered on the new date
+        setSelectedSlot(prev => (prev !== '' && !available.some(a => String(a.hour) === String(prev)) ? '' : prev))
       } catch (err) {
         console.error('[LabSignup] slot availability load failed:', err)
         toast.error('Could not load available slots. Please try again.')
         setSlots([])
+        setDayClosed(false)
       }
       setLoadingSlots(false)
     }
@@ -2554,7 +2592,7 @@ function AdminSignupTab({ preset = null }) {
 
   const handleSignup = async () => {
     if (!selectedStudent || !selectedSlot || !dateStr) return
-    const result = await signUpStudent(selectedStudent, dateStr, selectedSlot, selectedClass)
+    const result = await signUpStudent(selectedStudent, dateStr, selectedSlot, selectedClass, { kind: selectedSlotInfo?.kind || 'lab' })
     if (result.success) {
       setSelectedSlot('')
       // Refresh slots
@@ -2573,7 +2611,7 @@ function AdminSignupTab({ preset = null }) {
         {/* Warning */}
         <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
           <Info size={16} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
-          <span>This bypasses the Sunday midnight deadline. Use when a student needs to sign up after the deadline has passed.</span>
+          <span>This bypasses the Sunday midnight deadline. Use when a student needs to sign up after the deadline has passed. You can also book the lunch hour, or a time outside lab hours (7 AM – 9 PM on open lab days) — for example a meeting after class. Students can't book times outside lab hours themselves.</span>
         </div>
 
         {/* Opened from the Dashboard's "Short This Week" list */}
@@ -2642,12 +2680,41 @@ function AdminSignupTab({ preset = null }) {
             disabled={loadingSlots || slots.length === 0}
             className="mt-1 w-full px-3 py-2.5 border border-surface-200 rounded-lg text-sm disabled:bg-surface-50 disabled:text-surface-400"
           >
-            <option value="">{loadingSlots ? 'Loading...' : slots.length === 0 ? '— Select Date First —' : '— Select Slot —'}</option>
-            {slots.map(s => (
-              <option key={s.hour} value={s.hour}>{s.display} ({s.available} available)</option>
-            ))}
+            <option value="">{loadingSlots ? 'Loading...' : !dateStr ? '— Select Date First —' : dayClosed ? '— Lab closed this day —' : slots.length === 0 ? '— No open slots —' : '— Select Slot —'}</option>
+            {labSlots.length > 0 && (
+              <optgroup label="Lab hours">
+                {labSlots.map(s => (
+                  <option key={s.hour} value={s.hour}>{s.display}{s.kind === 'lunch' ? ' — Lunch' : ''} ({s.available} available)</option>
+                ))}
+              </optgroup>
+            )}
+            {afterSlots.length > 0 && (
+              <optgroup label="Outside lab hours (instructor only)">
+                {afterSlots.map(s => (
+                  <option key={s.hour} value={s.hour}>{s.display} — outside lab hours ({s.available} available)</option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
+
+        {/* Screen-reader summary of the slot list after a date change */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {loadingSlots ? '' : !dateStr ? '' : dayClosed
+            ? 'The lab is closed this day. No time slots are available.'
+            : `${slots.length} time slot${slots.length === 1 ? '' : 's'} available${afterSlots.length ? `, including ${afterSlots.length} outside lab hours` : ''}.`}
+        </p>
+
+        {selectedSlotInfo && selectedSlotInfo.kind !== 'lab' && (
+          <p className="flex items-start gap-2 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-lg p-2.5">
+            <Info size={14} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span>
+              {selectedSlotInfo.kind === 'lunch'
+                ? 'This is the lunch hour — the instructor on duty may be on break.'
+                : `This time is outside lab hours. It will show on the student's sign-up grid${selectedClass ? ` and count toward ${selectedClass}` : ' but, with no class picked, will not count toward any class'}.`}
+            </span>
+          </p>
+        )}
 
         {/* Submit */}
         <button
