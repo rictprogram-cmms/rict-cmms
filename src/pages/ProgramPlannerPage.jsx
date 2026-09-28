@@ -1125,6 +1125,17 @@ function NewPlanModal({ onCreated, onClose }) {
   )
 }
 
+// ─── Instructor Note storage ──────────────────────────────────────────────────
+// The private Instructor Note (sticky-note icon on the plan list) lives in the
+// instructor-only table plan_instructor_notes (security phase 1, 2026-09-28) so
+// students can never read it. Until that migration has run, the old
+// student_program_plans.instructor_notes column is used as a fallback.
+function isMissingTableError(e) {
+  const err = e?.cause || e
+  const code = err?.code
+  return code === '42P01' || code === 'PGRST205' || /does not exist|schema cache/i.test(err?.message || '')
+}
+
 // ─── StudentPlanView (read-only) ──────────────────────────────────────────────
 // `advising`: [{ term_name, met_on, notes?, advised_by? }]; notes render when showNotes.
 // Students pass showNotes too — their rows come from my_advising_meetings() (own rows
@@ -1389,7 +1400,16 @@ export default function ProgramPlannerPage() {
       const emails=[...new Set(data.map(p=>p.student_email))]
       const {data:profileData}=await supabase.from('profiles').select('email,status').in('email',emails)
       const archivedSet=new Set((profileData||[]).filter(p=>p.status==='Archived').map(p=>p.email))
-      setPlans((data||[]).filter(p=>!archivedSet.has(p.student_email)))
+      // Instructor Notes come from the instructor-only table (fallback: old column)
+      let withNotes=data||[]
+      try {
+        const noteRows=mustData(await supabase.from('plan_instructor_notes').select('plan_id,note'),'plan_instructor_notes.select')
+        const noteMap=new Map((noteRows||[]).map(r=>[r.plan_id,r.note]))
+        withNotes=withNotes.map(p=>({...p,instructor_notes:noteMap.has(p.plan_id)?noteMap.get(p.plan_id):(p.instructor_notes||null)}))
+      } catch(e) {
+        if(!isMissingTableError(e)){ console.error('ProgramPlanner instructor notes:',e); toast.error('Could not load instructor notes — try refreshing before editing a note.') }
+      }
+      setPlans(withNotes.filter(p=>!archivedSet.has(p.student_email)))
     } else { setPlans(data||[]) }
     setLoading(false)
   },[isInstructor,profile?.email])
@@ -1454,22 +1474,42 @@ export default function ProgramPlannerPage() {
 
   const handleDuplicatePlan = async (plan) => {
     const newId='PLAN-'+Date.now()+'-'+Math.random().toString(36).slice(2,6).toUpperCase()
+    const dupNote=plan.instructor_notes?`[Duplicated] ${plan.instructor_notes}`:'[Duplicated from existing plan]'
     const {error}=await supabase.from('student_program_plans').insert({
       plan_id:newId, student_email:plan.student_email, student_name:plan.student_name,
       plan_name:`${plan.plan_name} (Copy)`, programs:plan.programs, start_semester:plan.start_semester,
       semesters:plan.semesters, created_by:profile?.email||'', updated_at:new Date().toISOString(),
-      instructor_notes:plan.instructor_notes?`[Duplicated] ${plan.instructor_notes}`:'[Duplicated from existing plan]',
     }).select()
     if(error){toast.error('Duplicate failed: '+error.message);return}
+    // Carry the Instructor Note to the copy (instructor-only table; old column as fallback)
+    const noteRes=await supabase.from('plan_instructor_notes')
+      .upsert({plan_id:newId,note:dupNote,updated_at:new Date().toISOString(),updated_by_email:profile?.email||null},{onConflict:'plan_id'}).select()
+    if(noteRes.error){
+      if(isMissingTableError(noteRes.error)) await supabase.from('student_program_plans').update({instructor_notes:dupNote}).eq('plan_id',newId)
+      else console.error('ProgramPlanner duplicate note:',noteRes.error)
+    }
     toast.success('Plan duplicated — edit the copy to customize'); loadPlans()
   }
 
   const handleSaveNote = async (planId,note) => {
     const plan=plans.find(p=>p.plan_id===planId)
     const oldNote=plan?.instructor_notes||''
-    const {error}=await supabase.from('student_program_plans')
-      .update({instructor_notes:note,updated_at:new Date().toISOString()}).eq('plan_id',planId).select()
-    if(error){toast.error('Failed to save note: '+error.message);return}
+    const nowIso=new Date().toISOString()
+    // Instructor-only table: save the note, or remove the row when cleared
+    let res=(note||'').trim()
+      ? await supabase.from('plan_instructor_notes')
+          .upsert({plan_id:planId,note,updated_at:nowIso,updated_by_email:profile?.email||null},{onConflict:'plan_id'}).select()
+      : await supabase.from('plan_instructor_notes').delete().eq('plan_id',planId).select()
+    if(res.error&&isMissingTableError(res.error)){
+      // Security migration not run yet — fall back to the old column
+      res=await supabase.from('student_program_plans')
+        .update({instructor_notes:note,updated_at:nowIso}).eq('plan_id',planId).select()
+    } else if(!res.error){
+      if((note||'').trim()&&!(res.data?.length)){toast.error('Note not saved — you may not have permission.');return}
+      // Keep the plan's "Recent" position in step with its note, as before
+      await supabase.from('student_program_plans').update({updated_at:nowIso}).eq('plan_id',planId)
+    }
+    if(res.error){toast.error('Failed to save note: '+res.error.message);return}
     await supabase.from('audit_log').insert({
       user_email:profile?.email||'', user_name:profile?`${profile.first_name} ${profile.last_name}`.trim():'',
       action:oldNote?'UPDATE':'CREATE', entity_type:'student_program_plans', entity_id:planId,
