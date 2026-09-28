@@ -6,13 +6,14 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   GraduationCap, Plus, Printer, X, ChevronRight, ChevronLeft,
   Search, Trash2, Save, Check, AlertCircle, BookOpen, RefreshCw,
-  StickyNote, Sun, PlusCircle, Copy,
+  StickyNote, Sun, PlusCircle, Copy, Clock, ClipboardCheck,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { isSuperAdmin } from '@/lib/superAdmin'
 import { useAcademicTerms } from '@/hooks/useAcademicTerms'
 import { sortTermsAsc } from '@/lib/academicTerms'
+import { mustData, assertWrite, isUniqueViolation } from '@/lib/supabaseData'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROGRAMS = [
@@ -152,47 +153,153 @@ function migrateLegacySummerSemesters(semesters, startSemester) {
   return { semesters: result, migrated: true }
 }
 
-// ─── DonutChart ───────────────────────────────────────────────────────────────
-function DonutChart({ completed, total, size = 80 }) {
-  const pct = total > 0 ? Math.min(1, completed / total) : 0
-  const r = 26, circ = 2 * Math.PI * r, dash = circ * pct, gap = circ - dash
+// ─── Course status (Not started → In progress → Done) ─────────────────────────
+// Stored on each course in plan.semesters as two booleans: `completed` (the
+// original flag — unchanged, so older plans read correctly) and `in_progress`
+// (added 2026-09-28). `completed` wins if both are ever set.
+const IN_PROGRESS_HEX = '#d97706'   // amber-600 — ≥3:1 against white / slate-200 track
+const DONE_HEX        = '#16a34a'   // green-600
+// Diagonal stripes so "in progress" doesn't rely on colour alone
+const IN_PROGRESS_STRIPES = 'repeating-linear-gradient(135deg, rgba(255,255,255,0.35) 0 3px, transparent 3px 6px)'
+
+function courseStatus(c) {
+  if (c?.completed) return 'done'
+  if (c?.in_progress) return 'progress'
+  return 'none'
+}
+const STATUS_LABEL = { none: 'Not started', progress: 'In progress', done: 'Completed' }
+const NEXT_STATUS  = { none: 'progress', progress: 'done', done: 'none' }
+function statusFields(status) {
+  return { completed: status === 'done', in_progress: status === 'progress' }
+}
+
+const hasContent = c => !!(c?.course_num || c?.course_title)
+
+/** Credits for a list of semesters: { total, done, progress, remaining, donePct, progressPct } */
+function creditTotals(sems) {
+  let total = 0, done = 0, progress = 0
+  ;(sems || []).forEach(sem => (sem.courses || []).forEach(c => {
+    const cr = parseFloat(c.credits) || 0
+    total += cr
+    const st = courseStatus(c)
+    if (st === 'done') done += cr
+    else if (st === 'progress') progress += cr
+  }))
+  const donePct = total > 0 ? Math.round((done / total) * 100) : 0
+  // Round the combined figure so the two bar segments never exceed 100%
+  const progressPct = total > 0 ? Math.max(0, Math.min(100, Math.round(((done + progress) / total) * 100)) - donePct) : 0
+  return { total, done, progress, remaining: Math.max(0, total - done - progress), donePct, progressPct }
+}
+
+/** "5/7 done · 2 in progress" for a semester header, or '' when nothing is marked. */
+function semesterStatusLabel(courses) {
+  const rows = (courses || []).filter(hasContent)
+  const d = rows.filter(c => courseStatus(c) === 'done').length
+  const p = rows.filter(c => courseStatus(c) === 'progress').length
+  if (!d && !p) return ''
+  return [d ? `${d}/${rows.length} done` : '', p ? `${p} in progress` : ''].filter(Boolean).join(' · ')
+}
+
+// ─── Advising helpers ─────────────────────────────────────────────────────────
+/** Today as YYYY-MM-DD in local time (never toISOString — see conventions). */
+function todayLocalDate() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+/** 'YYYY-MM-DD' → 'Sep 28, 2026' (local parse). */
+function fmtMetOn(s, withYear = true) {
+  if (!s) return ''
+  const d = new Date(`${String(s).substring(0, 10)}T00:00:00`)
+  if (isNaN(d)) return ''
+  return d.toLocaleDateString('en-US', withYear ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' })
+}
+/** Fallback term name when Settings → Terms is empty: Aug–Dec = Fall, Jan–Jul = Spring. */
+function fallbackTermName(today = new Date()) {
+  const m = today.getMonth()
+  return m >= 7 ? `Fall ${today.getFullYear()}` : `Spring ${today.getFullYear()}`
+}
+const sortMeetings = list => [...(list || [])].sort((a, b) => semesterSortKey(a.term_name) - semesterSortKey(b.term_name))
+
+// ─── ProgressBar (stacked: done + in progress) ────────────────────────────────
+function ProgressBar({ totals, height = 'h-2.5' }) {
+  const { done, progress, total, donePct, progressPct } = totals
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" className="shrink-0">
+    <div className={`w-full bg-surface-100 rounded-full ${height} overflow-hidden flex`}
+      role="img" aria-label={`${done} of ${total} credits complete${progress ? `, ${progress} in progress` : ''}`}>
+      {donePct > 0 && <div className={`bg-emerald-500 ${height} transition-all duration-700`} style={{ width: `${donePct}%` }}/>}
+      {progressPct > 0 && (
+        <div className={`${height} transition-all duration-700`}
+          style={{ width: `${progressPct}%`, backgroundColor: IN_PROGRESS_HEX, backgroundImage: IN_PROGRESS_STRIPES }}/>
+      )}
+    </div>
+  )
+}
+
+/** Small status marker used in read-only tables. */
+function StatusMarker({ status }) {
+  if (status === 'done') return (
+    <span className="inline-flex w-5 h-5 bg-emerald-500 rounded-full items-center justify-center">
+      <Check size={11} className="text-white" aria-hidden="true" /><span className="sr-only">Completed</span>
+    </span>
+  )
+  if (status === 'progress') return (
+    <span className="inline-flex w-5 h-5 rounded-full items-center justify-center" style={{ backgroundColor: IN_PROGRESS_HEX }}>
+      <Clock size={11} className="text-white" aria-hidden="true" /><span className="sr-only">In progress</span>
+    </span>
+  )
+  return <span className="inline-flex w-5 h-5 border-2 border-surface-200 rounded-full"><span className="sr-only">Not started</span></span>
+}
+
+// ─── DonutChart ───────────────────────────────────────────────────────────────
+function DonutChart({ completed, inProgress = 0, total, size = 80 }) {
+  const pct  = total > 0 ? Math.min(1, completed / total) : 0
+  const pPct = total > 0 ? Math.max(0, Math.min(1 - pct, inProgress / total)) : 0
+  const r = 26, circ = 2 * Math.PI * r
+  const dash = circ * pct, pDash = circ * pPct
+  const label = `${Math.round(pct * 100)}% of credits complete${inProgress ? `, ${Math.round(pPct * 100)}% in progress` : ''}`
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" className="shrink-0" role="img" aria-label={label}>
       <circle cx="32" cy="32" r={r} fill="none" stroke="#e2e8f0" strokeWidth="9"/>
-      {pct > 0 && (
-        <circle cx="32" cy="32" r={r} fill="none" stroke="#16a34a" strokeWidth="9"
-          strokeDasharray={`${dash.toFixed(2)} ${gap.toFixed(2)}`} strokeLinecap="round"
+      {pPct > 0 && (
+        // In-progress arc starts where the done arc ends
+        <circle cx="32" cy="32" r={r} fill="none" stroke={IN_PROGRESS_HEX} strokeWidth="9"
+          strokeDasharray={`${pDash.toFixed(2)} ${(circ - pDash).toFixed(2)}`} strokeDashoffset={(-dash).toFixed(2)}
           transform="rotate(-90 32 32)" style={{ transition: 'stroke-dasharray 0.6s ease' }}/>
       )}
-      <text x="32" y="29" textAnchor="middle" fontSize="12" fontWeight="bold" fill="#0f172a">{Math.round(pct * 100)}%</text>
-      <text x="32" y="40" textAnchor="middle" fontSize="7.5" fill="#94a3b8">done</text>
+      {pct > 0 && (
+        <circle cx="32" cy="32" r={r} fill="none" stroke={DONE_HEX} strokeWidth="9"
+          strokeDasharray={`${dash.toFixed(2)} ${(circ - dash).toFixed(2)}`} strokeLinecap={pPct > 0 ? 'butt' : 'round'}
+          transform="rotate(-90 32 32)" style={{ transition: 'stroke-dasharray 0.6s ease' }}/>
+      )}
+      <text x="32" y="29" textAnchor="middle" fontSize="12" fontWeight="bold" fill="#0f172a" aria-hidden="true">{Math.round(pct * 100)}%</text>
+      <text x="32" y="40" textAnchor="middle" fontSize="7.5" fill="#64748b" aria-hidden="true">done</text>
     </svg>
   )
 }
 
 // ─── Print helper ─────────────────────────────────────────────────────────────
-function printPlan(plan, studentName) {
+// `advising` (optional): [{ term_name, met_on }] — printed as dates only, never notes.
+function printPlan(plan, studentName, advising = null) {
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-  const totalCr   = (plan.semesters||[]).reduce((s,sem)=>s+(sem.courses||[]).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-  const doneCr    = (plan.semesters||[]).reduce((s,sem)=>s+(sem.courses||[]).filter(c=>c.completed).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-  const pct = totalCr > 0 ? Math.round((doneCr/totalCr)*100) : 0
+  const { total: totalCr, done: doneCr, progress: progCr, remaining: remainingCr, donePct: pct, progressPct: progPct } = creditTotals(plan.semesters)
   const printedDate = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
 
   const semHtml = (plan.semesters||[]).map(sem => {
     const isSummer = sem.label?.toLowerCase().includes('summer')
     const semTotal = (sem.courses||[]).reduce((s,c)=>s+(parseFloat(c.credits)||0),0)
-    const rows = (sem.courses||[]).filter(c=>c.course_num||c.course_title).map(c=>`
-      <tr class="${c.completed?'done':''}">
-        <td style="text-align:center">${c.completed?'✓':'○'}</td>
+    const rows = (sem.courses||[]).filter(c=>c.course_num||c.course_title).map(c=>{
+      const st = courseStatus(c)
+      return `
+      <tr class="${st==='done'?'done':st==='progress'?'prog':''}">
+        <td style="text-align:center">${st==='done'?'✓':st==='progress'?'◐':'○'}</td>
         <td>${esc(c.course_num)}</td>
-        <td>${esc(c.course_title)}${c._programs?.length>1?'<span class="shared"> ★ Shared</span>':''}</td>
+        <td>${esc(c.course_title)}${c._programs?.length>1?'<span class="shared"> ★ Shared</span>':''}${st==='progress'?'<span class="prog-tag"> In progress</span>':''}</td>
         <td>${esc(c.prerequisites)}</td>
         <td class="cr">${esc(c.credits)}</td>
         <td>${esc(c.offered)}</td>
-      </tr>`).join('')
-    const doneCount = (sem.courses||[]).filter(c=>(c.course_num||c.course_title)&&c.completed).length
-    const totalRows = (sem.courses||[]).filter(c=>c.course_num||c.course_title).length
-    const doneLabel = doneCount > 0 ? ` — ${doneCount}/${totalRows} complete` : ''
+      </tr>`}).join('')
+    const statusText = semesterStatusLabel(sem.courses)
+    const doneLabel = statusText ? ` — ${statusText}` : ''
     if (!rows) return ''
     return `
       <div class="sem ${isSummer?'sem-summer':''}">
@@ -207,9 +314,13 @@ function printPlan(plan, studentName) {
 
   const progressHtml = totalCr > 0 ? `
     <div class="progress-section">
-      <div class="progress-row"><span>Progress: <strong>${doneCr} of ${totalCr} credits complete (${pct}%)</strong></span><span>${totalCr-doneCr} cr remaining</span></div>
-      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      <div class="progress-row"><span>Progress: <strong>${doneCr} of ${totalCr} credits complete (${pct}%)</strong>${progCr?` · <span class="prog-text">${progCr} cr in progress</span>`:''}</span><span>${remainingCr} cr remaining</span></div>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div><div class="progress-prog" style="width:${progPct}%"></div></div>
+      ${progCr?'<div class="legend"><span><i class="sw sw-done"></i>Complete</span><span><i class="sw sw-prog"></i>In progress</span><span><i class="sw sw-rem"></i>Remaining</span></div>':''}
     </div>` : ''
+
+  const advisingHtml = advising?.length ? `
+    <div class="advising"><b>Advising meetings:</b> ${sortMeetings(advising).map(m=>`${esc(m.term_name)} ✓ ${esc(fmtMetOn(m.met_on))}`).join(' &nbsp;·&nbsp; ')}</div>` : ''
 
   const html = `<!DOCTYPE html><html><head><title>Program Plan — ${esc(studentName)}</title>
   <style>
@@ -219,8 +330,14 @@ function printPlan(plan, studentName) {
     .meta-sub{font-size:8pt;color:#94a3b8;margin-bottom:12px}
     .progress-section{margin-bottom:16px;padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px}
     .progress-row{display:flex;justify-content:space-between;font-size:9pt;margin-bottom:5px}
-    .progress-track{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden}
-    .progress-fill{height:8px;background:#16a34a;border-radius:4px}
+    .progress-track{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;display:flex}
+    .progress-fill{height:8px;background:#16a34a}
+    .progress-prog{height:8px;background:${IN_PROGRESS_HEX};background-image:${IN_PROGRESS_STRIPES}}
+    .prog-text{color:#b45309;font-weight:bold}
+    .legend{display:flex;gap:14px;font-size:8pt;color:#475569;margin-top:5px}
+    .sw{display:inline-block;width:10px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
+    .sw-done{background:#16a34a}.sw-prog{background:${IN_PROGRESS_HEX};background-image:${IN_PROGRESS_STRIPES}}.sw-rem{background:#e2e8f0}
+    .advising{margin:-8px 0 14px;font-size:8.5pt;color:#334155}
     .sem{margin-bottom:18px;break-inside:avoid}
     .sem-head{display:flex;justify-content:space-between;background:#1e3a8a;color:white;padding:5px 8px;font-weight:bold;font-size:10pt;border-radius:3px 3px 0 0}
     .sem-summer .sem-head{background:#b45309}
@@ -231,6 +348,9 @@ function printPlan(plan, studentName) {
     .sem-total td{background:#f0f9ff}.shared{font-size:7.5pt;color:#7c3aed;margin-left:4px}
     tr.done td{color:#888;text-decoration:line-through;background:#f0fdf4}
     tr.done td:first-child{text-decoration:none;color:#16a34a;font-weight:bold}
+    tr.prog td{background:#fffbeb}
+    tr.prog td:first-child{color:#b45309;font-weight:bold}
+    .prog-tag{font-size:7.5pt;color:#b45309;font-weight:bold;margin-left:4px}
     .total{margin-top:12px;font-size:11pt;font-weight:bold;text-align:right;color:#1e3a8a}
     .dar-note{margin-top:14px;padding:7px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:8pt;color:#64748b}
     .dar-note b{color:#334155}
@@ -244,7 +364,7 @@ function printPlan(plan, studentName) {
     <span><b>Total Credits:</b> ${totalCr}</span>
   </div>
   <div class="meta-sub">Student: ${esc(plan.student_email||'')} &nbsp;|&nbsp; Printed: ${printedDate}</div>
-  ${progressHtml}${semHtml}
+  ${progressHtml}${advisingHtml}${semHtml}
   <div class="total">Total Program Credits: ${totalCr}</div>
   <div class="dar-note"><b>Note:</b> This plan is for advising purposes only and does not replace an official Degree Audit Report (DAR). Contact your instructor or advisor to request a DAR through the college's student records system.</div>
   </body></html>`
@@ -288,7 +408,7 @@ function DeleteSemesterDialog({ semester, onConfirm, onCancel }) {
 }
 
 // ─── PlanEditorModal ──────────────────────────────────────────────────────────
-function PlanEditorModal({ plan, onSave, onClose }) {
+function PlanEditorModal({ plan, advising = [], onSave, onClose }) {
   const dialogRef = useDialogA11y(true, onClose)
   const [wasMigrated, setWasMigrated] = useState(false)
   const [semesters, setSemesters] = useState(() => {
@@ -312,6 +432,10 @@ function PlanEditorModal({ plan, onSave, onClose }) {
     : null
 
   const updRow = (si,ri,field,val) => setSemesters(prev=>prev.map((s,i)=>i!==si?s:{...s,courses:s.courses.map((c,j)=>j!==ri?c:{...c,[field]:val})}))
+  // Not started → In progress → Done → Not started
+  const cycleStatus = (si,ri) => setSemesters(prev=>prev.map((s,i)=>i!==si?s:{...s,courses:s.courses.map((c,j)=>j!==ri?c:{...c,...statusFields(NEXT_STATUS[courseStatus(c)])})}))
+  const [statusMsg, setStatusMsg] = useState('')
+  const editorTotals = creditTotals(semesters)
   const delRow = (si,ri) => setSemesters(prev=>prev.map((s,i)=>i!==si?s:{...s,courses:s.courses.filter((_,j)=>j!==ri)}))
   const addRow = (si) => setSemesters(prev=>prev.map((s,i)=>i!==si?s:{...s,courses:[...s.courses,{course_num:'',course_title:'',prerequisites:'',credits:'',offered:''}]}))
 
@@ -376,10 +500,23 @@ function PlanEditorModal({ plan, onSave, onClose }) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 sticky top-0 bg-white rounded-t-2xl z-10">
           <div>
             <h2 className="text-base font-bold text-surface-900">Edit Plan — {plan.student_name}</h2>
-            <p className="text-xs text-surface-400 mt-0.5">Drag ⠿ to reorder courses. Semesters auto-sort chronologically on save.</p>
+            <p className="text-xs text-surface-400 mt-0.5">Drag ⠿ to reorder courses. Click the status circle to cycle Not started → In progress → Done. Semesters auto-sort chronologically on save.</p>
+            <p className="text-[11px] text-surface-500 mt-1">
+              <span className="font-semibold text-emerald-700">{editorTotals.done} cr done</span>
+              {editorTotals.progress>0&&<> · <span className="font-semibold text-amber-700">{editorTotals.progress} cr in progress</span></>}
+              {' '}· {editorTotals.remaining} cr remaining
+            </p>
+            {advising.length>0&&(
+              <p className="text-[11px] text-surface-500 mt-0.5 flex items-center gap-1 flex-wrap">
+                <ClipboardCheck size={11} className="text-emerald-600" aria-hidden="true" />
+                <span className="font-semibold">Advised:</span>
+                {sortMeetings(advising).map(m=>`${m.term_name} (${fmtMetOn(m.met_on,false)})`).join(' · ')}
+              </p>
+            )}
+            <p className="sr-only" aria-live="polite">{statusMsg}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters},plan.student_name)}
+            <button onClick={()=>printPlan({...plan,semesters},plan.student_name,advising)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print
             </button>
@@ -439,11 +576,15 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {(sem.courses||[]).some(c=>c.completed) && (
-                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full">
-                        {(sem.courses||[]).filter(c=>c.completed).length}/{(sem.courses||[]).filter(c=>c.course_num||c.course_title).length} complete
-                      </span>
-                    )}
+                    {(()=>{
+                      const rows=(sem.courses||[]).filter(hasContent)
+                      const d=rows.filter(c=>courseStatus(c)==='done').length
+                      const p=rows.filter(c=>courseStatus(c)==='progress').length
+                      return <>
+                        {d>0&&<span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">{d}/{rows.length} complete</span>}
+                        {p>0&&<span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">{p} in progress</span>}
+                      </>
+                    })()}
                     <span className="text-xs text-surface-400">{semTotal} credits</span>
                     <button onClick={()=>setDeleteConfirm(si)} title={`Remove ${sem.label}`} aria-label={`Remove ${sem.label}`}
                       className="p-1 rounded-lg text-surface-300 hover:text-red-500 hover:bg-red-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
@@ -456,7 +597,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                   <thead>
                     <tr className="bg-surface-50 border-b border-surface-200">
                       <th scope="col" className="p-2 w-5"/>
-                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[7%]">Done</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[7%]">Status</th>
                       <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[13%]">Course #</th>
                       <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[28%]">Course Title</th>
                       <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[24%]">Prerequisites</th>
@@ -485,7 +626,7 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                           onDragEnd={()=>{dragSrc.current=null;setDropTarget(null)}}
                           className={`border-b border-surface-100 last:border-0 transition-colors
                             ${dropTarget?.si===si&&dropTarget?.ri===ri?'bg-brand-50 border-t-2 border-t-brand-400':''}
-                            ${course.completed?'bg-emerald-50/50':isShared?'bg-violet-50/30':'hover:bg-surface-50/50'}`}>
+                            ${course.completed?'bg-emerald-50/50':course.in_progress?'bg-amber-50/60':isShared?'bg-violet-50/30':'hover:bg-surface-50/50'}`}>
                           <td className="pl-2 pr-0 cursor-grab select-none text-surface-300 hover:text-brand-400">
                             <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
                               <circle cx="2.5" cy="2.5" r="1.5"/><circle cx="7.5" cy="2.5" r="1.5"/>
@@ -494,11 +635,25 @@ function PlanEditorModal({ plan, onSave, onClose }) {
                             </svg>
                           </td>
                           <td className="p-1 text-center">
-                            <button onClick={()=>updRow(si,ri,'completed',!course.completed)}
-                              title={course.completed?'Mark incomplete':'Mark complete'} aria-label={course.completed?'Mark incomplete':'Mark complete'}
-                              className={`w-6 h-6 rounded-full border-2 flex items-center justify-center mx-auto transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${course.completed?'bg-emerald-500 border-emerald-500 text-white':'border-surface-300 hover:border-emerald-400 text-transparent'}`}>
-                              <Check size={11} aria-hidden="true" />
-                            </button>
+                            {(()=>{
+                              const st=courseStatus(course), next=NEXT_STATUS[st]
+                              const name=course.course_num||course.course_title||`row ${ri + 1}`
+                              return (
+                                <button type="button"
+                                  onClick={()=>{cycleStatus(si,ri);setStatusMsg(`${name}: ${STATUS_LABEL[next]}`)}}
+                                  title={`${STATUS_LABEL[st]} — click for ${STATUS_LABEL[next]}`}
+                                  aria-label={`${name} status: ${STATUS_LABEL[st]}. Activate to mark ${STATUS_LABEL[next]}.`}
+                                  className="min-h-[44px] min-w-[44px] mx-auto flex items-center justify-center rounded-lg group focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                                  <span className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors
+                                    ${st==='done'?'bg-emerald-500 border-emerald-500 text-white'
+                                      :st==='progress'?'border-amber-600 text-white'
+                                      :'border-surface-300 group-hover:border-amber-500 text-transparent'}`}
+                                    style={st==='progress'?{backgroundColor:IN_PROGRESS_HEX}:undefined}>
+                                    {st==='progress'?<Clock size={11} aria-hidden="true" />:<Check size={11} aria-hidden="true" />}
+                                  </span>
+                                </button>
+                              )
+                            })()}
                           </td>
                           <td className="p-1">
                             <input aria-label={`Course number, ${sem.label} row ${ri + 1}`} value={course.course_num||''} onChange={e=>updRow(si,ri,'course_num',e.target.value.toUpperCase())}
@@ -745,16 +900,16 @@ function NewPlanModal({ onCreated, onClose }) {
 }
 
 // ─── StudentPlanView (read-only) ──────────────────────────────────────────────
-export function StudentPlanView({ plan, onClose }) {
+// `advising`: [{ term_name, met_on, notes? }]; notes only render when showNotes (instructors).
+export function StudentPlanView({ plan, onClose, advising = [], showNotes = false }) {
   const dialogRef = useDialogA11y(true, onClose)
   const { semesters: cleanSemesters } = useMemo(
     () => migrateLegacySummerSemesters(plan?.semesters||[], plan?.start_semester),
     [plan]
   )
-  const totalCredits     = cleanSemesters.reduce((s,sem)=>s+(sem.courses||[]).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-  const completedCredits = cleanSemesters.reduce((s,sem)=>s+(sem.courses||[]).filter(c=>c.completed).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-  const remainingCredits = totalCredits - completedCredits
-  const pct = totalCredits > 0 ? Math.round((completedCredits/totalCredits)*100) : 0
+  const totals = creditTotals(cleanSemesters)
+  const { total: totalCredits, done: completedCredits, progress: progressCredits, remaining: remainingCredits, donePct: pct } = totals
+  const meetings = sortMeetings(advising)
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-3">
@@ -772,7 +927,7 @@ export function StudentPlanView({ plan, onClose }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student')}
+            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',meetings)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print / Save PDF
             </button>
@@ -802,21 +957,26 @@ export function StudentPlanView({ plan, onClose }) {
         {/* Progress + Donut */}
         <div className="px-6 pb-3 shrink-0">
           <div className="bg-gradient-to-r from-brand-50 to-emerald-50 border border-surface-200 rounded-xl px-4 py-3 flex items-center gap-4">
-            <DonutChart completed={completedCredits} total={totalCredits} size={72}/>
+            <DonutChart completed={completedCredits} inProgress={progressCredits} total={totalCredits} size={72}/>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-1.5 gap-2 flex-wrap">
                 <p className="text-xs font-bold text-surface-800">Degree Progress</p>
-                <p className="text-[11px] text-surface-500">
-                  <span className="font-semibold text-emerald-600">{completedCredits} cr</span> done ·{' '}
-                  <span className="font-semibold text-surface-600">{remainingCredits} cr</span> remaining
+                <p className="text-[11px] text-surface-600">
+                  <span className="font-semibold text-emerald-700">{completedCredits} cr</span> done ·{' '}
+                  {progressCredits>0&&<><span className="font-semibold text-amber-700">{progressCredits} cr</span> in progress ·{' '}</>}
+                  <span className="font-semibold text-surface-700">{remainingCredits} cr</span> remaining
                 </p>
               </div>
-              <div className="w-full bg-surface-100 rounded-full h-2.5 overflow-hidden">
-                <div className="bg-emerald-500 h-2.5 rounded-full transition-all duration-700" style={{width:`${pct}%`}}/>
-              </div>
-              <div className="flex justify-between mt-1">
-                <p className="text-[10px] text-surface-400">{completedCredits} / {totalCredits} credits complete</p>
-                <p className="text-[10px] text-emerald-600 font-semibold">{pct}%</p>
+              <ProgressBar totals={totals}/>
+              <div className="flex justify-between mt-1 gap-2 flex-wrap">
+                <p className="text-[10px] text-surface-500">{completedCredits} / {totalCredits} credits complete</p>
+                {progressCredits>0&&(
+                  <p className="text-[10px] text-surface-600 flex items-center gap-3" aria-hidden="true">
+                    <span className="inline-flex items-center gap-1"><span className="inline-block w-2.5 h-2 rounded-sm bg-emerald-500"/>Complete</span>
+                    <span className="inline-flex items-center gap-1"><span className="inline-block w-2.5 h-2 rounded-sm" style={{backgroundColor:IN_PROGRESS_HEX,backgroundImage:IN_PROGRESS_STRIPES}}/>In progress</span>
+                  </p>
+                )}
+                <p className="text-[10px] text-emerald-700 font-semibold">{pct}%</p>
               </div>
               {totalCredits>0&&(
                 <div className="flex gap-3 mt-2">
@@ -831,6 +991,25 @@ export function StudentPlanView({ plan, onClose }) {
             </div>
           </div>
         </div>
+
+        {/* Advising history */}
+        {meetings.length>0&&(
+          <div className="px-6 pb-3 shrink-0">
+            <div className="bg-surface-50 border border-surface-200 rounded-xl px-4 py-2.5">
+              <p className="text-[11px] font-bold text-surface-700 flex items-center gap-1.5 mb-1">
+                <ClipboardCheck size={12} className="text-emerald-600" aria-hidden="true" /> Advising meetings
+              </p>
+              <ul className="flex flex-wrap gap-x-4 gap-y-1">
+                {meetings.map(m=>(
+                  <li key={m.term_name} className="text-[11px] text-surface-600">
+                    <span className="font-semibold text-surface-800">{m.term_name}</span> <span className="text-emerald-700" aria-hidden="true">✓</span> {fmtMetOn(m.met_on)}
+                    {showNotes&&m.notes&&<span className="block text-[10px] text-surface-500 italic">{m.notes}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
 
         {/* Semesters */}
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-4 space-y-4">
@@ -848,7 +1027,10 @@ export function StudentPlanView({ plan, onClose }) {
                     {isSummer&&<span className="text-[10px] font-semibold text-amber-100 bg-amber-700/60 border border-amber-400/40 px-1.5 py-0.5 rounded-full">Gen Ed only</span>}
                   </div>
                   <div className="flex items-center gap-2">
-                    {rows.some(c=>c.completed)&&<span className="text-[10px] font-bold text-emerald-300">{rows.filter(c=>c.completed).length}/{rows.length} done</span>}
+                    {(()=>{const d=rows.filter(c=>courseStatus(c)==='done').length,p=rows.filter(c=>courseStatus(c)==='progress').length;return <>
+                      {d>0&&<span className="text-[10px] font-bold text-white">✓ {d}/{rows.length} done</span>}
+                      {p>0&&<span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded-full">{p} in progress</span>}
+                    </>})()}
                     <span className={`text-xs ${isSummer?'text-amber-200':'text-brand-200'}`}>{semTotal} credits</span>
                   </div>
                 </div>
@@ -860,7 +1042,7 @@ export function StudentPlanView({ plan, onClose }) {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-surface-50 border-b border-surface-200">
-                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[7%]">✓</th>
+                      <th scope="col" className="text-center p-2 font-semibold text-surface-600 w-[7%]"><span aria-hidden="true">✓</span><span className="sr-only">Status</span></th>
                       <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[15%]">Course #</th>
                       <th scope="col" className="text-left p-2 font-semibold text-surface-600">Course Title</th>
                       <th scope="col" className="text-left p-2 font-semibold text-surface-600 w-[22%]">Prerequisites</th>
@@ -871,17 +1053,17 @@ export function StudentPlanView({ plan, onClose }) {
                   <tbody>
                     {rows.map((course,ri)=>{
                       const isShared=course._programs?.length>1
+                      const st=courseStatus(course)
                       return (
-                        <tr key={ri} className={`border-b border-surface-100 last:border-0 ${course.completed?'bg-emerald-50/60':isShared?'bg-violet-50/40':''}`}>
+                        <tr key={ri} className={`border-b border-surface-100 last:border-0 ${st==='done'?'bg-emerald-50/60':st==='progress'?'bg-amber-50/70':isShared?'bg-violet-50/40':''}`}>
                           <td className="p-2 text-center">
-                            {course.completed
-                              ?<span className="inline-flex w-5 h-5 bg-emerald-500 rounded-full items-center justify-center"><Check size={11} className="text-white" aria-hidden="true" /></span>
-                              :<span className="inline-flex w-5 h-5 border-2 border-surface-200 rounded-full"/>}
+                            <StatusMarker status={st}/>
                           </td>
                           <td className={`p-2 font-medium ${course.completed?'text-surface-400 line-through':'text-surface-800'}`}>{course.course_num}</td>
                           <td className={`p-2 ${course.completed?'text-surface-400 line-through':'text-surface-700'}`}>
                             {course.course_title}
                             {isShared&&<span className="ml-1.5 text-[9px] font-bold text-violet-600 bg-violet-100 px-1 rounded">★ Shared</span>}
+                            {st==='progress'&&<span className="ml-1.5 text-[9px] font-bold text-amber-800 bg-amber-100 px-1 rounded">In progress</span>}
                           </td>
                           <td className="p-2 text-surface-500">{course.prerequisites||'—'}</td>
                           <td className="p-2 text-center font-semibold text-surface-700">{course.credits}</td>
@@ -890,7 +1072,7 @@ export function StudentPlanView({ plan, onClose }) {
                       )
                     })}
                     <tr className="bg-surface-50 border-t border-surface-200">
-                      <td colSpan={3} className="p-2 text-right text-xs font-bold text-surface-600">Semester Total</td>
+                      <td colSpan={4} className="p-2 text-right text-xs font-bold text-surface-600">Semester Total</td>
                       <td className="p-2 text-center text-xs font-bold text-brand-600">{semTotal}</td>
                       <td/>
                     </tr>
@@ -938,6 +1120,21 @@ export default function ProgramPlannerPage() {
   const [deleting,setDeleting]=useState(false)
   const autoOpenDismissedRef = useRef(false)
 
+  // ── Advising check-off state ──────────────────────────────────────────────
+  // Instructors: every advising_meetings row (RLS: instructors only).
+  // Students: their own term + date via the my_advising_meetings() RPC.
+  const { terms, current: currentTermRow } = useAcademicTerms()
+  const [advisingRows,setAdvisingRows]=useState([])
+  const [advisingError,setAdvisingError]=useState('')
+  const [advisingTerm,setAdvisingTerm]=useState(()=>fallbackTermName())
+  const [advisingFilter,setAdvisingFilter]=useState('all') // all | done | todo
+  const [advisingOpenId,setAdvisingOpenId]=useState(null)  // plan_id whose advising panel is open
+  const [advisingDraft,setAdvisingDraft]=useState({met_on:'',notes:''})
+  const [advisingBusy,setAdvisingBusy]=useState(false)
+  const [confirmRemoveAdvising,setConfirmRemoveAdvising]=useState(null)
+  const [advisingMsg,setAdvisingMsg]=useState('')
+  const termPickedRef = useRef(false)
+
   const handleSortChange = val => { setSortOrder(val); localStorage.setItem('plannerSortOrder',val) }
 
   const loadPlans = useCallback(async () => {
@@ -964,8 +1161,32 @@ export default function ProgramPlannerPage() {
     setLoadingMaster(false)
   },[])
 
+  const loadAdvising = useCallback(async () => {
+    if (!profile?.email) return
+    try {
+      const rows = isInstructor
+        ? mustData(await supabase.from('advising_meetings').select('*').order('met_on',{ascending:true}), 'advising_meetings.select')
+        : mustData(await supabase.rpc('my_advising_meetings'), 'my_advising_meetings')
+      setAdvisingRows(rows||[]); setAdvisingError('')
+    } catch (e) {
+      console.error('ProgramPlanner advising:', e)
+      const code = e?.code || e?.cause?.code
+      const missing = code==='42P01'||code==='PGRST205'||code==='PGRST202'||/does not exist|schema cache/i.test(e?.message||'')
+      // Keep the last-known-good rows; tell instructors why the column may be stale
+      setAdvisingError(missing
+        ? 'Advising check-off is not set up yet — run the 20260928_advising_meetings.sql migration.'
+        : 'Could not load advising check-offs. Showing the last loaded data — try Refresh.')
+    }
+  },[isInstructor,profile?.email])
+
   useEffect(()=>{loadPlans()},[loadPlans])
+  useEffect(()=>{loadAdvising()},[loadAdvising])
   useEffect(()=>{if(isInstructor)loadMasterPlanners()},[loadMasterPlanners,isInstructor])
+  // Default the advising term to the current term from Settings → Terms (once)
+  useEffect(()=>{
+    if(termPickedRef.current||!currentTermRow?.name) return
+    setAdvisingTerm(currentTermRow.name)
+  },[currentTermRow])
   useEffect(()=>{
     if(!isInstructor&&plans.length>=1&&!viewing&&!autoOpenDismissedRef.current) setViewing(plans[0])
   },[plans,isInstructor])
@@ -1021,8 +1242,116 @@ export default function ProgramPlannerPage() {
     else{setNoteText(currentNote||'');setExpandedNoteId(planId)}
   }
 
-  const filtered = plans
+  // ── Advising check-off ────────────────────────────────────────────────────
+  const advisingByEmail = useMemo(()=>{
+    const m=new Map()
+    ;(advisingRows||[]).forEach(r=>{
+      const k=(r.student_email||'').toLowerCase()
+      if(!m.has(k)) m.set(k,[])
+      m.get(k).push(r)
+    })
+    return m
+  },[advisingRows])
+  const meetingsFor = email => advisingByEmail.get((email||'').toLowerCase())||[]
+  const meetingThisTerm = email => meetingsFor(email).find(r=>r.term_name===advisingTerm)||null
+
+  const advisingTermOptions = useMemo(()=>{
+    const names=new Set(sortTermsAsc(terms||[]).map(t=>t.name).filter(n=>/^(Spring|Fall)\s/.test(n||'')))
+    ;(advisingRows||[]).forEach(r=>r.term_name&&names.add(r.term_name))
+    names.add(advisingTerm)
+    if(!terms?.length) names.add(fallbackTermName())
+    return [...names].sort((a,b)=>semesterSortKey(a)-semesterSortKey(b))
+  },[terms,advisingRows,advisingTerm])
+
+  const myName = profile?`${profile.first_name||''} ${profile.last_name||''}`.trim():''
+  const auditAdvising = async (action, entityId, details, oldValue=null, newValue=null) => {
+    try {
+      await supabase.from('audit_log').insert({
+        user_email:profile?.email||'', user_name:myName, action,
+        entity_type:'advising_meetings', entity_id:String(entityId), field_changed:'advising',
+        old_value:oldValue, new_value:newValue, details,
+      })
+    } catch (e) { console.error('advising audit:', e) }
+  }
+
+  const handleAdvise = async (plan) => {
+    if(advisingBusy) return
+    setAdvisingBusy(true)
+    try {
+      const row={
+        student_email:plan.student_email, student_name:plan.student_name,
+        term_name:advisingTerm, term_id:(terms||[]).find(t=>t.name===advisingTerm)?.term_id||null,
+        met_on:todayLocalDate(), advised_by:myName, advised_by_email:profile?.email||'',
+      }
+      const res=assertWrite(await supabase.from('advising_meetings').insert(row).select(),'advising_meetings.insert')
+      if(res.error){
+        if(isUniqueViolation(res.error)){ toast(`${plan.student_name} was already checked off for ${advisingTerm}`); await loadAdvising(); return }
+        throw res.error
+      }
+      const saved=res.data[0]
+      setAdvisingRows(prev=>[...prev,saved])
+      const msg=`${plan.student_name} marked advised for ${advisingTerm}`
+      setAdvisingMsg(msg); toast.success(msg)
+      auditAdvising('CREATE',saved.meeting_id,`Advising check-off: ${plan.student_name} — ${advisingTerm} (${fmtMetOn(saved.met_on)})`,null,`${advisingTerm} ${saved.met_on}`)
+    } catch(e){ toast.error('Could not save advising check-off: '+(e.message||e)) }
+    finally{ setAdvisingBusy(false) }
+  }
+
+  const openAdvisingPanel = (plan) => {
+    if(advisingOpenId===plan.plan_id){ setAdvisingOpenId(null); return }
+    const row=meetingThisTerm(plan.student_email)
+    setAdvisingDraft({met_on:row?.met_on?String(row.met_on).substring(0,10):todayLocalDate(),notes:row?.notes||''})
+    setAdvisingOpenId(plan.plan_id)
+  }
+
+  const handleSaveAdvising = async (plan) => {
+    const row=meetingThisTerm(plan.student_email)
+    if(!row||advisingBusy) return
+    if(!advisingDraft.met_on){ toast.error('Pick the meeting date'); return }
+    setAdvisingBusy(true)
+    try {
+      const patch={met_on:advisingDraft.met_on,notes:advisingDraft.notes.trim()||null,updated_at:new Date().toISOString()}
+      const res=assertWrite(await supabase.from('advising_meetings').update(patch).eq('meeting_id',row.meeting_id).select(),'advising_meetings.update')
+      if(res.error) throw res.error
+      const saved=res.data[0]
+      setAdvisingRows(prev=>prev.map(r=>r.meeting_id===saved.meeting_id?saved:r))
+      setAdvisingOpenId(null); setAdvisingMsg(`Advising details saved for ${plan.student_name}`); toast.success('Advising details saved')
+      const changes=[]
+      if(String(row.met_on).substring(0,10)!==saved.met_on) changes.push(`date ${fmtMetOn(row.met_on)} → ${fmtMetOn(saved.met_on)}`)
+      if((row.notes||'')!==(saved.notes||'')) changes.push(row.notes?'note updated':'note added')
+      if(changes.length) auditAdvising('UPDATE',saved.meeting_id,`Advising ${advisingTerm} for ${plan.student_name}: ${changes.join(', ')}`,`${row.met_on} ${row.notes||''}`.trim(),`${saved.met_on} ${saved.notes||''}`.trim())
+    } catch(e){ toast.error('Could not save: '+(e.message||e)) }
+    finally{ setAdvisingBusy(false) }
+  }
+
+  const handleRemoveAdvisingConfirmed = async () => {
+    const {plan,row}=confirmRemoveAdvising||{}
+    if(!row) return
+    setAdvisingBusy(true)
+    try {
+      const res=assertWrite(await supabase.from('advising_meetings').delete().eq('meeting_id',row.meeting_id).select(),'advising_meetings.delete')
+      if(res.error) throw res.error
+      setAdvisingRows(prev=>prev.filter(r=>r.meeting_id!==row.meeting_id))
+      setConfirmRemoveAdvising(null); setAdvisingOpenId(null)
+      const msg=`Advising check-off removed for ${plan.student_name} (${row.term_name})`
+      setAdvisingMsg(msg); toast.success(msg)
+      auditAdvising('DELETE',row.meeting_id,`Advising check-off removed: ${plan.student_name} — ${row.term_name} (was ${fmtMetOn(row.met_on)})`,`${row.term_name} ${row.met_on} ${row.notes||''}`.trim(),null)
+    } catch(e){ toast.error('Could not remove: '+(e.message||e)) }
+    finally{ setAdvisingBusy(false) }
+  }
+
+  const searched = plans
     .filter(p=>`${p.student_name} ${p.student_email} ${p.plan_name}`.toLowerCase().includes(search.toLowerCase()))
+  // Advising counts are per STUDENT (a student with two plans counts once)
+  const searchedStudents=[...new Set(searched.map(p=>(p.student_email||'').toLowerCase()))]
+  const advisedCount=searchedStudents.filter(e=>meetingsFor(e).some(r=>r.term_name===advisingTerm)).length
+  const notAdvisedCount=searchedStudents.length-advisedCount
+  const filtered = searched
+    .filter(p=>{
+      if(advisingFilter==='all') return true
+      const met=!!meetingThisTerm(p.student_email)
+      return advisingFilter==='done'?met:!met
+    })
     .sort((a,b)=>{
       if(sortOrder==='first') return ((a.student_name||'').split(' ')[0]||'').localeCompare((b.student_name||'').split(' ')[0]||'')
       if(sortOrder==='last'){const l=n=>(n||'').trim().split(' ').slice(-1)[0]||'';return l(a.student_name).localeCompare(l(b.student_name))}
@@ -1052,9 +1381,10 @@ export default function ProgramPlannerPage() {
           <div className="space-y-4">
             {plans.map(plan=>{
               const {semesters:cleanSems}=migrateLegacySummerSemesters(plan.semesters||[],plan.start_semester)
-              const totalCr=cleanSems.reduce((s,sem)=>s+(sem.courses||[]).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-              const doneCr=cleanSems.reduce((s,sem)=>s+(sem.courses||[]).filter(c=>c.completed).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-              const pct=totalCr>0?Math.round((doneCr/totalCr)*100):0
+              const totals=creditTotals(cleanSems)
+              const {total:totalCr,done:doneCr,progress:progCr,donePct:pct}=totals
+              const myMeetings=sortMeetings(advisingRows)
+              const lastMeeting=myMeetings[myMeetings.length-1]
               return (
                 <div key={plan.plan_id} className="bg-white border border-surface-200 rounded-2xl p-5 shadow-sm">
                   <div className="flex items-start justify-between mb-3">
@@ -1070,7 +1400,7 @@ export default function ProgramPlannerPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name)}
+                      <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name,advisingRows)}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                         <Printer size={13} aria-hidden="true" /> Print
                       </button>
@@ -1082,21 +1412,25 @@ export default function ProgramPlannerPage() {
                   </div>
                   {totalCr>0&&(
                     <div className="mt-2">
-                      <div className="flex justify-between text-[11px] text-surface-400 mb-1">
-                        <span>{doneCr} / {totalCr} credits complete</span>
-                        <span className="font-semibold text-emerald-600">{pct}%</span>
+                      <div className="flex justify-between text-[11px] text-surface-500 mb-1">
+                        <span>{doneCr} / {totalCr} credits complete{progCr>0&&<> · <span className="font-semibold text-amber-700">{progCr} cr in progress</span></>}</span>
+                        <span className="font-semibold text-emerald-700">{pct}%</span>
                       </div>
-                      <div className="w-full bg-surface-100 rounded-full h-1.5 overflow-hidden">
-                        <div className="bg-emerald-500 h-1.5 rounded-full" style={{width:`${pct}%`}}/>
-                      </div>
+                      <ProgressBar totals={totals} height="h-1.5"/>
                     </div>
+                  )}
+                  {lastMeeting&&(
+                    <p className="mt-2 text-[11px] text-surface-600 flex items-center gap-1.5">
+                      <ClipboardCheck size={12} className="text-emerald-600" aria-hidden="true" />
+                      Last advising meeting: <strong className="text-surface-800">{lastMeeting.term_name}</strong> — {fmtMetOn(lastMeeting.met_on)}
+                    </p>
                   )}
                 </div>
               )
             })}
           </div>
         )}
-        {viewing&&<StudentPlanView plan={viewing} onClose={()=>{autoOpenDismissedRef.current=true;setViewing(null)}}/>}
+        {viewing&&<StudentPlanView plan={viewing} advising={advisingRows} onClose={()=>{autoOpenDismissedRef.current=true;setViewing(null)}}/>}
       </div>
     )
   }
@@ -1119,7 +1453,7 @@ export default function ProgramPlannerPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={loadPlans} aria-label="Refresh plans" className="p-2 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><RefreshCw size={16} aria-hidden="true" /></button>
+          <button type="button" onClick={()=>{loadPlans();loadAdvising()}} aria-label="Refresh plans" className="p-2 text-surface-400 hover:text-surface-600 hover:bg-surface-100 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"><RefreshCw size={16} aria-hidden="true" /></button>
           <button onClick={()=>setShowNew(true)}
             className="flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-semibold rounded-xl hover:bg-brand-700 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
             <Plus size={15} aria-hidden="true" /> New Student Plan
@@ -1189,12 +1523,42 @@ export default function ProgramPlannerPage() {
           className="w-full pl-9 pr-4 py-2 text-sm border border-surface-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/40"/>
       </div>
 
+      {/* Advising check-off toolbar */}
+      <div className="flex flex-wrap items-center gap-3 bg-white border border-surface-200 rounded-xl px-4 py-2">
+        <div className="flex items-center gap-2">
+          <ClipboardCheck size={15} className="text-emerald-600" aria-hidden="true" />
+          <label htmlFor="pp-advising-term" className="text-xs font-semibold text-surface-700">Advising term</label>
+          <select id="pp-advising-term" value={advisingTerm}
+            onChange={e=>{termPickedRef.current=true;setAdvisingTerm(e.target.value);setAdvisingOpenId(null)}}
+            className="px-2 py-1.5 text-xs border border-surface-200 rounded-lg bg-white min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+            {advisingTermOptions.map(n=><option key={n} value={n}>{n}{n===currentTermRow?.name?' (current)':''}</option>)}
+          </select>
+        </div>
+        <div role="group" aria-label="Filter by advising status" className="flex items-center gap-1 bg-surface-100 rounded-lg p-0.5">
+          {[{val:'all',label:`All (${searchedStudents.length})`},{val:'done',label:`Advised (${advisedCount})`},{val:'todo',label:`Not yet advised (${notAdvisedCount})`}].map(opt=>(
+            <button key={opt.val} type="button" aria-pressed={advisingFilter===opt.val} onClick={()=>setAdvisingFilter(opt.val)}
+              className={`px-2.5 py-1 text-[11px] font-semibold rounded-md transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${advisingFilter===opt.val?'bg-white text-brand-700 shadow-sm':'text-surface-600 hover:text-surface-800'}`}>
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-surface-600 ml-auto" aria-live="polite">
+          <strong className="text-emerald-700">{advisedCount}</strong> of {searchedStudents.length} student{searchedStudents.length!==1?'s':''} advised for {advisingTerm}
+        </p>
+        <p className="sr-only" aria-live="polite">{advisingMsg}</p>
+        {advisingError&&(
+          <p role="alert" className="w-full text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 flex items-center gap-1.5">
+            <AlertCircle size={12} aria-hidden="true" /> {advisingError}
+          </p>
+        )}
+      </div>
+
       {loading&&<div className="space-y-2">{[1,2,3].map(i=><div key={i} className="h-16 bg-surface-100 rounded-xl animate-pulse"/>)}</div>}
 
       {!loading&&filtered.length===0&&(
         <div className="bg-white border border-surface-200 rounded-2xl p-12 text-center">
           <GraduationCap size={40} className="text-surface-300 mx-auto mb-3" aria-hidden="true" />
-          <p className="text-surface-600 font-medium">{search?'No plans match your search':'No student plans yet'}</p>
+          <p className="text-surface-600 font-medium">{advisingFilter!=='all'&&searched.length>0?(advisingFilter==='done'?`No students advised for ${advisingTerm} yet`:`Everyone has been advised for ${advisingTerm}`):search?'No plans match your search':'No student plans yet'}</p>
           <p className="text-sm text-surface-400 mt-1">Click "New Student Plan" to create one.</p>
         </div>
       )}
@@ -1203,14 +1567,17 @@ export default function ProgramPlannerPage() {
         <div className="space-y-1.5">
           {filtered.map(plan=>{
             const {semesters:cleanSems}=migrateLegacySummerSemesters(plan.semesters||[],plan.start_semester)
-            const totalCr=cleanSems.reduce((s,sem)=>s+(sem.courses||[]).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
-            const doneCr=cleanSems.reduce((s,sem)=>s+(sem.courses||[]).filter(c=>c.completed).reduce((a,c)=>a+(parseFloat(c.credits)||0),0),0)
+            const totals=creditTotals(cleanSems)
+            const {total:totalCr,progressPct:progPct}=totals
+            const advRow=meetingThisTerm(plan.student_email)
+            const isAdvisingOpen=advisingOpenId===plan.plan_id
+            const planMeetings=meetingsFor(plan.student_email)
             const semCount=cleanSems.filter(s=>(s.courses||[]).some(c=>c.course_num||c.course_title)).length
             const lastUpdated=new Date(plan.updated_at||plan.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
             const initials=(plan.student_name||'').split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()
             const isNoteOpen=expandedNoteId===plan.plan_id
             const hasNote=!!plan.instructor_notes?.trim()
-            const pct=totalCr>0?Math.round((doneCr/totalCr)*100):0
+            const pct=totals.donePct
             return (
               <div key={plan.plan_id} className="bg-white border border-surface-200 rounded-xl hover:border-brand-200 hover:shadow-sm transition-all">
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -1234,14 +1601,31 @@ export default function ProgramPlannerPage() {
                     </div>
                     {totalCr>0&&(
                       <div>
-                        <div className="w-full bg-surface-100 rounded-full h-1 overflow-hidden">
-                          <div className="bg-emerald-500 h-1 rounded-full" style={{width:`${pct}%`}}/>
+                        <ProgressBar totals={totals} height="h-1"/>
+                        <div className="text-[10px] font-medium mt-0.5 text-right">
+                          <span className="text-emerald-700">{pct}% done</span>
+                          {progPct>0&&<span className="text-amber-700"> · {progPct}% in progress</span>}
                         </div>
-                        <div className="text-[10px] text-emerald-600 font-medium mt-0.5 text-right">{pct}% done</div>
                       </div>
                     )}
                   </div>
-                  <p className="text-[10px] text-surface-300 shrink-0 w-24 text-right hidden xl:block">{lastUpdated}</p>
+                  <p className="text-[10px] text-surface-300 shrink-0 w-24 text-right hidden 2xl:block" title={`Plan last updated ${lastUpdated}`}>{lastUpdated}</p>
+                  {advRow?(
+                    <button type="button" onClick={()=>openAdvisingPanel(plan)} aria-expanded={isAdvisingOpen}
+                      aria-label={`${plan.student_name} advised for ${advisingTerm} on ${fmtMetOn(advRow.met_on)}. Edit date or note, or remove the check-off.`}
+                      title="Advised — click to edit date/note or remove"
+                      className="flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition-colors shrink-0 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                      <Check size={12} aria-hidden="true" /> Advised {fmtMetOn(advRow.met_on,false)}
+                      {advRow.notes&&<StickyNote size={10} className="text-emerald-600" aria-hidden="true" />}
+                    </button>
+                  ):(
+                    <button type="button" onClick={()=>handleAdvise(plan)} disabled={advisingBusy||!!advisingError}
+                      aria-label={`Mark ${plan.student_name} advised for ${advisingTerm}`}
+                      title={`Check off: met for advising in ${advisingTerm}`}
+                      className="flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold rounded-lg border border-dashed border-surface-300 text-surface-600 hover:border-emerald-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors shrink-0 min-h-[44px] disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                      <ClipboardCheck size={12} aria-hidden="true" /> Advise
+                    </button>
+                  )}
                   <button onClick={()=>toggleNote(plan.plan_id,plan.instructor_notes)}
                     title={hasNote?'View/edit instructor note':'Add instructor note'} aria-label={hasNote?'View/edit instructor note':'Add instructor note'}
                     className={`p-1.5 rounded-lg transition-colors shrink-0 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${hasNote?'text-amber-500 bg-amber-50 hover:bg-amber-100':'text-surface-300 hover:text-amber-400 hover:bg-amber-50'}`}>
@@ -1252,7 +1636,7 @@ export default function ProgramPlannerPage() {
                       className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       <BookOpen size={11} aria-hidden="true" /> View
                     </button>
-                    <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name)}
+                    <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name,planMeetings)}
                       className="p-1.5 border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Print" aria-label="Print">
                       <Printer size={12} aria-hidden="true" />
                     </button>
@@ -1270,6 +1654,49 @@ export default function ProgramPlannerPage() {
                     </button>
                   </div>
                 </div>
+
+                {isAdvisingOpen&&advRow&&(
+                  <div className="border-t border-emerald-100 bg-emerald-50/50 px-4 pb-3 pt-2.5">
+                    <p className="text-[11px] font-semibold text-emerald-800 mb-1.5 flex items-center gap-1.5">
+                      <ClipboardCheck size={11} aria-hidden="true" /> Advising — {advisingTerm}
+                      {advRow.advised_by&&<span className="text-surface-500 font-normal">· checked off by {advRow.advised_by}</span>}
+                    </p>
+                    <div className="flex flex-wrap items-start gap-3">
+                      <div>
+                        <label htmlFor={`pp-adv-date-${plan.plan_id}`} className="block text-[11px] font-semibold text-surface-700 mb-1">Meeting date</label>
+                        <input id={`pp-adv-date-${plan.plan_id}`} type="date" value={advisingDraft.met_on}
+                          onChange={e=>setAdvisingDraft(d=>({...d,met_on:e.target.value}))}
+                          className="px-2 py-1.5 text-xs border border-emerald-200 rounded-lg bg-white min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"/>
+                      </div>
+                      <div className="flex-1 min-w-[220px]">
+                        <label htmlFor={`pp-adv-note-${plan.plan_id}`} className="block text-[11px] font-semibold text-surface-700 mb-1">
+                          Note (optional) <span className="text-surface-500 font-normal">— instructors only; students see the date</span>
+                        </label>
+                        <textarea id={`pp-adv-note-${plan.plan_id}`} value={advisingDraft.notes} rows={2}
+                          onChange={e=>setAdvisingDraft(d=>({...d,notes:e.target.value}))}
+                          placeholder="What you discussed, next-term registration, concerns…"
+                          className="w-full text-xs border border-emerald-200 rounded-lg px-3 py-2 resize-none bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"/>
+                      </div>
+                    </div>
+                    {planMeetings.filter(m=>m.term_name!==advisingTerm).length>0&&(
+                      <p className="text-[11px] text-surface-600 mt-1.5">
+                        <span className="font-semibold">Other terms:</span>{' '}
+                        {sortMeetings(planMeetings.filter(m=>m.term_name!==advisingTerm)).map(m=>`${m.term_name} (${fmtMetOn(m.met_on,false)})`).join(' · ')}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap justify-end gap-2 mt-2">
+                      <button type="button" onClick={()=>setConfirmRemoveAdvising({plan,row:advRow})} disabled={advisingBusy}
+                        className="px-3 py-1.5 text-xs border border-red-200 text-red-700 rounded-lg hover:bg-red-50 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] mr-auto">
+                        Remove check-off
+                      </button>
+                      <button type="button" onClick={()=>setAdvisingOpenId(null)} className="px-3 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
+                      <button type="button" onClick={()=>handleSaveAdvising(plan)} disabled={advisingBusy}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                        <Save size={11} aria-hidden="true" /> {advisingBusy?'Saving…':'Save'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {isNoteOpen&&(
                   <div className="border-t border-amber-100 bg-amber-50/50 px-4 pb-3 pt-2.5 rounded-b-xl">
@@ -1295,8 +1722,28 @@ export default function ProgramPlannerPage() {
       )}
 
       {showNew&&<NewPlanModal onCreated={loadPlans} onClose={()=>setShowNew(false)}/>}
-      {editing&&<PlanEditorModal plan={editing} onSave={newSems=>handleSavePlan(editing.plan_id,newSems)} onClose={()=>setEditing(null)}/>}
-      {viewing&&<StudentPlanView plan={viewing} onClose={()=>setViewing(null)}/>}
+      {editing&&<PlanEditorModal plan={editing} advising={meetingsFor(editing.student_email)} onSave={newSems=>handleSavePlan(editing.plan_id,newSems)} onClose={()=>setEditing(null)}/>}
+      {viewing&&<StudentPlanView plan={viewing} advising={meetingsFor(viewing.student_email)} showNotes onClose={()=>setViewing(null)}/>}
+
+      {confirmRemoveAdvising&&(
+        <ConfirmDialog
+          open
+          variant="danger"
+          title="Remove advising check-off?"
+          message={
+            <>
+              Remove the <strong>{confirmRemoveAdvising.row.term_name}</strong> advising check-off for{' '}
+              <strong>{confirmRemoveAdvising.plan.student_name}</strong>
+              {confirmRemoveAdvising.row.notes?' and its note':''}?
+            </>
+          }
+          confirmLabel="Remove check-off"
+          cancelLabel="Keep it"
+          busy={advisingBusy}
+          onConfirm={handleRemoveAdvisingConfirmed}
+          onClose={()=>setConfirmRemoveAdvising(null)}
+        />
+      )}
 
       {confirmDeletePlan&&(
         <ConfirmDialog
