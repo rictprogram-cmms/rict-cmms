@@ -278,8 +278,11 @@ function DonutChart({ completed, inProgress = 0, total, size = 80 }) {
 }
 
 // ─── Print helper ─────────────────────────────────────────────────────────────
-// `advising` (optional): [{ term_name, met_on, notes? }]. Dates always print;
-// notes print only when opts.includeNotes (instructor printouts — never the student's own).
+// `advising` (optional): [{ term_name, met_on, notes?, advised_by? }]. Dates (and
+// who advised) always print; notes print only when opts.includeNotes — instructor
+// printouts follow the "Print advising notes" box, a student's own printout always
+// includes them (students see their advising notes; the plan's Instructor Note is
+// never passed here).
 function printPlan(plan, studentName, advising = null, opts = {}) {
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   const { total: totalCr, done: doneCr, progress: progCr, remaining: remainingCr, donePct: pct, progressPct: progPct } = creditTotals(plan.semesters)
@@ -327,10 +330,10 @@ function printPlan(plan, studentName, advising = null, opts = {}) {
       <div class="adv-head">Advising Meetings</div>
       <table class="adv-table">
         <thead><tr><th scope="col" style="width:110px">Term</th><th scope="col" style="width:95px">Date</th><th scope="col">Notes</th></tr></thead>
-        <tbody>${printMeetings.map(m=>`<tr><td style="white-space:nowrap">${esc(m.term_name)} ✓</td><td>${esc(fmtMetOn(m.met_on))}</td><td class="adv-note">${esc(m.notes||'')}</td></tr>`).join('')}</tbody>
+        <tbody>${printMeetings.map(m=>`<tr><td style="white-space:nowrap">${esc(m.term_name)} ✓</td><td>${esc(fmtMetOn(m.met_on))}${m.advised_by?`<div class="adv-by">with ${esc(m.advised_by)}</div>`:''}</td><td class="adv-note">${esc(m.notes||'')}</td></tr>`).join('')}</tbody>
       </table>
     </div>` : `
-    <div class="advising"><b>Advising meetings:</b> ${printMeetings.map(m=>`${esc(m.term_name)} ✓ ${esc(fmtMetOn(m.met_on))}`).join(' &nbsp;·&nbsp; ')}</div>`
+    <div class="advising"><b>Advising meetings:</b> ${printMeetings.map(m=>`${esc(m.term_name)} ✓ ${esc(fmtMetOn(m.met_on))}${m.advised_by?` (with ${esc(m.advised_by)})`:''}`).join(' &nbsp;·&nbsp; ')}</div>`
 
   const html = `<!DOCTYPE html><html><head><title>Program Plan — ${esc(studentName)}</title>
   <style>
@@ -358,6 +361,7 @@ function printPlan(plan, studentName, advising = null, opts = {}) {
     .adv-table th{background:#dcfce7;border:1px solid #bbf7d0}
     .adv-table td{border:1px solid #e2e8f0}
     .adv-note{white-space:pre-wrap}
+    .adv-by{font-size:7.5pt;color:#475569}
     .sem{margin-bottom:18px;break-inside:avoid}
     .sem-head{display:flex;justify-content:space-between;background:#1e3a8a;color:white;padding:5px 8px;font-weight:bold;font-size:10pt;border-radius:3px 3px 0 0}
     .sem-summer .sem-head{background:#b45309}
@@ -574,7 +578,7 @@ function AdvisingSection({ actions, studentName, idPrefix }) {
           </div>
           <div className="flex-1 min-w-[240px]">
             <label htmlFor={`${idPrefix}-adv-note`} className="block text-[11px] font-semibold text-surface-700 mb-1">
-              Advising notes <span className="font-normal text-surface-500">— students see the date only, never these notes on screen</span>
+              Advising notes <span className="font-normal text-surface-600">— the student can see these on their plan</span>
             </label>
             <textarea id={`${idPrefix}-adv-note`} rows={3} value={draft.notes}
               onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
@@ -1122,7 +1126,9 @@ function NewPlanModal({ onCreated, onClose }) {
 }
 
 // ─── StudentPlanView (read-only) ──────────────────────────────────────────────
-// `advising`: [{ term_name, met_on, notes? }]; notes only render when showNotes (instructors).
+// `advising`: [{ term_name, met_on, notes?, advised_by? }]; notes render when showNotes.
+// Students pass showNotes too — their rows come from my_advising_meetings() (own rows
+// only). The plan's private Instructor Note (instructor_notes) is never shown here.
 export function StudentPlanView({ plan, onClose, advising = [], showNotes = false, advisingActions = null }) {
   const dialogRef = useDialogA11y(true, onClose)
   const { semesters: cleanSemesters } = useMemo(
@@ -1149,7 +1155,7 @@ export function StudentPlanView({ plan, onClose, advising = [], showNotes = fals
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',advisingActions?.meetings||meetings,{includeNotes:!!(showNotes&&advisingActions?.printNotes),accessLabel:!!advisingActions?.accessLabel})}
+            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',advisingActions?.meetings||meetings,{includeNotes:!!showNotes&&(advisingActions?!!advisingActions.printNotes:true),accessLabel:!!advisingActions?.accessLabel})}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print / Save PDF
             </button>
@@ -1221,18 +1227,19 @@ export function StudentPlanView({ plan, onClose, advising = [], showNotes = fals
           </div>
         )}
 
-        {/* Advising history (students: dates only) */}
+        {/* Advising history (students: date, who advised, and the advising notes) */}
         {!advisingActions&&meetings.length>0&&(
           <div className="px-6 pb-3 shrink-0">
             <div className="bg-surface-50 border border-surface-200 rounded-xl px-4 py-2.5">
               <p className="text-[11px] font-bold text-surface-700 flex items-center gap-1.5 mb-1">
                 <ClipboardCheck size={12} className="text-emerald-600" aria-hidden="true" /> Advising meetings
               </p>
-              <ul className="flex flex-wrap gap-x-4 gap-y-1">
+              <ul className={showNotes&&meetings.some(m=>m.notes?.trim())?'space-y-1.5':'flex flex-wrap gap-x-4 gap-y-1'}>
                 {meetings.map(m=>(
                   <li key={m.term_name} className="text-[11px] text-surface-600">
                     <span className="font-semibold text-surface-800">{m.term_name}</span> <span className="text-emerald-700" aria-hidden="true">✓</span> {fmtMetOn(m.met_on)}
-                    {showNotes&&m.notes&&<span className="block text-[10px] text-surface-500 italic">{m.notes}</span>}
+                    {m.advised_by&&<span className="text-surface-600"> · with {m.advised_by}</span>}
+                    {showNotes&&m.notes?.trim()&&<span className="block text-xs text-surface-700 whitespace-pre-wrap pl-3 border-l-2 border-emerald-200 mt-0.5">{m.notes}</span>}
                   </li>
                 ))}
               </ul>
@@ -1351,7 +1358,8 @@ export default function ProgramPlannerPage() {
 
   // ── Advising check-off state ──────────────────────────────────────────────
   // Instructors: every advising_meetings row (RLS: instructors only).
-  // Students: their own term + date via the my_advising_meetings() RPC.
+  // Students: their own term, date, advising notes and who advised them via the
+  // my_advising_meetings() RPC (never other students' rows).
   const { terms, current: currentTermRow } = useAcademicTerms()
   const [advisingRows,setAdvisingRows]=useState([])
   const [advisingError,setAdvisingError]=useState('')
@@ -1682,7 +1690,7 @@ export default function ProgramPlannerPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name,advisingRows)}
+                      <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name,advisingRows,{includeNotes:true})}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                         <Printer size={13} aria-hidden="true" /> Print
                       </button>
@@ -1704,7 +1712,7 @@ export default function ProgramPlannerPage() {
                   {lastMeeting&&(
                     <p className="mt-2 text-[11px] text-surface-600 flex items-center gap-1.5">
                       <ClipboardCheck size={12} className="text-emerald-600" aria-hidden="true" />
-                      Last advising meeting: <strong className="text-surface-800">{lastMeeting.term_name}</strong> — {fmtMetOn(lastMeeting.met_on)}
+                      Last advising meeting: <strong className="text-surface-800">{lastMeeting.term_name}</strong> — {fmtMetOn(lastMeeting.met_on)}{lastMeeting.advised_by?` with ${lastMeeting.advised_by}`:''}
                     </p>
                   )}
                 </div>
@@ -1712,7 +1720,7 @@ export default function ProgramPlannerPage() {
             })}
           </div>
         )}
-        {viewing&&<StudentPlanView plan={viewing} advising={advisingRows} onClose={()=>{autoOpenDismissedRef.current=true;setViewing(null)}}/>}
+        {viewing&&<StudentPlanView plan={viewing} advising={advisingRows} showNotes onClose={()=>{autoOpenDismissedRef.current=true;setViewing(null)}}/>}
       </div>
     )
   }
@@ -1957,7 +1965,7 @@ export default function ProgramPlannerPage() {
                       </div>
                       <div className="flex-1 min-w-[220px]">
                         <label htmlFor={`pp-adv-note-${plan.plan_id}`} className="block text-[11px] font-semibold text-surface-700 mb-1">
-                          Note (optional) <span className="text-surface-500 font-normal">— instructors only; students see the date</span>
+                          Advising note (optional) <span className="text-surface-600 font-normal">— the student can see this on their plan</span>
                         </label>
                         <textarea id={`pp-adv-note-${plan.plan_id}`} value={advisingDraft.notes} rows={2}
                           onChange={e=>setAdvisingDraft(d=>({...d,notes:e.target.value}))}
