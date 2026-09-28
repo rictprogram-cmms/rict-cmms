@@ -278,8 +278,9 @@ function DonutChart({ completed, inProgress = 0, total, size = 80 }) {
 }
 
 // ─── Print helper ─────────────────────────────────────────────────────────────
-// `advising` (optional): [{ term_name, met_on }] — printed as dates only, never notes.
-function printPlan(plan, studentName, advising = null) {
+// `advising` (optional): [{ term_name, met_on, notes? }]. Dates always print;
+// notes print only when opts.includeNotes (instructor printouts — never the student's own).
+function printPlan(plan, studentName, advising = null, opts = {}) {
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   const { total: totalCr, done: doneCr, progress: progCr, remaining: remainingCr, donePct: pct, progressPct: progPct } = creditTotals(plan.semesters)
   const printedDate = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
@@ -291,7 +292,7 @@ function printPlan(plan, studentName, advising = null) {
       const st = courseStatus(c)
       return `
       <tr class="${st==='done'?'done':st==='progress'?'prog':''}">
-        <td style="text-align:center">${st==='done'?'✓':st==='progress'?'◐':'○'}</td>
+        <td style="text-align:center">${st==='done'?'✓':st==='progress'?'<span class="half" role="img" aria-label="In progress"></span>':'○'}</td>
         <td>${esc(c.course_num)}</td>
         <td>${esc(c.course_title)}${c._programs?.length>1?'<span class="shared"> ★ Shared</span>':''}${st==='progress'?'<span class="prog-tag"> In progress</span>':''}</td>
         <td>${esc(c.prerequisites)}</td>
@@ -319,12 +320,21 @@ function printPlan(plan, studentName, advising = null) {
       ${progCr?'<div class="legend"><span><i class="sw sw-done"></i>Complete</span><span><i class="sw sw-prog"></i>In progress</span><span><i class="sw sw-rem"></i>Remaining</span></div>':''}
     </div>` : ''
 
-  const advisingHtml = advising?.length ? `
-    <div class="advising"><b>Advising meetings:</b> ${sortMeetings(advising).map(m=>`${esc(m.term_name)} ✓ ${esc(fmtMetOn(m.met_on))}`).join(' &nbsp;·&nbsp; ')}</div>` : ''
+  const printMeetings = sortMeetings(advising||[])
+  const withNotes = !!opts.includeNotes && printMeetings.some(m=>m.notes?.trim())
+  const advisingHtml = !printMeetings.length ? '' : withNotes ? `
+    <div class="adv-box">
+      <div class="adv-head">Advising Meetings</div>
+      <table class="adv-table">
+        <thead><tr><th scope="col" style="width:110px">Term</th><th scope="col" style="width:95px">Date</th><th scope="col">Notes</th></tr></thead>
+        <tbody>${printMeetings.map(m=>`<tr><td style="white-space:nowrap">${esc(m.term_name)} ✓</td><td>${esc(fmtMetOn(m.met_on))}</td><td class="adv-note">${esc(m.notes||'')}</td></tr>`).join('')}</tbody>
+      </table>
+    </div>` : `
+    <div class="advising"><b>Advising meetings:</b> ${printMeetings.map(m=>`${esc(m.term_name)} ✓ ${esc(fmtMetOn(m.met_on))}`).join(' &nbsp;·&nbsp; ')}</div>`
 
   const html = `<!DOCTYPE html><html><head><title>Program Plan — ${esc(studentName)}</title>
   <style>
-    *{box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:10pt;margin:0.6in;color:#111}
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10pt;margin:0.6in;color:#111}
     h1{font-size:16pt;margin:0 0 2px;color:#1e3a8a}
     .meta{display:flex;gap:20px;font-size:9pt;color:#555;margin-bottom:4px;flex-wrap:wrap}.meta span b{color:#111}
     .meta-sub{font-size:8pt;color:#94a3b8;margin-bottom:12px}
@@ -338,6 +348,11 @@ function printPlan(plan, studentName, advising = null) {
     .sw{display:inline-block;width:10px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
     .sw-done{background:#16a34a}.sw-prog{background:${IN_PROGRESS_HEX};background-image:${IN_PROGRESS_STRIPES}}.sw-rem{background:#e2e8f0}
     .advising{margin:-8px 0 14px;font-size:8.5pt;color:#334155}
+    .adv-box{margin:-4px 0 16px;border:1px solid #bbf7d0;border-radius:5px;overflow:hidden;break-inside:avoid}
+    .adv-head{background:#166534;color:white;font-weight:bold;font-size:9.5pt;padding:4px 8px}
+    .adv-table th{background:#dcfce7;border:1px solid #bbf7d0}
+    .adv-table td{border:1px solid #e2e8f0}
+    .adv-note{white-space:pre-wrap}
     .sem{margin-bottom:18px;break-inside:avoid}
     .sem-head{display:flex;justify-content:space-between;background:#1e3a8a;color:white;padding:5px 8px;font-weight:bold;font-size:10pt;border-radius:3px 3px 0 0}
     .sem-summer .sem-head{background:#b45309}
@@ -350,6 +365,7 @@ function printPlan(plan, studentName, advising = null) {
     tr.done td:first-child{text-decoration:none;color:#16a34a;font-weight:bold}
     tr.prog td{background:#fffbeb}
     tr.prog td:first-child{color:#b45309;font-weight:bold}
+    .half{display:inline-block;width:10px;height:10px;border-radius:50%;border:1.5px solid #b45309;background:linear-gradient(90deg,#b45309 50%,transparent 50%);vertical-align:middle;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .prog-tag{font-size:7.5pt;color:#b45309;font-weight:bold;margin-left:4px}
     .total{margin-top:12px;font-size:11pt;font-weight:bold;text-align:right;color:#1e3a8a}
     .dar-note{margin-top:14px;padding:7px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:8pt;color:#64748b}
@@ -371,6 +387,73 @@ function printPlan(plan, studentName, advising = null) {
 
   const w = window.open('','_blank')
   if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(),300) }
+}
+
+// ─── Advising report (for the college) ────────────────────────────────────────
+// One page per term: who met for advising (date + instructor) and who has not.
+// Every student with a program plan is listed (archived students are already
+// excluded by loadPlans) — search/filter on screen do NOT narrow the report.
+// Notes are never printed here.
+function printAdvisingReport({ term, students, preparedBy }) {
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const lastName = n => (n||'').trim().split(' ').slice(-1)[0]||''
+  const byLast = (a,b) => lastName(a.name).localeCompare(lastName(b.name)) || (a.name||'').localeCompare(b.name||'')
+  const advised = students.filter(s=>s.meeting).sort((a,b)=>String(a.meeting.met_on).localeCompare(String(b.meeting.met_on)) || byLast(a,b))
+  const notYet  = students.filter(s=>!s.meeting).sort(byLast)
+  const total = students.length
+  const pct = total ? Math.round(advised.length/total*100) : 0
+  const printed = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
+  const progs = ids => (ids||[]).map(pid=>PROGRAMS.find(p=>p.id===pid)?.name||pid).join(', ')
+
+  const advisedRows = advised.map((s,i)=>`<tr>
+      <td class="n">${i+1}</td><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${esc(progs(s.programs))}</td>
+      <td class="nw">${esc(fmtMetOn(s.meeting.met_on))}</td><td>${esc(s.meeting.advised_by||s.meeting.advised_by_email||'')}</td></tr>`).join('')
+  const notYetRows = notYet.map((s,i)=>`<tr>
+      <td class="n">${i+1}</td><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${esc(progs(s.programs))}</td>
+      <td>${s.lastMeeting?`${esc(s.lastMeeting.term_name)} (${esc(fmtMetOn(s.lastMeeting.met_on))})`:'—'}</td></tr>`).join('')
+
+  const html = `<!DOCTYPE html><html lang="en"><head><title>Advising Report — ${esc(term)}</title>
+  <style>
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    body{font-family:Arial,sans-serif;font-size:10pt;margin:0.6in;color:#111}
+    h1{font-size:16pt;margin:0 0 2px;color:#1e3a8a}
+    .sub{font-size:9pt;color:#475569;margin-bottom:12px}
+    .summary{display:flex;gap:24px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:5px;background:#f8fafc;margin-bottom:16px;font-size:10pt}
+    .summary b{font-size:12pt}
+    h2{font-size:11pt;margin:18px 0 6px;padding:5px 8px;color:white;border-radius:3px}
+    h2.ok{background:#166534}h2.todo{background:#b45309}
+    table{width:100%;border-collapse:collapse;font-size:9pt}
+    th{background:#e2e8f0;text-align:left;padding:4px 6px;border:1px solid #cbd5e1}
+    td{padding:4px 6px;border:1px solid #e2e8f0;vertical-align:top}
+    tr{break-inside:avoid}td.n{width:26px;text-align:right;color:#64748b}.nw{white-space:nowrap}
+    .empty{font-style:italic;color:#64748b;padding:6px 2px}
+    .sign{margin-top:36px;display:flex;gap:40px;font-size:9.5pt}
+    .sign div{flex:1;border-top:1px solid #111;padding-top:4px}
+    .foot{margin-top:18px;font-size:8pt;color:#64748b}
+    thead{display:table-header-group}
+  </style></head><body>
+  <h1>Student Advising Report — ${esc(term)}</h1>
+  <div class="sub">Robotics &amp; Industrial Controls Technology (RICT) · St. Cloud Technical &amp; Community College · Printed ${printed}${preparedBy?` by ${esc(preparedBy)}`:''}</div>
+  <div class="summary">
+    <span>Students: <b>${total}</b></span>
+    <span>Advised: <b>${advised.length}</b></span>
+    <span>Not yet advised: <b>${notYet.length}</b></span>
+    <span>Completion: <b>${pct}%</b></span>
+  </div>
+
+  <h2 class="ok">Advised — ${advised.length}</h2>
+  ${advised.length?`<table><thead><tr><th scope="col">#</th><th scope="col">Student</th><th scope="col">Email</th><th scope="col">Program(s)</th><th scope="col">Date met</th><th scope="col">Met with</th></tr></thead><tbody>${advisedRows}</tbody></table>`:'<p class="empty">No students have been advised for this term yet.</p>'}
+
+  <h2 class="todo">Not yet advised — ${notYet.length}</h2>
+  ${notYet.length?`<table><thead><tr><th scope="col">#</th><th scope="col">Student</th><th scope="col">Email</th><th scope="col">Program(s)</th><th scope="col">Last advising meeting</th></tr></thead><tbody>${notYetRows}</tbody></table>`:'<p class="empty">Every student has been advised for this term.</p>'}
+
+  <div class="sign"><div>Instructor signature</div><div>Date</div></div>
+  <div class="foot">Includes every active student with a program plan in the RICT CMMS Program Planner. Advising notes are not included in this report.</div>
+  </body></html>`
+
+  const w = window.open('','_blank')
+  if (w) { w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>w.print(),300) }
+  else toast.error('Pop-up blocked — allow pop-ups for this site to print the report')
 }
 
 // ─── DeleteSemesterDialog ─────────────────────────────────────────────────────
@@ -407,8 +490,120 @@ function DeleteSemesterDialog({ semester, onConfirm, onCancel }) {
   )
 }
 
+// ─── AdvisingSection (inside Edit / View, instructors only) ───────────────────
+// The screen Aaron has open while advising a student: pick the term, set the
+// meeting date, type notes, and check the student off — saved immediately
+// (independent of "Save Plan"). History of earlier terms is listed below.
+function AdvisingSection({ actions, studentName, idPrefix }) {
+  const { meetings=[], defaultTerm, termOptions=[], currentTermName, busy, unavailable,
+          printNotes, setPrintNotes, onAdvise, onUpdate, onRemove } = actions
+  const [term, setTerm] = useState(defaultTerm)
+  const row = meetings.find(m => m.term_name === term) || null
+  const [draft, setDraft] = useState({ met_on: todayLocalDate(), notes: '' })
+  const [liveMsg, setLiveMsg] = useState('')
+  // Reset the draft when the term changes or the saved row changes underneath us
+  useEffect(() => {
+    setDraft(row
+      ? { met_on: String(row.met_on).substring(0,10), notes: row.notes || '' }
+      : { met_on: todayLocalDate(), notes: '' })
+  }, [term, row?.meeting_id, row?.updated_at]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const dirty = row && (draft.met_on !== String(row.met_on).substring(0,10) || (draft.notes||'').trim() !== (row.notes||'').trim())
+  const others = sortMeetings(meetings.filter(m => m.term_name !== term))
+  const options = termOptions.includes(term) ? termOptions : [...termOptions, term]
+
+  const doAdvise = async () => {
+    const ok = await onAdvise(term, draft)
+    if (ok) setLiveMsg(`${studentName} marked advised for ${term}`)
+  }
+  const doSave = async () => {
+    const ok = await onUpdate(row, draft)
+    if (ok) setLiveMsg(`Advising notes saved for ${term}`)
+  }
+
+  return (
+    <section aria-labelledby={`${idPrefix}-adv-h`} className={`border rounded-xl overflow-hidden ${row ? 'border-emerald-300' : 'border-surface-200'}`}>
+      <div className={`px-4 py-2.5 flex flex-wrap items-center gap-2 border-b ${row ? 'bg-emerald-50 border-emerald-200' : 'bg-surface-50 border-surface-200'}`}>
+        <ClipboardCheck size={15} className={row ? 'text-emerald-700' : 'text-surface-500'} aria-hidden="true" />
+        <h3 id={`${idPrefix}-adv-h`} className="text-xs font-bold text-surface-800">Advising</h3>
+        <label htmlFor={`${idPrefix}-adv-term`} className="sr-only">Advising term</label>
+        <select id={`${idPrefix}-adv-term`} value={term} onChange={e => setTerm(e.target.value)}
+          className="px-2 py-1 text-xs border border-surface-200 rounded-lg bg-white min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+          {options.map(n => <option key={n} value={n}>{n}{n === currentTermName ? ' (current)' : ''}</option>)}
+        </select>
+        {row
+          ? <span className="text-xs font-semibold text-emerald-800 flex items-center gap-1"><Check size={13} aria-hidden="true" /> Advised {fmtMetOn(row.met_on)}{row.advised_by ? ` · ${row.advised_by}` : ''}</span>
+          : <span className="text-xs text-surface-600">Not yet advised for {term}</span>}
+        <label className="ml-auto flex items-center gap-2 text-[11px] text-surface-700 cursor-pointer min-h-[44px]">
+          <input type="checkbox" checked={!!printNotes} onChange={e => setPrintNotes(e.target.checked)}
+            className="w-4 h-4 accent-emerald-600 focus-visible:ring-2 focus-visible:ring-brand-500" />
+          Print advising notes
+        </label>
+      </div>
+
+      <div className="px-4 py-3 space-y-2 bg-white">
+        {unavailable && (
+          <p role="alert" className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">{unavailable}</p>
+        )}
+        <div className="flex flex-wrap items-start gap-3">
+          <div>
+            <label htmlFor={`${idPrefix}-adv-date`} className="block text-[11px] font-semibold text-surface-700 mb-1">Meeting date</label>
+            <input id={`${idPrefix}-adv-date`} type="date" value={draft.met_on}
+              onChange={e => setDraft(d => ({ ...d, met_on: e.target.value }))}
+              className="px-2 py-1.5 text-xs border border-surface-200 rounded-lg bg-white min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+          </div>
+          <div className="flex-1 min-w-[240px]">
+            <label htmlFor={`${idPrefix}-adv-note`} className="block text-[11px] font-semibold text-surface-700 mb-1">
+              Advising notes <span className="font-normal text-surface-500">— students see the date only, never these notes on screen</span>
+            </label>
+            <textarea id={`${idPrefix}-adv-note`} rows={3} value={draft.notes}
+              onChange={e => setDraft(d => ({ ...d, notes: e.target.value }))}
+              placeholder="What you discussed, courses to register for next term, concerns, follow-ups…"
+              className="w-full text-xs border border-surface-200 rounded-lg px-3 py-2 resize-y bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {row ? (
+            <>
+              <button type="button" onClick={() => onRemove(row)} disabled={busy}
+                className="px-3 py-1.5 text-xs border border-red-200 text-red-700 rounded-lg hover:bg-red-50 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                Remove check-off
+              </button>
+              <button type="button" onClick={doSave} disabled={busy || !dirty}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-40 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                <Save size={12} aria-hidden="true" /> {busy ? 'Saving…' : dirty ? 'Save advising notes' : 'Saved'}
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={doAdvise} disabled={busy || !!unavailable}
+              className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-40 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              <ClipboardCheck size={12} aria-hidden="true" /> {busy ? 'Saving…' : `Mark advised for ${term}`}
+            </button>
+          )}
+        </div>
+        <p className="text-[10px] text-surface-500">Saves right away — separate from Save Plan.</p>
+        <p className="sr-only" aria-live="polite">{liveMsg}</p>
+
+        {others.length > 0 && (
+          <div className="border-t border-surface-100 pt-2">
+            <p className="text-[11px] font-semibold text-surface-700 mb-1">Earlier advising meetings</p>
+            <ul className="space-y-1">
+              {others.map(m => (
+                <li key={m.term_name} className="text-[11px] text-surface-700">
+                  <span className="font-semibold">{m.term_name}</span> <span className="text-emerald-700" aria-hidden="true">✓</span> {fmtMetOn(m.met_on)}
+                  {m.notes && <span className="block text-surface-600 whitespace-pre-wrap pl-3 border-l-2 border-emerald-200 mt-0.5">{m.notes}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 // ─── PlanEditorModal ──────────────────────────────────────────────────────────
-function PlanEditorModal({ plan, advising = [], onSave, onClose }) {
+function PlanEditorModal({ plan, advising = [], advisingActions = null, onSave, onClose }) {
   const dialogRef = useDialogA11y(true, onClose)
   const [wasMigrated, setWasMigrated] = useState(false)
   const [semesters, setSemesters] = useState(() => {
@@ -506,7 +701,7 @@ function PlanEditorModal({ plan, advising = [], onSave, onClose }) {
               {editorTotals.progress>0&&<> · <span className="font-semibold text-amber-700">{editorTotals.progress} cr in progress</span></>}
               {' '}· {editorTotals.remaining} cr remaining
             </p>
-            {advising.length>0&&(
+            {!advisingActions&&advising.length>0&&(
               <p className="text-[11px] text-surface-500 mt-0.5 flex items-center gap-1 flex-wrap">
                 <ClipboardCheck size={11} className="text-emerald-600" aria-hidden="true" />
                 <span className="font-semibold">Advised:</span>
@@ -516,7 +711,7 @@ function PlanEditorModal({ plan, advising = [], onSave, onClose }) {
             <p className="sr-only" aria-live="polite">{statusMsg}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters},plan.student_name,advising)}
+            <button onClick={()=>printPlan({...plan,semesters},plan.student_name,advisingActions?.meetings||advising,{includeNotes:!!advisingActions?.printNotes})}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print
             </button>
@@ -553,6 +748,13 @@ function PlanEditorModal({ plan, advising = [], onSave, onClose }) {
           <div className="mx-6 mt-3 flex items-center gap-2 bg-yellow-50 border border-yellow-300 rounded-xl px-4 py-2.5">
             <AlertCircle size={14} className="text-yellow-600 shrink-0" aria-hidden="true" />
             <p className="text-xs text-yellow-800">{creditWarning}</p>
+          </div>
+        )}
+
+        {/* ── Advising (saved immediately, separate from Save Plan) ── */}
+        {advisingActions && (
+          <div className="px-6 pt-4">
+            <AdvisingSection actions={advisingActions} studentName={plan.student_name} idPrefix={`edit-${plan.plan_id}`} />
           </div>
         )}
 
@@ -901,7 +1103,7 @@ function NewPlanModal({ onCreated, onClose }) {
 
 // ─── StudentPlanView (read-only) ──────────────────────────────────────────────
 // `advising`: [{ term_name, met_on, notes? }]; notes only render when showNotes (instructors).
-export function StudentPlanView({ plan, onClose, advising = [], showNotes = false }) {
+export function StudentPlanView({ plan, onClose, advising = [], showNotes = false, advisingActions = null }) {
   const dialogRef = useDialogA11y(true, onClose)
   const { semesters: cleanSemesters } = useMemo(
     () => migrateLegacySummerSemesters(plan?.semesters||[], plan?.start_semester),
@@ -927,7 +1129,7 @@ export function StudentPlanView({ plan, onClose, advising = [], showNotes = fals
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',meetings)}
+            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',advisingActions?.meetings||meetings,{includeNotes:!!(showNotes&&advisingActions?.printNotes)})}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print / Save PDF
             </button>
@@ -992,8 +1194,15 @@ export function StudentPlanView({ plan, onClose, advising = [], showNotes = fals
           </div>
         </div>
 
-        {/* Advising history */}
-        {meetings.length>0&&(
+        {/* Advising — instructors can check off / take notes right here */}
+        {advisingActions&&(
+          <div className="px-6 pb-3 shrink-0 max-h-[40vh] overflow-y-auto">
+            <AdvisingSection actions={advisingActions} studentName={plan?.student_name||'Student'} idPrefix={`view-${plan?.plan_id}`} />
+          </div>
+        )}
+
+        {/* Advising history (students: dates only) */}
+        {!advisingActions&&meetings.length>0&&(
           <div className="px-6 pb-3 shrink-0">
             <div className="bg-surface-50 border border-surface-200 rounded-xl px-4 py-2.5">
               <p className="text-[11px] font-bold text-surface-700 flex items-center gap-1.5 mb-1">
@@ -1134,6 +1343,9 @@ export default function ProgramPlannerPage() {
   const [confirmRemoveAdvising,setConfirmRemoveAdvising]=useState(null)
   const [advisingMsg,setAdvisingMsg]=useState('')
   const termPickedRef = useRef(false)
+  // Instructor printouts include advising notes unless turned off (remembered per browser)
+  const [printAdvisingNotes,setPrintAdvisingNotesState]=useState(()=>{ try{ return localStorage.getItem('plannerPrintAdvisingNotes')!=='0' }catch{ return true } })
+  const setPrintAdvisingNotes = v => { setPrintAdvisingNotesState(v); try{ localStorage.setItem('plannerPrintAdvisingNotes',v?'1':'0') }catch{} }
 
   const handleSortChange = val => { setSortOrder(val); localStorage.setItem('plannerSortOrder',val) }
 
@@ -1274,28 +1486,34 @@ export default function ProgramPlannerPage() {
     } catch (e) { console.error('advising audit:', e) }
   }
 
-  const handleAdvise = async (plan) => {
-    if(advisingBusy) return
+  // Shared by the list-row button and the Advising section inside Edit/View.
+  // Returns true on success.
+  const adviseStudent = async (plan, term, {met_on, notes}={}) => {
+    if(advisingBusy) return false
+    if(!term){ toast.error('Pick an advising term'); return false }
     setAdvisingBusy(true)
     try {
       const row={
         student_email:plan.student_email, student_name:plan.student_name,
-        term_name:advisingTerm, term_id:(terms||[]).find(t=>t.name===advisingTerm)?.term_id||null,
-        met_on:todayLocalDate(), advised_by:myName, advised_by_email:profile?.email||'',
+        term_name:term, term_id:(terms||[]).find(t=>t.name===term)?.term_id||null,
+        met_on:met_on||todayLocalDate(), notes:(notes||'').trim()||null,
+        advised_by:myName, advised_by_email:profile?.email||'',
       }
       const res=assertWrite(await supabase.from('advising_meetings').insert(row).select(),'advising_meetings.insert')
       if(res.error){
-        if(isUniqueViolation(res.error)){ toast(`${plan.student_name} was already checked off for ${advisingTerm}`); await loadAdvising(); return }
+        if(isUniqueViolation(res.error)){ toast(`${plan.student_name} was already checked off for ${term}`); await loadAdvising(); return false }
         throw res.error
       }
       const saved=res.data[0]
       setAdvisingRows(prev=>[...prev,saved])
-      const msg=`${plan.student_name} marked advised for ${advisingTerm}`
+      const msg=`${plan.student_name} marked advised for ${term}`
       setAdvisingMsg(msg); toast.success(msg)
-      auditAdvising('CREATE',saved.meeting_id,`Advising check-off: ${plan.student_name} — ${advisingTerm} (${fmtMetOn(saved.met_on)})`,null,`${advisingTerm} ${saved.met_on}`)
-    } catch(e){ toast.error('Could not save advising check-off: '+(e.message||e)) }
+      auditAdvising('CREATE',saved.meeting_id,`Advising check-off: ${plan.student_name} — ${term} (${fmtMetOn(saved.met_on)})${saved.notes?' with note':''}`,null,`${term} ${saved.met_on} ${saved.notes||''}`.trim())
+      return true
+    } catch(e){ toast.error('Could not save advising check-off: '+(e.message||e)); return false }
     finally{ setAdvisingBusy(false) }
   }
+  const handleAdvise = (plan) => adviseStudent(plan, advisingTerm)
 
   const openAdvisingPanel = (plan) => {
     if(advisingOpenId===plan.plan_id){ setAdvisingOpenId(null); return }
@@ -1304,25 +1522,64 @@ export default function ProgramPlannerPage() {
     setAdvisingOpenId(plan.plan_id)
   }
 
-  const handleSaveAdvising = async (plan) => {
-    const row=meetingThisTerm(plan.student_email)
-    if(!row||advisingBusy) return
-    if(!advisingDraft.met_on){ toast.error('Pick the meeting date'); return }
+  // Shared update (date / note) — returns true on success.
+  const updateMeeting = async (plan, row, {met_on, notes}) => {
+    if(!row||advisingBusy) return false
+    if(!met_on){ toast.error('Pick the meeting date'); return false }
     setAdvisingBusy(true)
     try {
-      const patch={met_on:advisingDraft.met_on,notes:advisingDraft.notes.trim()||null,updated_at:new Date().toISOString()}
+      const patch={met_on,notes:(notes||'').trim()||null,updated_at:new Date().toISOString()}
       const res=assertWrite(await supabase.from('advising_meetings').update(patch).eq('meeting_id',row.meeting_id).select(),'advising_meetings.update')
       if(res.error) throw res.error
       const saved=res.data[0]
       setAdvisingRows(prev=>prev.map(r=>r.meeting_id===saved.meeting_id?saved:r))
-      setAdvisingOpenId(null); setAdvisingMsg(`Advising details saved for ${plan.student_name}`); toast.success('Advising details saved')
+      setAdvisingMsg(`Advising details saved for ${plan.student_name}`); toast.success('Advising details saved')
       const changes=[]
       if(String(row.met_on).substring(0,10)!==saved.met_on) changes.push(`date ${fmtMetOn(row.met_on)} → ${fmtMetOn(saved.met_on)}`)
       if((row.notes||'')!==(saved.notes||'')) changes.push(row.notes?'note updated':'note added')
-      if(changes.length) auditAdvising('UPDATE',saved.meeting_id,`Advising ${advisingTerm} for ${plan.student_name}: ${changes.join(', ')}`,`${row.met_on} ${row.notes||''}`.trim(),`${saved.met_on} ${saved.notes||''}`.trim())
-    } catch(e){ toast.error('Could not save: '+(e.message||e)) }
+      if(changes.length) auditAdvising('UPDATE',saved.meeting_id,`Advising ${row.term_name} for ${plan.student_name}: ${changes.join(', ')}`,`${row.met_on} ${row.notes||''}`.trim(),`${saved.met_on} ${saved.notes||''}`.trim())
+      return true
+    } catch(e){ toast.error('Could not save: '+(e.message||e)); return false }
     finally{ setAdvisingBusy(false) }
   }
+  const handleSaveAdvising = async (plan) => {
+    const ok = await updateMeeting(plan, meetingThisTerm(plan.student_email), advisingDraft)
+    if(ok) setAdvisingOpenId(null)
+  }
+
+  // Whole-program advising report for the selected term (ignores search/filter)
+  const handlePrintAdvisingReport = () => {
+    const byEmail=new Map()
+    plans.forEach(p=>{
+      const k=(p.student_email||'').toLowerCase(); if(!k) return
+      const cur=byEmail.get(k)||{name:p.student_name,email:p.student_email,programs:[]}
+      ;(p.programs||[]).forEach(id=>{ if(!cur.programs.includes(id)) cur.programs.push(id) })
+      byEmail.set(k,cur)
+    })
+    const students=[...byEmail.entries()].map(([k,s])=>{
+      const all=sortMeetings(advisingByEmail.get(k)||[])
+      const meeting=all.find(m=>m.term_name===advisingTerm)||null
+      const earlier=all.filter(m=>semesterSortKey(m.term_name)<semesterSortKey(advisingTerm))
+      return {...s,meeting,lastMeeting:earlier[earlier.length-1]||null}
+    })
+    if(!students.length){ toast.error('No student plans to report on'); return }
+    printAdvisingReport({term:advisingTerm,students,preparedBy:myName})
+  }
+
+  // Props bundle for the Advising section inside the Edit and View modals
+  const advisingActionsFor = (plan) => ({
+    meetings: meetingsFor(plan.student_email),
+    defaultTerm: advisingTerm,
+    termOptions: advisingTermOptions,
+    currentTermName: currentTermRow?.name||'',
+    busy: advisingBusy,
+    unavailable: advisingError,
+    printNotes: printAdvisingNotes,
+    setPrintNotes: setPrintAdvisingNotes,
+    onAdvise: (term, draft) => adviseStudent(plan, term, draft),
+    onUpdate: (row, draft) => updateMeeting(plan, row, draft),
+    onRemove: (row) => setConfirmRemoveAdvising({plan,row}),
+  })
 
   const handleRemoveAdvisingConfirmed = async () => {
     const {plan,row}=confirmRemoveAdvising||{}
@@ -1545,6 +1802,11 @@ export default function ProgramPlannerPage() {
         <p className="text-xs text-surface-600 ml-auto" aria-live="polite">
           <strong className="text-emerald-700">{advisedCount}</strong> of {searchedStudents.length} student{searchedStudents.length!==1?'s':''} advised for {advisingTerm}
         </p>
+        <button type="button" onClick={handlePrintAdvisingReport} disabled={loading||!plans.length}
+          title={`Print who has and hasn't met for advising in ${advisingTerm} (all students, ignores search and filter)`}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-emerald-300 bg-emerald-50 text-emerald-800 rounded-lg hover:bg-emerald-100 disabled:opacity-40 transition-colors min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+          <Printer size={13} aria-hidden="true" /> Print Advising Report
+        </button>
         <p className="sr-only" aria-live="polite">{advisingMsg}</p>
         {advisingError&&(
           <p role="alert" className="w-full text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 flex items-center gap-1.5">
@@ -1636,7 +1898,7 @@ export default function ProgramPlannerPage() {
                       className="flex items-center gap-1 px-2.5 py-1.5 text-xs border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
                       <BookOpen size={11} aria-hidden="true" /> View
                     </button>
-                    <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name,planMeetings)}
+                    <button onClick={()=>printPlan({...plan,semesters:cleanSems},plan.student_name,planMeetings,{includeNotes:printAdvisingNotes})}
                       className="p-1.5 border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center" title="Print" aria-label="Print">
                       <Printer size={12} aria-hidden="true" />
                     </button>
@@ -1722,8 +1984,8 @@ export default function ProgramPlannerPage() {
       )}
 
       {showNew&&<NewPlanModal onCreated={loadPlans} onClose={()=>setShowNew(false)}/>}
-      {editing&&<PlanEditorModal plan={editing} advising={meetingsFor(editing.student_email)} onSave={newSems=>handleSavePlan(editing.plan_id,newSems)} onClose={()=>setEditing(null)}/>}
-      {viewing&&<StudentPlanView plan={viewing} advising={meetingsFor(viewing.student_email)} showNotes onClose={()=>setViewing(null)}/>}
+      {editing&&<PlanEditorModal plan={editing} advising={meetingsFor(editing.student_email)} advisingActions={advisingActionsFor(editing)} onSave={newSems=>handleSavePlan(editing.plan_id,newSems)} onClose={()=>setEditing(null)}/>}
+      {viewing&&<StudentPlanView plan={viewing} advising={meetingsFor(viewing.student_email)} showNotes advisingActions={advisingActionsFor(viewing)} onClose={()=>setViewing(null)}/>}
 
       {confirmRemoveAdvising&&(
         <ConfirmDialog
