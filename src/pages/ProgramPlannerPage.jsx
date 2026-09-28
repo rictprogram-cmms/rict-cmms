@@ -338,6 +338,11 @@ function printPlan(plan, studentName, advising = null, opts = {}) {
     h1{font-size:16pt;margin:0 0 2px;color:#1e3a8a}
     .meta{display:flex;gap:20px;font-size:9pt;color:#555;margin-bottom:4px;flex-wrap:wrap}.meta span b{color:#111}
     .meta-sub{font-size:8pt;color:#94a3b8;margin-bottom:12px}
+    /* Avery 5961 label = 4in × 1in; box is 1/16in larger on every side so the label sits inside the line */
+    .label-row{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:0 0 14px;break-inside:avoid}
+    .label-cap{font-size:9pt;color:#334155}
+    .label-box{flex:0 0 auto;width:4.125in;height:1.125in;border:1.5px dashed #64748b;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt}
+    .label-box small{font-size:7pt;margin-top:2px}
     .progress-section{margin-bottom:16px;padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:5px}
     .progress-row{display:flex;justify-content:space-between;font-size:9pt;margin-bottom:5px}
     .progress-track{height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;display:flex}
@@ -380,6 +385,11 @@ function printPlan(plan, studentName, advising = null, opts = {}) {
     <span><b>Total Credits:</b> ${totalCr}</span>
   </div>
   <div class="meta-sub">Student: ${esc(plan.student_email||'')} &nbsp;|&nbsp; Printed: ${printedDate}</div>
+  ${opts.accessLabel ? `
+  <div class="label-row">
+    <div class="label-cap"><b>Registration Access Code</b><br>Use this code when you register for next term's classes.</div>
+    <div class="label-box" role="img" aria-label="Space for Access Code label"><span>Place Access Code label here</span><small>Avery 5961 · 4&Prime; × 1&Prime;</small></div>
+  </div>` : ''}
   ${progressHtml}${advisingHtml}${semHtml}
   <div class="total">Total Program Credits: ${totalCr}</div>
   <div class="dar-note"><b>Note:</b> This plan is for advising purposes only and does not replace an official Degree Audit Report (DAR). Contact your instructor or advisor to request a DAR through the college's student records system.</div>
@@ -496,7 +506,7 @@ function DeleteSemesterDialog({ semester, onConfirm, onCancel }) {
 // (independent of "Save Plan"). History of earlier terms is listed below.
 function AdvisingSection({ actions, studentName, idPrefix }) {
   const { meetings=[], defaultTerm, termOptions=[], currentTermName, busy, unavailable,
-          printNotes, setPrintNotes, onAdvise, onUpdate, onRemove } = actions
+          printNotes, setPrintNotes, accessLabel, setAccessLabel, onAdvise, onUpdate, onRemove } = actions
   const [term, setTerm] = useState(defaultTerm)
   const row = meetings.find(m => m.term_name === term) || null
   const [draft, setDraft] = useState({ met_on: todayLocalDate(), notes: '' })
@@ -534,11 +544,21 @@ function AdvisingSection({ actions, studentName, idPrefix }) {
         {row
           ? <span className="text-xs font-semibold text-emerald-800 flex items-center gap-1"><Check size={13} aria-hidden="true" /> Advised {fmtMetOn(row.met_on)}{row.advised_by ? ` · ${row.advised_by}` : ''}</span>
           : <span className="text-xs text-surface-600">Not yet advised for {term}</span>}
-        <label className="ml-auto flex items-center gap-2 text-[11px] text-surface-700 cursor-pointer min-h-[44px]">
-          <input type="checkbox" checked={!!printNotes} onChange={e => setPrintNotes(e.target.checked)}
-            className="w-4 h-4 accent-emerald-600 focus-visible:ring-2 focus-visible:ring-brand-500" />
-          Print advising notes
-        </label>
+        <div className="ml-auto flex flex-wrap items-center gap-x-4">
+          <label className="flex items-center gap-2 text-[11px] text-surface-700 cursor-pointer min-h-[44px]">
+            <input type="checkbox" checked={!!printNotes} onChange={e => setPrintNotes(e.target.checked)}
+              className="w-4 h-4 accent-emerald-600 focus-visible:ring-2 focus-visible:ring-brand-500" />
+            Print advising notes
+          </label>
+          {setAccessLabel && (
+            <label className="flex items-center gap-2 text-[11px] text-surface-700 cursor-pointer min-h-[44px]"
+              title="Adds a 4″ × 1″ box to the printout for an Avery 5961 Access Code label">
+              <input type="checkbox" checked={!!accessLabel} onChange={e => setAccessLabel(e.target.checked)}
+                className="w-4 h-4 accent-emerald-600 focus-visible:ring-2 focus-visible:ring-brand-500" />
+              Label spot for Access Code
+            </label>
+          )}
+        </div>
       </div>
 
       <div className="px-4 py-3 space-y-2 bg-white">
@@ -711,7 +731,7 @@ function PlanEditorModal({ plan, advising = [], advisingActions = null, onSave, 
             <p className="sr-only" aria-live="polite">{statusMsg}</p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters},plan.student_name,advisingActions?.meetings||advising,{includeNotes:!!advisingActions?.printNotes})}
+            <button onClick={()=>printPlan({...plan,semesters},plan.student_name,advisingActions?.meetings||advising,{includeNotes:!!advisingActions?.printNotes,accessLabel:!!advisingActions?.accessLabel})}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print
             </button>
@@ -1129,7 +1149,7 @@ export function StudentPlanView({ plan, onClose, advising = [], showNotes = fals
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',advisingActions?.meetings||meetings,{includeNotes:!!(showNotes&&advisingActions?.printNotes)})}
+            <button onClick={()=>printPlan({...plan,semesters:cleanSemesters},plan?.student_name||'Student',advisingActions?.meetings||meetings,{includeNotes:!!(showNotes&&advisingActions?.printNotes),accessLabel:!!advisingActions?.accessLabel})}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
               <Printer size={13} aria-hidden="true" /> Print / Save PDF
             </button>
@@ -1345,6 +1365,8 @@ export default function ProgramPlannerPage() {
   const termPickedRef = useRef(false)
   // Instructor printouts include advising notes unless turned off (remembered per browser)
   const [printAdvisingNotes,setPrintAdvisingNotesState]=useState(()=>{ try{ return localStorage.getItem('plannerPrintAdvisingNotes')!=='0' }catch{ return true } })
+  // Access Code label spot (Avery 5961) — only wanted when advising, so it starts off for every plan opened
+  const [printAccessLabel,setPrintAccessLabel]=useState(false)
   const setPrintAdvisingNotes = v => { setPrintAdvisingNotesState(v); try{ localStorage.setItem('plannerPrintAdvisingNotes',v?'1':'0') }catch{} }
 
   const handleSortChange = val => { setSortOrder(val); localStorage.setItem('plannerSortOrder',val) }
@@ -1392,6 +1414,7 @@ export default function ProgramPlannerPage() {
   },[isInstructor,profile?.email])
 
   useEffect(()=>{loadPlans()},[loadPlans])
+  useEffect(()=>{ setPrintAccessLabel(false) },[editing?.plan_id,viewing?.plan_id])
   useEffect(()=>{loadAdvising()},[loadAdvising])
   useEffect(()=>{if(isInstructor)loadMasterPlanners()},[loadMasterPlanners,isInstructor])
   // Default the advising term to the current term from Settings → Terms (once)
@@ -1575,6 +1598,8 @@ export default function ProgramPlannerPage() {
     busy: advisingBusy,
     unavailable: advisingError,
     printNotes: printAdvisingNotes,
+    accessLabel: printAccessLabel,
+    setAccessLabel: setPrintAccessLabel,
     setPrintNotes: setPrintAdvisingNotes,
     onAdvise: (term, draft) => adviseStudent(plan, term, draft),
     onUpdate: (row, draft) => updateMeeting(plan, row, draft),
