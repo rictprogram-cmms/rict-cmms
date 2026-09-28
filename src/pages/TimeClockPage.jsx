@@ -1,12 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
-import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { createClient } from '@supabase/supabase-js'
-import { generateSafeTcId } from '@/utils/generateSafeTcId'
+import { subscribeKioskFeed } from '@/lib/kioskFeed'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 
 // ─── Standalone Supabase client (no auth needed for public page) ─────────────
+// Security phase 2 (2026-09-28): this logged-out kiosk can no longer read
+// profiles / time_clock / lab_signup or write time_clock directly. Every
+// lookup and punch goes through a kiosk_* database function that takes the
+// badge swipe as proof (badge only — a typed email is not accepted). The
+// swiped badge is kept in badgeRef for the rest of that person's visit.
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -621,28 +625,24 @@ function InstructorApproveScreen({ user, onApproved, onCancel, loading: parentLo
     setLoading(true)
 
     try {
-      const { data: profile, error: profileErr } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('card_id', cardId)
-        .eq('status', 'Active')
-        .maybeSingle()
-      if (profileErr) throw profileErr
+      // The database checks the badge; the punch-out re-checks it before
+      // recording the approval.
+      const { data: res, error: rpcErr } = await supabase.rpc('kiosk_verify_instructor', { p_card: cardId })
+      if (rpcErr) throw rpcErr
 
-      if (!profile) {
+      if (!res?.ok && res?.error !== 'not_instructor') {
         setError('Badge not recognized. Please try again.')
         setLoading(false)
         return
       }
 
-      if (!isInstructorRole(profile.role)) {
+      if (!res?.ok) {
         setError('Only instructors can approve early departures.')
         setLoading(false)
         return
       }
 
-      const instructorName = `${profile.first_name} ${(profile.last_name || '').charAt(0)}.`
-      onApproved(instructorName)
+      onApproved(res.name, cardId)
     } catch (err) {
       console.error('[TimeClock] Instructor approval error:', err)
       setError('Lookup failed. Please try again.')
@@ -864,6 +864,13 @@ export default function TimeClockPage() {
   const [gracePeriod, setGracePeriod] = useState(10)
   const [earlyInfo, setEarlyInfo] = useState(null)
 
+  // The badge swiped for this visit (the student's own, or the instructor's
+  // when an instructor punches for a student). Every kiosk_* call sends it.
+  const badgeRef = useRef('')
+  // True while this kiosk is punching out, so the live "punched out
+  // elsewhere?" re-check doesn't race our own success screen.
+  const punchingOutRef = useRef(false)
+
   // ── Lab Access Mode ─────────────────────────────────────────────────
   // 'unknown' while loading, then 'in_session' | 'summer_break' |
   // 'planned_maintenance'. The kiosk polls every 5 minutes so it responds
@@ -956,6 +963,7 @@ export default function TimeClockPage() {
   }, [screen, successMsg.flags])
 
   function resetToSwipe() {
+    badgeRef.current = ''
     setScreen('swipe')
     setUser(null)
     setInstructor(null)
@@ -968,9 +976,9 @@ export default function TimeClockPage() {
   }
 
   useEffect(() => {
-    if (screen !== 'punch-out' || !punchRecord?.record_id) return
+    if (screen !== 'punch-out' || !punchRecord?.record_id || !user?.email) return
 
-    // Shared by the realtime handler and the reconnect re-read below
+    // Shared by the live signal and the reconnect re-read below
     const showIfPunchedOut = (updated) => {
       if (updated && updated.status === 'Punched Out') {
         const totalHours = parseFloat(updated.total_hours) || 0
@@ -985,30 +993,28 @@ export default function TimeClockPage() {
       }
     }
     const recordId = punchRecord.record_id
+    const studentEmail = user.email
 
-    return subscribeWithReconnect(`timeclock-kiosk-${recordId}`, ch => ch
-      .on('postgres_changes', {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'time_clock',
-        filter: `record_id=eq.${recordId}`,
-      }, (payload) => showIfPunchedOut(payload.new))
-    , {
+    // If the punch-out happened elsewhere (Time Cards, another kiosk), the
+    // database bumps the time_clock signal; re-check this one record through
+    // the badge-checked kiosk_record_status so the student isn't left on the
+    // punch-out screen. Also run after a reconnect, since missed signals are
+    // not replayed.
+    const recheck = async () => {
+      if (punchingOutRef.current || !badgeRef.current) return
+      const { data, error } = await supabase.rpc('kiosk_record_status', {
+        p_card: badgeRef.current, p_email: studentEmail, p_record_id: recordId,
+      })
+      if (!error && data?.ok && !punchingOutRef.current) showIfPunchedOut(data)
+    }
+
+    return subscribeKioskFeed(`timeclock-kiosk-${recordId}`, recheck, {
       client: supabase,
       tag: 'TimeClock',
-      // If the punch-out happened elsewhere while the kiosk was offline, the
-      // UPDATE event is gone for good — re-read this one record on reconnect
-      // so the student isn't left on the punch-out screen.
-      onReconnect: async () => {
-        const { data, error } = await supabase
-          .from('time_clock')
-          .select('status, total_hours')
-          .eq('record_id', recordId)
-          .maybeSingle()
-        if (!error) showIfPunchedOut(data)
-      },
+      filter: 'topic=eq.time_clock',
+      onReconnect: recheck,
     })
-  }, [screen, punchRecord?.record_id, todaySignup, gracePeriod])
+  }, [screen, punchRecord?.record_id, user?.email, todaySignup, gracePeriod])
 
   function checkPunchInFlags(isVolunteer, isWorkStudy, isFirstPunchToday) {
     const flags = []
@@ -1040,9 +1046,9 @@ export default function TimeClockPage() {
     return flags
   }
 
-  async function fetchAttendanceContext(userEmail) {
-    const today = todayStr()
-
+  // `signups` = today's Confirmed lab sign-ups for this person, from
+  // kiosk_student_state (the kiosk can no longer read lab_signup directly).
+  async function fetchAttendanceContext(signups) {
     try {
       const gs = mustData(await supabase
         .from('settings')
@@ -1054,67 +1060,27 @@ export default function TimeClockPage() {
       }
     } catch {}
 
-    try {
-      const signups = mustData(await supabase
-        .from('lab_signup')
-        .select('date, start_time, end_time, status')
-        .eq('user_email', userEmail)
-        .eq('status', 'Confirmed')
-        .gte('date', today)
-        .lte('date', today + 'T23:59:59'), 'lab_signup.select')
+    if (signups && signups.length > 0) {
+      let startMin = Infinity
+      let endMin = 0
+      signups.forEach(s => {
+        const sMin = timeToMinutes(s.start_time)
+        const eMin = timeToMinutes(s.end_time)
+        if (sMin !== null && sMin < startMin) startMin = sMin
+        if (eMin !== null && eMin > endMin) endMin = eMin
+      })
 
-      if (signups && signups.length > 0) {
-        let startMin = Infinity
-        let endMin = 0
-        signups.forEach(s => {
-          const sMin = timeToMinutes(s.start_time)
-          const eMin = timeToMinutes(s.end_time)
-          if (sMin !== null && sMin < startMin) startMin = sMin
-          if (eMin !== null && eMin > endMin) endMin = eMin
-        })
-
-        if (startMin !== Infinity) {
-          setTodaySignup({ startMin, endMin, slots: signups.length })
-          console.log('[TimeClock] Signup found for', userEmail,
-            `start=${Math.floor(startMin / 60)}:${String(startMin % 60).padStart(2, '0')}`,
-            `end=${Math.floor(endMin / 60)}:${String(endMin % 60).padStart(2, '0')}`)
-          return
-        }
+      if (startMin !== Infinity) {
+        setTodaySignup({ startMin, endMin, slots: signups.length })
+        console.log('[TimeClock] Signup found for today',
+          `start=${Math.floor(startMin / 60)}:${String(startMin % 60).padStart(2, '0')}`,
+          `end=${Math.floor(endMin / 60)}:${String(endMin % 60).padStart(2, '0')}`)
+        return
       }
-
-      setTodaySignup(null)
-      console.log('[TimeClock] No signup for', userEmail, 'today')
-    } catch {
-      setTodaySignup(null)
-    }
-  }
-
-  // Throws on query error. A failed read must never be treated as "no open
-  // punch" — that would show Punch In to a student who is already punched in
-  // and create a duplicate open record. The caller's catch shows a retry error.
-  async function findOpenPunch(profile) {
-    const openPunchQuery = (col, val) => supabase
-      .from('time_clock')
-      .select('*')
-      .eq(col, val)
-      .eq('status', 'Punched In')
-      .order('punch_in', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const { data: p1, error: e1 } = await openPunchQuery('user_id', profile.id)
-    if (e1) throw new Error('time_clock lookup failed: ' + e1.message)
-    if (p1) return p1
-
-    if (profile.user_id) {
-      const { data: p2, error: e2 } = await openPunchQuery('user_id', profile.user_id)
-      if (e2) throw new Error('time_clock lookup failed: ' + e2.message)
-      if (p2) return p2
     }
 
-    const { data: p3, error: e3 } = await openPunchQuery('user_email', profile.email)
-    if (e3) throw new Error('time_clock lookup failed: ' + e3.message)
-    return p3 || null
+    setTodaySignup(null)
+    console.log('[TimeClock] No signup today')
   }
 
   // ── Fetch & cache classes data ──
@@ -1292,10 +1258,19 @@ export default function TimeClockPage() {
     return classDetails
   }
 
+  // Throws on any failure. A failed read must never be treated as "no open
+  // punch" — that would show Punch In to a student who is already punched in.
+  // The caller's catch shows a retry error.
   async function loadStudentPunchState(studentProfile) {
     setUser(studentProfile)
-    await fetchAttendanceContext(studentProfile.email)
-    const openPunch = await findOpenPunch(studentProfile)
+    const { data: state, error: stateErr } = await supabase.rpc('kiosk_student_state', {
+      p_card: badgeRef.current, p_email: studentProfile.email, p_date: todayStr(),
+    })
+    if (stateErr) throw new Error('kiosk_student_state failed: ' + stateErr.message)
+    if (!state?.ok) throw new Error('kiosk_student_state: ' + (state?.error || 'no data'))
+
+    await fetchAttendanceContext(state.signups || [])
+    const openPunch = state.open_punch || null
 
     if (openPunch) {
       console.log('[TimeClock] Student has open punch:', openPunch.record_id,
@@ -1329,27 +1304,20 @@ export default function TimeClockPage() {
     classesDataRef.current = null
 
     try {
-      const searchId = cardId.trim().toLowerCase()
+      // Badge only: the database matches the swipe and returns just this
+      // person — plus the student list when it is an instructor's badge.
+      // Badge numbers never come back to the kiosk.
+      const badge = cardId.trim()
+      const { data: res, error: lookupErr } = await supabase.rpc('kiosk_badge_lookup', { p_card: badge })
+      if (lookupErr) throw lookupErr
 
-      const { data: users, error: userError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('status', 'Active')
-        .neq('email', SUPER_ADMIN_EMAIL) // utility admin never appears in the student picker
-
-      if (userError) throw userError
-
-      const foundUser = (users || []).find(u => {
-        const userCard = (u.card_id || '').trim().toLowerCase()
-        const userEmail = (u.email || '').trim().toLowerCase()
-        return (userCard && userCard === searchId) || userEmail === searchId
-      })
-
+      const foundUser = res?.found ? res.user : null
       if (!foundUser) {
         setError('Card not recognized. Please see an instructor.')
         setLoading(false)
         return
       }
+      badgeRef.current = badge
 
       if (import.meta.env.DEV) console.log('[TimeClock] Found user:', foundUser.first_name, foundUser.last_name,
         '| Role:', foundUser.role, '| Classes:', foundUser.classes)
@@ -1357,16 +1325,8 @@ export default function TimeClockPage() {
       if (isInstructorRole(foundUser.role)) {
         console.log('[TimeClock] Instructor detected — showing student picker')
         setInstructor(foundUser)
-
-        const studentList = (users || [])
-          .filter(u => !isInstructorRole(u.role))
-          .sort((a, b) => {
-            const nameA = `${a.first_name || ''} ${a.last_name || ''}`.toLowerCase()
-            const nameB = `${b.first_name || ''} ${b.last_name || ''}`.toLowerCase()
-            return nameA.localeCompare(nameB)
-          })
-
-        setStudents(studentList)
+        // Already sorted by name, instructors and the utility admin excluded
+        setStudents(res.students || [])
         setScreen('student-picker')
         setLoading(false)
         return
@@ -1403,73 +1363,40 @@ export default function TimeClockPage() {
     setLoading(true)
 
     try {
-      // Shared collision-safe TC ID generation. Pass the kiosk's standalone
-      // supabase client (auth-less) so the helper uses the same anon context
-      // as the rest of this page.
-      const recordId = await generateSafeTcId(supabase)
-
       const userName = `${user.first_name || ''} ${(user.last_name || '').charAt(0)}.`.trim()
       const entryType = cls.isVolunteer ? 'Volunteer' : cls.isWorkStudy ? 'Work Study' : cls.isClubActivity ? 'Club Activity' : 'Class'
-      // Volunteer time clock punches are auto-approved — instructor is present when they punch in.
-      // Only manual "Log Volunteer Hours" requests require approval.
-      const approvalStatus = (cls.isVolunteer || cls.isWorkStudy || cls.isClubActivity) ? 'Approved' : 'N/A'
 
-      const description = instructor
-        ? `Punched in by instructor: ${instructor.first_name} ${(instructor.last_name || '').charAt(0)}.`
-        : ''
-
-      // Store the RICT code in course_id column
-      const courseIdForDb = cls.courseId || 'Unknown'
-
-      // IMPORTANT: Use user_id (USR###) not id (UUID) — reports query by user_id
-      const userIdForDb = user.user_id || user.id
-
-      const { data: insertedRows, error } = await supabase.from('time_clock').insert({
-        record_id: recordId,
-        user_id: userIdForDb,
-        user_name: userName,
-        user_email: user.email,
-        class_id: cls.classId,
-        course_id: courseIdForDb,
-        punch_in: localToUtcIso(new Date()),
-        status: 'Punched In',
-        total_hours: 0,
-        week_start: getWeekStart(),
-        entry_type: entryType,
-        description,
-        approval_status: approvalStatus,
-      }).select()
+      // The database creates the record (collision-safe TC id, fake-UTC
+      // punch_in, week start, approval status for Volunteer / Work Study /
+      // Club Activity, and the "Punched in by instructor" note) after checking
+      // the badge. It refuses a second open punch.
+      const { data: res, error } = await supabase.rpc('kiosk_punch_in', {
+        p_card: badgeRef.current,
+        p_email: user.email,
+        p_class_id: cls.classId,
+        p_course_id: cls.courseId || 'Unknown',   // RICT code goes in course_id
+        p_entry_type: entryType,
+      })
 
       if (error) throw error
 
-      if (!insertedRows || insertedRows.length === 0) {
-        setError('Punch in failed — database permission issue. Please see an instructor.')
+      if (!res?.ok) {
+        if (res?.error === 'already_punched_in') {
+          resetToSwipe()
+          setError('Already punched in — swipe again to punch out.')
+        } else {
+          setError('Punch in failed — please see an instructor.')
+        }
         setLoading(false)
         return
       }
 
-      if (import.meta.env.DEV) console.log('[TimeClock] Punched in:', recordId, '| for:', userName,
+      if (import.meta.env.DEV) console.log('[TimeClock] Punched in:', res.record?.record_id, '| for:', userName,
         '| courseId:', cls.courseId, '| courseName:', cls.courseName)
 
-      // Check if this is the first punch today — only flag late/walk-in on first punch
-      let isFirstPunchToday = true
-      try {
-        const today = todayStr()
-        const earlierPunches = mustData(await supabase
-          .from('time_clock')
-          .select('record_id')
-          .eq('user_email', user.email)
-          .gte('punch_in', today)
-          .lte('punch_in', today + 'T23:59:59')
-          .neq('record_id', recordId)
-          .limit(1), 'time_clock.select')
-        if (earlierPunches && earlierPunches.length > 0) {
-          isFirstPunchToday = false
-          console.log('[TimeClock] Not first punch today — skipping late/walk-in flags')
-        }
-      } catch (e) {
-        console.warn('[TimeClock] Earlier punch check failed:', e)
-      }
+      // Only flag late/walk-in on the first punch of the day
+      const isFirstPunchToday = res.first_punch_today !== false
+      if (!isFirstPunchToday) console.log('[TimeClock] Not first punch today — skipping late/walk-in flags')
 
       const flags = checkPunchInFlags(cls.isVolunteer, !!cls.isWorkStudy, isFirstPunchToday)
       const studentName = instructor ? `${user.first_name} ${(user.last_name || '').charAt(0)}.` : ''
@@ -1517,92 +1444,43 @@ export default function TimeClockPage() {
   // isBreak: student punched out via "Taking a break — coming back". Not an
   // early departure; entry_type is left alone and is_break_punch_out is set so
   // reports can tell a lunch break from a real departure.
-  const executePunchOut = useCallback(async (earlyDeparture, instructorApproved, approverName, isBreak = false) => {
+  // approverCard: the instructor badge swiped on the approval screen — the
+  // database re-checks it before recording early_departure_approved_by.
+  const executePunchOut = useCallback(async (earlyDeparture, instructorApproved, approverName, isBreak = false, approverCard = null) => {
     if (!user || !punchRecord) return
     setLoading(true)
+    punchingOutRef.current = true
 
     try {
-      const punchOutTime = new Date()
-      const punchInTime = new Date(punchRecord.punch_in)
-      const nowFakeUtcMs = Date.UTC(punchOutTime.getFullYear(), punchOutTime.getMonth(), punchOutTime.getDate(),
-        punchOutTime.getHours(), punchOutTime.getMinutes(), punchOutTime.getSeconds())
-      const rawHours = (nowFakeUtcMs - punchInTime.getTime()) / (1000 * 60 * 60)
-      // Club Activity earns 0.25 hrs credit per actual hour attended
-      const isClubActivityPunch = punchRecord.entry_type === 'Club Activity'
-      const totalHours = Math.round((isClubActivityPunch ? rawHours * 0.25 : rawHours) * 100) / 100
-
-      let description = punchRecord.description || ''
-      if (instructor) {
-        const note = `Punched out by instructor: ${instructor.first_name} ${(instructor.last_name || '').charAt(0)}.`
-        description = description ? `${description} | ${note}` : note
-      }
-      if (isBreak) {
-        const note = `Break — out ${formatNow()}`
-        description = description ? `${description} | ${note}` : note
-      } else if (instructorApproved && approverName) {
-        const note = `Early departure approved by ${approverName}`
-        description = description ? `${description} | ${note}` : note
-      } else if (earlyDeparture && !instructorApproved) {
-        const earlyMins = earlyInfo?.minutes || 0
-        const note = earlyMins > 0
-          ? `Left early — ${formatMinutes(earlyMins)} before scheduled end`
-          : 'Left early'
-        description = description ? `${description} | ${note}` : note
-      }
-
-      // Determine entry_type:
-      //   - Break (coming back) → keep original (scoring ignores mid-day gaps)
-      //   - Instructor approved early departure → keep original (not penalized)
-      //   - Left early without permission → "Left Early" (flagged in reports)
-      //   - Normal punch out → keep original entry_type
-      let entryType = punchRecord.entry_type
-      if (earlyDeparture && !instructorApproved && !isBreak) {
-        entryType = 'Left Early'
-      }
-
-      const updateData = {
-        punch_out: localToUtcIso(punchOutTime),
-        total_hours: totalHours,
-        status: 'Punched Out',
-        description,
-        entry_type: entryType,
-        is_break_punch_out: !!isBreak,
-      }
-      // Authoritative approval marker — scoring checks this column, not the
-      // description text or entry_type.
-      if (instructorApproved && approverName) {
-        updateData.early_departure_approved_by = approverName
-      }
-
-      // For volunteer/club activity punches, record who approved
-      if (punchRecord.entry_type === 'Volunteer' || punchRecord.entry_type === 'Club Activity') {
-        updateData.approved_by = instructor
-          ? `${instructor.first_name} ${(instructor.last_name || '').charAt(0)}.`
-          : 'Time Clock'
-        updateData.approved_date = new Date().toISOString()
-      }
-      // Add note showing actual vs credited hours for Club Activity
-      if (isClubActivityPunch) {
-        const actualHrsDisplay = Math.round(rawHours * 100) / 100
-        const note = `Club Activity: ${actualHrsDisplay}h actual → ${totalHours}h credited (0.25x)`
-        updateData.description = updateData.description
-          ? `${updateData.description} | ${note}`
-          : note
-      }
-
-      const { data: updatedRows, error } = await supabase
-        .from('time_clock')
-        .update(updateData)
-        .eq('record_id', punchRecord.record_id)
-        .select()
+      // The database works out the hours (fake-UTC, Club Activity at 0.25x),
+      // the description notes (instructor, break, approval, left early), the
+      // Left Early entry type, and approved_by for Volunteer / Club Activity —
+      // the same rules this page used to apply itself.
+      const { data: res, error } = await supabase.rpc('kiosk_punch_out', {
+        p_card: badgeRef.current,
+        p_email: user.email,
+        p_record_id: punchRecord.record_id,
+        p_early: !!earlyDeparture,
+        p_early_minutes: earlyInfo?.minutes || 0,
+        p_approver_card: instructorApproved && approverCard ? approverCard : null,
+        p_is_break: !!isBreak,
+      })
 
       if (error) throw error
 
-      if (!updatedRows || updatedRows.length === 0) {
-        setError('Punch out failed — database permission issue. Please see an instructor.')
+      if (!res?.ok) {
+        const msg = res?.error === 'not_open'
+          ? 'This punch was already closed. Swipe again to check your status.'
+          : res?.error === 'approver_not_instructor'
+            ? 'Only instructors can approve early departures.'
+            : 'Punch out failed — please see an instructor.'
+        resetToSwipe()
+        setError(msg)
         setLoading(false)
         return
       }
+
+      const totalHours = parseFloat(res.total_hours) || 0
 
       const isVolunteer = punchRecord.entry_type === 'Volunteer'
       let flags = []
@@ -1633,6 +1511,7 @@ export default function TimeClockPage() {
       console.error('[TimeClock] Punch out error:', err)
       setError('Failed to punch out. Please try again.')
     } finally {
+      punchingOutRef.current = false
       setLoading(false)
     }
   }, [user, punchRecord, instructor, todaySignup, gracePeriod, earlyInfo])
@@ -1656,8 +1535,8 @@ export default function TimeClockPage() {
     setScreen('instructor-approve')
   }, [])
 
-  const handleInstructorApproved = useCallback((approverName) => {
-    executePunchOut(true, true, approverName)
+  const handleInstructorApproved = useCallback((approverName, approverCard) => {
+    executePunchOut(true, true, approverName, false, approverCard)
   }, [executePunchOut])
 
   const handleCancelApproval = useCallback(() => {

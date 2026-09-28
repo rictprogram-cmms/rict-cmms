@@ -27,6 +27,7 @@ import { createClient } from '@supabase/supabase-js'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
+import { fetchKioskFeed, subscribeKioskFeed } from '@/lib/kioskFeed'
 import { mergeSignupSessions, pickSession, minutesToDate, nowMinutes, fakeUtcMinutes, leftSessionEarly, minutesToTime12 } from '@/lib/labSessions'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
@@ -471,48 +472,30 @@ export default function TVDisplayPage() {
         String(today.getMonth() + 1).padStart(2, '0') + '-' +
         String(today.getDate()).padStart(2, '0')
 
-      // ---------- 1. Open Work Orders ----------
-      // Run the five board queries in parallel (was sequential) and fail the
-      // whole cycle if any of them errors, so partial state is never shown.
-      const [wosRes, usersRes, tcRes, signupRes, helpRes, outRes] = await Promise.all([
-        supabase
-          .from('work_orders')
-          .select('wo_id, description, priority, status, asset_name, assigned_to, due_date, created_at')
-          .neq('status', 'Closed')
-          .order('due_date', { ascending: true, nullsFirst: false }),
-        supabase
-          .from('profiles')
-          .select('id, email, first_name, last_name, time_clock_only'),
-        // Fake-UTC convention: build the bound from the local date string, not
-        // toISOString() (which shifts by the CT offset and can miss early punches).
-        supabase
-          .from('time_clock')
-          .select('user_id, user_name, user_email, punch_in, punch_out, status')
-          .gte('punch_in', todayStr + 'T00:00:00')
-          .eq('status', 'Punched In'),
-        supabase
-          .from('lab_signup')
-          .select('user_id, user_name, user_email, start_time, end_time, status')
-          .eq('date', todayStr)
-          // 'Confirmed' only — matches Dashboard, Lab Status, Time Cards and
-          // Weekly Labs so every roster/hours reader agrees on who counts.
-          .eq('status', 'Confirmed'),
-        supabase
-          .from('help_requests')
-          .select('*')
-          .in('status', ['pending', 'acknowledged'])
-          .order('requested_at', { ascending: true }),
-        // Today's completed punches — so a student who punched out partway
-        // through a running block shows "Left Early" instead of "Missing"
-        // (same rule as Lab Status / Dashboard). Non-fatal: on error the board
-        // falls back to the previous behavior.
-        supabase
-          .from('time_clock')
-          .select('user_name, user_email, punch_in, punch_out, is_break_punch_out')
-          .eq('status', 'Punched Out')
-          .gte('punch_in', todayStr + 'T00:00:00')
-          .lte('punch_in', todayStr + 'T23:59:59'),
-      ])
+      // ---------- 1. Board data (one kiosk feed call) ----------
+      // Security phase 2: the TV is logged out and can no longer read
+      // work_orders / profiles / time_clock / lab_signup / help_requests
+      // directly. kiosk_feed returns the same rows, with every email replaced
+      // by an anonymous per-person key that matches across the lists (so the
+      // matching below is unchanged and no address reaches the TV):
+      //   workOrders    not Closed, by due_date (nulls last)
+      //   timeClockOnly time-clock-only people (the only profile rows used here)
+      //   punchedIn     today's Punched In rows (fake-UTC day bounds)
+      //   signups       today's 'Confirmed' sign-ups (matches Dashboard, Lab
+      //                 Status, Time Cards and Weekly Labs)
+      //   help          pending / acknowledged, by requested_at
+      //   punchedOut    today's completed punches — so a student who punched out
+      //                 partway through a running block shows "Left Early"
+      //                 instead of "Missing". Non-fatal (see below).
+      // The cycle still fails as a whole if the feed errors, so partial state
+      // is never shown.
+      const feed = await fetchKioskFeed(supabase, todayStr)
+      const wosRes = feed.workOrders
+      const usersRes = feed.timeClockOnly
+      const tcRes = feed.punchedIn
+      const signupRes = feed.signups
+      const helpRes = feed.help
+      const outRes = feed.punchedOut
       if (seq !== loadSeqRef.current) return // a newer load superseded this one
       const wos      = mustData(wosRes, 'work_orders')
       const allUsers = mustData(usersRes, 'profiles')
@@ -796,14 +779,13 @@ export default function TVDisplayPage() {
 
   // ── Real-time subscriptions ─────────────────────────────────────
   // Instant updates when work orders, time clock entries, lab signups,
-  // or user profiles change. Replaces the old 90-second polling loop.
+  // user profiles or help requests change — delivered as the kiosk feed
+  // signal (security phase 2; the TV can't watch those tables directly).
+  // lab_calendar is still watched directly. Replaces the old 90-second
+  // polling loop.
+  useEffect(() => subscribeKioskFeed('tv-display-feed', () => { loadData() }, TV_RT_OPTS), [loadData])
   useEffect(() => subscribeWithReconnect('tv-display-realtime', ch => ch
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, () => { loadData() })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, () => { loadData() })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, () => { loadData() })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { loadData() })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { loadData() })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, () => { loadData() })
   , TV_RT_OPTS), [loadData])
 
   // ── Minute-tick refresh so closure "isCurrent / isUpcoming" labels stay accurate ──

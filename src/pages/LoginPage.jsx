@@ -3,6 +3,35 @@ import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
+
+// Security phase 2 (2026-09-28): logged-out visitors can no longer read
+// profiles / access_requests. email_status(email) answers "is this email
+// registered / is a request pending" without exposing any rows. Falls back to
+// the old direct reads if the function isn't installed yet.
+async function checkEmailStatus(cleanEmail) {
+  const { data, error } = await supabase.rpc('email_status', { p_email: cleanEmail })
+  if (!error && data) {
+    return { registered: !!data.registered, pendingRequest: !!data.pending_request, anyRequest: !!data.any_request }
+  }
+  const existingUser = mustData(await supabase
+    .from('profiles')
+    .select('email')
+    .eq('email', cleanEmail)
+    .maybeSingle(), 'profiles.select')
+  const pending = mustData(await supabase
+    .from('access_requests')
+    .select('request_id, status')
+    .eq('email', cleanEmail)
+    .eq('status', 'Pending')
+    .maybeSingle(), 'access_requests.select')
+  const any = pending || mustData(await supabase
+    .from('access_requests')
+    .select('email')
+    .eq('email', cleanEmail)
+    .limit(1)
+    .maybeSingle(), 'access_requests.select')
+  return { registered: !!existingUser, pendingRequest: !!pending, anyRequest: !!any }
+}
 import { Wrench, Eye, EyeOff, Loader2, CheckCircle, ArrowLeft, Clock, Mail, Lock, ShieldCheck, RefreshCw } from 'lucide-react'
 
 // ── LoginPage ───────────────────────────────────────────────────────────────
@@ -216,28 +245,16 @@ export default function LoginPage() {
     try {
       const cleanEmail = regEmail.toLowerCase().trim()
 
-      // Check if the email already has an approved profile
-      const existingUser = mustData(await supabase
-        .from('profiles')
-        .select('email')
-        .eq('email', cleanEmail)
-        .maybeSingle(), 'profiles.select')
+      // Check if the email already has an approved profile, or a pending request
+      const status = await checkEmailStatus(cleanEmail)
 
-      if (existingUser) {
+      if (status.registered) {
         setError('This email is already registered. Please log in instead.')
         setLoading(false)
         return
       }
 
-      // Check if there's already a pending access request
-      const existingRequest = mustData(await supabase
-        .from('access_requests')
-        .select('request_id, status')
-        .eq('email', cleanEmail)
-        .eq('status', 'Pending')
-        .maybeSingle(), 'access_requests.select')
-
-      if (existingRequest) {
+      if (status.pendingRequest) {
         setError('An access request for this email is already pending. Please wait for instructor approval.')
         setLoading(false)
         return
@@ -429,19 +446,9 @@ export default function LoginPage() {
       const cleanEmail = forgotEmail.toLowerCase().trim()
 
       // Verify the email exists in our system (profiles or access_requests)
-      const existingProfile = mustData(await supabase
-        .from('profiles')
-        .select('email')
-        .eq('email', cleanEmail)
-        .maybeSingle(), 'profiles.select')
+      const status = await checkEmailStatus(cleanEmail)
 
-      const existingRequest = mustData(await supabase
-        .from('access_requests')
-        .select('email')
-        .eq('email', cleanEmail)
-        .maybeSingle(), 'access_requests.select')
-
-      if (!existingProfile && !existingRequest) {
+      if (!status.registered && !status.anyRequest) {
         setError('No account found with this email. Please register instead.')
         setLoading(false)
         return

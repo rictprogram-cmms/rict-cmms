@@ -31,7 +31,7 @@ import { supabase } from '@/lib/supabase';
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime';
 import { mustData } from '@/lib/supabaseData';
 import { useVersionCheck } from '@/hooks/useVersionCheck';
-import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
+import { fetchKioskFeed, subscribeKioskFeed } from '@/lib/kioskFeed';
 import { shortName } from '@/lib/utils';
 import { mergeSignupSessions, pickSession, minutesToTime12, minutesToDate, nowMinutes, lastPunchOutMinute, leftSessionEarly } from '@/lib/labSessions';
 
@@ -413,12 +413,14 @@ export default function LabStatusPage() {
   useEffect(() => {
     async function loadInstructors() {
       try {
-        const data = mustData(await supabase.from('profiles').select('email, first_name, last_name, role')
-          .eq('role', 'Instructor').eq('status', 'Active').neq('email', SUPER_ADMIN_EMAIL)
-          .order('first_name', { ascending: true }), 'profiles.select');
+        // From the kiosk feed (security phase 2): Active instructors, utility
+        // admin excluded, sorted by first name. `email` is an anonymous key,
+        // used only as the React key — never shown.
+        const feed = await fetchKioskFeed(supabase, toLocalDateStr(new Date()));
+        const data = mustData(feed.instructors, 'kiosk_feed.instructors');
         setInstructors((data || []).map(p => {
           const first = (p.first_name || '').trim(); const last = (p.last_name || '').trim();
-          return { email: p.email, displayName: `${first} ${last}`.trim() || p.email, initials: (first.charAt(0) + last.charAt(0)).toUpperCase() || '?' };
+          return { email: p.email, displayName: `${first} ${last}`.trim() || 'Instructor', initials: (first.charAt(0) + last.charAt(0)).toUpperCase() || '?' };
         }));
       } catch (err) { console.error('[LabStatus] Error loading instructors:', err); }
       setLoadingInstructors(false);
@@ -472,7 +474,14 @@ export default function LabStatusPage() {
 
   const toggleAwayOff = useCallback(async () => {
     setAwayToggling(true);
-    try { const { error } = await supabase.rpc('toggle_instructor_away_off'); if (error) throw error; setInstructorAway(false); setAwayReturnTime(''); }
+    try {
+      // kiosk_instructor_away_off works on the logged-out Pi (security phase 2);
+      // fall back to the older function if the new one isn't installed yet.
+      let { error } = await supabase.rpc('kiosk_instructor_away_off');
+      if (error) ({ error } = await supabase.rpc('toggle_instructor_away_off'));
+      if (error) throw error;
+      setInstructorAway(false); setAwayReturnTime('');
+    }
     catch (err) { console.error('[LabStatus] Toggle away off error:', err); }
     setAwayToggling(false);
   }, []);
@@ -491,26 +500,24 @@ export default function LabStatusPage() {
     const todayStr = toLocalDateStr(today);
 
     try {
-      const [clockRes, helpRes, profilesRes, signupRes, calRes, outRes] = await Promise.all([
-        supabase.from('time_clock').select('record_id, user_name, user_email, punch_in, course_id, entry_type')
-          .eq('status', 'Punched In').gte('punch_in', todayStr + 'T00:00:00').lte('punch_in', todayStr + 'T23:59:59')
-          .order('punch_in', { ascending: true }),
-        supabase.from('help_requests').select('request_id, user_name, location, requested_at, status, acknowledged_at, acknowledged_by')
-          .in('status', ['pending', 'acknowledged']).order('requested_at', { ascending: true }),
-        supabase.from('profiles').select('email, time_clock_only').eq('time_clock_only', 'Yes'),
-        // 'Confirmed' only — matches Dashboard, TV Display, Time Cards and
-        // Weekly Labs so every roster/hours reader agrees on who counts.
-        supabase.from('lab_signup').select('user_name, user_email, start_time, end_time, status')
-          .eq('date', todayStr).eq('status', 'Confirmed'),
+      // Security phase 2: this logged-out screen reads people data through the
+      // kiosk feed (no emails — `user_email` / `email` are anonymous keys that
+      // match across lists). Same rows as before: today's Punched In and
+      // Punched Out time_clock rows by punch_in, pending/acknowledged help
+      // requests by requested_at, time-clock-only people, and today's
+      // 'Confirmed' sign-ups (matches Dashboard, TV Display, Time Cards and
+      // Weekly Labs). The lab_calendar row is still read directly.
+      const [feed, calRes] = await Promise.all([
+        fetchKioskFeed(supabase, todayStr),
         supabase.from('lab_calendar').select('closed_blocks').eq('date', todayStr + 'T12:00:00').maybeSingle(),
-        // Today's completed punches — used to spot students whose LATEST punch
-        // today was a "Taking a break — coming back" and who haven't swiped in
-        // since. Non-fatal: if this read fails the roster still renders, just
-        // without the On Break rows.
-        supabase.from('time_clock').select('user_name, user_email, punch_in, punch_out, course_id, is_break_punch_out')
-          .eq('status', 'Punched Out').gte('punch_in', todayStr + 'T00:00:00').lte('punch_in', todayStr + 'T23:59:59')
-          .order('punch_in', { ascending: true }),
       ]);
+      const clockRes = feed.punchedIn;
+      const helpRes = feed.help;
+      const profilesRes = feed.timeClockOnly;
+      const signupRes = feed.signups;
+      // Non-fatal: if this list fails the roster still renders, just without
+      // the On Break rows.
+      const outRes = feed.punchedOut;
 
       // A newer fetch has already started — discard this (stale) response.
       if (seq !== fetchSeqRef.current) return;
@@ -713,10 +720,12 @@ export default function LabStatusPage() {
     return () => { clearInterval(poll); clearTimeout(retryTimerRef.current); window.removeEventListener('online', onOnline); };
   }, [fetchData]);
 
+  // time_clock / help_requests / lab_signup changes arrive as the kiosk feed
+  // signal (security phase 2); lab_calendar is still watched directly.
+  useEffect(() => subscribeKioskFeed('lab-status-feed', (topic) => {
+    if (topic === 'time_clock' || topic === 'help_requests' || topic === 'lab_signup' || topic === 'profiles') fetchData();
+  }, { tag: 'LabStatus', onReconnect: fetchData }), [fetchData]);
   useEffect(() => subscribeWithReconnect('lab-status-rt', ch => ch
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchData)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'help_requests' }, fetchData)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchData)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, fetchData)
   , { tag: 'LabStatus', onReconnect: fetchData }), [fetchData]);
 
@@ -724,7 +733,10 @@ export default function LabStatusPage() {
   const acknowledgeRequest = useCallback(async (requestId) => {
     const responderName = selectedInstructor?.displayName || 'Instructor';
     try {
-      await supabase.from('help_requests').update({ status: 'acknowledged', acknowledged_by: responderName, acknowledged_at: new Date().toISOString() }).eq('request_id', requestId).select();
+      // Security phase 2: the screen can only move a request's status, through
+      // kiosk_help_update (stamps acknowledged_at / acknowledged_by).
+      const { error } = await supabase.rpc('kiosk_help_update', { p_request_id: requestId, p_action: 'acknowledge', p_responder: responderName });
+      if (error) throw error;
       await fetchData();
     } catch (err) { console.error('[LabStatus] Acknowledge error:', err); }
   }, [fetchData, selectedInstructor]);
@@ -736,12 +748,10 @@ export default function LabStatusPage() {
   const resolveRequest = useCallback(async (requestId) => {
     const responderName = selectedInstructor?.displayName || 'Instructor';
     try {
-      const { error } = await supabase.from('help_requests')
-        .update({ status: 'resolved', resolved_at: new Date().toISOString(), resolved_by: responderName })
-        .eq('request_id', requestId).select();
-      if (error && /resolved_at|resolved_by/i.test(error.message || '')) {
-        await supabase.from('help_requests').update({ status: 'resolved' }).eq('request_id', requestId).select();
-      } else if (error) { throw error; }
+      // kiosk_help_update stamps resolved_at / resolved_by when those columns
+      // exist, otherwise just the status (the old fallback, now server-side).
+      const { error } = await supabase.rpc('kiosk_help_update', { p_request_id: requestId, p_action: 'resolve', p_responder: responderName });
+      if (error) throw error;
       await fetchData();
     } catch (err) { console.error('[LabStatus] Resolve error:', err); }
   }, [fetchData, selectedInstructor]);
