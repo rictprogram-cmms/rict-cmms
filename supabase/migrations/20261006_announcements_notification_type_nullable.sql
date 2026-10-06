@@ -9,8 +9,9 @@
 --   The app has always sent notification_type = NULL for an instructor's
 --   ordinary message (only student messages and system notices carry a type).
 --   The column picked up a NOT NULL constraint outside version control, so
---   every instructor send — and the Users page "Message" button, which leaves
---   the column out entirely — is refused.
+--   every Compose Message send by an instructor is refused. (The Users page
+--   "Message" button omits the column, so it gets the default 'announcement'
+--   and was never affected.)
 --
 -- Fix
 --   Drop the NOT NULL. Nothing else changes: existing rows, any default,
@@ -62,5 +63,5 @@ SELECT 4, 'instructor-style insert with NULL type', '1',
        (SELECT count(*)::text FROM probe)
 ORDER BY n;
 
-ROLLBACK;
--- COMMIT;
+-- ROLLBACK;
+COMMIT;   -- applied 2026-10-06 after dry run passed
