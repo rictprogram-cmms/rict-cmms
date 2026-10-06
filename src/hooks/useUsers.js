@@ -80,6 +80,12 @@ export function archiveReasonValid(reason, note) {
  * users. Pass enabled=false for non-instructors (nothing is fetched).
  * `available` turns false when the table is missing (migration not run yet) so
  * pages can fall back to the old behaviour instead of showing errors.
+ *
+ * Also returns `historyByUserId`: profiles.id → past archives that ended in a
+ * restore (newest first), from profile_archive_history. That table is written
+ * only by the database trigger, so a restore never erases that a student had,
+ * say, previously dropped. `historyAvailable` is false until its migration
+ * (20261005_user_archive_history.sql) is live.
  */
 export function useArchiveInfo(enabled = true) {
   const [byUserId, setByUserId] = useState({})
@@ -87,6 +93,36 @@ export function useArchiveInfo(enabled = true) {
   // reason fields, so a database without the migration never asks for a reason
   // it cannot save.
   const [available, setAvailable] = useState(null)
+  const [historyByUserId, setHistoryByUserId] = useState({})
+  const [historyAvailable, setHistoryAvailable] = useState(null)
+
+  const loadHistory = useCallback(async () => {
+    if (!enabled) { setHistoryByUserId({}); return }
+    try {
+      const rows = mustData(await supabase
+        .from('profile_archive_history')
+        .select('history_id, user_id, reason, note, archived_at, archived_by, restored_at, restored_by')
+        .order('restored_at', { ascending: false }),
+        'profile_archive_history.select') || []
+      const map = {}
+      rows.forEach(r => { (map[r.user_id] = map[r.user_id] || []).push(r) })
+      setHistoryByUserId(map)
+      setHistoryAvailable(true)
+    } catch (err) {
+      const code = err?.code || err?.cause?.code
+      if (code === '42P01' || code === 'PGRST205') setHistoryAvailable(false)
+      console.error('Archive history fetch error:', err)
+    }
+  }, [enabled])
+
+  useEffect(() => { loadHistory() }, [loadHistory])
+
+  useEffect(() => {
+    if (!enabled || historyAvailable !== true) return undefined
+    return subscribeWithReconnect('archive-history-changes', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profile_archive_history' }, () => { loadHistory() })
+    , { tag: 'ArchiveHistory', onReconnect: loadHistory })
+  }, [enabled, historyAvailable, loadHistory])
 
   const load = useCallback(async () => {
     if (!enabled) { setByUserId({}); return }
@@ -122,7 +158,12 @@ export function useArchiveInfo(enabled = true) {
     , { tag: 'ArchiveInfo', onReconnect: load })
   }, [enabled, available, load])
 
-  return { byUserId, available: available === true, refresh: load }
+  const refresh = useCallback(() => { load(); loadHistory() }, [load, loadHistory])
+
+  return {
+    byUserId, available: available === true, refresh,
+    historyByUserId, historyAvailable: historyAvailable === true,
+  }
 }
 
 // ─── User Actions ────────────────────────────────────────────────────────────
@@ -265,6 +306,38 @@ export function useUserActions() {
     } catch (err) {
       console.error('Archive reason save error:', err)
       toast.error('The archive reason could not be saved. Please try again.')
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Remove ONE past-archive entry (instructors only) — for an archive that was
+  // a mistake, e.g. the wrong person was archived and then restored. Entries
+  // cannot be added or edited from the app; the database trigger writes them.
+  const removeArchiveHistory = async (historyId, userId, fullName) => {
+    setSaving(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('profile_archive_history').delete().eq('history_id', historyId).select(),
+        'profile_archive_history.delete'
+      )
+      if (error) throw error
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Remove Archive History',
+          entity_type: 'User',
+          entity_id: userId,
+          details: `Removed a past archive entry for ${fullName}`
+        })
+      } catch {}
+      toast.success('Entry removed')
+      return true
+    } catch (err) {
+      console.error('Archive history remove error:', err)
+      toast.error('The entry could not be removed. Please try again.')
       throw err
     } finally {
       setSaving(false)
@@ -441,7 +514,7 @@ export function useUserActions() {
     }
   }
 
-  return { saving, updateUser, assignCardId, archiveUser, setArchiveReason, permanentlyDeleteUser, resetStudentPassword }
+  return { saving, updateUser, assignCardId, archiveUser, setArchiveReason, removeArchiveHistory, permanentlyDeleteUser, resetStudentPassword }
 }
 
 // ─── Access Requests ─────────────────────────────────────────────────────────

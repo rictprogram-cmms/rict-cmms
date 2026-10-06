@@ -15,7 +15,7 @@ import {
   AlertCircle, Clock, UserCheck, UserX, Eye, EyeOff, Save, Archive,
   Trash2, AlertTriangle, UserMinus, Wifi, KeyRound, Copy, Check,
   RefreshCcw, FileSearch, ScanLine, PackageCheck, PackageX, Hourglass,
-  ClipboardCheck, GraduationCap, HelpCircle
+  ClipboardCheck, GraduationCap, HelpCircle, History
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
@@ -145,6 +145,41 @@ function archivedYear(ts) {
   return isNaN(d.getTime()) ? null : d.getFullYear()
 }
 
+// Past archives that ended in a restore (instructors only). Read-only unless
+// onRemove is given, which adds a Remove button per entry.
+function ArchiveHistoryList({ entries, onRemove = null, busy = false }) {
+  if (!entries || entries.length === 0) return null
+  return (
+    <ul className="space-y-1.5 list-none m-0 p-0">
+      {entries.map(h => {
+        const Icon = archiveReasonIcon(h.reason)
+        const from = formatArchivedDate(h.archived_at)
+        const to = formatArchivedDate(h.restored_at)
+        return (
+          <li key={h.history_id} className="flex items-start gap-2.5 p-2.5 rounded-lg border border-surface-200 bg-surface-50">
+            <Icon size={14} className="text-surface-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="flex-1 min-w-0 text-xs text-surface-600">
+              <p className="text-sm font-medium text-surface-900">{archiveReasonLabel(h.reason)}</p>
+              {h.note && <p className="mt-0.5 break-words">Note: {h.note}</p>}
+              <p className="mt-0.5">
+                Archived {from || 'on an unrecorded date'}{h.archived_by ? ` by ${h.archived_by}` : ''}
+              </p>
+              <p>Restored {to}{h.restored_by ? ` by ${h.restored_by}` : ''}</p>
+            </div>
+            {onRemove && (
+              <button type="button" onClick={() => onRemove(h)} disabled={busy}
+                aria-label={`Remove past archive entry: ${archiveReasonLabel(h.reason)}, restored ${to}`}
+                className="px-2 min-h-[44px] min-w-[44px] rounded-lg text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                <Trash2 size={13} aria-hidden="true" /> Remove
+              </button>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 // Radio group + note, shared by the Archive dialog and Edit User.
 function ArchiveReasonFields({ idPrefix, reason, note, onReason, onNote, required = false, error = '' }) {
   const noteRequired = reason === 'Other'
@@ -242,7 +277,14 @@ export default function UsersPage() {
   // `profile` is the emulated profile while the super admin is emulating, so
   // the reason stays hidden when viewing the app as a student / work study.
   const canSeeArchiveReasons = profile?.role === 'Instructor' || profile?.role === 'Super Admin'
-  const { byUserId: archiveInfo, available: archiveInfoAvailable, refresh: refreshArchiveInfo } = useArchiveInfo(canSeeArchiveReasons)
+  const {
+    byUserId: archiveInfo, available: archiveInfoAvailable, refresh: refreshArchiveInfo,
+    historyByUserId: archiveHistory, historyAvailable: archiveHistoryAvailable,
+  } = useArchiveInfo(canSeeArchiveReasons)
+  // Past archives (kept when a user is restored) — false until the history migration is live.
+  const canSeeArchiveHistory = canSeeArchiveReasons && archiveHistoryAvailable
+  const historyFor = (u) => (canSeeArchiveHistory && archiveHistory[u.id]) || []
+  const [historyView, setHistoryView] = useState(null)        // user row whose past archives are open
   // False until the 20261005 migration is live — the page then behaves as before.
   const canSetArchiveReason = canSeeArchiveReasons && archiveInfoAvailable
   const [reasonFilter, setReasonFilter] = useState('')        // '', a reason value, or 'none'
@@ -691,6 +733,18 @@ export default function UsersPage() {
                                 </button>
                               )
                             })()}
+                            {/* Archived before and restored — instructors only */}
+                            {historyFor(u).length > 0 && (() => {
+                              const past = historyFor(u)
+                              return (
+                                <button type="button" onClick={() => setHistoryView(u)}
+                                  title={`Archived before:\n${past.map(h => `${archiveReasonLabel(h.reason)} — restored ${formatArchivedDate(h.restored_at)}`).join('\n')}\nClick for details`}
+                                  aria-label={`${fullName} was archived before, ${past.length} time${past.length === 1 ? '' : 's'}. Most recent: ${archiveReasonLabel(past[0].reason)}. View archive history`}
+                                  className="ml-1 inline-flex items-center gap-1 px-2 min-h-[44px] rounded-lg text-xs font-medium text-surface-700 hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                                  <History size={12} aria-hidden="true" /> Archived before
+                                </button>
+                              )
+                            })()}
                           </td>
                           {/* Badge column - indicator only, not full number */}
                           <td className="px-3 py-2">
@@ -862,6 +916,7 @@ export default function UsersPage() {
             <ArchiveConfirmModal user={archiveConfirm} actions={actions}
               scannerRow={scannerFor(archiveConfirm)}
               canSetReason={canSetArchiveReason}
+              history={historyFor(archiveConfirm)}
               onClose={() => setArchiveConfirm(null)}
               onDone={() => { setArchiveConfirm(null); refresh(); refreshArchiveInfo() }} />
           )}
@@ -871,8 +926,17 @@ export default function UsersPage() {
             <ArchiveConfirmModal mode="reason" user={reasonEdit} actions={actions}
               canSetReason
               info={archiveInfo[reasonEdit.id] || null}
+              history={historyFor(reasonEdit)}
               onClose={() => setReasonEdit(null)}
               onDone={() => { setReasonEdit(null); refreshArchiveInfo() }} />
+          )}
+
+          {/* Archive history — past archives of a user who was restored */}
+          {historyView && canSeeArchiveHistory && (
+            <ArchiveHistoryModal user={historyView} actions={actions}
+              entries={historyFor(historyView)}
+              onChanged={refreshArchiveInfo}
+              onClose={() => setHistoryView(null)} />
           )}
 
           {/* Mark Scanner Lost — confirm */}
@@ -1276,7 +1340,7 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
 // mode="reason"            — the user is already archived; add / change the reason.
 // canSetReason is false for non-instructors (and until the archive-reason
 // migration is live): the dialog is then the plain confirmation it always was.
-function ArchiveConfirmModal({ user, actions, scannerRow = null, canSetReason = false, mode = 'archive', info = null, onClose, onDone }) {
+function ArchiveConfirmModal({ user, actions, scannerRow = null, canSetReason = false, mode = 'archive', info = null, history = [], onClose, onDone }) {
   const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [processing, setProcessing] = useState(false)
   const [reason, setReason] = useState(info?.reason || '')
@@ -1347,6 +1411,15 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, canSetReason = 
             onNote={v => { setNote(v); if (error) setError('') }} />
         )}
 
+        {history.length > 0 && (
+          <section aria-labelledby="archive-dialog-history">
+            <h4 id="archive-dialog-history" className="label flex items-center gap-1.5">
+              <History size={12} aria-hidden="true" /> Archived before ({history.length})
+            </h4>
+            <ArchiveHistoryList entries={history} />
+          </section>
+        )}
+
         {hasScanner && (
           <div role="alert" className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
             <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
@@ -1376,6 +1449,86 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, canSetReason = 
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ARCHIVE HISTORY MODAL — past archives of a restored user (instructors only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ArchiveHistoryModal({ user, actions, entries, onChanged, onClose }) {
+  const dialogRef = useDialogA11y(true, onClose)
+  const [removeTarget, setRemoveTarget] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [announce, setAnnounce] = useState('')
+  const fullName = `${user.first_name} ${user.last_name}`
+
+  const handleRemove = async () => {
+    if (!removeTarget) return
+    setBusy(true)
+    try {
+      await actions.removeArchiveHistory(removeTarget.history_id, user.id, fullName)
+      setAnnounce('Entry removed.')
+      onChanged?.()
+    } catch { /* toast handled in hook */ }
+    setBusy(false)
+    setRemoveTarget(null)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
+      role="dialog" aria-modal="true" aria-labelledby="archive-history-title">
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-full bg-surface-100 flex items-center justify-center flex-shrink-0">
+              <History size={20} className="text-surface-600" aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <h3 id="archive-history-title" className="text-sm font-bold text-surface-900">Archive History</h3>
+              <p className="text-xs text-surface-500 truncate">{fullName} · {user.email}</p>
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close"
+            className="text-surface-500 hover:text-surface-700 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <p className="text-xs text-surface-500">
+          Each time this user was archived and later restored. Only instructors can see this.
+        </p>
+
+        <div aria-live="polite" className="sr-only">{announce}</div>
+
+        {entries.length > 0
+          ? <ArchiveHistoryList entries={entries} onRemove={setRemoveTarget} busy={busy} />
+          : <p className="text-sm text-surface-600">No past archives on record.</p>}
+
+        <div className="flex justify-end pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-700 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Close</button>
+        </div>
+      </div>
+
+      {removeTarget && (
+        <div onClick={e => e.stopPropagation()}>
+          <ConfirmDialog
+            open
+            variant="danger"
+            title="Remove this entry?"
+            message={<>
+              Remove the past archive <strong>{archiveReasonLabel(removeTarget.reason)}</strong> (restored {formatArchivedDate(removeTarget.restored_at)}) from <strong>{fullName}</strong>'s history?
+              Use this only when the archive was a mistake. It cannot be undone.
+            </>}
+            confirmLabel="Remove entry"
+            cancelLabel="Keep it"
+            busy={busy}
+            onConfirm={handleRemove}
+            onClose={() => setRemoveTarget(null)}
+          />
+        </div>
+      )}
     </div>
   )
 }
