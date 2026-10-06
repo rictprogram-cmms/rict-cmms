@@ -590,6 +590,17 @@ export function useLabTrackerActions() {
   }
 
   // ── Mark All Done (student badge swipe from student view) ──
+  //
+  // `instructor` is either { badge } — the swiped value from AllDoneModal
+  // (security phase 3, 2026-10-06) — or, for the retired Weekly Labs page, a
+  // matched instructor profile.
+  //
+  // With { badge } everything happens in the database (mark_all_done): it
+  // checks the badge belongs to an Active instructor, cancels the student's
+  // remaining Confirmed sign-ups for the week, writes the All Done time_clock
+  // marker and the audit row — the same data the steps below wrote from the
+  // student's session. Returns { success, instructor, error } where error is
+  // 'badge_not_recognized' for a non-instructor badge.
   const markAllDone = async (userId, userEmail, userName, classInfos, instructor) => {
     // Guard against double-fire
     if (savingRef.current) {
@@ -598,6 +609,33 @@ export function useLabTrackerActions() {
     }
     savingRef.current = true
     setSaving(true)
+
+    if (instructor && typeof instructor.badge === 'string') {
+      try {
+        const weekEnds = (classInfos || [])
+          .map(c => c.weekEndDate ? String(c.weekEndDate).substring(0, 10) : '')
+          .filter(Boolean)
+          .sort()
+        const { data, error } = await supabase.rpc('mark_all_done', {
+          p_card: instructor.badge,
+          p_student_email: userEmail,
+          p_student_name: userName,
+          p_classes: (classInfos || []).map(c => ({ className: c.className || '', classId: c.classId || '' })),
+          p_week_number: classInfos?.[0]?.weekNumber ?? null,
+          p_week_end: weekEnds.length ? weekEnds[weekEnds.length - 1] : null,
+        })
+        if (error) throw error
+        if (!data?.ok) return { success: false, error: data?.error || 'failed' }
+        return { success: true, partial: false, instructor: data.instructor || null }
+      } catch (err) {
+        console.error('Mark All Done error:', err)
+        toast.error('Error: ' + (err.message || 'All Done failed'))
+        return { success: false, error: 'failed' }
+      } finally {
+        savingRef.current = false
+        setSaving(false)
+      }
+    }
 
     try {
       // For each class, mark as all_done + lab_complete + required_hours_met

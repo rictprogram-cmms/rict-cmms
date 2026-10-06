@@ -13,17 +13,21 @@
  *   Make-up hours owed this week are shown for the instructor to review.
  * The lab sign-off gate that used to sit in front of these is gone.
  *
- * On a recognised instructor badge it calls onAllDone(instructor); the caller
- * (AllDoneSection) runs useLabTrackerActions().markAllDone, which cancels the
- * week's remaining signups, writes the time_clock 'All Done' marker and the
- * audit row. This modal never punches the student out — a note says so.
+ * On a swipe it calls onAllDone({ badge }); the caller (AllDoneSection) runs
+ * useLabTrackerActions().markAllDone, which asks the database
+ * (mark_all_done) to check the badge is an Active instructor's, cancel the
+ * week's remaining signups, write the time_clock 'All Done' marker and the
+ * audit row. Badge numbers are never downloaded to this screen (security
+ * phase 3, 2026-10-06). This modal never punches the student out — a note
+ * says so.
  *
  * Props
  *   isOpen, onClose
  *   studentName, studentEmail
  *   weekNumber, weekDate ("9/14 — 9/18"), weekStartDate, weekEndDate (ISO)
  *   classes    — [{ className, classId }] enrolled classes with a current week
- *   onAllDone  — async (instructor) => void
+ *   onAllDone  — async ({ badge }) => { success, error? } — error
+ *                'badge_not_recognized' keeps the modal open with a message
  *   punchedIn  — boolean, shows the punch-out reminder wording
  *
  * Accessibility: useDialogA11y (focus in, Tab trap, Esc, focus return),
@@ -388,30 +392,25 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
     setError('')
 
     try {
-      const { data: instructors, error: fetchError } = await supabase
-        .from('profiles')
-        .select('first_name, last_name, email, role, card_id')
-        .eq('role', 'Instructor')
-        .eq('status', 'Active')
+      // Security phase 3 (2026-10-06): badge numbers are no longer readable
+      // here. The swiped value goes to the database, which checks it belongs to
+      // an Active instructor and records All Done (see markAllDone).
+      const result = await onAllDone({ badge: badgeValue })
 
-      if (fetchError) throw fetchError
-
-      const swipedValue = badgeValue
-      const matchedInstructor = (instructors || []).find(i => {
-        if (!i.card_id) return false
-        if (i.card_id === swipedValue) return true
-        if (i.card_id.trim() === swipedValue) return true
-        return false
-      })
-
-      if (!matchedInstructor) {
+      if (result?.error === 'badge_not_recognized') {
         setError('Badge not recognized. Only instructor badges can mark All Done.')
+        setBadge('')
+        processingRef.current = false
+        setVerifying(false)
+        return
+      }
+      if (result && result.success === false) {
+        setError('Verification failed. Please try again.')
         processingRef.current = false
         setVerifying(false)
         return
       }
 
-      await onAllDone(matchedInstructor)
       setBadge('')
       setError('')
       onClose()

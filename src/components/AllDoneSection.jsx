@@ -181,7 +181,9 @@ export default function AllDoneSection() {
     }))
     const result = await markAllDone(profile?.user_id, profile?.email, studentName, classInfos, instructor)
     if (result.success) {
-      const who = `${instructor.first_name} ${instructor.last_name}`
+      // The database returns the instructor whose badge was swiped
+      const by = result.instructor || instructor || {}
+      const who = `${by.first_name || ''} ${by.last_name || ''}`.trim() || 'instructor'
       toast.success(`All Done — confirmed by ${who}`)
       const fresh = await fetchAllDoneToday(profile.email).catch(() => null)
       if (fresh) setStatus(fresh)
@@ -189,6 +191,8 @@ export default function AllDoneSection() {
         toast('Remember: you still need to punch out on the Time Clock before you leave.', { icon: '⏰', duration: 8000 })
       }
     }
+    // AllDoneModal shows "Badge not recognized" and stays open on failure
+    return result
   }
 
   const loading = reportLoading || statusLoading

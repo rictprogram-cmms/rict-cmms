@@ -5,6 +5,45 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 
+// ─── Badge numbers ───────────────────────────────────────────────────────────
+// Since 2026-10-06 badge / card numbers live in user_badges (keyed by
+// profile_id), NOT profiles.card_id: every signed-in user can read profiles,
+// and a badge number is what the kiosk and All Done accept as proof. Row
+// security on user_badges is staff / Users assign_card_id / edit_users only,
+// so for anyone else the read comes back empty. Until the database migration
+// (20261006_security_phase3a_badges_alldone.sql) has run, the old column is
+// used as a fallback.
+function isMissingTableError(e) {
+  const err = e?.cause || e
+  const code = err?.code
+  return code === '42P01' || code === 'PGRST205' || /does not exist|schema cache/i.test(err?.message || '')
+}
+
+// Save (or clear) one person's badge. Returns { ok, error }.
+async function saveBadge(userId, cardId, byEmail) {
+  const card = (cardId || '').trim()
+  const res = card
+    ? await supabase.from('user_badges')
+        .upsert({ profile_id: userId, card_id: card, updated_at: new Date().toISOString(), updated_by_email: byEmail || null },
+                { onConflict: 'profile_id' })
+        .select()
+    : await supabase.from('user_badges').delete().eq('profile_id', userId).select()
+  if (res.error && isMissingTableError(res.error)) {
+    // Migration not run yet — old column
+    const old = await supabase.from('profiles').update({ card_id: card }).eq('id', userId).select()
+    if (old.error) return { ok: false, error: old.error }
+    return { ok: (old.data || []).length > 0, error: null }
+  }
+  if (res.error) return { ok: false, error: res.error }
+  return { ok: !card || (res.data || []).length > 0, error: null }
+}
+
+// Badge numbers are never written to audit_log (any signed-in user can read it)
+function redactBadge(updates) {
+  if (!updates || updates.cardId === undefined) return updates
+  return { ...updates, cardId: updates.cardId ? '(badge changed)' : '(badge removed)' }
+}
+
 // ─── All Users ───────────────────────────────────────────────────────────────
 
 export function useAllUsers() {
@@ -21,7 +60,16 @@ export function useAllUsers() {
         .order('last_name', { ascending: true })
 
       if (error) throw error
-      setUsers(data || [])
+      // Fill card_id from user_badges (staff only; empty for everyone else)
+      let rows = data || []
+      try {
+        const badges = mustData(await supabase.from('user_badges').select('profile_id, card_id'), 'user_badges.select')
+        const byId = new Map((badges || []).map(b => [String(b.profile_id), b.card_id]))
+        rows = rows.map(u => ({ ...u, card_id: byId.has(String(u.id)) ? byId.get(String(u.id)) : (u.card_id || '') }))
+      } catch (e) {
+        if (!isMissingTableError(e)) console.error('Badge fetch error:', e)
+      }
+      setUsers(rows)
       hasLoadedRef.current = true
     } catch (err) {
       console.error('Users fetch error:', err)
@@ -37,6 +85,7 @@ export function useAllUsers() {
   useEffect(() => {
     return subscribeWithReconnect('all-users-changes', ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { fetch() })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'user_badges' }, () => { fetch() })
     , { tag: 'Users', onReconnect: fetch })
   }, [fetch])
 
@@ -188,26 +237,37 @@ export function useUserActions() {
       if (updates.role !== undefined) dbUpdates.role = updates.role
       if (updates.status !== undefined) dbUpdates.status = updates.status
       if (updates.classes !== undefined) dbUpdates.classes = updates.classes
-      if (updates.cardId !== undefined) dbUpdates.card_id = updates.cardId
       if (updates.timeClockOnly !== undefined) dbUpdates.time_clock_only = updates.timeClockOnly ? 'Yes' : ''
       // Instructor contact (printed on syllabi — entered once here)
       if (updates.phone !== undefined) dbUpdates.phone = updates.phone || null
       if (updates.office !== undefined) dbUpdates.office = updates.office || null
       if (updates.officeHours !== undefined) dbUpdates.office_hours = updates.officeHours || null
 
-      const { data: rows, error } = await supabase
-        .from('profiles')
-        .update(dbUpdates)
-        .eq('id', userId)
-        .select()
+      if (Object.keys(dbUpdates).length > 0) {
+        const { data: rows, error } = await supabase
+          .from('profiles')
+          .update(dbUpdates)
+          .eq('id', userId)
+          .select()
 
-      if (error) throw error
-      if (!rows || rows.length === 0) {
-        toast.error('Update failed — you may not have permission to edit users.')
-        return
+        if (error) throw error
+        if (!rows || rows.length === 0) {
+          toast.error('Update failed — you may not have permission to edit users.')
+          return
+        }
       }
 
-      // Audit
+      // Badge number → user_badges (instructor-only table)
+      if (updates.cardId !== undefined) {
+        const { ok, error: badgeErr } = await saveBadge(userId, updates.cardId, profile?.email)
+        if (badgeErr) throw badgeErr
+        if (!ok) {
+          toast.error('Badge update failed — you may not have permission.')
+          return
+        }
+      }
+
+      // Audit (badge numbers are never written here)
       try {
         await supabase.from('audit_log').insert({
           user_email: profile.email,
@@ -215,7 +275,7 @@ export function useUserActions() {
           action: 'Update User',
           entity_type: 'User',
           entity_id: userId,
-          details: `Updated: ${JSON.stringify(updates)}`
+          details: `Updated: ${JSON.stringify(redactBadge(updates))}`
         })
       } catch {}
 
@@ -231,29 +291,42 @@ export function useUserActions() {
   const assignCardId = async (userId, cardId) => {
     setSaving(true)
     try {
-      // Check if card already assigned
+      // Check if card already assigned (user_badges; old column if not migrated)
       if (cardId && cardId.trim()) {
-        const existing = mustData(await supabase
-          .from('profiles')
-          .select('id, first_name, last_name')
-          .eq('card_id', cardId)
-          .neq('id', userId)
-          .maybeSingle(), 'profiles.select')
+        let existingId = null
+        const dupRes = await supabase
+          .from('user_badges')
+          .select('profile_id')
+          .eq('card_id', cardId.trim())
+          .neq('profile_id', userId)
+          .limit(1)
+        if (dupRes.error && isMissingTableError(dupRes.error)) {
+          const old = mustData(await supabase
+            .from('profiles')
+            .select('id')
+            .eq('card_id', cardId)
+            .neq('id', userId)
+            .maybeSingle(), 'profiles.select')
+          existingId = old?.id || null
+        } else {
+          existingId = mustData(dupRes, 'user_badges.select')?.[0]?.profile_id || null
+        }
 
-        if (existing) {
-          toast.error(`Card ID already assigned to ${existing.first_name} ${existing.last_name}`)
+        if (existingId) {
+          const other = mustData(await supabase
+            .from('profiles')
+            .select('first_name, last_name')
+            .eq('id', existingId)
+            .maybeSingle(), 'profiles.select')
+          toast.error(`Card ID already assigned to ${other ? `${other.first_name} ${other.last_name}` : 'another user'}`)
           return
         }
       }
 
-      const { data: rows, error } = await supabase
-        .from('profiles')
-        .update({ card_id: cardId || '' })
-        .eq('id', userId)
-        .select()
+      const { ok, error } = await saveBadge(userId, cardId, profile?.email)
 
       if (error) throw error
-      if (!rows || rows.length === 0) {
+      if (!ok) {
         toast.error('Card ID update failed — you may not have permission.')
         return
       }
