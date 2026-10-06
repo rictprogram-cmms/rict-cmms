@@ -34,7 +34,7 @@ export function useEnrollmentCounts() {
     try {
       const [enr, profs] = await Promise.all([
         supabase.from('class_enrollments').select('enrollment_id, class_id, student_email'),
-        supabase.from('profiles').select('email, first_name, last_name, status').in('role', ['Student', 'Work Study']),
+        supabase.from('profiles').select('id, email, first_name, last_name, status').in('role', ['Student', 'Work Study']),
       ])
       const rows = mustData(enr, 'class_enrollments.select') || []
       const people = new Map((mustData(profs, 'profiles.select') || []).map(p => [String(p.email || '').toLowerCase(), p]))
@@ -42,7 +42,7 @@ export function useEnrollmentCounts() {
       for (const r of rows) {
         const p = people.get(String(r.student_email).toLowerCase())
         if (!m.has(r.class_id)) m.set(r.class_id, [])
-        m.get(r.class_id).push({ enrollment_id: r.enrollment_id, email: r.student_email, name: p ? fullName(p) : r.student_email, archived: p?.status === 'Archived', unknown: !p })
+        m.get(r.class_id).push({ enrollment_id: r.enrollment_id, profile_id: p?.id || null, email: r.student_email, name: p ? fullName(p) : r.student_email, archived: p?.status === 'Archived', unknown: !p })
       }
       for (const list of m.values()) list.sort((a, b) => a.name.localeCompare(b.name))
       setByClass(m)

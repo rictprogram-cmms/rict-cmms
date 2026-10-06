@@ -48,7 +48,7 @@ import {
   Users, Calendar, Clock, BookOpen, ChevronRight, Search, UserPlus, UserCircle,
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
   LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
-  History, Globe, FileSearch, Archive, ArchiveRestore, Wrench,
+  History, Globe, FileSearch, Archive, ArchiveRestore, Wrench, UserMinus, HelpCircle,
 } from 'lucide-react'
 import {
   useMaintenanceWindow, formatMaintenanceDateTime,
@@ -63,6 +63,7 @@ import { isSuperAdminEmail } from '@/lib/superAdmin'
 import { DELIVERY_OPTIONS, DEFAULT_DELIVERY, normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
 import { useAcademicTerms, useTermActions } from '@/hooks/useAcademicTerms'
 import { useEnrollmentCounts, useEnrollmentActions } from '@/hooks/useEnrollments'
+import { useArchiveInfo, archiveReasonLabel } from '@/hooks/useUsers'
 import { RUNS, RUNS_SHORT, datesForRuns, calendarFromTerm, classMatchesTerm, inferRuns, needsNextTerm, suggestNextTerm, sortTerms, fmtDate as fmtTermDate, fmtShort as fmtTermShort, parseTermName, semesterOptions } from '@/lib/academicTerms'
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -4492,6 +4493,16 @@ function ClassesSection() {
   const [search, setSearch] = useState('')
   // Enrollment per class offering (class_enrollments) — keyed by class_id.
   const { byClass: enrollmentByClass, refresh: refreshEnrollment } = useEnrollmentCounts()
+  // Why each former (archived) student left — instructors only. Row security
+  // returns nothing to anyone else, and nothing is assumed when no reason was
+  // recorded (an archived student is NOT necessarily a graduate).
+  const { profile: viewerProfile } = useAuth()
+  const canSeeArchiveReasons = viewerProfile?.role === 'Instructor' || viewerProfile?.role === 'Super Admin'
+  const { byUserId: archiveInfo } = useArchiveInfo(canSeeArchiveReasons)
+  const formerLine = (st) => {
+    const reason = canSeeArchiveReasons && st.profile_id ? archiveInfo[st.profile_id]?.reason : null
+    return reason ? `${st.name} — ${archiveReasonLabel(reason)}` : st.name
+  }
   // Course catalog (syllabus_courses) — the "pick from catalog" search on Add
   // Class. Loaded once; the catalog changes rarely.
   const [catalog, setCatalog] = useState([])
@@ -5189,10 +5200,10 @@ function ClassesSection() {
                             {formerCount > 0 && (
                               <span
                                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-surface-100 text-surface-500 border border-surface-200 cursor-default"
-                                title={`Former / graduated:\n${formerStudents.map(s => s.name).join('\n')}`}
-                                aria-label={`${formerCount} former or graduated student${formerCount !== 1 ? 's' : ''}`}
+                                title={`Former students (archived):\n${formerStudents.map(formerLine).join('\n')}`}
+                                aria-label={`${formerCount} former student${formerCount !== 1 ? 's' : ''} (archived)`}
                               >
-                                <GraduationCap size={10} aria-hidden="true" /> {formerCount}
+                                <History size={10} aria-hidden="true" /> {formerCount}
                               </span>
                             )}
                           </div>
@@ -5598,8 +5609,13 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [enrolled, setEnrolled] = useState({})          // email → true (working copy)
-  // Read-only history: archived (graduated) students enrolled in THIS class.
+  // Read-only history: archived students enrolled in THIS class. Archived does
+  // not mean graduated — the reason (Graduated / Dropped/Withdrew / Other) is
+  // shown per student when one was recorded, to instructors only.
   const [formerMembers, setFormerMembers] = useState([])
+  const { profile: viewerProfile } = useAuth()
+  const canSeeArchiveReasons = viewerProfile?.role === 'Instructor' || viewerProfile?.role === 'Super Admin'
+  const { byUserId: archiveInfo } = useArchiveInfo(canSeeArchiveReasons)
 
   useEffect(() => {
     let cancelled = false
@@ -5704,30 +5720,39 @@ function EnrollmentModal({ cls, onClose, onSaved }) {
                 </label>
               ))}
 
-              {/* Read-only history of archived (graduated) members. Not
-                  editable — archived users can't be re-enrolled here; restore
-                  them from Users first. Preserves "who was in this class". */}
+              {/* Read-only history of archived members. Not editable —
+                  archived users can't be re-enrolled here; restore them from
+                  Users first. Preserves "who was in this class". The icon and
+                  label follow the recorded archive reason; with no reason
+                  recorded the student is simply "Archived". */}
               {formerMembers.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-surface-100">
                   <div className="flex items-center gap-1.5 px-1 mb-1.5">
-                    <GraduationCap size={12} className="text-surface-400" aria-hidden="true" />
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-surface-400">
-                      Former / graduated ({formerMembers.length})
+                    <History size={12} className="text-surface-500" aria-hidden="true" />
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-surface-500">
+                      Former students ({formerMembers.length})
                     </span>
                   </div>
                   <ul className="space-y-1 list-none m-0 p-0">
-                    {formerMembers.map(s => (
-                      <li key={s.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-50/60 opacity-70">
-                        <GraduationCap size={14} className="text-surface-400 flex-shrink-0" aria-hidden="true" />
+                    {formerMembers.map(s => {
+                      const reason = canSeeArchiveReasons ? (archiveInfo[s.id]?.reason || null) : null
+                      const ReasonIcon = reason === 'Graduated' ? GraduationCap
+                        : reason === 'Dropped/Withdrew' ? UserMinus
+                        : reason === 'Other' ? HelpCircle
+                        : Archive
+                      return (
+                      <li key={s.id} className="flex items-center gap-3 p-2.5 rounded-lg bg-surface-50/60">
+                        <ReasonIcon size={14} className="text-surface-500 flex-shrink-0" aria-hidden="true" />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-surface-700">{s.first_name} {s.last_name}</div>
-                          <div className="text-xs text-surface-400">{s.email}</div>
+                          <div className="text-xs text-surface-500">{s.email}</div>
                         </div>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-surface-100 text-surface-400">
-                          Archived
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-surface-100 text-surface-600">
+                          {reason ? archiveReasonLabel(reason) : 'Archived'}
                         </span>
                       </li>
-                    ))}
+                      )
+                    })}
                   </ul>
                 </div>
               )}

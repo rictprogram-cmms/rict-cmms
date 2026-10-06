@@ -43,6 +43,88 @@ export function useAllUsers() {
   return { users, loading, refresh: fetch }
 }
 
+// ─── Archive reasons ─────────────────────────────────────────────────────────
+// Why a user was archived. Stored in profile_archive_info (one row per archived
+// user), NOT on profiles: every signed-in user can read profiles, and the
+// reason is for instructors only. Row security on that table is staff-only, so
+// for anyone else the read below simply comes back empty.
+//
+// The row itself is created / removed by a database trigger whenever
+// profiles.status moves to or away from 'Archived' — the app only fills in
+// `reason` and `note`. Values must match the CHECK constraint in
+// supabase/migrations/20261005_user_archive_reason.sql.
+
+export const ARCHIVE_REASONS = [
+  { value: 'Graduated',        label: 'Graduated',          hint: 'Completed the program' },
+  { value: 'Dropped/Withdrew', label: 'Dropped / Withdrew', hint: 'Left the program or stopped attending' },
+  { value: 'Other',            label: 'Other',              hint: 'Anything else — add a note' },
+]
+
+/** Display label for a stored reason ('' / null → "No reason recorded"). */
+export function archiveReasonLabel(reason) {
+  const r = ARCHIVE_REASONS.find(x => x.value === reason)
+  return r ? r.label : 'No reason recorded'
+}
+
+/** True when the reason + note pair is complete enough to save. */
+export function archiveReasonValid(reason, note) {
+  if (!reason) return false
+  if (!ARCHIVE_REASONS.some(r => r.value === reason)) return false
+  if (reason === 'Other' && !String(note || '').trim()) return false
+  return true
+}
+
+/**
+ * useArchiveInfo(enabled)
+ * Map of profiles.id → { reason, note, archived_at, archived_by } for archived
+ * users. Pass enabled=false for non-instructors (nothing is fetched).
+ * `available` turns false when the table is missing (migration not run yet) so
+ * pages can fall back to the old behaviour instead of showing errors.
+ */
+export function useArchiveInfo(enabled = true) {
+  const [byUserId, setByUserId] = useState({})
+  // null = not known yet (first load still running). Only `true` unlocks the
+  // reason fields, so a database without the migration never asks for a reason
+  // it cannot save.
+  const [available, setAvailable] = useState(null)
+
+  const load = useCallback(async () => {
+    if (!enabled) { setByUserId({}); return }
+    try {
+      const rows = mustData(await supabase
+        .from('profile_archive_info')
+        .select('user_id, reason, note, archived_at, archived_by, archived_by_email'),
+        'profile_archive_info.select') || []
+      const map = {}
+      rows.forEach(r => { map[r.user_id] = r })
+      setByUserId(map)
+      setAvailable(true)
+    } catch (err) {
+      // Keep the last-known-good map on a network blip. A missing table
+      // (42P01 / PGRST205) means the migration has not been run.
+      const code = err?.code || err?.cause?.code
+      if (code === '42P01' || code === 'PGRST205') setAvailable(false)
+      console.error('Archive info fetch error:', err)
+    }
+  }, [enabled])
+
+  useEffect(() => { load() }, [load])
+
+  // Real-time: the trigger writes rows when a profile is archived / restored,
+  // and another instructor may set a reason. Only once the table is known to
+  // exist — never subscribe to a table that is not there. (profiles is not
+  // listened to on purpose: its 5-minute heartbeat updates would refetch this
+  // constantly, and the trigger's own write already raises an event here.)
+  useEffect(() => {
+    if (!enabled || available !== true) return undefined
+    return subscribeWithReconnect('archive-info-changes', ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profile_archive_info' }, () => { load() })
+    , { tag: 'ArchiveInfo', onReconnect: load })
+  }, [enabled, available, load])
+
+  return { byUserId, available: available === true, refresh: load }
+}
+
 // ─── User Actions ────────────────────────────────────────────────────────────
 
 export function useUserActions() {
@@ -53,7 +135,9 @@ export function useUserActions() {
     ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
     : 'Unknown'
 
-  const updateUser = async (userId, updates) => {
+  // options.quiet — skip the success toast (used when Edit User goes on to
+  // archive the user, which shows its own confirmation).
+  const updateUser = async (userId, updates, options = {}) => {
     setSaving(true)
     try {
       // Map friendly field names to column names
@@ -94,7 +178,7 @@ export function useUserActions() {
         })
       } catch {}
 
-      toast.success('User updated!')
+      if (!options.quiet) toast.success('User updated!')
     } catch (err) {
       toast.error(err.message || 'Failed to update user')
       throw err
@@ -141,10 +225,59 @@ export function useUserActions() {
     }
   }
 
-  // ─── Archive User ──────────────────────────────────────────────────────────
-  // Sets status to 'Archived' - removes from rotations but preserves all data
+  // ─── Archive reason (instructors only) ────────────────────────────────────
+  // Writes reason + note onto the row the database trigger created when the
+  // user was archived. Upsert, so it also works if that row is somehow
+  // missing. Returns true when saved.
+  //
+  // PRIVACY: the reason and note are deliberately NOT written to audit_log —
+  // any signed-in user can read audit_log, and the reason is instructor-only.
 
-  const archiveUser = async (userId, fullName, email) => {
+  const writeArchiveReason = async (userId, reason, note) => {
+    const cleanNote = String(note || '').trim()
+    const { error } = assertWrite(
+      await supabase
+        .from('profile_archive_info')
+        .upsert({ user_id: userId, reason: reason || null, note: cleanNote || null }, { onConflict: 'user_id' })
+        .select(),
+      'profile_archive_info.upsert'
+    )
+    if (error) throw error
+  }
+
+  // Set or change the reason for a user who is ALREADY archived.
+  const setArchiveReason = async (userId, fullName, { reason, note, quiet = false } = {}) => {
+    setSaving(true)
+    try {
+      await writeArchiveReason(userId, reason, note)
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile.email,
+          user_name: userName,
+          action: 'Update Archive Reason',
+          entity_type: 'User',
+          entity_id: userId,
+          details: `Updated the archive reason for ${fullName}`
+        })
+      } catch {}
+      if (!quiet) toast.success(`Archive reason saved for ${fullName}`)
+      return true
+    } catch (err) {
+      console.error('Archive reason save error:', err)
+      toast.error('The archive reason could not be saved. Please try again.')
+      throw err
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ─── Archive User ──────────────────────────────────────────────────────────
+  // Sets status to 'Archived' - removes from rotations but preserves all data.
+  // details.reason / details.note (optional, instructors only) record WHY —
+  // Graduated, Dropped/Withdrew or Other. Callers without a reason (a
+  // non-instructor with the Users permission) archive exactly as before.
+
+  const archiveUser = async (userId, fullName, email, details = {}) => {
     setSaving(true)
     try {
       const { data: archRows, error } = await supabase
@@ -169,7 +302,19 @@ export function useUserActions() {
         console.warn('assignment_rotation deactivation failed (non-fatal):', rotErr.message)
       }
 
-      // Audit log
+      // Reason (instructors only). The user is already archived at this point,
+      // so a failure here must not look like the archive failed.
+      let reasonFailed = false
+      if (details.reason) {
+        try {
+          await writeArchiveReason(userId, details.reason, details.note)
+        } catch (reasonErr) {
+          reasonFailed = true
+          console.error('Archive reason save error:', reasonErr)
+        }
+      }
+
+      // Audit log (no reason / note here — see PRIVACY above)
       try {
         await supabase.from('audit_log').insert({
           user_email: profile.email,
@@ -181,7 +326,11 @@ export function useUserActions() {
         })
       } catch {}
 
-      toast.success(`${fullName} archived`)
+      if (reasonFailed) {
+        toast.error(`${fullName} was archived, but the reason could not be saved. Add it from the Archived list.`, { duration: 8000 })
+      } else {
+        toast.success(`${fullName} archived`)
+      }
     } catch (err) {
       toast.error(err.message || 'Failed to archive user')
       throw err
@@ -292,7 +441,7 @@ export function useUserActions() {
     }
   }
 
-  return { saving, updateUser, assignCardId, archiveUser, permanentlyDeleteUser, resetStudentPassword }
+  return { saving, updateUser, assignCardId, archiveUser, setArchiveReason, permanentlyDeleteUser, resetStudentPassword }
 }
 
 // ─── Access Requests ─────────────────────────────────────────────────────────

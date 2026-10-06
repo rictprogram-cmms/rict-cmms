@@ -1,18 +1,21 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
-import { useAllUsers, useUserActions, useAccessRequests, useMessageTemplates } from '@/hooks/useUsers'
+import {
+  useAllUsers, useUserActions, useAccessRequests, useMessageTemplates,
+  useArchiveInfo, ARCHIVE_REASONS, archiveReasonLabel, archiveReasonValid,
+} from '@/hooks/useUsers'
 import {
   Users, Search, Filter, Edit3, CreditCard, Mail, CheckCircle2,
   XCircle, Shield, ChevronDown, UserPlus, Send, X, Loader2,
   AlertCircle, Clock, UserCheck, UserX, Eye, EyeOff, Save, Archive,
   Trash2, AlertTriangle, UserMinus, Wifi, KeyRound, Copy, Check,
   RefreshCcw, FileSearch, ScanLine, PackageCheck, PackageX, Hourglass,
-  ClipboardCheck
+  ClipboardCheck, GraduationCap, HelpCircle
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
@@ -116,6 +119,103 @@ function ScannerPill({ row }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// ARCHIVE REASON — why a user was archived (instructors only)
+// Archived does NOT mean graduated: the reason is Graduated, Dropped/Withdrew
+// or Other, and users archived before reasons existed have none.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function archiveReasonIcon(reason) {
+  if (reason === 'Graduated') return GraduationCap
+  if (reason === 'Dropped/Withdrew') return UserMinus
+  if (reason === 'Other') return HelpCircle
+  return Archive
+}
+
+// archived_at is real UTC (Convention B) — plain local formatting is correct.
+function formatArchivedDate(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function archivedYear(ts) {
+  if (!ts) return null
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? null : d.getFullYear()
+}
+
+// Radio group + note, shared by the Archive dialog and Edit User.
+function ArchiveReasonFields({ idPrefix, reason, note, onReason, onNote, required = false, error = '' }) {
+  const noteRequired = reason === 'Other'
+  // On a validation error, move focus to the field that needs attention (the
+  // message itself is announced through role="alert").
+  const groupRef = useRef(null)
+  const noteRef = useRef(null)
+  useEffect(() => {
+    if (!error) return
+    if (reason === 'Other') noteRef.current?.focus()
+    else groupRef.current?.querySelector('input[type="radio"]')?.focus()
+  }, [error]) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <fieldset className="space-y-2">
+      <legend className="label">
+        Reason for archiving
+        {required
+          ? <><span className="text-red-600" aria-hidden="true"> *</span><span className="sr-only"> (required)</span></>
+          : <span className="font-normal text-surface-500"> (optional)</span>}
+      </legend>
+      <div ref={groupRef} role="radiogroup" aria-label="Reason for archiving" className="space-y-1.5"
+        aria-required={required} aria-invalid={!!error && !reason}
+        aria-describedby={error ? `${idPrefix}-error` : undefined}>
+        {ARCHIVE_REASONS.map(r => {
+          const id = `${idPrefix}-reason-${r.value.replace(/[^a-z]/gi, '').toLowerCase()}`
+          const checked = reason === r.value
+          return (
+            <label key={r.value} htmlFor={id}
+              className={`flex items-start gap-2.5 px-3 py-2 min-h-[44px] rounded-lg border cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-brand-500 focus-within:ring-offset-1 ${
+                checked ? 'border-brand-500 bg-brand-50' : 'border-surface-200 hover:bg-surface-50'
+              }`}>
+              <input type="radio" id={id} name={`${idPrefix}-reason`} value={r.value}
+                checked={checked} onChange={() => onReason(r.value)}
+                aria-describedby={`${id}-hint`} className="mt-1" />
+              <span>
+                <span className="block text-sm font-medium text-surface-900">{r.label}</span>
+                <span id={`${id}-hint`} className="block text-xs text-surface-500">{r.hint}</span>
+              </span>
+            </label>
+          )
+        })}
+      </div>
+      <div>
+        <label htmlFor={`${idPrefix}-note`} className="label">
+          Note <span className="font-normal text-surface-500">{noteRequired ? '(required for Other)' : '(optional)'}</span>
+        </label>
+        <textarea ref={noteRef} id={`${idPrefix}-note`} value={note} onChange={e => onNote(e.target.value)}
+          rows={2} maxLength={500} className="input text-sm"
+          aria-required={noteRequired} aria-invalid={!!error && noteRequired && !note.trim()}
+          aria-describedby={`${idPrefix}-privacy${error ? ` ${idPrefix}-error` : ''}`}
+          placeholder={noteRequired ? 'Briefly, why?' : 'e.g. last day attended, where they went'} />
+        <p id={`${idPrefix}-privacy`} className="text-xs text-surface-500 mt-1">
+          Only instructors can see the reason and note.
+        </p>
+      </div>
+      {error && (
+        <p id={`${idPrefix}-error`} role="alert" className="flex items-start gap-1.5 text-xs font-medium text-red-700">
+          <AlertCircle size={14} className="flex-shrink-0 mt-0.5" aria-hidden="true" /> {error}
+        </p>
+      )}
+    </fieldset>
+  )
+}
+
+function archiveReasonError(reason, note) {
+  if (!reason) return 'Choose a reason before archiving.'
+  if (reason === 'Other' && !String(note || '').trim()) return 'Add a note to explain "Other".'
+  return ''
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -138,6 +238,17 @@ export default function UsersPage() {
   const [showCompose, setShowCompose] = useState(false)
   const [tab, setTab] = useState('users')
   const [archiveConfirm, setArchiveConfirm] = useState(null)
+  // ── Archive reason (instructors only) ────────────────────────────────
+  // `profile` is the emulated profile while the super admin is emulating, so
+  // the reason stays hidden when viewing the app as a student / work study.
+  const canSeeArchiveReasons = profile?.role === 'Instructor' || profile?.role === 'Super Admin'
+  const { byUserId: archiveInfo, available: archiveInfoAvailable, refresh: refreshArchiveInfo } = useArchiveInfo(canSeeArchiveReasons)
+  // False until the 20261005 migration is live — the page then behaves as before.
+  const canSetArchiveReason = canSeeArchiveReasons && archiveInfoAvailable
+  const [reasonFilter, setReasonFilter] = useState('')        // '', a reason value, or 'none'
+  const [yearFilter, setYearFilter] = useState('')            // '', 'YYYY', or 'unknown'
+  const [reasonEdit, setReasonEdit] = useState(null)          // archived user row whose reason is being edited
+  const showArchiveFilters = canSetArchiveReason && statusFilter === 'Archived'
   const [deleteConfirm, setDeleteConfirm] = useState(null)
   const [resetConfirm, setResetConfirm] = useState(null)
   const [showAddUser, setShowAddUser] = useState(false)
@@ -223,9 +334,40 @@ export default function UsersPage() {
         || (scannerFilter === 'issued' && scState === 'issued')
         || (scannerFilter === 'pending' && scState === 'pending')
         || (scannerFilter === 'none' && scState === 'none')
-      return matchSearch && matchRole && matchStatus && matchBadge && matchOnline && matchScanner
+      // Archive reason / year — only while the Archived list is showing
+      let matchArchive = true
+      if (showArchiveFilters && (reasonFilter || yearFilter)) {
+        const info = archiveInfo[u.id]
+        if (reasonFilter === 'none') matchArchive = !info?.reason
+        else if (reasonFilter) matchArchive = info?.reason === reasonFilter
+        if (matchArchive && yearFilter) {
+          const yr = archivedYear(info?.archived_at)
+          matchArchive = yearFilter === 'unknown' ? yr === null : String(yr) === yearFilter
+        }
+      }
+      return matchSearch && matchRole && matchStatus && matchBadge && matchOnline && matchScanner && matchArchive
     })
-  }, [users, search, roleFilter, statusFilter, badgeFilter, onlineFilter, onlineUsers, scannerFilter, scannerByEmail])
+  }, [users, search, roleFilter, statusFilter, badgeFilter, onlineFilter, onlineUsers, scannerFilter, scannerByEmail, showArchiveFilters, reasonFilter, yearFilter, archiveInfo])
+
+  // Years that archived users were archived in (newest first), for the year filter.
+  const archiveYears = useMemo(() => {
+    const years = new Set()
+    let unknown = false
+    users.forEach(u => {
+      if (u.status !== 'Archived') return
+      const yr = archivedYear(archiveInfo[u.id]?.archived_at)
+      if (yr === null) unknown = true; else years.add(yr)
+    })
+    return { years: [...years].sort((a, b) => b - a), unknown }
+  }, [users, archiveInfo])
+
+  // If the chosen year is no longer offered (its last user was restored), clear
+  // it — otherwise the list would stay filtered while the menu reads "Any Year".
+  useEffect(() => {
+    if (!yearFilter) return
+    const stillOffered = yearFilter === 'unknown' ? archiveYears.unknown : archiveYears.years.includes(Number(yearFilter))
+    if (!stillOffered) setYearFilter('')
+  }, [yearFilter, archiveYears])
 
   const selectedCount = Object.keys(selectedUsers).length
 
@@ -331,10 +473,33 @@ export default function UsersPage() {
               <option value="">All Roles</option>
               {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
-            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="input text-sm w-auto" aria-label="Filter by status">
+            <select value={statusFilter}
+              onChange={e => {
+                setStatusFilter(e.target.value)
+                // The reason / year filters only apply to the Archived list
+                if (e.target.value !== 'Archived') { setReasonFilter(''); setYearFilter('') }
+              }}
+              className="input text-sm w-auto" aria-label="Filter by status">
               <option value="">All Status</option>
               {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
+            {/* Archived list only (instructors): why and when they were archived */}
+            {showArchiveFilters && (
+              <>
+                <select value={reasonFilter} onChange={e => setReasonFilter(e.target.value)}
+                  className="input text-sm w-auto" aria-label="Filter archived users by reason">
+                  <option value="">All Reasons</option>
+                  {ARCHIVE_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                  <option value="none">No reason recorded</option>
+                </select>
+                <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
+                  className="input text-sm w-auto" aria-label="Filter archived users by year archived">
+                  <option value="">Any Year</option>
+                  {archiveYears.years.map(y => <option key={y} value={String(y)}>Archived in {y}</option>)}
+                  {archiveYears.unknown && <option value="unknown">Date unknown</option>}
+                </select>
+              </>
+            )}
             <select value={badgeFilter} onChange={e => setBadgeFilter(e.target.value)} className="input text-sm w-auto" aria-label="Filter by badge">
               <option value="">All Badges</option>
               <option value="assigned">Has Badge</option>
@@ -378,6 +543,10 @@ export default function UsersPage() {
 
           {/* Screen-reader announcement for bulk scanner results */}
           <div aria-live="polite" aria-atomic="true" className="sr-only">{bulkAnnounce}</div>
+          {/* Screen-reader announcement of how many users the filters leave */}
+          <div aria-live="polite" aria-atomic="true" className="sr-only">
+            {loading ? '' : `${filtered.length} user${filtered.length === 1 ? '' : 's'} shown`}
+          </div>
 
           {/* Selection Toolbar */}
           {selectedCount > 0 && (
@@ -458,7 +627,7 @@ export default function UsersPage() {
                           ? `Last active: ${new Date(lastActiveTs).toLocaleString()}`
                           : 'Never active'
                       return (
-                        <tr key={u.id} className={`group hover:bg-surface-50 transition-colors ${u.status === 'Archived' ? 'opacity-60' : ''}`}>
+                        <tr key={u.id} className={`group hover:bg-surface-50 transition-colors ${u.status === 'Archived' && statusFilter !== 'Archived' ? 'opacity-60' : ''}`}>
                           <td className="px-3 py-2">
                             <input type="checkbox" checked={!!selectedUsers[u.id]}
                               onChange={() => toggleSelect(u.id)} className="rounded"
@@ -491,12 +660,37 @@ export default function UsersPage() {
                               'bg-surface-100 text-surface-600'
                             }`}>{u.role}</span>
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="px-3 py-2 whitespace-nowrap">
                             <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                               u.status === 'Active' ? 'bg-emerald-100 text-emerald-800' :
                               u.status === 'Archived' ? 'bg-amber-100 text-amber-700' :
                               'bg-surface-100 text-surface-500'
                             }`}>{u.status}</span>
+                            {/* Why they were archived — instructors only. Icon + text, never color alone. */}
+                            {u.status === 'Archived' && canSetArchiveReason && (() => {
+                              const info = archiveInfo[u.id]
+                              const ReasonIcon = archiveReasonIcon(info?.reason)
+                              const when = formatArchivedDate(info?.archived_at)
+                              const tip = [
+                                info?.reason ? archiveReasonLabel(info.reason) : 'No reason recorded',
+                                info?.note ? `Note: ${info.note}` : null,
+                                when ? `Archived ${when}${info?.archived_by ? ` by ${info.archived_by}` : ''}` : null,
+                                'Click to change',
+                              ].filter(Boolean).join('\n')
+                              return (
+                                <button type="button" onClick={() => setReasonEdit(u)}
+                                  title={tip}
+                                  aria-label={`${info?.reason ? `Archive reason for ${fullName}: ${archiveReasonLabel(info.reason)}` : `No archive reason recorded for ${fullName}`}${when ? `, archived ${when}` : ''}. ${info?.reason ? 'Change' : 'Add'} reason`}
+                                  className={`ml-1 inline-flex items-center gap-1 px-2 min-h-[44px] rounded-lg text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 ${
+                                    info?.reason
+                                      ? 'text-surface-700 hover:bg-surface-100'
+                                      : 'text-brand-700 underline decoration-dotted underline-offset-2 hover:bg-brand-50'
+                                  }`}>
+                                  <ReasonIcon size={12} aria-hidden="true" />
+                                  {info?.reason ? archiveReasonLabel(info.reason) : 'Add reason'}
+                                </button>
+                              )
+                            })()}
                           </td>
                           {/* Badge column - indicator only, not full number */}
                           <td className="px-3 py-2">
@@ -650,8 +844,10 @@ export default function UsersPage() {
           {/* Edit User Modal */}
           {editingUser && (
             <EditUserModal user={editingUser} actions={actions} allClasses={allClasses}
+              canSetReason={canSetArchiveReason}
+              archiveInfo={archiveInfo[editingUser.id] || null}
               onClose={() => setEditingUser(null)}
-              onSaved={() => { setEditingUser(null); refresh() }} />
+              onSaved={() => { setEditingUser(null); refresh(); refreshArchiveInfo() }} />
           )}
 
           {/* Reset Password Modal */}
@@ -665,8 +861,18 @@ export default function UsersPage() {
           {archiveConfirm && (
             <ArchiveConfirmModal user={archiveConfirm} actions={actions}
               scannerRow={scannerFor(archiveConfirm)}
+              canSetReason={canSetArchiveReason}
               onClose={() => setArchiveConfirm(null)}
-              onDone={() => { setArchiveConfirm(null); refresh() }} />
+              onDone={() => { setArchiveConfirm(null); refresh(); refreshArchiveInfo() }} />
+          )}
+
+          {/* Archive reason — add / change for a user who is already archived */}
+          {reasonEdit && canSetArchiveReason && (
+            <ArchiveConfirmModal mode="reason" user={reasonEdit} actions={actions}
+              canSetReason
+              info={archiveInfo[reasonEdit.id] || null}
+              onClose={() => setReasonEdit(null)}
+              onDone={() => { setReasonEdit(null); refreshArchiveInfo() }} />
           )}
 
           {/* Mark Scanner Lost — confirm */}
@@ -1066,17 +1272,35 @@ function ResetPasswordModal({ user, actions, onClose, onDone }) {
 // ARCHIVE CONFIRMATION MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone }) {
+// mode="archive" (default) — confirm archiving; instructors must also say why.
+// mode="reason"            — the user is already archived; add / change the reason.
+// canSetReason is false for non-instructors (and until the archive-reason
+// migration is live): the dialog is then the plain confirmation it always was.
+function ArchiveConfirmModal({ user, actions, scannerRow = null, canSetReason = false, mode = 'archive', info = null, onClose, onDone }) {
   const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [processing, setProcessing] = useState(false)
+  const [reason, setReason] = useState(info?.reason || '')
+  const [note, setNote] = useState(info?.note || '')
+  const [error, setError] = useState('')
   const fullName = `${user.first_name} ${user.last_name}`
-  const hasScanner = !!scannerRow
+  const reasonOnly = mode === 'reason'
+  const hasScanner = !reasonOnly && !!scannerRow
   const scannerPending = scannerRow?.status === 'pending_acknowledgment'
+  const archivedWhen = formatArchivedDate(info?.archived_at)
 
   const handleArchive = async () => {
+    if (canSetReason) {
+      const problem = archiveReasonError(reason, note)
+      if (problem) { setError(reasonOnly ? problem.replace(' before archiving', '') : problem); return }
+    }
+    setError('')
     setProcessing(true)
     try {
-      await actions.archiveUser(user.id, fullName, user.email)
+      if (reasonOnly) {
+        await actions.setArchiveReason(user.id, fullName, { reason, note })
+      } else {
+        await actions.archiveUser(user.id, fullName, user.email, canSetReason ? { reason, note } : {})
+      }
       onDone()
     } catch {
       setProcessing(false)
@@ -1086,26 +1310,42 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="archive-user-title">
-      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
             <Archive size={20} className="text-amber-600" aria-hidden="true" />
           </div>
           <div>
-            <h3 id="archive-user-title" className="text-sm font-bold text-surface-900">Archive User</h3>
-            <p className="text-xs text-surface-500">Remove from active rotations</p>
+            <h3 id="archive-user-title" className="text-sm font-bold text-surface-900">{reasonOnly ? 'Archive Reason' : 'Archive User'}</h3>
+            <p className="text-xs text-surface-500">{reasonOnly ? 'Why this user was archived' : 'Remove from active rotations'}</p>
           </div>
         </div>
 
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
           <p className="text-sm font-medium text-surface-900">{fullName}</p>
           <p className="text-xs text-surface-500">{user.email}</p>
+          {reasonOnly && (
+            <p className="text-xs text-surface-600 mt-1">
+              {archivedWhen
+                ? `Archived ${archivedWhen}${info?.archived_by ? ` by ${info.archived_by}` : ''}`
+                : 'Archive date not recorded'}
+            </p>
+          )}
         </div>
 
-        <p className="text-xs text-surface-500">
-          Archiving will remove this user from class rotations, lab signups, and work order assignments. 
-          Their historical data (time clock, work orders) will be preserved. You can reactivate them later.
-        </p>
+        {!reasonOnly && (
+          <p className="text-xs text-surface-500">
+            Archiving will remove this user from class rotations, lab signups, and work order assignments. 
+            Their historical data (time clock, work orders) will be preserved. You can reactivate them later.
+          </p>
+        )}
+
+        {canSetReason && (
+          <ArchiveReasonFields idPrefix="archive-dialog" required
+            reason={reason} note={note} error={error}
+            onReason={v => { setReason(v); setError('') }}
+            onNote={v => { setNote(v); if (error) setError('') }} />
+        )}
 
         {hasScanner && (
           <div role="alert" className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-800">
@@ -1128,8 +1368,10 @@ function ArchiveConfirmModal({ user, actions, scannerRow = null, onClose, onDone
         <div className="flex gap-2 pt-1">
           <button onClick={handleArchive} disabled={processing}
             className="flex-1 px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 flex items-center justify-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-            {processing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
-            {processing ? 'Archiving...' : hasScanner ? 'Archive Anyway' : 'Archive User'}
+            {processing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : reasonOnly ? <Save size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
+            {reasonOnly
+              ? (processing ? 'Saving...' : 'Save Reason')
+              : (processing ? 'Archiving...' : hasScanner ? 'Archive Anyway' : 'Archive User')}
           </button>
           <button onClick={onClose} className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Cancel</button>
         </div>
@@ -1237,7 +1479,7 @@ function DeleteConfirmModal({ user, actions, onClose, onDone }) {
 // EDIT USER MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
+function EditUserModal({ user, actions, allClasses, canSetReason = false, archiveInfo = null, onClose, onSaved }) {
   const dialogRef = useDialogA11y(true, onClose) // focus trap + focus restore (Escape also handled below)
   const [form, setForm] = useState({
     firstName: user.first_name || '',
@@ -1278,9 +1520,42 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
   )
   const isStudentRole = form.role === 'Student' || form.role === 'Work Study'
 
+  // ── Archive reason (instructors only) ──
+  // Picking Status = Archived here used to skip the Archive dialog entirely,
+  // so nothing asked why. The same reason fields now appear under Status.
+  // Snapshot what was recorded when the dialog opened, so "did I change it?"
+  // is judged against that and not against a later background refresh.
+  const [initialArchive] = useState(() => ({ reason: archiveInfo?.reason || '', note: String(archiveInfo?.note || '').trim() }))
+  const [archReason, setArchReason] = useState(initialArchive.reason)
+  const [archNote, setArchNote] = useState(archiveInfo?.note || '')
+  const [archError, setArchError] = useState('')
+  const wasArchived = user.status === 'Archived'
+  const becomingArchived = form.status === 'Archived' && !wasArchived
+  const showArchiveReason = canSetReason && form.status === 'Archived'
+  const reasonChanged = archReason !== initialArchive.reason || archNote.trim() !== initialArchive.note
+
   const handleSave = async () => {
+    // Reason is required when archiving; when editing someone already archived
+    // it is only checked if it was touched.
+    if (showArchiveReason && (becomingArchived || reasonChanged)) {
+      const problem = archiveReasonError(archReason, archNote)
+      if (problem) { setArchError(becomingArchived ? problem : problem.replace(' before archiving', '')); return }
+    }
+    setArchError('')
     try {
-      await actions.updateUser(user.id, form)
+      const label = `${form.firstName} ${form.lastName}`.trim() || user.email
+      if (canSetReason && becomingArchived) {
+        // Save the other fields, then archive through the same path as the
+        // Archive button (rotation removal + reason + audit entry).
+        const { status: _unused, ...rest } = form
+        await actions.updateUser(user.id, rest, { quiet: true })
+        await actions.archiveUser(user.id, label, user.email, { reason: archReason, note: archNote })
+      } else {
+        await actions.updateUser(user.id, form)
+        if (showArchiveReason && wasArchived && reasonChanged && archiveReasonValid(archReason, archNote)) {
+          await actions.setArchiveReason(user.id, label, { reason: archReason, note: archNote, quiet: true })
+        }
+      }
       // Enrollment: per class, one call each for the current term's classes that changed.
       if (picked && enrollmentDirty) {
         const label = `${form.firstName} ${form.lastName}`.trim() || user.email
@@ -1302,7 +1577,7 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}
       role="dialog" aria-modal="true" aria-labelledby="edit-user-title">
-      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="bg-white rounded-2xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h3 id="edit-user-title" className="text-sm font-bold text-surface-900">Edit User</h3>
           <button onClick={onClose} className="text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" aria-label="Close"><X size={16} aria-hidden="true" /></button>
@@ -1333,6 +1608,13 @@ function EditUserModal({ user, actions, allClasses, onClose, onSaved }) {
             </select>
           </div>
         </div>
+
+        {showArchiveReason && (
+          <ArchiveReasonFields idPrefix="edit-archive" required={becomingArchived}
+            reason={archReason} note={archNote} error={archError}
+            onReason={v => { setArchReason(v); setArchError('') }}
+            onNote={v => { setArchNote(v); if (archError) setArchError('') }} />
+        )}
 
         {form.role === 'Instructor' && (
           <fieldset className="space-y-2">
