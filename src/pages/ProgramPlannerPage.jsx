@@ -407,7 +407,7 @@ function printPlan(plan, studentName, advising = null, opts = {}) {
 // One page per term: who met for advising (date + instructor) and who has not.
 // Every student with a program plan is listed (archived students are already
 // excluded by loadPlans) — search/filter on screen do NOT narrow the report.
-// Notes are never printed here.
+// Notes and student email addresses are never printed here.
 function printAdvisingReport({ term, students, preparedBy }) {
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   const lastName = n => (n||'').trim().split(' ').slice(-1)[0]||''
@@ -420,10 +420,10 @@ function printAdvisingReport({ term, students, preparedBy }) {
   const progs = ids => (ids||[]).map(pid=>PROGRAMS.find(p=>p.id===pid)?.name||pid).join(', ')
 
   const advisedRows = advised.map((s,i)=>`<tr>
-      <td class="n">${i+1}</td><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${esc(progs(s.programs))}</td>
+      <td class="n">${i+1}</td><td>${esc(s.name)}</td><td>${esc(progs(s.programs))}</td>
       <td class="nw">${esc(fmtMetOn(s.meeting.met_on))}</td><td>${esc(s.meeting.advised_by||s.meeting.advised_by_email||'')}</td></tr>`).join('')
   const notYetRows = notYet.map((s,i)=>`<tr>
-      <td class="n">${i+1}</td><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${esc(progs(s.programs))}</td>
+      <td class="n">${i+1}</td><td>${esc(s.name)}</td><td>${esc(progs(s.programs))}</td>
       <td>${s.lastMeeting?`${esc(s.lastMeeting.term_name)} (${esc(fmtMetOn(s.lastMeeting.met_on))})`:'—'}</td></tr>`).join('')
 
   const html = `<!DOCTYPE html><html lang="en"><head><title>Advising Report — ${esc(term)}</title>
@@ -456,10 +456,10 @@ function printAdvisingReport({ term, students, preparedBy }) {
   </div>
 
   <h2 class="ok">Advised — ${advised.length}</h2>
-  ${advised.length?`<table><thead><tr><th scope="col">#</th><th scope="col">Student</th><th scope="col">Email</th><th scope="col">Program(s)</th><th scope="col">Date met</th><th scope="col">Met with</th></tr></thead><tbody>${advisedRows}</tbody></table>`:'<p class="empty">No students have been advised for this term yet.</p>'}
+  ${advised.length?`<table><thead><tr><th scope="col">#</th><th scope="col">Student</th><th scope="col">Program(s)</th><th scope="col">Date met</th><th scope="col">Met with</th></tr></thead><tbody>${advisedRows}</tbody></table>`:'<p class="empty">No students have been advised for this term yet.</p>'}
 
   <h2 class="todo">Not yet advised — ${notYet.length}</h2>
-  ${notYet.length?`<table><thead><tr><th scope="col">#</th><th scope="col">Student</th><th scope="col">Email</th><th scope="col">Program(s)</th><th scope="col">Last advising meeting</th></tr></thead><tbody>${notYetRows}</tbody></table>`:'<p class="empty">Every student has been advised for this term.</p>'}
+  ${notYet.length?`<table><thead><tr><th scope="col">#</th><th scope="col">Student</th><th scope="col">Program(s)</th><th scope="col">Last advising meeting</th></tr></thead><tbody>${notYetRows}</tbody></table>`:'<p class="empty">Every student has been advised for this term.</p>'}
 
   <div class="sign"><div>Instructor signature</div><div>Date</div></div>
   <div class="foot">Includes every active student with a program plan in the RICT CMMS Program Planner. Advising notes are not included in this report.</div>
