@@ -5,6 +5,9 @@
  * Features:
  * - Data table with checkbox selection, image thumbnails, qty color-coding
  * - Search + location/stock-level filters + show-inactive toggle
+ * - "Missing info" filter with counts (no image / vendor / vendor part # /
+ *   location / description / min-max, plus vendor or location not in the
+ *   Settings list) for data clean-up
  * - Low stock warning banner with Purchase Orders link
  * - Cycle Count button (navigates to /inventory/scan for QR-based qty adjustments)
  * - Add/Edit Part modal (name, status, description, supplier, part#, qty/min/max, location, image upload)
@@ -26,6 +29,27 @@ import { useAuth } from '@/contexts/AuthContext';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 
+// ---------- MISSING-INFO FILTER ----------
+// Data clean-up filter: which parts are missing a piece of information.
+// `stale` options compare against the ACTIVE vendors / locations in Settings,
+// so they catch a value that was typed, renamed or deactivated.
+const blank = (v) => v === null || v === undefined || String(v).trim() === '';
+const norm = (v) => String(v || '').trim().toLowerCase();
+
+const MISSING_OPTIONS = [
+  { value: 'image',       label: 'No image',              test: (i) => blank(i.image_url) },
+  { value: 'vendor',      label: 'No vendor',             test: (i) => blank(i.primary_supplier) },
+  { value: 'vendor_part', label: 'No vendor part number', test: (i) => blank(i.supplier_part_number) },
+  { value: 'location',    label: 'No location',           test: (i) => blank(i.location) },
+  { value: 'description', label: 'No description',        test: (i) => blank(i.description) },
+  // Minimum 0 = the part is never flagged as low stock
+  { value: 'minmax',      label: 'No min/max set',        test: (i) => !((Number(i.min_qty) || 0) > 0) },
+  { value: 'vendor_stale',   label: 'Vendor not in list',   needs: 'vendors',
+    test: (i, ctx) => !blank(i.primary_supplier) && !ctx.vendorNames.has(norm(i.primary_supplier)) },
+  { value: 'location_stale', label: 'Location not in list', needs: 'locations',
+    test: (i, ctx) => !blank(i.location) && !ctx.locationNames.has(norm(i.location)) },
+];
+
 export default function InventoryPage() {
   const { user, profile } = useAuth();
   const navigate = useNavigate();
@@ -36,6 +60,7 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
   const [stockFilter, setStockFilter] = useState('');
+  const [missingFilter, setMissingFilter] = useState('');   // '', 'any', or a MISSING_OPTIONS value
   const [showInactive, setShowInactive] = useState(false);
   const [sortColumn, setSortColumn] = useState('');
   const [sortDirection, setSortDirection] = useState('asc');
@@ -44,6 +69,10 @@ export default function InventoryPage() {
   // Dropdowns
   const [locations, setLocations] = useState([]);
   const [vendors, setVendors] = useState([]);
+  // True only after each list actually loaded — the "not in list" checks are
+  // skipped until then, so a failed load can never flag every part.
+  const [locationsLoaded, setLocationsLoaded] = useState(false);
+  const [vendorsLoaded, setVendorsLoaded] = useState(false);
 
   // Modals
   const [showPartModal, setShowPartModal] = useState(false);
@@ -156,12 +185,12 @@ export default function InventoryPage() {
   const loadDropdowns = async () => {
     try {
       const data = mustData(await supabase.from('inventory_locations').select('*').eq('status', 'Active').order('location_name'), 'inventory_locations.select');
-      if (data) setLocations(data);
+      if (data) { setLocations(data); setLocationsLoaded(true); }
     } catch (e) { console.error(e); }
 
     try {
       const data = mustData(await supabase.from('vendors').select('vendor_id, vendor_name, status').eq('status', 'Active').order('vendor_name'), 'vendors.select');
-      if (data) setVendors(data);
+      if (data) { setVendors(data); setVendorsLoaded(true); }
     } catch (e) { console.error(e); }
   };
 
@@ -214,7 +243,24 @@ export default function InventoryPage() {
   };
 
   // ---------- FILTER ----------
-  const filteredItems = useMemo(() => {
+  // Options usable right now ("not in list" ones need their Settings list loaded)
+  const missingCtx = useMemo(() => ({
+    vendorNames: new Set(vendors.map(v => norm(v.vendor_name))),
+    locationNames: new Set(locations.map(l => norm(l.location_name))),
+  }), [vendors, locations]);
+  const missingOptions = useMemo(() => MISSING_OPTIONS.filter(o =>
+    !o.needs || (o.needs === 'vendors' ? vendorsLoaded : locationsLoaded)
+  ), [vendorsLoaded, locationsLoaded]);
+  const matchesMissing = useCallback((item, which) => {
+    if (!which) return true;
+    if (which === 'any') return missingOptions.some(o => o.test(item, missingCtx));
+    const opt = missingOptions.find(o => o.value === which);
+    return opt ? opt.test(item, missingCtx) : true;
+  }, [missingOptions, missingCtx]);
+
+  // Everything except the missing-info filter — also the base for its counts,
+  // so each count is "how many of what I'm looking at have this gap".
+  const baseFilteredItems = useMemo(() => {
     return items.filter(item => {
       const matchSearch = !search ||
         item.part_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -231,6 +277,26 @@ export default function InventoryPage() {
       return matchSearch && matchLoc && matchStock && matchStatus;
     });
   }, [items, search, locationFilter, stockFilter, showInactive]);
+
+  const filteredItems = useMemo(() => {
+    if (!missingFilter) return baseFilteredItems;
+    return baseFilteredItems.filter(item => matchesMissing(item, missingFilter));
+  }, [baseFilteredItems, missingFilter, matchesMissing]);
+
+  const missingCounts = useMemo(() => {
+    const counts = { any: 0 };
+    missingOptions.forEach(o => { counts[o.value] = 0; });
+    baseFilteredItems.forEach(item => {
+      let any = false;
+      missingOptions.forEach(o => { if (o.test(item, missingCtx)) { counts[o.value]++; any = true; } });
+      if (any) counts.any++;
+    });
+    return counts;
+  }, [baseFilteredItems, missingOptions, missingCtx]);
+
+  const missingLabel = missingFilter === 'any'
+    ? 'Anything missing'
+    : (MISSING_OPTIONS.find(o => o.value === missingFilter)?.label || '');
 
   // Items that are low AND not already on an active purchase order.
   // "On order" is taken from real PO line items (onOrderMap), not the
@@ -598,6 +664,7 @@ export default function InventoryPage() {
     if (search) filterNotes.push(`Search: "${search}"`);
     if (locationFilter) filterNotes.push(`Location: ${locationFilter}`);
     if (stockFilter) filterNotes.push(`Stock: ${stockFilter}`);
+    if (missingFilter && missingLabel) filterNotes.push(`Missing info: ${missingLabel}`);
     if (showInactive) filterNotes.push('Including inactive');
     const filterLine = filterNotes.length > 0
       ? `<div style="font-size:11px;color:#666;margin-bottom:8px">Filters: ${filterNotes.join(' · ')}</div>`
@@ -648,6 +715,12 @@ export default function InventoryPage() {
             {hasPerm('view_low_stock') && <option value="low">Low Stock</option>}
             <option value="ok">In Stock</option>
           </select>
+          {/* Missing info — data clean-up. Counts follow the other filters. */}
+          <select className="filter-select" aria-label="Filter by missing information" value={missingFilter} onChange={e => setMissingFilter(e.target.value)}>
+            <option value="">Missing Info: Off</option>
+            <option value="any">Anything missing ({missingCounts.any})</option>
+            {missingOptions.map(o => <option key={o.value} value={o.value}>{o.label} ({missingCounts[o.value] || 0})</option>)}
+          </select>
           <label className="checkbox-filter">
             <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
             <span>Show Inactive</span>
@@ -697,6 +770,10 @@ export default function InventoryPage() {
           </div>
           <div className="header-right">
             <span className="badge">{filteredItems.length}</span>
+            {/* Screen-reader announcement when the missing-info filter changes the list */}
+            <span className="sr-only" aria-live="polite" aria-atomic="true">
+              {missingFilter && missingLabel ? `${filteredItems.length} part${filteredItems.length === 1 ? '' : 's'} shown: ${missingLabel}` : ''}
+            </span>
             {selectedIds.length > 0 && hasPerm('print_labels') && (
               <button className="btn btn-sm btn-secondary" onClick={openLabelsPreview}>
                 <span className="material-icons" aria-hidden="true">print</span>Print Labels ({selectedIds.length})
