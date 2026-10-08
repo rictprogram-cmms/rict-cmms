@@ -799,7 +799,7 @@ export default function NotificationBell() {
     try {
       const data = mustData(await supabase
         .from('absence_requests')
-        .select('request_id, request_type, assignment_name, user_name, user_email, course_id, class_id, absence_date, hours_missed, submitted_by_email, submitted_by_name, created_at')
+        .select('request_id, request_type, assignment_name, user_name, user_email, course_id, class_id, absence_date, due_date, hours_missed, submitted_by_email, submitted_by_name, created_at')
         .eq('status', 'Pending')
         .order('created_at', { ascending: false })
         .limit(50), 'absence_requests.select');
@@ -821,6 +821,16 @@ export default function NotificationBell() {
         // Late submissions share the table (request_type). Title/subtitle
         // word themselves per type; the bell action is the same page either way.
         const isLate = r.request_type === 'Late Submission';
+        // Asked before the work was due (filed ahead, e.g. Guard duty). Inferred
+        // from the dates rather than absence_requests.work_turned_in so this
+        // list never depends on that migration having run — a request dated
+        // before its due date can only have been filed ahead of time.
+        const dueStr = r.due_date ? String(r.due_date).substring(0, 10) : '';
+        const askingAhead = isLate && !!dueStr && !!r.absence_date &&
+          String(r.absence_date).substring(0, 10) < dueStr;
+        const dueLabel = dueStr
+          ? new Date(dueStr + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : '';
         const hrsLabel = isLate
           ? (Number(r.hours_missed) > 0 ? r.hours_missed + 'h lab time requested' : 'no extra lab time')
           : (r.hours_missed ? r.hours_missed + 'h missed' : 'Hours TBD');
@@ -830,7 +840,9 @@ export default function NotificationBell() {
           icon: isLate ? 'assignment_late' : 'event_busy',
           color: '#f59f00',
           title: isLate
-            ? `${r.user_name || r.user_email} — late: ${r.assignment_name || 'assignment'} (${dateLabel})`
+            ? askingAhead
+              ? `${r.user_name || r.user_email} — asking ahead: ${r.assignment_name || 'assignment'} (due ${dueLabel})`
+              : `${r.user_name || r.user_email} — late: ${r.assignment_name || 'assignment'} (${dateLabel})`
             : `${r.user_name || r.user_email} — absence ${dateLabel}`,
           subtitle: `${cls ? cls + '  •  ' : ''}${hrsLabel}${isOnBehalf ? '  •  filed by ' + (r.submitted_by_name || 'instructor') : ''}`,
           date: createdLocal || r.created_at,

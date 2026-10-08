@@ -178,14 +178,29 @@ function timeAgo(dateStr) {
 }
 
 /**
- * Date line for a Late Submission: "Submitted Tue, Oct 7, 2026", or for one
- * filed before the work was turned in "Requested Tue, Oct 7, 2026 · not yet
- * turned in". Text, not colour, carries the difference.
+ * Date line for a Late Submission:
+ *   turned in            "Submitted Tue, Oct 7, 2026"
+ *   asked ahead          "Requested Tue, Oct 7, 2026 · not yet turned in"
+ *   asked ahead, then
+ *   Work received ticked "Requested Tue, Oct 7, 2026 · turned in Mon, Oct 12, 2026"
+ * The turned-in date is work_received_date (fake-UTC) — when the instructor
+ * ticked Work received. absence_date is never rewritten, so the request date
+ * is never passed off as a submission date. Text, not colour, carries it.
  */
 function lateDateText(req, { lower = false } = {}) {
-  const text = isNotYetTurnedIn(req)
-    ? `Requested ${formatDate(req.absence_date)} · not yet turned in`
-    : `Submitted ${formatDate(req.absence_date)}`
+  let text
+  if (isNotYetTurnedIn(req)) {
+    const got = req.work_received ? fakeUtcToLocalDate(req.work_received_date) : null
+    const gotStr = got
+      ? `${got.getFullYear()}-${String(got.getMonth() + 1).padStart(2, '0')}-${String(got.getDate()).padStart(2, '0')}`
+      : null
+    text = `Requested ${formatDate(req.absence_date)} · ${
+      req.work_received
+        ? (gotStr ? `turned in ${formatDate(gotStr)}` : 'turned in')
+        : 'not yet turned in'}`
+  } else {
+    text = `Submitted ${formatDate(req.absence_date)}`
+  }
   return lower ? text.charAt(0).toLowerCase() + text.slice(1) : text
 }
 
