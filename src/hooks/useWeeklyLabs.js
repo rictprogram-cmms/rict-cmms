@@ -786,7 +786,12 @@ export function useLabTrackerActions() {
             .from('time_clock')
             .insert({
               record_id: markerRecordId,
-              user_id: activeEntry?.user_id || (isValidUUID(userId) ? userId : null),
+              // time_clock.user_id is TEXT holding the legacy USR#### id (the kiosk
+              // writes the same). The UUID check used for weekly_lab_tracker must NOT
+              // apply here: it turned every marker written after the student had
+              // punched out into user_id = NULL, and the time card (which loads by
+              // user_id) never saw it — no All Done row, no "Week Closed". (2026-10-08)
+              user_id: activeEntry?.user_id || userId || null,
               user_name: userName,
               user_email: userEmail,
               class_id: activeEntry?.class_id || fallbackClass.classId || '',
