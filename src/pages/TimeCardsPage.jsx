@@ -1215,18 +1215,18 @@ function ReportModal({ profile, isInstructor, users, classes, selectedUserId, on
           )}
         </div>
         <div className="px-5 py-3 border-t border-surface-100 flex flex-wrap justify-end gap-2">
-          {/* Accountability Report: the same student, every check in one place */}
+          {/* Metrics Report: the same student, every check in one place */}
           {reportMode === 'individual' && (
             <button type="button"
               onClick={() => {
                 const u = isInstructor ? (users || []).find(x => x.user_id === reportUserId) : profile
                 const email = u?.email || ''
                 onClose()
-                navigate(isInstructor && email ? `/accountability-report?student=${encodeURIComponent(email)}` : '/accountability-report')
+                navigate(isInstructor && email ? `/metrics-report?student=${encodeURIComponent(email)}` : '/metrics-report')
               }}
               className="mr-auto px-3 py-2 rounded-lg text-sm text-brand-700 hover:bg-brand-50 border border-transparent inline-flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
               <ClipboardCheck size={14} aria-hidden="true" />
-              Accountability Report
+              Metrics Report
             </button>
           )}
           <button onClick={onClose}

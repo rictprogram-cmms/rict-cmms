@@ -1,7 +1,8 @@
 /**
- * RICT CMMS — Accountability Report rules (pure)
+ * RICT CMMS — Metrics Report rules (pure)
+ * (Page renamed from "Accountability Report" 2026-10-08; file name kept.)
  *
- * Every check the Accountability Report makes lives here as a plain function
+ * Every check the Metrics Report makes lives here as a plain function
  * of data already in hand. Nothing in this file touches the network or React,
  * so each rule can be reasoned about (and unit-checked) on its own, and other
  * pages can reuse a rule without inheriting the page.
@@ -959,7 +960,7 @@ export function checkVolunteer({ volunteer }) {
     detail: v.hasRequirement ? `Midpoint: ${v.midpointStatus.replace(/_/g, ' ')}; second half: ${v.secondHalfStatus.replace(/_/g, ' ')}.` : 'No enrolled class requires volunteer hours this term.',
   }] : []
   return makeCheck({ id: 'volunteer', num: 31, section: 'program', label: 'Volunteer hours', severity: v?.overallStatus === 'behind' ? 'high' : v?.overallStatus === 'at_risk' ? 'medium' : 'info', counts: true,
-    help: 'Same standing as the Volunteer Hours page. Counts one infraction when Behind.',
+    help: 'Same standing as the Volunteer Hours page. Counts as one event when Behind.',
     summary: v ? (label[v.overallStatus] || v.overallStatus) : '' }, items, { count: v?.overallStatus === 'behind' ? 1 : 0, status: v?.overallStatus || '' })
 }
 

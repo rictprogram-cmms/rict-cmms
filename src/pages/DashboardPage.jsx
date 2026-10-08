@@ -857,7 +857,7 @@ function GradeCard({ card, navigate }) {
         <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
           <button
             type="button"
-            onClick={() => navigate('/accountability-report')}
+            onClick={() => navigate('/metrics-report')}
             className="focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             style={{
               background: 'transparent',
@@ -1874,7 +1874,7 @@ function InstructorOverview({ navigate }) {
         </div>
       </div>
 
-      {/* ── Students to check on (pattern alerts from the Accountability Report) ── */}
+      {/* ── Students to check on (pattern alerts from the Metrics Report) ── */}
       <AccountabilityAlertsCard />
 
       {/* ── Day View ── */}

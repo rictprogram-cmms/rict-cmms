@@ -327,6 +327,13 @@ function KioskRoute({ children }) {
   return children
 }
 
+// Redirect a renamed route while keeping its ?query and #hash (plain <Navigate>
+// drops them, which would lose ?student= on old Metrics Report links).
+function RedirectKeepQuery({ to }) {
+  const location = useLocation()
+  return <Navigate to={{ pathname: to, search: location.search, hash: location.hash }} replace />
+}
+
 function ProtectedRoute({ children }) {
   const { isAuthenticated, loading, mustChangePassword } = useAuth()
   const location = useLocation()
@@ -501,7 +508,9 @@ function AppRoutes() {
             <Route path="/weekly-labs" element={<Navigate to="/time-cards" replace />} />
             <Route path="/volunteer-hours" element={<Lazy><VolunteerHoursPage /></Lazy>} />
             <Route path="/attendance-reports" element={<Lazy><AttendanceReportsPage /></Lazy>} />
-            <Route path="/accountability-report" element={<Lazy><AccountabilityReportPage /></Lazy>} />
+            <Route path="/metrics-report" element={<Lazy><AccountabilityReportPage /></Lazy>} />
+            {/* Renamed 2026-10-08 (was "Accountability Report"). Keep old bookmarks and links working, ?student=/&term= included. */}
+            <Route path="/accountability-report" element={<RedirectKeepQuery to="/metrics-report" />} />
             <Route path="/request-history" element={<Lazy><RequestHistoryPage /></Lazy>} />
 
             {/* Administration */}

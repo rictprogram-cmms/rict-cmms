@@ -798,11 +798,11 @@ export default function UsersPage() {
                                   className="p-1.5 rounded-lg hover:bg-purple-50 text-surface-400 hover:text-purple-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                                   <FileSearch size={14} aria-hidden="true" />
                                 </button>
-                                {/* Accountability Report (students / work study only) */}
+                                {/* Metrics Report (students / work study only) */}
                                 {(u.role === 'Student' || u.role === 'Work Study') && (
-                                  <button onClick={(e) => { e.stopPropagation(); navigate(`/accountability-report?student=${encodeURIComponent(u.email)}`) }}
-                                    title="Accountability Report"
-                                    aria-label={`Open accountability report for ${u.first_name} ${u.last_name}`}
+                                  <button onClick={(e) => { e.stopPropagation(); navigate(`/metrics-report?student=${encodeURIComponent(u.email)}`) }}
+                                    title="Metrics Report"
+                                    aria-label={`Open metrics report for ${u.first_name} ${u.last_name}`}
                                     className="p-1.5 rounded-lg hover:bg-amber-50 text-surface-400 hover:text-amber-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                                     <ClipboardCheck size={14} aria-hidden="true" />
                                   </button>

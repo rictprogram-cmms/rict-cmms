@@ -4,7 +4,7 @@
  * Instructor Dashboard card fed by accountability_alerts. Shows every open,
  * unacknowledged pattern alert grouped by student — drastic ones first —
  * with a shared Acknowledge button and a link into the student's
- * Accountability Report. Acknowledged alerts stay open (a pattern that keeps
+ * Metrics Report. Acknowledged alerts stay open (a pattern that keeps
  * going comes back as "still open, week N") and can be shown with a toggle.
  *
  * A background sweep refreshes the table when the last one is older than the
@@ -138,10 +138,10 @@ export default function AccountabilityAlertsCard({ enabled = true }) {
                 <li key={g.email} style={{ padding: '10px 16px', borderTop: '1px solid #f1f3f5' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                     <button type="button"
-                      onClick={() => navigate(`/accountability-report?student=${encodeURIComponent(g.email)}`)}
+                      onClick={() => navigate(`/metrics-report?student=${encodeURIComponent(g.email)}`)}
                       className={`inline-flex items-center gap-1 text-brand-700 hover:underline font-semibold min-h-[44px] ${FOCUS}`}
                       style={{ fontSize: '0.9rem' }}>
-                      {g.name} <ExternalLink size={12} aria-hidden="true" /><span className="sr-only">, open accountability report</span>
+                      {g.name} <ExternalLink size={12} aria-hidden="true" /><span className="sr-only">, open metrics report</span>
                     </button>
                   </div>
                   <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>

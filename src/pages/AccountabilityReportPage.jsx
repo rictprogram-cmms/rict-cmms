@@ -1,5 +1,17 @@
 /**
- * RICT CMMS — Accountability Report
+ * RICT CMMS — Metrics Report (renamed from "Accountability Report" 2026-10-08)
+ *
+ * Renamed because students read "Accountability" as grading. The page is a
+ * shared look at how a student is doing — and how quickly help reaches them —
+ * not a grade input. The route is /metrics-report; /accountability-report
+ * redirects here (App.jsx). Internal file, hook, table and setting-key names
+ * keep "accountability" on purpose — nobody sees them and renaming them would
+ * touch a live table for no user benefit.
+ *
+ * Permissions: page 'Metrics Report'. Until 20261008_metrics_report_rename.sql
+ * runs, the rows are still named 'Accountability Report', so the page falls
+ * back to the old name when the new one has no rows. That lets the code and
+ * the SQL go live in either order without locking anyone out.
  *
  * One place to see everything a student is held to for a term: lab sign-ups,
  * time-clock behaviour, absences and late work, work orders, equipment,
@@ -24,7 +36,7 @@
  * a grade input. The total is a plain count of events; severity is shown
  * beside each count as text + icon, never as colour alone.
  *
- * Links in: ?student=<email>&term=<term_id> opens straight to one student
+ * Links in: /metrics-report?student=<email>&term=<term_id> opens straight to one student
  * (Users page, Time Cards report modal, Dashboard grade cards).
  *
  * Exports: CSV / Excel (SheetJS, dynamic import) of the class table or the
@@ -120,13 +132,23 @@ function safeName(s) { return String(s || '').replace(/[^a-z0-9]+/gi, '_').repla
 
 function studentName(p) { return `${p?.first_name || ''} ${p?.last_name || ''}`.trim() || p?.email || '' }
 
+// Permission page name, plus the pre-2026-10-08 name used as a fallback until
+// 20261008_metrics_report_rename.sql has renamed the rows.
+export const METRICS_PERM_PAGE = 'Metrics Report'
+const LEGACY_PERM_PAGE = 'Accountability Report'
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function AccountabilityReportPage() {
   const { profile } = useAuth()
-  const { hasPerm, permsLoading } = usePermissions('Accountability Report')
+  const currentPerms = usePermissions(METRICS_PERM_PAGE)
+  const legacyPerms = usePermissions(LEGACY_PERM_PAGE)
+  const permsLoading = currentPerms.permsLoading || legacyPerms.permsLoading
+  // Use the old rows only while the new page name has none at all
+  const useLegacyPerms = !currentPerms.permsLoading && Object.keys(currentPerms.perms || {}).length === 0
+  const hasPerm = feature => currentPerms.hasPerm(feature) || (useLegacyPerms && legacyPerms.hasPerm(feature))
   const canViewAll = hasPerm('view_all')
   const canViewOwn = hasPerm('view_own') || hasPerm('view_page')
   const canExport = hasPerm('export')
@@ -184,7 +206,7 @@ export default function AccountabilityReportPage() {
         <div className="card p-8 text-center">
           <AlertTriangle className="mx-auto mb-3 text-amber-500" size={40} aria-hidden="true" />
           <h1 className="text-lg font-semibold text-surface-900 mb-2">Access Restricted</h1>
-          <p className="text-surface-500 text-sm">You do not have permission to view the Accountability Report.</p>
+          <p className="text-surface-500 text-sm">You do not have permission to view the Metrics Report.</p>
         </div>
       </div>
     )
@@ -196,12 +218,12 @@ export default function AccountabilityReportPage() {
         <div>
           <h1 className="text-2xl font-bold text-surface-900 flex items-center gap-2">
             <ClipboardCheck size={24} className="text-brand-600" aria-hidden="true" />
-            Accountability Report
+            Metrics Report
           </h1>
-          <p className="text-sm text-surface-500 mt-1">
+          <p className="text-sm text-surface-500 mt-1 max-w-3xl">
             {canViewAll
-              ? 'Everything a student is held to this term, in one place — a reference for a conversation, not a grade.'
-              : 'Everything you are held to this term, in one place. Expand any row to see the details behind it.'}
+              ? 'How each student is doing this term, in one place — a reference for a conversation, not a grade.'
+              : 'How you are doing this term, and how quickly help reaches you — all in one place. This report is not a grade. It is here so you and your instructor can both see how things are going. Expand any row to see the details behind it.'}
           </p>
         </div>
         <div className="min-w-[220px]">
@@ -354,12 +376,12 @@ function ClassPanel({ term, canViewNotes, canExport, onOpenStudent }) {
       if (c.check) return checkCount(r, c.check) ?? ''
       return r.report?.totals[c.key] ?? ''
     }))
-    return [[`Accountability Report — ${cls?.course_id || ''} ${cls?.course_name || ''} — ${term.name}`], [`Generated ${new Date().toLocaleString()}`],
+    return [[`Metrics Report — ${cls?.course_id || ''} ${cls?.course_name || ''} — ${term.name}`], [`Generated ${new Date().toLocaleString()}`],
       [`Help requests: ${classHelp.requests} (${classHelp.answered} answered)`, `Class avg wait (min): ${classHelp.avgWaitMin ?? ''}`, `Class avg to cleared (min): ${classHelp.avgClearMin ?? ''}`],
       [], head, ...body]
   }, [sorted, cls, term, classHelp])
 
-  const fname = `accountability_${safeName(cls?.course_id)}_${safeName(term.name)}`
+  const fname = `metrics_report_${safeName(cls?.course_id)}_${safeName(term.name)}`
 
   return (
     <div>
@@ -546,13 +568,13 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
       for (const it of c.items) body.push([c.num, s.label, label(c), SEVERITY_LABEL[c.severity], it.date ? fmtDate(it.date) : '', it.label, it.detail || ''])
     }
     return [
-      [`Accountability Report — ${studentName(student)} — ${term.name}`],
+      [`Metrics Report — ${studentName(student)} — ${term.name}`],
       [`Generated ${new Date().toLocaleString()}`, `Total events: ${report.totals.total}`, `High ${report.totals.high}`, `Medium ${report.totals.medium}`, `Low ${report.totals.low}`, `Trend: ${report.trend.direction}`],
       [], head, ...body,
     ]
   }, [report, student, term, studentView]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const fname = `accountability_${safeName(studentName(student))}_${safeName(term.name)}`
+  const fname = `metrics_report_${safeName(studentName(student))}_${safeName(term.name)}`
 
   return (
     <div>
