@@ -3,12 +3,15 @@
  * 
  * Welcome section with fun fact & quick actions.
  * 
- * Student / Work Study: Compact 1×4 accountability metrics
+ * Student / Work Study: compact metric tiles
  *   - Work Orders (open, assigned to me)
  *   - All Done (instructor-swipe confirmation for today — reads the time_clock marker;
  *     replaced the Weekly Labs tile when the tracker was retired for D2L, 2026-09)
- *   - Attendance Score (on-time %)
  *   - Volunteer Hours (approved / required)
+ *   - WOC Score
+ *   (The Attendance tile was removed 2026-10-08: it showed one on-time % across
+ *   every punch since the earliest class start, which students read as their
+ *   grade. Per-class attendance stays in "My Grade-Relevant Scores" below.)
  * 
  * Instructors: 1×3 summary tiles + Day View list + Active Temp Access card
  *   - Late Work Orders (click for detail modal)
@@ -219,8 +222,6 @@ function AccountabilityMetrics({ navigate }) {
 
   const [woCount, setWoCount] = useState(0);
   const [woLoading, setWoLoading] = useState(true);
-  const [attendanceScore, setAttendanceScore] = useState(null);
-  const [attLoading, setAttLoading] = useState(true);
 
 
   useEffect(() => {
@@ -246,82 +247,6 @@ function AccountabilityMetrics({ navigate }) {
   }, [profile?.email]);
 
   useEffect(() => {
-    if (!profile?.email || !profile?.user_id) { setAttLoading(false); return; }
-    let cancelled = false;
-    const fetchAttendance = async () => {
-      try {
-        const userClasses = (profile.classes || '').split(',').map(c => c.trim()).filter(Boolean);
-        if (userClasses.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
-        // Use local date — toISOString() returns UTC and would shift to tomorrow after ~6 PM CST,
-        // causing classes that haven't started yet to be incorrectly included in the filter.
-        const todayStr = toLocalDateStr(new Date());
-        const classesData = mustData(await supabase.from('classes').select('start_date, end_date').in('course_id', userClasses).eq('status', 'Active').or(`start_date.is.null,start_date.lte.${todayStr}`), 'classes');
-        if (!classesData || classesData.length === 0) { if (!cancelled) { setAttendanceScore(100); setAttLoading(false); } return; }
-        let startDate = null, endDate = null;
-        classesData.forEach(c => {
-          const sd = c.start_date ? c.start_date.split('T')[0] : null;
-          const ed = c.end_date ? c.end_date.split('T')[0] : null;
-          if (sd && (!startDate || sd < startDate)) startDate = sd;
-          if (ed && (!endDate || ed > endDate)) endDate = ed;
-        });
-        if (!startDate) startDate = `${new Date().getFullYear()}-01-01`;
-        // Same TZ fix as todayStr above — local date, not UTC
-        if (!endDate) endDate = toLocalDateStr(new Date());
-        let gracePeriod = 10;
-        try {
-          const gs = mustData(await supabase.from('settings').select('setting_value').eq('setting_key', 'grace_period_minutes').maybeSingle(), 'settings.select');
-          if (gs?.setting_value) gracePeriod = parseInt(gs.setting_value) || 10;
-        } catch {}
-        // IMPORTANT: time_clock stores USR#### in user_id — must use profile.user_id, not profile.id (UUID)
-        // Both reads are mandatory: a failed lab_signup read with a good
-        // time_clock read would make every punch look like "no signup" and
-        // show the student 0% until the next refresh.
-        const [tcRes, suRes] = await Promise.all([
-          supabase.from('time_clock').select('record_id, punch_in, punch_out, status, entry_type').eq('user_id', profile.user_id).gte('punch_in', startDate + 'T00:00:00').lte('punch_in', endDate + 'T23:59:59'),
-          supabase.from('lab_signup').select('date, start_time, end_time').eq('user_email', profile.email).eq('status', 'Confirmed').gte('date', startDate).lte('date', endDate + 'T23:59:59'),
-        ]);
-        const records = mustData(tcRes, 'time_clock') || [];
-        const suData = mustData(suRes, 'lab_signup');
-        const signupsByDate = {};
-        (suData || []).forEach(s => {
-          const d = (s.date || '').split('T')[0]; if (!d) return;
-          if (!signupsByDate[d]) signupsByDate[d] = { startMin: Infinity, endMin: 0 };
-          const sMin = timeToMinutes(s.start_time); const eMin = timeToMinutes(s.end_time);
-          if (sMin !== null && sMin < signupsByDate[d].startMin) signupsByDate[d].startMin = sMin;
-          if (eMin !== null && eMin > signupsByDate[d].endMin) signupsByDate[d].endMin = eMin;
-        });
-        let onTimeCount = 0;
-        records.forEach(r => {
-          if (r.status === 'No Show' || r.entry_type === 'Volunteer') return;
-          if (r.entry_type === 'All Done') { onTimeCount++; return; }
-          const entryDate = extractDateFromTimestamp(r.punch_in);
-          const punchInMin = extractTimeMinutes(r.punch_in);
-          const daySignup = entryDate ? signupsByDate[entryDate] : null;
-          if (!daySignup || daySignup.startMin === Infinity) return;
-          if (punchInMin !== null && (punchInMin - daySignup.startMin) <= gracePeriod) onTimeCount++;
-        });
-        const nonVol = records.filter(r => r.entry_type !== 'Volunteer');
-        const denom = nonVol.length - nonVol.filter(r => r.status === 'No Show').length;
-        const score = denom > 0 ? Math.round((onTimeCount / denom) * 100) : 100;
-        if (!cancelled) setAttendanceScore(score);
-      } catch (err) {
-        console.error('Dashboard attendance error:', err);
-        // Keep the last good score on a transient failure; only fall back to
-        // 100 if we have never managed to compute one.
-        if (!cancelled) setAttendanceScore(prev => (prev == null ? 100 : prev));
-      }
-      if (!cancelled) setAttLoading(false);
-    };
-    fetchAttendance();
-    // Unique channel name per mount — prevents collision when dashboard is open in two tabs
-    const unsubscribe = subscribeWithReconnect('dash-attendance', ch => ch
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_clock' }, fetchAttendance)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_signup' }, fetchAttendance)
-    , { tag: 'Dashboard', onReconnect: fetchAttendance });
-    return () => { cancelled = true; unsubscribe(); };
-  }, [profile?.email, profile?.user_id, profile?.classes]);
-
-  useEffect(() => {
     if (!profile?.email) { setAllDoneLoading(false); return undefined; }
     let cancelled = false;
     const load = async () => {
@@ -339,12 +264,8 @@ function AccountabilityMetrics({ navigate }) {
     return () => { cancelled = true; unsubscribe(); };
   }, [profile?.email]);
 
-  const isLoading = volLoading || allDoneLoading || woLoading || attLoading || wocLoading;
+  const isLoading = volLoading || allDoneLoading || woLoading || wocLoading;
   if (isLoading) return null;
-
-  const scoreColor = (v) => scoreTone(v);
-  const scoreBg = (v) => v >= 90 ? '#d3f9d8' : v >= 70 ? '#fff9db' : '#ffe3e3';
-  const score = attendanceScore ?? 100;
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -362,13 +283,6 @@ function AccountabilityMetrics({ navigate }) {
           <div className="dash-metric-value">{allDone.done ? '✓' : '—'}</div>
           <div className="dash-metric-label">All Done</div>
           <div className="dash-metric-sub">{allDone.done ? (allDone.punchedIn ? 'Done — punch out!' : `Confirmed${allDone.at ? ` ${formatFakeUtcTime(allDone.at)}` : ''}`) : 'Not yet today'}</div>
-        </button>
-        <button type="button" className="dash-metric-tile" onClick={() => navigate('/time-cards')}
-          aria-label={`Attendance: ${score} percent, ${score >= 90 ? 'on track' : score >= 70 ? 'needs improvement' : 'at risk'}`}>
-          <span className="material-icons dash-metric-icon" aria-hidden="true" style={{ color: scoreColor(score), background: scoreBg(score) }}>shield</span>
-          <div className="dash-metric-value" style={{ color: scoreColor(score) }}>{score}%</div>
-          <div className="dash-metric-label">Attendance</div>
-          <div className="dash-metric-sub">{score >= 90 ? 'On-time score' : score >= 70 ? 'Needs improvement' : 'At risk'}</div>
         </button>
         <button type="button" className="dash-metric-tile" onClick={() => navigate('/volunteer-hours')}
           aria-label={`Volunteer Hours: ${formatHoursMin(volStats.approvedHours)} of ${formatHoursMin(volStats.totalRequired)} required`}>
