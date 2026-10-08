@@ -8,7 +8,12 @@
  *   Late Submission  — student reports work turned in late: which assignment,
  *                      original due date, when it was submitted, why, their
  *                      plan, and optionally extra lab time (added to the
- *                      following week exactly like absence make-up hours)
+ *                      following week exactly like absence make-up hours).
+ *                      "Has the work been turned in yet?" → Not yet lets a
+ *                      student ask BEFORE the work is late (e.g. leaving for
+ *                      Guard duty); the date becomes the date of the request
+ *                      and lab time lands the week after the later of that
+ *                      date and the original due date.
  *
  * Instructors approve (choosing "20% Deduction" or "Waived" AND setting a new
  * due date/time for the missed/late work — default: second open lab day of
@@ -66,6 +71,8 @@ import {
   makeupWeekOf,
   makeupPastClassEnd,
   isLateSubmission,
+  isNotYetTurnedIn,
+  lateLabTimeWeekStart,
   requestTypeLabel,
   workDueState,
   fakeUtcToLocalDate,
@@ -168,6 +175,18 @@ function timeAgo(dateStr) {
   if (hrs < 24) return `${hrs}h ago`
   const days = Math.floor(hrs / 24)
   return `${days}d ago`
+}
+
+/**
+ * Date line for a Late Submission: "Submitted Tue, Oct 7, 2026", or for one
+ * filed before the work was turned in "Requested Tue, Oct 7, 2026 · not yet
+ * turned in". Text, not colour, carries the difference.
+ */
+function lateDateText(req, { lower = false } = {}) {
+  const text = isNotYetTurnedIn(req)
+    ? `Requested ${formatDate(req.absence_date)} · not yet turned in`
+    : `Submitted ${formatDate(req.absence_date)}`
+  return lower ? text.charAt(0).toLowerCase() + text.slice(1) : text
 }
 
 function todayStr() {
@@ -284,14 +303,17 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
   const [assignmentName, setAssignmentName] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [needsLabTime, setNeedsLabTime] = useState('no') // 'no' | 'yes'
+  const [turnedIn, setTurnedIn] = useState('yes') // 'yes' | 'no' — has the work been turned in?
   const [formError, setFormError] = useState('')
 
   const late = isLateSubmission(requestType)
+  const notYet = late && turnedIn === 'no'
 
   const titleId = useId()
   const errId = useId()
   const typeGroupId = useId()
   const labTimeGroupId = useId()
+  const turnedInGroupId = useId()
   const classHelpId = useId()
   const makeupNoteId = useId()
   const dateHelpId = useId()
@@ -325,6 +347,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
     setAssignmentName('')
     setDueDate('')
     setNeedsLabTime('no')
+    setTurnedIn('yes')
     setFormError('')
   }
 
@@ -357,15 +380,17 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
         return
       }
       if (!absenceDate) {
-        setFormError('Select the date the work was submitted.')
+        setFormError(notYet ? 'Select the date of this request.' : 'Select the date the work was submitted.')
         return
       }
       if (absenceDate > todayStr()) {
-        setFormError('The date submitted can\'t be in the future.')
+        setFormError(notYet ? 'The date of the request can\'t be in the future.' : 'The date submitted can\'t be in the future.')
         return
       }
-      if (absenceDate < dueDate) {
-        setFormError('The date submitted is before the original due date — this work wasn\'t late.')
+      // Only turned-in work can be "not late". A request filed ahead of time
+      // (Not yet) is allowed before the due date — that's the point of it.
+      if (!notYet && absenceDate < dueDate) {
+        setFormError('The date submitted is before the original due date — this work wasn\'t late. If it hasn\'t been turned in yet, choose "Not yet" under "Has the work been turned in yet?"')
         return
       }
       if (needsLabTime === 'yes' && !(Number(hoursMissed) > 0)) {
@@ -383,7 +408,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
       }
     }
     if (!reason.trim()) {
-      setFormError(late ? 'Explain why the work was late.' : 'A reason is required.')
+      setFormError(late ? (notYet ? 'Explain why the work will be late.' : 'Explain why the work was late.') : 'A reason is required.')
       return
     }
     if (!makeupPlan.trim()) {
@@ -418,6 +443,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
       makeupPlan,
       assignmentName: late ? assignmentName : '',
       dueDate: late ? dueDate : '',
+      workTurnedIn: !notYet,
     })
 
     if (result?.success) {
@@ -505,14 +531,14 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
                 />
                 <span>
                   <span className="block text-sm font-medium text-surface-900">Late Submission</span>
-                  <span className="block text-[11px] text-surface-500">Work turned in after the due date</span>
+                  <span className="block text-[11px] text-surface-500">Work turned in after the due date, or that will be</span>
                 </span>
               </label>
             </div>
             {/* Announce the form change to screen-reader users */}
             <p role="status" aria-live="polite" className="sr-only">
               {late
-                ? 'Late submission form: assignment name, original due date, date submitted, optional lab time, reason, and plan.'
+                ? 'Late submission form: assignment name, whether the work has been turned in yet, original due date, date submitted or date of request, optional lab time, reason, and plan.'
                 : 'Absence form: date of absence, hours missed, reason, and make-up plan.'}
             </p>
           </fieldset>
@@ -524,6 +550,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
               <p>
                 Approved requests get a new due date (default: the second lab day of the following week at lab close).
                 Work not received by that date scores 0. A 20% deduction applies unless your instructor waives it (Section 5.2).
+                If you already know an assignment will be late, you can ask before it's due.
                 Submitting does not guarantee approval.
               </p>
             ) : (
@@ -617,6 +644,47 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
                 />
               </div>
 
+              {/* Turned in yet? — "Not yet" = asking ahead of time */}
+              <fieldset>
+                <legend id={turnedInGroupId} className="block text-xs font-semibold text-surface-700 mb-2">
+                  Has the work been turned in yet? <span className="text-red-600" aria-hidden="true">*</span>
+                </legend>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby={turnedInGroupId}>
+                  <label className={typeOptionClass(turnedIn === 'yes')}>
+                    <input
+                      type="radio"
+                      name="turned-in"
+                      value="yes"
+                      checked={turnedIn === 'yes'}
+                      onChange={() => { setTurnedIn('yes'); setFormError('') }}
+                      disabled={saving}
+                      className="mt-0.5 focus-visible:ring-2 focus-visible:ring-brand-500"
+                    />
+                    <span className="text-sm font-medium text-surface-900">Yes</span>
+                  </label>
+                  <label className={typeOptionClass(turnedIn === 'no')}>
+                    <input
+                      type="radio"
+                      name="turned-in"
+                      value="no"
+                      checked={turnedIn === 'no'}
+                      onChange={() => { setTurnedIn('no'); setFormError('') }}
+                      disabled={saving}
+                      className="mt-0.5 focus-visible:ring-2 focus-visible:ring-brand-500"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-surface-900">Not yet</span>
+                      <span className="block text-[11px] text-surface-500">Asking ahead of time</span>
+                    </span>
+                  </label>
+                </div>
+                <p role="status" aria-live="polite" className="sr-only">
+                  {notYet
+                    ? 'Asking ahead of time: enter the date of this request. It can be before the original due date.'
+                    : ''}
+                </p>
+              </fieldset>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="abs-due" className="block text-xs font-semibold text-surface-700 mb-1">
@@ -636,7 +704,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
                 </div>
                 <div>
                   <label htmlFor="abs-date" className="block text-xs font-semibold text-surface-700 mb-1">
-                    Date Submitted <span className="text-red-600" aria-hidden="true">*</span>
+                    {notYet ? 'Date of Request' : 'Date Submitted'} <span className="text-red-600" aria-hidden="true">*</span>
                   </label>
                   <input
                     id="abs-date"
@@ -652,7 +720,9 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
                       focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                   />
                   <p id={dateHelpId} className="text-[11px] text-surface-400 mt-1">
-                    {absenceDate ? formatWeekLabel(mondayOf(absenceDate)) : 'When you turned it in'}
+                    {absenceDate
+                      ? formatWeekLabel(mondayOf(absenceDate))
+                      : (notYet ? 'Today, or the day you asked' : 'When you turned it in')}
                   </p>
                 </div>
               </div>
@@ -713,7 +783,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
                     {absenceDate && (
                       <MakeupWeekNote
                         id={makeupNoteId}
-                        weekStart={mondayOf(absenceDate)}
+                        weekStart={lateLabTimeWeekStart(absenceDate, dueDate, !notYet)}
                         hours={hoursMissed}
                         classEndDate={selectedClass?.end_date}
                         courseLabel={selectedClass?.course_id}
@@ -787,7 +857,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
           {/* Reason */}
           <div>
             <label htmlFor="abs-reason" className="block text-xs font-semibold text-surface-700 mb-1">
-              {late ? 'Why was it late?' : 'Reason'} <span className="text-red-600" aria-hidden="true">*</span>
+              {late ? (notYet ? 'Why will it be late?' : 'Why was it late?') : 'Reason'} <span className="text-red-600" aria-hidden="true">*</span>
             </label>
             <textarea
               id="abs-reason"
@@ -798,7 +868,7 @@ function SubmitRequestModal({ open, onClose, onSubmit, saving, canSubmitOnBehalf
               required
               aria-required="true"
               placeholder={late
-                ? 'What kept you from turning it in on time?'
+                ? (notYet ? 'What will keep you from turning it in on time?' : 'What kept you from turning it in on time?')
                 : 'Why will/did you miss the scheduled lab time?'}
               className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm resize-y
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
@@ -967,7 +1037,7 @@ function ApproveRequestModal({ open, request, onClose, onConfirm, saving, fetchD
             </h2>
             <p className="text-xs text-surface-400">
               {request.user_name} — {late
-                ? `"${request.assignment_name}" submitted ${formatDate(request.absence_date)}`
+                ? `"${request.assignment_name}" ${lateDateText(request, { lower: true })}`
                 : formatDate(request.absence_date)} ({request.request_id})
             </p>
           </div>
@@ -1392,7 +1462,7 @@ function RequestCard({
           )}
           <span className="flex items-center gap-1">
             <Calendar size={11} className="text-surface-400" aria-hidden="true" />
-            {late ? `Submitted ${formatDate(req.absence_date)}` : formatDate(req.absence_date)}
+            {late ? lateDateText(req) : formatDate(req.absence_date)}
           </span>
           <span className="flex items-center gap-1">
             <Clock size={11} className="text-surface-400" aria-hidden="true" />
@@ -2022,7 +2092,7 @@ export default function AbsenceRequestPage() {
         title={`Reject ${rejectTarget ? requestTypeLabel(rejectTarget, { capitalize: true }) : 'Absence'} Request`}
         subtitle={rejectTarget
           ? isLateSubmission(rejectTarget)
-            ? `${rejectTarget.user_name || rejectTarget.user_email} — "${rejectTarget.assignment_name}" submitted ${formatDate(rejectTarget.absence_date)}`
+            ? `${rejectTarget.user_name || rejectTarget.user_email} — "${rejectTarget.assignment_name}" ${lateDateText(rejectTarget, { lower: true })}`
             : `${rejectTarget.user_name || rejectTarget.user_email} — absence on ${formatDate(rejectTarget.absence_date)}`
           : ''
         }

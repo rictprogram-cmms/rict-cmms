@@ -5,9 +5,12 @@
  * Policy Section 4.1–4.3 and 5.2). Two request types share one table:
  *
  *   'Absence'          — student missed lab time; hours_missed > 0 required
- *   'Late Submission'  — work was turned in late; assignment_name + due_date
- *                        required, hours_missed = ADDITIONAL LAB HOURS
- *                        REQUESTED (0 allowed)
+ *   'Late Submission'  — work that is (or will be) late; assignment_name +
+ *                        due_date required, hours_missed = ADDITIONAL LAB
+ *                        HOURS REQUESTED (0 allowed). work_turned_in = false
+ *                        when the student asks before turning the work in
+ *                        (e.g. leaving for Guard duty); absence_date is then
+ *                        the date of the request, not a submission date.
  *
  * Students (or instructors on their behalf) submit with a plan; instructors
  * approve (choosing the deduction outcome AND a new due date/time for the
@@ -32,7 +35,8 @@
  *                                   (dual-format course_id / class_id matching)
  *   useAbsenceStudentOptions()    — active non-instructor profiles for the
  *                                   instructor "submit on behalf" picker
- *   REQUEST_TYPES, isLateSubmission, requestTypeLabel
+ *   REQUEST_TYPES, isLateSubmission, requestTypeLabel,
+ *   isNotYetTurnedIn, lateLabTimeWeekStart
  *   workDueState, fakeUtcToLocalDate, formatDueAt,
  *   toDatetimeLocalValue, datetimeLocalToFakeUtc, ordinal
  *   mondayOf, makeupWeekOf, makeupPastClassEnd
@@ -66,6 +70,36 @@ export const REQUEST_TYPES = ['Absence', 'Late Submission']
 export function isLateSubmission(requestOrType) {
   const t = typeof requestOrType === 'string' ? requestOrType : requestOrType?.request_type
   return t === 'Late Submission'
+}
+
+/**
+ * True for a Late Submission filed before the work was turned in.
+ * Uses the work_turned_in flag; if the column isn't there yet (migration
+ * 20261007 not run) it infers from the dates — a request dated before the
+ * original due date can only have been filed in advance, because the form
+ * has always refused that combination for turned-in work.
+ */
+export function isNotYetTurnedIn(request) {
+  if (!isLateSubmission(request)) return false
+  if (request?.work_turned_in === false) return true
+  if (request?.work_turned_in === true) return false
+  const a = String(request?.absence_date || '').substring(0, 10)
+  const d = String(request?.due_date || '').substring(0, 10)
+  return !!(a && d && a < d)
+}
+
+/**
+ * week_start for a Late Submission. Turned-in work: the week it was turned
+ * in (unchanged). Not yet turned in: the week of whichever is later — the
+ * request date or the original due date — so a request filed weeks ahead
+ * gets its lab time (and default new due date) the week after the work was
+ * due, not the week after it was asked about.
+ */
+export function lateLabTimeWeekStart(requestDate, dueDate, workTurnedIn = true) {
+  const r = String(requestDate || '').substring(0, 10)
+  const d = String(dueDate || '').substring(0, 10)
+  const anchor = !workTurnedIn && d && d > r ? d : r
+  return mondayOf(anchor)
 }
 
 /** Short noun for messages: "absence" / "late submission". */
@@ -455,22 +489,29 @@ export function useAbsenceRequests({ enabled = true } = {}) {
    * @param {string} p.courseId        course_id (RICTxxxx) — may be ''
    * @param {string} p.absenceDate     'YYYY-MM-DD' — absence date, or for a
    *                                   late submission the date it was turned in
+   *                                   (or the date of the request when
+   *                                   workTurnedIn is false)
    * @param {number} p.hoursMissed     absence: hours missed (> 0 required);
    *                                   late: additional lab hours requested (≥ 0)
    * @param {string} p.reason          why absent / why late
    * @param {string} p.makeupPlan      the student's plan
    * @param {string} [p.assignmentName] late only — required
    * @param {string} [p.dueDate]       late only — 'YYYY-MM-DD', required
+   * @param {boolean} [p.workTurnedIn] late only — false when asking before the
+   *                                   work is turned in (default true)
    */
   const submitRequest = useCallback(async ({
     student, requestType = 'Absence', classId, courseId, absenceDate, hoursMissed,
-    reason, makeupPlan, assignmentName, dueDate,
+    reason, makeupPlan, assignmentName, dueDate, workTurnedIn = true,
   }) => {
     if (!profile?.email) return { success: false, message: 'Not signed in.' }
     if (!student?.user_email) return { success: false, message: 'Missing student.' }
     if (!REQUEST_TYPES.includes(requestType)) return { success: false, message: 'Invalid request type.' }
     const late = isLateSubmission(requestType)
-    if (!absenceDate) return { success: false, message: late ? 'Missing date submitted.' : 'Missing absence date.' }
+    const turnedIn = late ? workTurnedIn !== false : true
+    if (!absenceDate) {
+      return { success: false, message: late ? (turnedIn ? 'Missing date submitted.' : 'Missing date of request.') : 'Missing absence date.' }
+    }
     if (!reason?.trim()) return { success: false, message: 'A reason is required.' }
     if (!makeupPlan?.trim()) return { success: false, message: 'A plan is required.' }
     const hrs = Number(hoursMissed) || 0
@@ -482,7 +523,9 @@ export function useAbsenceRequests({ enabled = true } = {}) {
       return { success: false, message: 'Hours missed is required (greater than 0).' }
     }
 
-    const weekStart = mondayOf(absenceDate)
+    const weekStart = late
+      ? lateLabTimeWeekStart(absenceDate, dueDate, turnedIn)
+      : mondayOf(absenceDate)
     if (!weekStart) return { success: false, message: 'Invalid date.' }
 
     setSaving(true)
@@ -505,16 +548,31 @@ export function useAbsenceRequests({ enabled = true } = {}) {
         makeup_plan: makeupPlan.trim(),
         assignment_name: late ? assignmentName.trim() : null,
         due_date: late ? dueDate : null,
+        // Only sent for "not yet turned in" so that until the 20261007
+        // migration runs, every ordinary request inserts exactly as before.
+        ...(late && !turnedIn ? { work_turned_in: false } : {}),
         status: 'Pending',
         submitted_by_email: profile.email.toLowerCase(),
         submitted_by_name: fullNameFrom(profile),
         created_at: localToUtcIso(new Date()),
       }
 
-      const { data: inserted, error: insErr } = await supabase
+      let { data: inserted, error: insErr } = await supabase
         .from('absence_requests')
         .insert(row)
         .select()
+      // Migration not run yet → PostgREST doesn't know work_turned_in.
+      // Retry without it; the page infers "not yet turned in" from the dates.
+      if (insErr && 'work_turned_in' in row &&
+          (insErr.code === 'PGRST204' || insErr.code === '42703' ||
+           String(insErr.message || '').includes('work_turned_in'))) {
+        console.warn('absence_requests.work_turned_in missing — run 20261007_absence_work_turned_in.sql', insErr.message)
+        delete row.work_turned_in
+        ;({ data: inserted, error: insErr } = await supabase
+          .from('absence_requests')
+          .insert(row)
+          .select())
+      }
       if (insErr) {
         // 23505 = unique violation — one retry with a fresh ID
         if (insErr.code === '23505') {
@@ -534,7 +592,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
       }
 
       const what = late
-        ? `late submission of "${row.assignment_name}" (due ${dueDate}, submitted ${absenceDate}${hrs > 0 ? `, ${hrs} lab hr requested` : ''})`
+        ? `late submission of "${row.assignment_name}" (due ${dueDate}, ${turnedIn ? `submitted ${absenceDate}` : `not yet turned in, requested ${absenceDate}`}${hrs > 0 ? `, ${hrs} lab hr requested` : ''})`
         : `absence on ${absenceDate}`
       await writeAudit(
         profile,
