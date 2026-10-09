@@ -2184,22 +2184,25 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
 
       const emails = targetStudents.map(s => s.email)
 
-      // Batch fetch: all volunteer time_clock entries for target students
+      // Batch fetch: all volunteer AND Club Activity time_clock entries for target
+      // students. (Before 2026-10-08 only 'Volunteer' was loaded, so Club rows were
+      // missing from the printout even though the totals above included them.)
       const tcData = mustData(await supabase
         .from('time_clock')
         .select('*')
         .in('user_email', emails)
-        .eq('entry_type', 'Volunteer')
+        .in('entry_type', ['Volunteer', 'Club Activity'])
         .gte('punch_in', semStart + 'T00:00:00')
         .lte('punch_in', semEnd + 'T23:59:59')
         .order('punch_in', { ascending: false }), 'time_clock.select')
 
-      // Batch fetch: all pending/approved manual volunteer requests for target students
+      // Batch fetch: manual volunteer + Club Activity requests for target students
+      // (same filter the Volunteer Hours summary uses)
       const reqData = mustData(await supabase
         .from('time_entry_requests')
         .select('*')
         .in('user_email', emails)
-        .or('entry_type.eq.Volunteer,class_id.eq.VOLUNTEER')
+        .or('entry_type.eq.Volunteer,entry_type.eq.Club Activity,class_id.eq.VOLUNTEER,class_id.eq.CLUB_ACTIVITY')
         .order('created_at', { ascending: false }), 'time_entry_requests.select')
 
       // Build per-email entry maps
@@ -2207,7 +2210,13 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
       const reqByEmail = {}
       emails.forEach(e => { tcByEmail[e] = []; reqByEmail[e] = [] })
       ;(tcData || []).forEach(r => { if (tcByEmail[r.user_email]) tcByEmail[r.user_email].push(r) })
-      ;(reqData || []).filter(r => r.entry_type !== 'Edit').forEach(r => { if (reqByEmail[r.user_email]) reqByEmail[r.user_email].push(r) })
+      // Requests contribute only Pending / Rejected rows. An APPROVED request
+      // already has its own time_clock entry (loaded above), so listing it too
+      // printed it twice and doubled it in the table total — the main page
+      // never did that. (2026-10-08)
+      ;(reqData || [])
+        .filter(r => r.entry_type !== 'Edit' && r.status !== 'Approved')
+        .forEach(r => { if (reqByEmail[r.user_email]) reqByEmail[r.user_email].push(r) })
 
       // Build student report objects
       const studentReports = targetStudents.map((s, i) => {
@@ -2676,7 +2685,7 @@ function VolunteerReportView({ reportData, onClose }) {
                       <td className="px-3 py-2 text-right font-bold text-surface-800 text-xs"><LogHours entry={e} /></td>
                       <td className="px-3 py-2 text-xs">
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium print:border ${
-                          e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' : 'bg-purple-50 text-purple-700'
+                          e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' : e.source === 'Club Activity' ? 'bg-orange-50 text-orange-700' : 'bg-purple-50 text-purple-700'
                         }`}>
                           {e.source}
                         </span>
