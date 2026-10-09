@@ -2272,6 +2272,32 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
   const totalEarly = students.reduce((s, st) => s + st.earlyCount, 0)
   const totalWalkIns = students.reduce((s, st) => s + st.walkInCount, 0)
 
+  // ── Time-on-lab averages ──
+  // Students with no time logged are left out so an absence doesn't drag the
+  // average toward zero; they're counted separately in the footer text.
+  const timeStats = useMemo(() => {
+    const hrs = (s) => Number(s.totalHours) || 0
+    const logged = students.filter(s => hrs(s) > 0).map(hrs).sort((a, b) => a - b)
+    const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+    const median = logged.length === 0 ? 0
+      : logged.length % 2 ? logged[(logged.length - 1) / 2]
+      : (logged[logged.length / 2 - 1] + logged[logged.length / 2]) / 2
+    // Signed off All Done = instructor confirmed the lab was finished
+    const allDone = students.filter(s => s.weekClosed && hrs(s) > 0).map(hrs)
+    const required = students.map(s => Number(s.requiredHours) || 0)
+    return {
+      count: logged.length,
+      noTime: students.length - logged.length,
+      avg: avg(logged),
+      median,
+      min: logged[0] || 0,
+      max: logged[logged.length - 1] || 0,
+      allDoneCount: allDone.length,
+      allDoneAvg: avg(allDone),
+      avgRequired: avg(required),
+    }
+  }, [students])
+
   return (
     <div>
       <div className="text-center mb-6 pb-4 border-b-2 border-surface-100">
@@ -2344,7 +2370,47 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                 </tr>
               ))}
             </tbody>
+            {timeStats.count > 0 && (
+              <tfoot className="print:[display:table-row-group]">
+                <tr className="border-t-2 border-surface-200 bg-surface-50">
+                  <th scope="row" colSpan={2} className="px-3 py-3 text-left text-xs font-semibold text-surface-600 uppercase">Class average</th>
+                  <td className="px-3 py-3 text-right font-bold text-surface-900">
+                    {formatHours(timeStats.avg)}
+                    <span className="sr-only"> average hours</span>
+                  </td>
+                  <td className="px-3 py-3 text-right text-surface-500">
+                    {formatHours(timeStats.avgRequired)}
+                    <span className="sr-only"> average required</span>
+                  </td>
+                  <td colSpan={4} className="px-3 py-3 text-xs text-surface-500">
+                    {timeStats.count} of {totalStudents} student{totalStudents === 1 ? '' : 's'} with time logged
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
+          <div className="mt-3 px-3 text-xs text-surface-600 space-y-1" aria-live="polite">
+            {timeStats.count > 0 ? (
+              <>
+                <p>
+                  <Clock size={12} className="inline -mt-0.5 mr-1 text-surface-400" aria-hidden="true" />
+                  <span className="font-semibold text-surface-700">Average {formatHours(timeStats.avg)}</span>
+                  {' · '}Median {formatHours(timeStats.median)}
+                  {' · '}Range {formatHours(timeStats.min)} – {formatHours(timeStats.max)}
+                  {timeStats.noTime > 0 && <> · {timeStats.noTime} student{timeStats.noTime === 1 ? '' : 's'} with no time left out</>}
+                </p>
+                {timeStats.allDoneCount > 0 && (
+                  <p>
+                    <BadgeCheck size={12} className="inline -mt-0.5 mr-1 text-emerald-600" aria-hidden="true" />
+                    <span className="font-semibold text-emerald-800">Signed off All Done: {formatHours(timeStats.allDoneAvg)} average</span>
+                    {' '}({timeStats.allDoneCount} student{timeStats.allDoneCount === 1 ? '' : 's'}) — time taken by students who finished the lab
+                  </p>
+                )}
+              </>
+            ) : (
+              <p>No time logged for this class this week, so there is no average yet.</p>
+            )}
+          </div>
         </div>
       )}
     </div>
