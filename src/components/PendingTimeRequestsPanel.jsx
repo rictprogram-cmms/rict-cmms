@@ -163,6 +163,11 @@ export default function PendingTimeRequestsPanel({ actions }) {
             const isProcessing = processingId === req.request_id
             const isNew = req.entry_type === 'New'
             const isEdit = req.entry_type === 'Edit'
+            // Club Activity / Volunteer requests come from the Volunteer Hours page
+            // (they used to show as "Edit")
+            const isClub = req.entry_type === 'Club Activity' || req.class_id === 'CLUB_ACTIVITY'
+            const isVolunteer = !isClub && (req.entry_type === 'Volunteer' || req.class_id === 'VOLUNTEER')
+            const typeLabel = isClub ? 'Club Activity' : isVolunteer ? 'Volunteer' : isNew ? 'New Entry' : 'Edit'
 
             return (
               <div
@@ -185,13 +190,17 @@ export default function PendingTimeRequestsPanel({ actions }) {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span
                       className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                        isNew
-                          ? 'bg-blue-100 text-blue-700'
-                          : 'bg-purple-100 text-purple-700'
+                        isClub
+                          ? 'bg-orange-100 text-orange-800'
+                          : isVolunteer
+                            ? 'bg-pink-100 text-pink-800'
+                            : isNew
+                              ? 'bg-blue-100 text-blue-700'
+                              : 'bg-purple-100 text-purple-700'
                       }`}
-                      aria-label={`Request type: ${req.entry_type}`}
+                      aria-label={`Request type: ${typeLabel}`}
                     >
-                      {isNew ? 'New Entry' : 'Edit'}
+                      {typeLabel}
                     </span>
                     <span className="text-[10px] text-surface-400" title={req.created_at}>
                       {timeAgo(req.created_at)}

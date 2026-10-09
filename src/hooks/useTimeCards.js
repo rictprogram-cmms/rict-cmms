@@ -2247,7 +2247,15 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     if (!canEdit) { toast.error('Not authorized'); return }
     setSaving(true)
     try {
-      if (request.entry_type === 'New') {
+      // Club Activity and Volunteer requests (Volunteer Hours page) are NEW
+      // entries too. Before 2026-10-08 only entry_type 'New' created a
+      // time_clock row here, so approving a Club / Volunteer request on Time
+      // Cards just flipped it to Approved and the hours were never credited.
+      const isClubReq = request.entry_type === 'Club Activity' || request.class_id === 'CLUB_ACTIVITY'
+      const isVolunteerReq = !isClubReq && (request.entry_type === 'Volunteer' || request.class_id === 'VOLUNTEER')
+      let createdRecordId = null
+
+      if (request.entry_type === 'New' || isClubReq || isVolunteerReq) {
         // ── NEW request: create a time_clock entry from the request data ──
         const reqUser = mustData(await supabase
           .from('profiles')
@@ -2263,10 +2271,14 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
         const piDate = new Date(piStr)
         const poDate = poStr ? new Date(poStr) : null
-        const totalHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
+        const clockHours = poDate ? roundToMinute((poDate - piDate) / 3600000) : 0
+        // Club Activity credits 0.25 h per clock hour (the time_clock_club_credit
+        // trigger enforces the same rule)
+        const totalHours = isClubReq ? roundToMinute(clockHours * 0.25) : clockHours
 
         // Generate next TC record_id via shared collision-safe helper.
         const recordId = await generateSafeTcId()
+        createdRecordId = recordId
 
         // Compute week_start (Monday) using UTC (local-as-UTC convention)
         const day = piDate.getUTCDay()
@@ -2291,6 +2303,16 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
             total_hours: totalHours,
             status: poDate ? 'Punched Out' : 'Punched In',
             week_start: weekStart,
+            // Club / Volunteer rows need their type and an Approved status, or
+            // Volunteer Hours (which reads entry_type + approval_status) never
+            // counts them. Same fields the notification-bell approval writes.
+            ...((isClubReq || isVolunteerReq) && {
+              entry_type: isClubReq ? 'Club Activity' : 'Volunteer',
+              description: request.reason || '',
+              approval_status: 'Approved',
+              approved_by: userName,
+              approved_date: new Date().toISOString(),
+            }),
           }).select(),
       'time_clock.insert'
     )
@@ -2347,6 +2369,8 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
             status: 'Approved',
             reviewed_by: userName,
             review_date: new Date().toISOString(),
+            // Link the Club / Volunteer entry we just created (as the bell does)
+            ...((isClubReq || isVolunteerReq) && createdRecordId && { time_clock_record_id: createdRecordId }),
           })
           .eq('request_id', request.request_id).select(),
       'time_entry_requests.update'

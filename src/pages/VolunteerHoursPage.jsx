@@ -97,6 +97,40 @@ function roundToMinute(h) {
 const CLUB_CREDIT_RATE = 0.25
 const creditFor = (clockHours, isClub) => (isClub ? roundToMinute(clockHours * CLUB_CREDIT_RATE) : clockHours)
 
+/** Hours on the clock between two fake-UTC timestamps (null when open/invalid). */
+function clockHoursFromISO(pi, po) {
+  if (!pi || !po) return null
+  const h = (new Date(po) - new Date(pi)) / 3600000
+  return Number.isFinite(h) && h > 0 ? roundToMinute(h) : null
+}
+
+/** Hours on the clock between two 'HH:MM[:SS]' times on one day (null when invalid). */
+function clockHoursFromTimes(start, end) {
+  if (!start || !end) return null
+  const toMin = t => { const [h, m] = String(t).split(':'); return parseInt(h, 10) * 60 + parseInt(m || '0', 10) }
+  const h = (toMin(end) - toMin(start)) / 60
+  return Number.isFinite(h) && h > 0 ? roundToMinute(h) : null
+}
+
+/**
+ * Hours cell for the volunteer logs. Club Activity rows show the credited
+ * amount with the time on the clock underneath ("46m · credited · 3h 3m on
+ * clock") so a long Club punch is obvious at a glance. Other rows unchanged.
+ */
+function LogHours({ entry, className = '' }) {
+  const showClock = entry.isClubActivity && entry.clockHours > 0
+  if (!showClock) return <span className={className}>{fmtHoursMin(entry.hours)}</span>
+  return (
+    <span className={className}>
+      <span aria-hidden="true">{fmtHoursMin(entry.hours)}</span>
+      <span aria-hidden="true" className="block text-[11px] font-normal text-surface-500 whitespace-nowrap">
+        credited · {fmtHoursMin(entry.clockHours)} on clock
+      </span>
+      <span className="sr-only">{fmtHoursMin(entry.hours)} credited, {fmtHoursMin(entry.clockHours)} on the clock</span>
+    </span>
+  )
+}
+
 /** Format decimal hours as "Xh Ym" (rounds to nearest minute first) */
 function fmtHoursMin(h) {
   const totalMins = Math.round((h || 0) * 60)
@@ -245,6 +279,7 @@ function StudentView() {
         source: isClub ? 'Club Activity' : 'Time Clock',
         timeIn: fmtTimeFromISO(e.punch_in),
         timeOut: fmtTimeFromISO(e.punch_out),
+        clockHours: clockHoursFromISO(e.punch_in, e.punch_out),
         approvedBy: e.approved_by || 'Time Clock',
         description: e.description || '',
         hasPendingEdit: pendingEditRecordIds.has(e.record_id),
@@ -263,6 +298,7 @@ function StudentView() {
         source: isClub ? 'Club Activity' : 'Manual Entry',
         timeIn: fmtTime(e.start_time),
         timeOut: fmtTime(e.end_time),
+        clockHours: clockHoursFromTimes(e.start_time, e.end_time),
         approvedBy: '',
         description: e.reason || '',
         hasPendingEdit: false,
@@ -281,6 +317,7 @@ function StudentView() {
         source: isClub ? 'Club Activity' : 'Manual Entry',
         timeIn: fmtTime(e.start_time),
         timeOut: fmtTime(e.end_time),
+        clockHours: clockHoursFromTimes(e.start_time, e.end_time),
         approvedBy: e.reviewed_by || '',
         description: e.reason || '',
         rejectionReason: e.rejection_reason || '',
@@ -496,7 +533,7 @@ function StudentView() {
                   <tr key={e.id} className="hover:bg-surface-50 transition-colors">
                     <td className="px-4 py-2.5 text-surface-800 whitespace-nowrap">{fmtDate(e.date)}</td>
                     <td className="px-4 py-2.5 text-surface-600 whitespace-nowrap">{e.timeIn} – {e.timeOut}</td>
-                    <td className="px-4 py-2.5 text-right font-medium text-surface-800">{fmtHoursMin(e.hours)}</td>
+                    <td className="px-4 py-2.5 text-right font-medium text-surface-800"><LogHours entry={e} /></td>
                     <td className="px-4 py-2.5">
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' :
@@ -1282,6 +1319,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
       source: isClub ? 'Club Activity' : 'Time Clock',
       timeIn: fmtTimeFromISO(e.punch_in),
       timeOut: fmtTimeFromISO(e.punch_out),
+      clockHours: clockHoursFromISO(e.punch_in, e.punch_out),
       description: e.description || '',
       approvedBy: e.approved_by || '',
       dateInput: isoToDateInput(e.punch_in),
@@ -1304,6 +1342,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
       source: isClub ? 'Club Activity' : 'Manual Entry',
       timeIn: fmtTime(e.start_time),
       timeOut: fmtTime(e.end_time),
+      clockHours: clockHoursFromTimes(e.start_time, e.end_time),
       description: e.reason || '',
       approvedBy: e.reviewed_by || '',
       dateInput: e.requested_date || '',
@@ -1390,7 +1429,7 @@ function StudentDetailPanel({ studentEmail, studentName }) {
               <tr key={e.id} className={`hover:bg-white ${e.hasPendingEdit ? 'bg-orange-50/40' : ''}`}>
                 <td className="px-3 py-1.5 text-surface-700 whitespace-nowrap">{fmtDate(e.date)}</td>
                 <td className="px-3 py-1.5 text-surface-600 whitespace-nowrap">{e.timeIn} – {e.timeOut}</td>
-                <td className="px-3 py-1.5 text-right font-medium text-surface-800">{fmtHoursMin(e.hours)}</td>
+                <td className="px-3 py-1.5 text-right font-medium text-surface-800"><LogHours entry={e} /></td>
                 <td className="px-3 py-1.5">
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
                     e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' :
@@ -2181,9 +2220,11 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
           date: e.punch_in,
           hours: parseFloat(e.total_hours) || 0,
           status: e.approval_status || 'Approved',
-          source: 'Time Clock',
+          isClubActivity: e.entry_type === 'Club Activity' || e.class_id === 'CLUB_ACTIVITY',
+          source: (e.entry_type === 'Club Activity' || e.class_id === 'CLUB_ACTIVITY') ? 'Club Activity' : 'Time Clock',
           timeIn: fmtTimeFromISO(e.punch_in),
           timeOut: fmtTimeFromISO(e.punch_out),
+          clockHours: clockHoursFromISO(e.punch_in, e.punch_out),
           description: e.description || '',
           approvedBy: e.approved_by || 'Time Clock',
         }))
@@ -2193,9 +2234,11 @@ function VolunteerReportModal({ students, settings, summary, onClose, onGenerate
           date: e.requested_date || e.created_at,
           hours: parseFloat(e.total_hours) || 0,
           status: e.status || 'Pending',
-          source: 'Manual Entry',
+          isClubActivity: e.entry_type === 'Club Activity' || e.class_id === 'CLUB_ACTIVITY',
+          source: (e.entry_type === 'Club Activity' || e.class_id === 'CLUB_ACTIVITY') ? 'Club Activity' : 'Manual Entry',
           timeIn: fmtTime(e.start_time),
           timeOut: fmtTime(e.end_time),
+          clockHours: clockHoursFromTimes(e.start_time, e.end_time),
           description: e.reason || '',
           approvedBy: e.reviewed_by || '',
           rejectionReason: e.rejection_reason || '',
@@ -2630,7 +2673,7 @@ function VolunteerReportView({ reportData, onClose }) {
                     <tr key={e.id} className="hover:bg-surface-50">
                       <td className="px-3 py-2 text-surface-700 whitespace-nowrap text-xs">{fmtDate(e.date)}</td>
                       <td className="px-3 py-2 text-surface-600 whitespace-nowrap text-xs">{e.timeIn} – {e.timeOut}</td>
-                      <td className="px-3 py-2 text-right font-bold text-surface-800 text-xs">{fmtHoursMin(e.hours)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-surface-800 text-xs"><LogHours entry={e} /></td>
                       <td className="px-3 py-2 text-xs">
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium print:border ${
                           e.source === 'Time Clock' ? 'bg-blue-50 text-blue-700' : 'bg-purple-50 text-purple-700'
