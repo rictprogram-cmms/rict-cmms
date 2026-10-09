@@ -5,8 +5,9 @@
  * - Individual Time Card tab (student sees own, instructor picks any)
  * - Class Weekly Report tab (instructor only)
  * - GB Items tab (instructor only) — end-of-class gradebook export:
- *     Attendance %, WOC Ratio, Volunteer Hours per student over the
- *     class start_date → end_date window (finals week excluded)
+ *     Attendance %, On Track % (weeks elapsed so far), WOC Ratio, Volunteer
+ *     Hours per student over the class start_date → end_date window
+ *     (finals week excluded)
  * - Week navigation + date range picker
  * - Class summary cards (hours vs required)
  * - Attendance analysis:
@@ -521,6 +522,9 @@ export default function TimeCardsPage() {
 
       // 6. Per-student attendance via generateUserReport (reuses the same
       //    cross-class All Done propagation logic the rest of the report uses).
+      //    "On Track %" is derived from the same per-week scores, counting only
+      //    the weeks that have elapsed as of today (see computeGBOnTrack).
+      const asOfDate = toDateStr(new Date())
       const studentRows = []
       for (let i = 0; i < enrolledStudents.length; i++) {
         const s = enrolledStudents[i]
@@ -529,6 +533,7 @@ export default function TimeCardsPage() {
           const r = await generateUserReport(s, startDate, endDate, gracePeriod, classesData)
           const cr = (r.classReports || []).find(x => x.courseId === courseId)
           const attendanceScore = cr ? cr.attendance.attendanceScore : null
+          const onTrack = computeGBOnTrack(cr ? cr.weeklyBreakdown : [], asOfDate)
           const totalHours = cr ? cr.totalHours : 0
           const requiredTotal = cr ? cr.totalRequiredHours : 0
           const woc = wocByEmail.get((s.email || '').toLowerCase().trim())
@@ -538,6 +543,9 @@ export default function TimeCardsPage() {
             email: s.email || '',
             role: s.role || '',
             attendanceScore,
+            onTrackScore: cr ? onTrack.score : null,
+            onTrackWeeks: onTrack.weeksCounted,
+            onTrackTotalWeeks: onTrack.totalWeeks,
             totalHours: Math.round(totalHours * 100) / 100,
             requiredTotal: Math.round(requiredTotal * 100) / 100,
             wocScore: woc ? woc.score : null,
@@ -551,6 +559,9 @@ export default function TimeCardsPage() {
             email: s.email || '',
             role: s.role || '',
             attendanceScore: null,
+            onTrackScore: null,
+            onTrackWeeks: 0,
+            onTrackTotalWeeks: 0,
             totalHours: 0,
             requiredTotal: 0,
             wocScore: null,
@@ -564,6 +575,7 @@ export default function TimeCardsPage() {
         classConfig: gbClassConfig,
         dateRange: { start: startDate, end: endDate },
         volunteerWindow: { start: volSemStart, end: volSemEnd },
+        asOfDate,
         students: studentRows,
         generatedAt: new Date().toISOString(),
       })
@@ -2769,11 +2781,38 @@ function ModalOverlay({ children, onClose, zIndex = 'z-50', labelledBy }) {
 // @/components/ui — see the import at the top of this file.
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GB ITEMS — Gradebook export view (Attendance %, WOC Ratio, Volunteer Hours)
+// GB ITEMS — Gradebook export view (Attendance %, On Track %, WOC Ratio,
+// Volunteer Hours)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// "On Track %" — the same per-week attendance scores as Attendance %, but
+// averaged over only the weeks that have elapsed as of `asOfDate` (YYYY-MM-DD,
+// local). Attendance % averages every week in the class window, so mid-term a
+// perfect student reads e.g. 7/8 = 88%; On Track % reads 100% on any day.
+//
+// A week is counted when it has started AND either:
+//   • its end date has passed (the week is over), or
+//   • the student has already closed it — hours met, All Done, or
+//     required_hours_met — so a finished current week counts right away.
+// A current week the student hasn't finished yet is left out (not penalized
+// until it actually ends). Weeks that haven't started are never counted — the
+// start-date guard matters because a zero-requirement week reports metHours
+// as true before it is even reached.
+function computeGBOnTrack(weeklyBreakdown, asOfDate) {
+  const weeks = Array.isArray(weeklyBreakdown) ? weeklyBreakdown : []
+  const counted = weeks.filter(w =>
+    w.startDate && w.startDate <= asOfDate && (
+      (w.endDate && w.endDate < asOfDate) || w.metHours || w.allDone || w.requiredHoursMet
+    )
+  )
+  const score = counted.length > 0
+    ? Math.round(counted.reduce((sum, w) => sum + (w.attendance?.attendanceScore || 0), 0) / counted.length)
+    : null
+  return { score, weeksCounted: counted.length, totalWeeks: weeks.length }
+}
+
 function GBItemsContent({ reportData }) {
-  const { classConfig, dateRange, volunteerWindow, students, generatedAt } = reportData
+  const { classConfig, dateRange, volunteerWindow, students, generatedAt, asOfDate } = reportData
 
   const formatDateLocal = (s) => {
     if (!s) return '—'
@@ -2815,6 +2854,11 @@ function GBItemsContent({ reportData }) {
               <span className="ml-2 text-surface-400">(finals week excluded)</span>
             )}
           </p>
+          {asOfDate && (
+            <p className="text-xs text-surface-500 mt-0.5">
+              On Track % counts weeks elapsed as of {formatDateLocal(asOfDate)}
+            </p>
+          )}
         </div>
         <div className="text-right">
           <p className="text-[11px] text-surface-400">Generated</p>
@@ -2833,8 +2877,9 @@ function GBItemsContent({ reportData }) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <caption className="sr-only">
-                Gradebook Items for {classConfig.course_id}: Attendance percentage,
-                WOC Ratio score, and Volunteer hours per student over the class window
+                Gradebook Items for {classConfig.course_id}: Attendance percentage over
+                the full class window, On Track percentage over the weeks elapsed so far,
+                WOC Ratio score, and Volunteer hours per student
                 {finalsExcluded ? ' (finals week excluded)' : ''}.
               </caption>
               <thead className="bg-surface-50 border-b-2 border-surface-200">
@@ -2847,6 +2892,9 @@ function GBItemsContent({ reportData }) {
                   </th>
                   <th scope="col" className="px-4 py-2 text-right text-xs font-semibold text-surface-600 uppercase tracking-wider">
                     Attendance %
+                  </th>
+                  <th scope="col" className="px-4 py-2 text-right text-xs font-semibold text-surface-600 uppercase tracking-wider">
+                    On Track %
                   </th>
                   <th scope="col" className="px-4 py-2 text-right text-xs font-semibold text-surface-600 uppercase tracking-wider">
                     WOC Ratio
@@ -2878,6 +2926,20 @@ function GBItemsContent({ reportData }) {
                       )}
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums">
+                      {s.onTrackScore == null ? (
+                        <span className="text-surface-400">—</span>
+                      ) : (
+                        <>
+                          <span className={scoreTone(s.onTrackScore)}>
+                            {s.onTrackScore}%
+                          </span>
+                          <span className="block text-[10px] text-surface-400 leading-tight">
+                            {s.onTrackWeeks} of {s.onTrackTotalWeeks} wks
+                          </span>
+                        </>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums">
                       {s.wocScore == null ? (
                         <span className="text-surface-400">—</span>
                       ) : (
@@ -2899,7 +2961,14 @@ function GBItemsContent({ reportData }) {
             <strong className="not-italic font-semibold text-surface-600">Attendance %</strong> uses the same on-time score as the per-class report
             (factors in Late, Left Early, and No Show penalties; Left Early is waived once the
             week's required hours are met; weeks closed by an All Done are scored as 100% across
-            every enrolled class), computed over the class window.
+            every enrolled class), computed over the class window. Weeks that haven't
+            happened yet score 0, so mid-term this can only reach 100% once the last week ends.
+            <br />
+            <strong className="not-italic font-semibold text-surface-600">On Track %</strong> is the same per-week score averaged over
+            only the weeks elapsed so far (a week counts once it has ended, or sooner once the
+            student has met its hours or received an All Done). A student who has been on
+            track every week reads 100% on any day of the term; the “N of M wks” note shows
+            how many weeks are counted. Once the class ends it matches Attendance %.
             <br />
             <strong className="not-italic font-semibold text-surface-600">WOC Ratio</strong> uses the standard scoring shown on the WOC Ratio page,
             applied to the class window.
@@ -2927,7 +2996,7 @@ function GBItemsContent({ reportData }) {
 // a comma, quote, or newline gets wrapped in quotes with internal quotes
 // doubled. Excel-friendly.
 function exportGBToCsv(reportData) {
-  const { classConfig, students, dateRange, volunteerWindow, generatedAt } = reportData
+  const { classConfig, students, dateRange, volunteerWindow, generatedAt, asOfDate } = reportData
   const rows = [
     ['RICT CMMS — Gradebook Items'],
     ['Class', classConfig.course_id],
@@ -2937,14 +3006,18 @@ function exportGBToCsv(reportData) {
     ['End Date', dateRange.end || ''],
     ['Finals Excluded', classConfig.finals_start ? 'Yes' : 'No'],
     ['Volunteer Hours Window', volunteerWindow ? `${volunteerWindow.start} to ${volunteerWindow.end}` : '(class window)'],
+    ['On Track As Of', asOfDate || ''],
     ['Generated', generatedAt || ''],
     [],
-    ['Student', 'Email', 'Role', 'Attendance %', 'WOC Ratio %', 'Volunteer Hours'],
+    ['Student', 'Email', 'Role', 'Attendance %', 'On Track %', 'On Track Weeks Counted', 'Total Weeks', 'WOC Ratio %', 'Volunteer Hours'],
     ...students.map(s => [
       s.name,
       s.email || '',
       s.role || '',
       s.attendanceScore == null ? '' : s.attendanceScore,
+      s.onTrackScore == null ? '' : s.onTrackScore,
+      s.onTrackWeeks == null ? '' : s.onTrackWeeks,
+      s.onTrackTotalWeeks == null ? '' : s.onTrackTotalWeeks,
       s.wocScore == null ? '' : s.wocScore,
       s.volunteerHours == null ? 0 : (Math.round(s.volunteerHours * 100) / 100),
     ])
