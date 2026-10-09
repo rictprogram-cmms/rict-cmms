@@ -92,6 +92,11 @@ function roundToMinute(h) {
   return Math.round((h || 0) * 60) / 60
 }
 
+// Club Activity earns 0.25 h credited per hour on the clock (same rule as the
+// kiosk and the time_clock_club_credit trigger). Edit previews show both.
+const CLUB_CREDIT_RATE = 0.25
+const creditFor = (clockHours, isClub) => (isClub ? roundToMinute(clockHours * CLUB_CREDIT_RATE) : clockHours)
+
 /** Format decimal hours as "Xh Ym" (rounds to nearest minute first) */
 function fmtHoursMin(h) {
   const totalMins = Math.round((h || 0) * 60)
@@ -807,6 +812,7 @@ function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
   const currentPunchOut = isoToTimeInput(entry.punch_out)
   const currentDate     = isoToDateInput(entry.punch_in)
   const currentHours = entry.total_hours ? roundToMinute(Number(entry.total_hours)) : 0
+  const isClub = entry.entry_type === 'Club Activity' || entry.class_id === 'CLUB_ACTIVITY'
 
   const [form, setForm] = useState({
     startTime: currentPunchIn,
@@ -814,13 +820,16 @@ function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
     reason:    '',
   })
 
-  const previewHours = useMemo(() => {
+  // Time on the clock for the new start/end
+  const clockHours = useMemo(() => {
     if (!form.startTime || !form.endTime) return 0
     const pi = new Date(`2000-01-01T${form.startTime}:00`)
     const po = new Date(`2000-01-01T${form.endTime}:00`)
     const hrs = (po - pi) / 3600000
     return hrs > 0 ? Math.round(hrs * 60) / 60 : 0
   }, [form.startTime, form.endTime])
+  // Hours that would be credited (Club Activity: 0.25 per clock hour)
+  const previewHours = creditFor(clockHours, isClub)
 
   const hasChanges = form.startTime !== currentPunchIn || form.endTime !== currentPunchOut
 
@@ -883,7 +892,8 @@ function VolunteerEditRequestModal({ entry, saving, onSubmit, onClose }) {
                 <Clock size={14} className="text-purple-500" aria-hidden="true" />
                 <span className="text-surface-500">{fmtHoursMin(Number(currentHours))}</span>
                 <span className="text-purple-500 font-medium">→</span>
-                <span className="font-medium text-purple-700">{fmtHoursMin(previewHours)}</span>
+                <span className="font-medium text-purple-700">{fmtHoursMin(previewHours)}{isClub ? ' credited' : ''}</span>
+                {isClub && <span className="text-xs text-surface-500">({fmtHoursMin(clockHours)} on clock)</span>}
                 {previewHours > Number(currentHours) && (
                   <span className="text-[10px] text-green-600 font-medium bg-green-100 px-1.5 py-0.5 rounded-full">
                     +{fmtHoursMin(previewHours - Number(currentHours))}
@@ -1313,7 +1323,9 @@ function StudentDetailPanel({ studentEmail, studentName }) {
     if (type === 'timeclock') {
       result = await instructorEditTimeClock(raw, date, startTime, endTime)
     } else {
-      result = await instructorEditRequest(id, date, startTime, endTime)
+      result = await instructorEditRequest(id, date, startTime, endTime, {
+        isClub: !!raw && (raw.entry_type === 'Club Activity' || raw.class_id === 'CLUB_ACTIVITY'),
+      })
     }
     if (result?.success) setEditTarget(null)
   }
@@ -1566,13 +1578,19 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
     endTime:   entry.endTimeInput || '',
   })
 
-  const previewHours = useMemo(() => {
+  const isClub = !!entry.isClubActivity
+
+  // Time on the clock for the new start/end
+  const clockHours = useMemo(() => {
     if (!form.startTime || !form.endTime) return 0
     const pi = new Date(`2000-01-01T${form.startTime}:00`)
     const po = new Date(`2000-01-01T${form.endTime}:00`)
     const hrs = (po - pi) / 3600000
     return hrs > 0 ? Math.round(hrs * 60) / 60 : 0
   }, [form.startTime, form.endTime])
+  // Hours that will be credited — Club Activity earns 0.25 per clock hour.
+  // (Before 2026-10-08 this preview, and the save, used the full clock time.)
+  const previewHours = creditFor(clockHours, isClub)
 
   const originalHours = fmtHoursMin(entry.hours || 0)
   const hasChanges =
@@ -1670,8 +1688,13 @@ function InstructorEditVolunteerModal({ entry, saving, onSave, onClose }) {
                     <span className="sr-only">changes to</span>
                   </>
                 )}
-                <span className="font-medium text-brand-700">{fmtHoursMin(previewHours)}</span>
+                <span className="font-medium text-brand-700">{fmtHoursMin(previewHours)}{isClub ? ' credited' : ''}</span>
+                {isClub && <span className="text-xs text-surface-500">({fmtHoursMin(clockHours)} on clock)</span>}
               </div>
+            )}
+
+            {isClub && (
+              <p className="text-xs text-surface-500 mt-1">Club Activity earns 0.25 h credited per hour on the clock.</p>
             )}
 
             {!hasChanges && (

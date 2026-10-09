@@ -39,6 +39,12 @@ function roundToMinute(h) {
   return Math.round((h || 0) * 60) / 60
 }
 
+// Club Activity earns 0.25 h of volunteer credit per hour on the clock. The
+// kiosk, the instructor "Add entry" and (since 2026-10-08) a database trigger
+// all apply it; every edit below must too, or an edit credits the full time.
+const CLUB_CREDIT_RATE = 0.25
+const isClubRow = r => !!r && (r.entry_type === 'Club Activity' || r.class_id === 'CLUB_ACTIVITY')
+
 /**
  * Extract YYYY-MM-DD from a fake-UTC timestamp
  * e.g. "2026-03-05T15:05:00+00" → "2026-03-05"
@@ -538,9 +544,11 @@ export function useVolunteerData() {
       const endParts = newEndTime.split(':')
       const startMins = parseInt(startParts[0]) * 60 + parseInt(startParts[1] || '0')
       const endMins = parseInt(endParts[0]) * 60 + parseInt(endParts[1] || '0')
-      const totalHours = roundToMinute((endMins - startMins) / 60)
+      const clockHours = roundToMinute((endMins - startMins) / 60)
+      // Club Activity: the request carries the credited amount, like every other Club row
+      const totalHours = isClubRow(entry) ? roundToMinute(clockHours * CLUB_CREDIT_RATE) : clockHours
 
-      if (totalHours <= 0) {
+      if (clockHours <= 0) {
         toast.error('End time must be after start time')
         setSaving(false)
         return
@@ -904,9 +912,14 @@ export function useStudentVolunteerDetail(studentEmail) {
 
       const startMins = parseInt(newStartTime.split(':')[0]) * 60 + parseInt(newStartTime.split(':')[1] || '0')
       const endMins = parseInt(newEndTime.split(':')[0]) * 60 + parseInt(newEndTime.split(':')[1] || '0')
-      const totalHours = roundToMinute((endMins - startMins) / 60)
+      const clockHours = roundToMinute((endMins - startMins) / 60)
+      // Club Activity credits 0.25 h per clock hour. Before 2026-10-08 this saved
+      // the full clock time as credit (4× too much). The database trigger
+      // time_clock_club_credit enforces the same rule and refreshes the note.
+      const isClub = isClubRow(entry)
+      const totalHours = isClub ? roundToMinute(clockHours * CLUB_CREDIT_RATE) : clockHours
 
-      if (totalHours <= 0) {
+      if (clockHours <= 0) {
         toast.error('End time must be after start time')
         setSaving(false)
         return
@@ -932,7 +945,7 @@ export function useStudentVolunteerDetail(studentEmail) {
           action: 'Instructor Edit Volunteer Entry',
           entity_type: 'Time Clock',
           entity_id: entry.record_id,
-          details: `Edited ${entry.record_id} for ${entry.user_name || studentEmail}: ${date} ${newStartTime}–${newEndTime} (${totalHours}h)`,
+          details: `Edited ${entry.record_id} for ${entry.user_name || studentEmail}: ${date} ${newStartTime}–${newEndTime} (${isClub ? `${clockHours}h on clock → ${totalHours}h credited` : `${totalHours}h`})`,
         })
       } catch {}
 
@@ -948,15 +961,18 @@ export function useStudentVolunteerDetail(studentEmail) {
   }
 
   // ── Instructor: directly edit a time_entry_request (manual or edit-request) ──
-  const instructorEditRequest = async (requestId, date, newStartTime, newEndTime) => {
+  // opts.isClub: the request is a Club Activity request (stores credited hours)
+  const instructorEditRequest = async (requestId, date, newStartTime, newEndTime, opts = {}) => {
     if (!profile) { toast.error('Not authorized'); return }
     setSaving(true)
     try {
       const startMins = parseInt(newStartTime.split(':')[0]) * 60 + parseInt(newStartTime.split(':')[1] || '0')
       const endMins = parseInt(newEndTime.split(':')[0]) * 60 + parseInt(newEndTime.split(':')[1] || '0')
-      const totalHours = roundToMinute((endMins - startMins) / 60)
+      const clockHours = roundToMinute((endMins - startMins) / 60)
+      const isClub = !!opts.isClub
+      const totalHours = isClub ? roundToMinute(clockHours * CLUB_CREDIT_RATE) : clockHours
 
-      if (totalHours <= 0) {
+      if (clockHours <= 0) {
         toast.error('End time must be after start time')
         setSaving(false)
         return
@@ -984,7 +1000,7 @@ export function useStudentVolunteerDetail(studentEmail) {
           action: 'Instructor Edit Volunteer Request',
           entity_type: 'Time Entry Request',
           entity_id: requestId,
-          details: `Edited ${requestId} for ${studentEmail}: ${date} ${newStartTime}–${newEndTime} (${totalHours}h)`,
+          details: `Edited ${requestId} for ${studentEmail}: ${date} ${newStartTime}–${newEndTime} (${isClub ? `${clockHours}h on clock → ${totalHours}h credited` : `${totalHours}h`})`,
         })
       } catch {}
 
