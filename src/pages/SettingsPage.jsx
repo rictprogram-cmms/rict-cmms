@@ -133,6 +133,16 @@ const SETTING_META = {
       effect: 'Normally RICT@sctcc.edu, the instructors\' shared inbox. One address only. A blank value turns the digest off; the schedule itself (Fridays 4:00 PM) is set in the database, not here.',
     },
   },
+  wo_due_reminder_days: {
+    label: 'Due Date Reminder — Days Before',
+    type: 'number', category: 'Work Orders',
+    desc: 'Students assigned to an open work order get one email and one bell notification when it is this many days (or fewer) from its due date. Set to 0 to turn reminders off.',
+    details: {
+      what: 'Every morning at 7:00 AM, each student assigned to an open work order due within this many days gets one email listing those work orders, plus a bell notification (and a phone push if they have push turned on). Each student is reminded once per work order; if the due date is moved, they are reminded again for the new date.',
+      where: 'Sent by a scheduled database job (pg_cron) that calls the send-wo-due-reminders Edge Function. Work orders created with less lead time than this (High priority, Weekly PMs) are reminded on the next morning\'s run. Daily PMs, unassigned and overdue work orders, and instructors are skipped.',
+      effect: 'Default 7. A larger number reminds students earlier. 0 or blank turns reminders off; the 7:00 AM time is set in the database, not here.',
+    },
+  },
 
   // ── Notifications ──
   // Note: notification_email was retired in the audit pass — outbound emails

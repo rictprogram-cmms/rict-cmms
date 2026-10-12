@@ -706,6 +706,7 @@ export default function NotificationBell() {
       .limit(20), 'announcements.select');
     (data || []).forEach(a => {
       const isWOAssign = a.notification_type === 'wo_assignment';
+      const isWODue = a.notification_type === 'wo_due_reminder';
       const isStudentMsg = a.notification_type === 'student_message';
       // Type / icon / color matrix:
       //   wo_assignment  → orange clipboard ('assignment_ind')
@@ -724,6 +725,15 @@ export default function NotificationBell() {
         color = '#f59f00';
         title = a.subject || 'Work Order Assigned';
         subtitle = a.body || `Assigned by ${a.sender_name || 'Instructor'}`;
+      } else if (isWODue) {
+        // wo_due_reminder → amber clock ('schedule'), written daily by the
+        // send-wo-due-reminders Edge Function. Same View WO action as an
+        // assignment; the body lists each WO and its due date.
+        type = 'wo_due_reminder';
+        icon = 'schedule';
+        color = '#d97706';
+        title = a.subject || 'Work Order Due Soon';
+        subtitle = (a.body || '').split('\n\n')[0] || 'A work order assigned to you is coming due';
       } else if (isStudentMsg) {
         type = 'student_message';
         icon = 'forum';
@@ -1887,6 +1897,7 @@ export default function NotificationBell() {
     announcement: 'ANNOUNCEMENT',
     student_message: 'STUDENT MESSAGE',
     wo_assignment: 'WORK ORDER ASSIGNED',
+    wo_due_reminder: 'WORK ORDER DUE SOON',
     help: 'NEEDS HELP',
     netchg: 'NETWORK CHANGE',
     absence: 'ABSENCE REQUEST',
@@ -1938,6 +1949,7 @@ export default function NotificationBell() {
       case 'announcement': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => viewAnnouncement(item)}><span className="material-icons" aria-hidden="true">visibility</span>View</button>);
       case 'student_message': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#10b981' }} onClick={() => viewAnnouncement(item)} aria-label={`View student message: ${item.title}`}><span className="material-icons" aria-hidden="true">forum</span>View &amp; Reply</button>);
       case 'wo_assignment': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
+      case 'wo_due_reminder': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#b45309' }} onClick={() => viewWOAssignment(item)} aria-label={`View work orders coming due: ${item.title}`}><span className="material-icons" aria-hidden="true">schedule</span>View WO</button>);
       case 'help': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary min-h-[44px]" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       case 'netchg': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
       case 'absence': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review ${item.raw?.request_type === 'Late Submission' ? 'late submission' : 'absence'} request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence / Late Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
