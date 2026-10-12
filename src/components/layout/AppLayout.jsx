@@ -902,6 +902,23 @@ function TempAccessModal({ profile, activeGrant, onClose, onSubmitted }) {
 
 const HELP_LOCATIONS = ['1-316B', '1-350', '1-354', '1-356', '1-369']
 
+// Local (wall-clock) YYYY-MM-DD — lab_calendar.date is a local date, so the
+// UTC date from toISOString() would point at tomorrow after 7 PM Central.
+function localDateKey(d = new Date()) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+// 12 → "12:00 PM", 13 → "1:00 PM"
+function formatHourLabel(h) {
+  const n = ((parseInt(h, 10) % 24) + 24) % 24
+  const suffix = n >= 12 ? 'PM' : 'AM'
+  const h12 = n % 12 === 0 ? 12 : n % 12
+  return `${h12}:00 ${suffix}`
+}
+
 function HelpButton({ profile }) {
   const [helpStatus, setHelpStatus] = useState('idle') // 'idle', 'picking', 'pending', 'acknowledged'
   const [helpRequest, setHelpRequest] = useState(null)
@@ -911,6 +928,8 @@ function HelpButton({ profile }) {
   // ── New: clock-in gate and lunch detection ──
   const [isClockedIn, setIsClockedIn] = useState(null)   // null=loading, true/false
   const [lunchHour, setLunchHour] = useState(null)        // integer hour (e.g. 12) or null
+  // Clock tick so the lunch lock turns on/off on the hour without a refresh
+  const [now, setNow] = useState(() => new Date())
   // ── Meeting / Away mode ──
   const [instructorAway, setInstructorAway] = useState(false)
   const [awayReturnTime, setAwayReturnTime] = useState('')
@@ -944,28 +963,40 @@ function HelpButton({ profile }) {
     return () => { cancelled = true; clearInterval(interval) }
   }, [profile?.email, isInstructor])
 
+  // ── Clock tick (every 30 s) — drives the lunch-hour lock ──
+  useEffect(() => {
+    if (!profile?.email || isInstructor) return
+    const id = setInterval(() => setNow(new Date()), 30000)
+    return () => clearInterval(id)
+  }, [profile?.email, isInstructor])
+
+  const todayKey = localDateKey(now)
+
   // ── Load today's lab calendar to get lunch_hour ──
+  // Re-runs when the local date changes so a tab left open overnight
+  // picks up the new day's lunch hour (or lack of one).
   useEffect(() => {
     if (!profile?.email || isInstructor) return
     let cancelled = false
     async function loadLunchHour() {
       try {
-        const today = new Date().toISOString().substring(0, 10)
         const data = mustData(await supabase
           .from('lab_calendar')
           .select('lunch_hour')
-          .eq('date', today)
+          .eq('date', todayKey)
           .limit(1), 'lab_calendar.select')
-        if (!cancelled && data && data.length > 0 && data[0].lunch_hour != null) {
-          setLunchHour(parseInt(data[0].lunch_hour))
-        }
+        if (cancelled) return
+        const raw = data && data.length > 0 ? data[0].lunch_hour : null
+        const parsed = raw == null || raw === '' ? null : parseInt(raw, 10)
+        setLunchHour(Number.isNaN(parsed) ? null : parsed)
       } catch {
         // No lunch_hour — that's fine
+        if (!cancelled) setLunchHour(null)
       }
     }
     loadLunchHour()
     return () => { cancelled = true }
-  }, [profile?.email, isInstructor])
+  }, [profile?.email, isInstructor, todayKey])
 
   // ── Load instructor away / meeting mode settings ──
   useEffect(() => {
@@ -1120,12 +1151,23 @@ function HelpButton({ profile }) {
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [helpStatus, helpRequest?.expires_at, helpRequest?.request_id, isInstructor])
 
+  // ── Derived: is it currently the designated lunch hour (Lab Sign Up setup)? ──
+  const isLunchTime = lunchHour !== null && now.getHours() === lunchHour
+  const lunchEndsLabel = lunchHour !== null ? formatHourLabel(lunchHour + 1) : ''
+  const lunchMessage = `Instructors are on lunch until ${lunchEndsLabel}. Keep working — you can ask for help after lunch.`
+
+  // ── If the room picker is open when lunch starts, close it ──
+  useEffect(() => {
+    if (isLunchTime && !isInstructor) setShowLocationPicker(false)
+  }, [isLunchTime, isInstructor])
+
   // ─── EARLY RETURN — safe now because all hooks are above ───────────
   // Don't render for instructors
   if (isInstructor) return null
 
-  // ── Derived: is it currently the lunch hour? ──
-  const isLunchTime = lunchHour !== null && new Date().getHours() === lunchHour
+  // New requests are blocked during lunch. A request already open from
+  // before lunch can still be cancelled / cleared.
+  const lunchLocked = isLunchTime && helpStatus === 'idle'
 
   // ── Determine if button should be disabled (not clocked in, still loading treated as disabled) ──
   const notClockedIn = isClockedIn === false
@@ -1133,6 +1175,12 @@ function HelpButton({ profile }) {
   // ── Request help with location ──
   const requestHelp = async (location) => {
     if (helpLoading) return
+    // Belt-and-braces: lunch may have started while the picker was open
+    if (lunchHour !== null && new Date().getHours() === lunchHour) {
+      setShowLocationPicker(false)
+      showHelpTooltip(lunchMessage, 'lunch', 6000)
+      return
+    }
     setHelpLoading(true)
     setShowLocationPicker(false)
     try {
@@ -1195,9 +1243,9 @@ function HelpButton({ profile }) {
     setHelpLoading(false)
   }
 
-  const showHelpTooltip = (msg, type) => {
+  const showHelpTooltip = (msg, type, duration = 2500) => {
     setHelpTooltip({ msg, type })
-    setTimeout(() => setHelpTooltip(null), 2500)
+    setTimeout(() => setHelpTooltip(null), duration)
   }
 
   // ── Click handler ──
@@ -1205,6 +1253,11 @@ function HelpButton({ profile }) {
     // Gate: must be clocked in to request help
     if (notClockedIn) {
       showHelpTooltip('You must be clocked in to request help', 'error')
+      return
+    }
+    // Gate: no new help requests during the designated lunch hour
+    if (lunchLocked) {
+      showHelpTooltip(lunchMessage, 'lunch', 6000)
       return
     }
     if (helpStatus === 'idle') {
@@ -1219,6 +1272,9 @@ function HelpButton({ profile }) {
   const getStyle = () => {
     if (notClockedIn) {
       return { color: '#9ca3af', bg: 'transparent', border: 'transparent', title: 'You must be clocked in to request help' }
+    }
+    if (lunchLocked) {
+      return { color: '#9ca3af', bg: 'transparent', border: 'transparent', title: `Help unavailable — instructors are on lunch until ${lunchEndsLabel}` }
     }
     if (helpStatus === 'acknowledged') {
       return { color: '#22c55e', bg: '#dcfce7', border: '#22c55e', title: 'Instructor acknowledged — click to clear' }
@@ -1237,14 +1293,20 @@ function HelpButton({ profile }) {
       <button
         onClick={handleClick}
         disabled={helpLoading || isClockedIn === null}
+        // aria-disabled (not disabled) for the clock-in and lunch locks so the
+        // button stays focusable/clickable and can explain *why* it is locked.
+        aria-disabled={notClockedIn || lunchLocked || undefined}
+        aria-label={style.title}
+        aria-haspopup={helpStatus === 'idle' && !notClockedIn && !lunchLocked ? 'true' : undefined}
+        aria-expanded={helpStatus === 'idle' && !notClockedIn && !lunchLocked ? showLocationPicker : undefined}
         className="p-2 rounded-lg transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
         style={{
           background: style.bg,
           border: `2px solid ${style.border}`,
           color: style.color,
-          cursor: (helpLoading || notClockedIn || isClockedIn === null) ? 'not-allowed' : 'pointer',
+          cursor: (helpLoading || notClockedIn || lunchLocked || isClockedIn === null) ? 'not-allowed' : 'pointer',
           animation: helpStatus === 'pending' ? 'helpPulse 1.5s ease-in-out infinite' : 'none',
-          opacity: (helpLoading || notClockedIn) ? 0.45 : 1,
+          opacity: (helpLoading || notClockedIn || lunchLocked) ? 0.45 : 1,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -1293,25 +1355,8 @@ function HelpButton({ profile }) {
             Where are you?
           </div>
 
-          {/* Lunch notice banner — shown only during the designated lunch hour */}
-          {isLunchTime && (
-            <div style={{
-              padding: '10px 14px',
-              background: '#fffbeb',
-              borderBottom: '1px solid #fde68a',
-              display: 'flex', alignItems: 'flex-start', gap: 8,
-            }}>
-              <span style={{ fontSize: '1rem', lineHeight: 1.3 }}>🍽️</span>
-              <div>
-                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#92400e', marginBottom: 2 }}>
-                  Instructors are on lunch break
-                </div>
-                <div style={{ fontSize: '0.74rem', color: '#b45309', lineHeight: 1.4 }}>
-                  Your request will be seen and responded to after lunch.
-                </div>
-              </div>
-            </div>
-          )}
+          {/* Lunch: the picker can no longer open during the lunch hour —
+              the button itself is locked and shows the lunch message. */}
 
           {/* Meeting / Away notice banner — shown when instructor has enabled away mode */}
           {instructorAway && (
@@ -1355,9 +1400,29 @@ function HelpButton({ profile }) {
         </div>
       )}
 
-      {/* Tooltip */}
-      {helpTooltip && (
-        <div style={{
+      {/* Tooltip (visual) */}
+      {helpTooltip && (helpTooltip.type === 'lunch' ? (
+        <div aria-hidden="true" style={{
+          position: 'absolute', top: '100%', right: 0, marginTop: 8,
+          padding: '10px 14px', borderRadius: 10, zIndex: 5000,
+          width: 260, maxWidth: 'calc(100vw - 32px)',
+          background: '#fffbeb', border: '1px solid #f59e0b',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+          display: 'flex', alignItems: 'flex-start', gap: 8,
+          animation: 'helpTooltipIn 0.2s ease',
+        }}>
+          <span style={{ fontSize: '1rem', lineHeight: 1.3 }}>🍽️</span>
+          <div>
+            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#78350f', marginBottom: 2 }}>
+              Instructors are on lunch
+            </div>
+            <div style={{ fontSize: '0.76rem', color: '#92400e', lineHeight: 1.4 }}>
+              Help requests reopen at {lunchEndsLabel}. Keep working — you can ask for help after lunch.
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div aria-hidden="true" style={{
           position: 'absolute', top: '100%', right: 0, marginTop: 8,
           padding: '8px 14px', borderRadius: 8, fontSize: '0.8rem',
           color: 'white', whiteSpace: 'nowrap', zIndex: 5000,
@@ -1368,7 +1433,12 @@ function HelpButton({ profile }) {
         }}>
           {helpTooltip.msg}
         </div>
-      )}
+      ))}
+
+      {/* Screen-reader announcement for every help status message (always mounted) */}
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {helpTooltip?.msg || ''}
+      </span>
 
       <style>{`
         @keyframes helpPulse {
