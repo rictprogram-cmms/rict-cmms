@@ -27,10 +27,22 @@ function getWeekStart(date = new Date()) {
 /** Calculate which week number we're in relative to a start date */
 function getWeekNumber(semesterStart, targetDate = new Date()) {
   if (!semesterStart) return 0
-  const start = getWeekStart(new Date(semesterStart))
+  // Parse 'YYYY-MM-DD' as a LOCAL date. new Date('2026-08-24') is UTC
+  // midnight = Sunday evening in Central time, which pushed the start back
+  // a week and made "Currently Week N" read one week high.
+  const parseLocal = (v) => {
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
+      const [y, m, d] = v.substring(0, 10).split('-').map(Number)
+      return new Date(y, m - 1, d)
+    }
+    return new Date(v)
+  }
+  const start = getWeekStart(parseLocal(semesterStart))
   const target = getWeekStart(targetDate)
   const diffMs = target.getTime() - start.getTime()
-  const diffWeeks = Math.floor(diffMs / (7 * 24 * 60 * 60 * 1000))
+  // Math.round, not floor: a DST change between the two Mondays makes the
+  // gap an hour short (spring) or long (fall), and floor would drop a week.
+  const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000))
   return Math.max(0, diffWeeks + 1) // 1-based, minimum 0
 }
 
