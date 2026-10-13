@@ -13,11 +13,31 @@ import {
 import toast from 'react-hot-toast'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+// `matches(name)` receives the planner's lowercased program name. The two
+// Mechatronics programs must be mutually exclusive — the old keyword lists
+// used .some(), so 'mechatronics' alone let the Certificate card bind to the
+// AAS planner (and vice versa).
+const isCertName = (n) => /\bcert(ificate)?\b/.test(n)
 const PROGRAMS = [
-  { id: 'IPC-AAS',   name: 'Instrumentation & Process Control AAS',  keywords: ['instrumentation','process control','ipc'] },
-  { id: 'MECH-AAS',  name: 'Mechatronics AAS',                        keywords: ['mechatronics'] },
-  { id: 'MECH-CERT', name: 'Mechatronics Certificate',                keywords: ['mechatronics','certificate'] },
+  { id: 'IPC-AAS',   name: 'Instrumentation & Process Control AAS',  matches: (n) => /instrumentation|process control|\bipc\b/.test(n) },
+  { id: 'MECH-AAS',  name: 'Mechatronics AAS',                        matches: (n) => n.includes('mechatronics') && !isCertName(n) },
+  { id: 'MECH-CERT', name: 'Mechatronics Certificate',                matches: (n) => n.includes('mechatronics') && isCertName(n) },
 ]
+
+/**
+ * The planner a program card uses: among approved revisions whose program
+ * name matches, the most recently approved one. The query that loads them is
+ * unordered, so taking the first match picked an arbitrary — possibly older —
+ * revision. Returns null when nothing matches (the card is then disabled).
+ * Exported for testing.
+ */
+export function findProgramPlanner(prog, planners) {
+  if (!prog) return null
+  const hits = (planners || []).filter(p =>
+    prog.matches(String(p.current_program_name || p.planner_name || '').toLowerCase()))
+  if (!hits.length) return null
+  return hits.sort((a, b) => String(b.approved_at || '').localeCompare(String(a.approved_at || '')))[0]
+}
 
 const CATEGORY_CONFIG = {
   Tuition:   { color: 'bg-blue-100 text-blue-700 border-blue-200',      icon: '🎓', order: 1 },
@@ -1090,7 +1110,7 @@ export default function ProgramCostPage() {
     if (!selectedProgram||!masterPlanners.length) return null
     const prog = PROGRAMS.find(p=>p.id===selectedProgram)
     if (!prog) return null
-    return masterPlanners.find(p=>prog.keywords.some(kw=>(p.current_program_name||p.planner_name||'').toLowerCase().includes(kw)))||masterPlanners[0]
+    return findProgramPlanner(prog, masterPlanners)
   }, [selectedProgram, masterPlanners])
 
   const breakdown = useMemo(() => {
@@ -1168,7 +1188,7 @@ export default function ProgramCostPage() {
         <p className="text-sm font-semibold text-surface-700 mb-3">Select Program</p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {PROGRAMS.map(prog => {
-            const planner = masterPlanners.find(p=>prog.keywords.some(kw=>(p.current_program_name||p.planner_name||'').toLowerCase().includes(kw)))
+            const planner = findProgramPlanner(prog, masterPlanners)
             const hasPlanner = !!planner
             return (
               <button key={prog.id} onClick={()=>{ if(!hasPlanner) return; setOpenCategory(null); setSelectedProgram(prog.id) }} disabled={!hasPlanner}
