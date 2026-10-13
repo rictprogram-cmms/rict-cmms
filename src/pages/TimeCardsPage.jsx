@@ -33,7 +33,13 @@
  *   marker the badge swipe writes (useTimeEntryActions.markWeekAllDone), so
  *   every report already treats it the same and the undo above still applies.
  *   Only offered when the selected range is a single Mon–Sun week that has
- *   started.
+ *   started. Every dialog needs an "I confirm…" tick before it will save.
+ *   Class Weekly Report rows have checkboxes + "Mark selected All Done"
+ *   (BulkMarkAllDoneModal), one save per student. Saves go through the server
+ *   function mark_all_done_manual when installed (permission checked on the
+ *   server, one transaction), else the browser path.
+ * - All Done badges carry a tooltip / screen-reader text saying who swiped or
+ *   marked it (allDoneSourceText).
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
@@ -290,6 +296,8 @@ export default function TimeCardsPage() {
   const [editRequestEntry, setEditRequestEntry] = useState(null)
   // Manual All Done: { userId, name, fallbackClass, source: 'timecard' | 'classweekly' }
   const [allDoneTarget, setAllDoneTarget] = useState(null)
+  // Bulk manual All Done (Class Weekly Report): { students: [...], fallbackClass }
+  const [allDoneBulk, setAllDoneBulk] = useState(null)
 
   // Report
   const [showReportModal, setShowReportModal] = useState(false)
@@ -650,6 +658,13 @@ export default function TimeCardsPage() {
     return { single: true, weekStart, weekEnd, reason: '' }
   }, [startDate, endDate])
   const canMarkAllDone = canEditTime && isInstructor
+  const classWeeklyFallbackClass = classReport.classInfo
+    ? { classId: classReport.classInfo.class_id || '', courseName: classReport.classInfo.course_id || selectedClass }
+    : { classId: '', courseName: selectedClass }
+  const handleAllDoneBulkDone = () => {
+    setAllDoneBulk(null)
+    if (selectedClass) classReport.fetchReport(selectedClass, startDate, endDate)
+  }
   const handleAllDoneSaved = () => {
     const source = allDoneTarget?.source
     setAllDoneTarget(null)
@@ -848,10 +863,12 @@ export default function TimeCardsPage() {
                   onMarkAllDone={canMarkAllDone && allDoneWeek.single ? (s) => setAllDoneTarget({
                     userId: s.userId,
                     name: s.fullName,
-                    fallbackClass: classReport.classInfo
-                      ? { classId: classReport.classInfo.class_id || '', courseName: classReport.classInfo.course_id || selectedClass }
-                      : { classId: '', courseName: selectedClass },
+                    fallbackClass: classWeeklyFallbackClass,
                     source: 'classweekly',
+                  }) : null}
+                  onMarkSelectedAllDone={canMarkAllDone && allDoneWeek.single ? (list) => setAllDoneBulk({
+                    students: list,
+                    fallbackClass: classWeeklyFallbackClass,
                   }) : null}
                 />
               )}
@@ -983,6 +1000,16 @@ export default function TimeCardsPage() {
           actions={actions}
           onClose={() => setAllDoneTarget(null)}
           onSaved={handleAllDoneSaved} />
+      )}
+      {allDoneBulk && allDoneWeek.single && (
+        <BulkMarkAllDoneModal
+          students={allDoneBulk.students}
+          fallbackClass={allDoneBulk.fallbackClass}
+          weekStart={allDoneWeek.weekStart}
+          weekEnd={allDoneWeek.weekEnd}
+          actions={actions}
+          onClose={() => setAllDoneBulk(null)}
+          onDone={handleAllDoneBulkDone} />
       )}
       {showReportModal && (
         <ReportModal
@@ -1878,7 +1905,7 @@ function ReportClassSections({ classReports, expandedClasses, toggleExpand, stud
                                               <td className="px-2 py-1">
                                                 <div className="flex flex-wrap gap-0.5">
                                                   {isAllDone ? (
-                                                    <AttBadge color="emerald" icon={<CheckCircle2 size={9} aria-hidden="true" />} label="All Done" />
+                                                    <AttBadge color="emerald" icon={<CheckCircle2 size={9} aria-hidden="true" />} label="All Done" title={allDoneSourceText(e)} srText={allDoneSourceText(e)} />
                                                   ) : (
                                                     <>
                                                       {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={9} aria-hidden="true" />} label="On Time" />}
@@ -2251,7 +2278,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                         )}
                         {isVolunteer && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">Volunteer</span>}
                         {isWorkStudy && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Work Study</span>}
-                        {isAllDone && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">All Done</span>}
+                        {isAllDone && <span title={allDoneSourceText(e)} className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">All Done<span className="sr-only"> ({allDoneSourceText(e)})</span></span>}
                       </td>
                       <td className="px-3 py-2.5 text-xs text-surface-500">
                         {f.scheduledStart !== null && f.scheduledStart !== undefined ? (
@@ -2286,7 +2313,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
                           {isWorkStudy ? (
                             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-600 font-medium">Work Hours</span>
                           ) : isAllDone ? (
-                            <AttBadge color="emerald" icon={<CheckCircle2 size={10} aria-hidden="true" />} label="All Done" />
+                            <AttBadge color="emerald" icon={<CheckCircle2 size={10} aria-hidden="true" />} label="All Done" title={allDoneSourceText(e)} />
                           ) : (
                             <>
                               {f.isOnTime && !f.isEarlyDeparture && <AttBadge color="green" icon={<CheckCircle2 size={10} aria-hidden="true" />} label="On Time" />}
@@ -2359,7 +2386,34 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
 // CLASS WEEKLY REPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ClassWeeklyContent({ students, classInfo, dateRange, allDoneWeek = null, onMarkAllDone = null }) {
+function ClassWeeklyContent({ students, classInfo, dateRange, allDoneWeek = null, onMarkAllDone = null, onMarkSelectedAllDone = null }) {
+  // ── Bulk All Done selection (instructors with edit_time, single started week) ──
+  // Only Behind students can be selected. Ticking a row saves nothing — the
+  // bulk dialog has its own required confirmation.
+  const selectable = !!onMarkSelectedAllDone
+  const eligible = useMemo(() => students.filter(s => !s.metRequirement && s.userId), [students])
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  // Realtime refreshes replace `students` often — keep ticks that are still
+  // eligible instead of clearing, so a refresh never undoes the selection.
+  useEffect(() => {
+    setSelectedIds(prev => {
+      if (!selectable) return prev.size ? new Set() : prev
+      const ok = new Set(eligible.map(s => s.userId))
+      const next = new Set([...prev].filter(id => ok.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [eligible, selectable])
+  const selectedStudents = eligible.filter(s => selectedIds.has(s.userId))
+  const allEligibleSelected = eligible.length > 0 && selectedStudents.length === eligible.length
+  const toggleOne = (id) => setSelectedIds(prev => {
+    const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next
+  })
+  const toggleAll = () => setSelectedIds(allEligibleSelected ? new Set() : new Set(eligible.map(s => s.userId)))
+  const selectAllRef = React.useRef(null)
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = selectedStudents.length > 0 && !allEligibleSelected
+  }, [selectedStudents.length, allEligibleSelected])
+
   const metCount = students.filter(s => s.metRequirement).length
   // Students counted as met only because the week was closed (All Done), not by hours
   const allDoneCount = students.filter(s => s.weekClosed && !s.hoursMet).length
@@ -2415,9 +2469,33 @@ function ClassWeeklyContent({ students, classInfo, dateRange, allDoneWeek = null
         <div className="text-center py-8 text-surface-400 text-sm">No students enrolled in this class.</div>
       ) : (
         <div className="overflow-x-auto">
+          {selectable && eligible.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3 print:hidden">
+              <p className="text-xs text-surface-600" aria-live="polite">
+                {selectedStudents.length > 0
+                  ? `${selectedStudents.length} of ${eligible.length} behind student${eligible.length === 1 ? '' : 's'} selected`
+                  : `Tick students who are Behind to mark several All Done at once.`}
+              </p>
+              <button type="button" disabled={selectedStudents.length === 0}
+                onClick={() => onMarkSelectedAllDone(selectedStudents)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg text-xs font-medium bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                <BadgeCheck size={14} aria-hidden="true" /> Mark selected All Done{selectedStudents.length > 0 ? ` (${selectedStudents.length})` : ''}
+              </button>
+            </div>
+          )}
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-50 text-left">
+                {selectable && (
+                  <th scope="col" className="px-1 py-1 w-12 print:hidden">
+                    <label className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] cursor-pointer">
+                      <input ref={selectAllRef} type="checkbox" checked={allEligibleSelected} onChange={toggleAll}
+                        disabled={eligible.length === 0}
+                        aria-label={allEligibleSelected ? 'Clear selection' : 'Select all behind students'}
+                        className="h-5 w-5 rounded border-surface-300 text-emerald-700 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                    </label>
+                  </th>
+                )}
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Student</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500">Role</th>
                 <th scope="col" className="px-3 py-2.5 text-xs font-semibold text-surface-500 text-right">Hours</th>
@@ -2431,6 +2509,17 @@ function ClassWeeklyContent({ students, classInfo, dateRange, allDoneWeek = null
             <tbody className="divide-y divide-surface-100">
               {students.map((s, idx) => (
                 <tr key={s.userId || `student-${idx}`} className={`hover:bg-surface-50 ${!s.metRequirement ? 'bg-amber-50/50' : ''}`}>
+                  {selectable && (
+                    <td className="px-1 py-1 print:hidden">
+                      {!s.metRequirement && s.userId ? (
+                        <label className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] cursor-pointer">
+                          <input type="checkbox" checked={selectedIds.has(s.userId)} onChange={() => toggleOne(s.userId)}
+                            aria-label={`Select ${s.fullName}`}
+                            className="h-5 w-5 rounded border-surface-300 text-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                        </label>
+                      ) : <span className="sr-only">Not behind</span>}
+                    </td>
+                  )}
                   <td className="px-3 py-2.5 font-medium text-surface-800">{s.fullName}</td>
                   <td className="px-3 py-2.5 text-surface-500 text-xs">{s.role}</td>
                   <td className="px-3 py-2.5 text-right font-semibold text-surface-900">{formatHours(s.totalHours)}</td>
@@ -2478,6 +2567,7 @@ function ClassWeeklyContent({ students, classInfo, dateRange, allDoneWeek = null
             {timeStats.count > 0 && (
               <tfoot className="print:[display:table-row-group]">
                 <tr className="border-t-2 border-surface-200 bg-surface-50">
+                  {selectable && <td className="print:hidden" aria-hidden="true" />}
                   <th scope="row" colSpan={2} className="px-3 py-3 text-left text-xs font-semibold text-surface-600 uppercase">Class average</th>
                   <td className="px-3 py-3 text-right font-bold text-surface-900">
                     {formatHours(timeStats.avg)}
@@ -2825,6 +2915,7 @@ function MarkAllDoneModal({ target, weekStart, weekEnd, actions, onClose, onSave
   const [date, setDate] = useState(isCurrentWeek ? today : (friday <= maxDate ? friday : maxDate))
   const [note, setNote] = useState('')
   const [cancelSignups, setCancelSignups] = useState(true)
+  const [confirmed, setConfirmed] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -2847,11 +2938,12 @@ function MarkAllDoneModal({ target, weekStart, weekEnd, actions, onClose, onSave
 
   const already = ctx?.existingAllDone || null
   const dateInvalid = !date || date < weekStart || date > maxDate
-  const canSubmit = !!ctx && !already && !dateInvalid && !actions.saving
+  const canSubmit = !!ctx && !already && !dateInvalid && confirmed && !actions.saving
 
   const handleSubmit = async (e) => {
     e?.preventDefault?.()
     if (dateInvalid) { setError(`Pick a date from ${formatDate(weekStart + 'T00:00:00Z')} to ${formatDate(maxDate + 'T00:00:00Z')}.`); return }
+    if (!confirmed) { setError('Tick the confirmation box to mark All Done.'); return }
     setError('')
     const res = await actions.markWeekAllDone({
       userId: target.userId, date, weekStart, weekEnd,
@@ -2937,6 +3029,16 @@ function MarkAllDoneModal({ target, weekStart, weekEnd, actions, onClose, onSave
                   </span>
                 </label>
               )}
+
+              <label htmlFor="tc-alldone-confirm" className="flex items-start gap-3 min-h-[44px] cursor-pointer rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                <input id="tc-alldone-confirm" type="checkbox" checked={confirmed} required aria-required="true"
+                  onChange={e => { setConfirmed(e.target.checked); setError('') }}
+                  className="mt-1 h-5 w-5 rounded border-surface-300 text-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <span className="text-sm text-surface-800">
+                  I confirm <strong>{studentName}</strong> is done for the week of {formatDate(weekStart + 'T00:00:00Z')} and should be marked All Done.
+                  <span className="block text-xs text-surface-600">Required — nothing is saved until this is ticked.</span>
+                </span>
+              </label>
             </>
           )}
 
@@ -2954,6 +3056,199 @@ function MarkAllDoneModal({ target, weekStart, weekEnd, actions, onClose, onSave
               {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <BadgeCheck size={14} aria-hidden="true" />}
               {actions.saving ? 'Saving…' : 'Mark All Done'}
             </button>
+          )}
+        </div>
+      </form>
+    </ModalOverlay>
+  )
+}
+
+/**
+ * BulkMarkAllDoneModal — mark several Behind students All Done for one week
+ * (Class Weekly Report). One date, note and sign-up choice for everyone, a
+ * required "I confirm…" tick, then one save per student (each one all-or-
+ * nothing on the server), so one failure never blocks the rest. Students
+ * already marked are reported and skipped, never doubled.
+ * WCAG 2.1 AA: labelled dialog, focus trap via ModalOverlay, visible labels,
+ * progress in role="status", per-student results in text (icon + words).
+ */
+function BulkMarkAllDoneModal({ students, fallbackClass, weekStart, weekEnd, actions, onClose, onDone }) {
+  const today = toDateStr(new Date())
+  const isCurrentWeek = today >= weekStart && today <= weekEnd
+  const maxDate = today < weekEnd ? today : weekEnd
+  const friday = (() => {
+    const d = new Date(weekStart + 'T00:00:00'); d.setDate(d.getDate() + 4); return toDateStr(d)
+  })()
+  const [date, setDate] = useState(isCurrentWeek ? today : (friday <= maxDate ? friday : maxDate))
+  const [note, setNote] = useState('')
+  const [cancelSignups, setCancelSignups] = useState(true)
+  const [confirmed, setConfirmed] = useState(false)
+  const [error, setError] = useState('')
+  const [running, setRunning] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [results, setResults] = useState(null)   // [{ student, status: 'ok'|'already'|'failed', detail }]
+
+  const n = students.length
+  const dateInvalid = !date || date < weekStart || date > maxDate
+  const finished = !!results && !running
+
+  const handleSubmit = async (e) => {
+    e?.preventDefault?.()
+    if (dateInvalid) { setError(`Pick a date from ${formatDate(weekStart + 'T00:00:00Z')} to ${formatDate(maxDate + 'T00:00:00Z')}.`); return }
+    if (!confirmed) { setError('Tick the confirmation box to mark these students All Done.'); return }
+    setError(''); setRunning(true); setProgress(0)
+    const out = []
+    for (let i = 0; i < students.length; i++) {
+      const st = students[i]
+      setProgress(i + 1)
+      // eslint-disable-next-line no-await-in-loop
+      const res = await actions.markWeekAllDone({
+        userId: st.userId, date, weekStart, weekEnd, fallbackClass, note,
+        cancelSignups: isCurrentWeek && cancelSignups, quiet: true,
+      })
+      if (res?.success) out.push({ student: st, status: 'ok', detail: res.cancelledCount ? `${res.cancelledCount} sign-up${res.cancelledCount === 1 ? '' : 's'} cancelled` : '' })
+      else if (res?.already) out.push({ student: st, status: 'already', detail: res.recordedOn ? `already marked ${formatDate(res.recordedOn + 'T00:00:00Z')}` : 'already marked' })
+      else out.push({ student: st, status: 'failed', detail: res?.error || 'not saved' })
+    }
+    setResults(out); setRunning(false)
+  }
+
+  const okCount = results ? results.filter(r => r.status === 'ok').length : 0
+  const alreadyCount = results ? results.filter(r => r.status === 'already').length : 0
+  const failCount = results ? results.filter(r => r.status === 'failed').length : 0
+
+  return (
+    <ModalOverlay onClose={running ? NOOP : (finished ? onDone : onClose)} zIndex="z-[60]" labelledBy="tc-bulk-alldone-title">
+      <form className="bg-white rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}
+        aria-describedby="tc-bulk-alldone-desc" noValidate>
+        <div className="px-5 py-4 border-b border-surface-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 id="tc-bulk-alldone-title" className="font-semibold text-surface-900">Mark {n} student{n === 1 ? '' : 's'} All Done</h3>
+            <p id="tc-bulk-alldone-desc" className="text-xs text-surface-500 mt-0.5">
+              Week of {formatDate(weekStart + 'T00:00:00Z')} – {formatDate(weekEnd + 'T00:00:00Z')}
+            </p>
+          </div>
+          <button type="button" onClick={finished ? onDone : onClose} disabled={running} aria-label="Close"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-surface-500 hover:bg-surface-100 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {!results && (
+            <>
+              <div>
+                <h4 className="text-xs font-medium text-surface-700 mb-1">Students</h4>
+                <ul className="max-h-40 overflow-y-auto rounded-lg border border-surface-200 divide-y divide-surface-100 text-sm" aria-label="Students to mark All Done">
+                  {students.map(st => (
+                    <li key={st.userId} className="px-3 py-1.5 flex items-center justify-between gap-2">
+                      <span className="text-surface-800">{st.fullName}</span>
+                      <span className="text-xs text-surface-500">{formatHours(st.totalHours)} / {formatHours(st.requiredHours)} hrs</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <label htmlFor="tc-bulk-alldone-date" className="block text-xs font-medium text-surface-700 mb-1">
+                  Date to record it on <span className="text-red-600" aria-hidden="true">*</span><span className="sr-only">(required)</span>
+                </label>
+                <input id="tc-bulk-alldone-date" type="date" required value={date} min={weekStart} max={maxDate}
+                  disabled={running}
+                  onChange={e => { setDate(e.target.value); setError('') }}
+                  aria-invalid={dateInvalid || undefined} aria-describedby="tc-bulk-alldone-date-help"
+                  className="w-full px-3 py-2 min-h-[44px] border border-surface-300 rounded-lg text-sm bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <p id="tc-bulk-alldone-date-help" className="text-xs text-surface-500 mt-1">
+                  Same day for every student. Must be in this week and not in the future; clears a Left Early flag on that day, as with a swipe.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="tc-bulk-alldone-note" className="block text-xs font-medium text-surface-700 mb-1">Note (optional)</label>
+                <textarea id="tc-bulk-alldone-note" rows={2} maxLength={500} value={note} disabled={running}
+                  onChange={e => setNote(e.target.value)} aria-describedby="tc-bulk-alldone-note-count"
+                  placeholder="e.g. Lab finished in class"
+                  className="w-full px-3 py-2 border border-surface-300 rounded-lg text-sm bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <p id="tc-bulk-alldone-note-count" className="text-xs text-surface-400 mt-1" aria-live="polite">{note.length}/500 · added to each student's entry and the audit log</p>
+              </div>
+
+              {isCurrentWeek && (
+                <label htmlFor="tc-bulk-alldone-cancel" className="flex items-start gap-3 min-h-[44px] cursor-pointer">
+                  <input id="tc-bulk-alldone-cancel" type="checkbox" checked={cancelSignups} disabled={running}
+                    onChange={e => setCancelSignups(e.target.checked)}
+                    className="mt-1 h-5 w-5 rounded border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                  <span className="text-sm text-surface-700">
+                    Cancel their remaining lab sign-ups this week (today onward)
+                    <span className="block text-xs text-surface-500">Same as the badge swipe. Earlier days are never changed.</span>
+                  </span>
+                </label>
+              )}
+
+              <label htmlFor="tc-bulk-alldone-confirm" className="flex items-start gap-3 min-h-[44px] cursor-pointer rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                <input id="tc-bulk-alldone-confirm" type="checkbox" checked={confirmed} required aria-required="true" disabled={running}
+                  onChange={e => { setConfirmed(e.target.checked); setError('') }}
+                  className="mt-1 h-5 w-5 rounded border-surface-300 text-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <span className="text-sm text-surface-800">
+                  I confirm these <strong>{n} student{n === 1 ? '' : 's'}</strong> are done for the week and should be marked All Done.
+                  <span className="block text-xs text-surface-600">Required — nothing is saved until this is ticked.</span>
+                </span>
+              </label>
+            </>
+          )}
+
+          {running && (
+            <div role="status" aria-live="polite" className="flex items-center gap-2 text-sm text-surface-600">
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Marking {progress} of {n}…
+            </div>
+          )}
+
+          {results && (
+            <div>
+              <p role="status" className="text-sm font-medium text-surface-800 mb-2">
+                {okCount} marked All Done{alreadyCount ? ` · ${alreadyCount} already marked` : ''}{failCount ? ` · ${failCount} not saved` : ''}.
+              </p>
+              <ul className="rounded-lg border border-surface-200 divide-y divide-surface-100 text-sm max-h-60 overflow-y-auto" aria-label="Results">
+                {results.map(r => (
+                  <li key={r.student.userId} className="px-3 py-1.5 flex items-start gap-2">
+                    {r.status === 'ok' && <CheckCircle2 size={14} className="mt-0.5 text-emerald-600 shrink-0" aria-hidden="true" />}
+                    {r.status === 'already' && <BadgeCheck size={14} className="mt-0.5 text-surface-500 shrink-0" aria-hidden="true" />}
+                    {r.status === 'failed' && <AlertTriangle size={14} className="mt-0.5 text-red-600 shrink-0" aria-hidden="true" />}
+                    <span>
+                      <span className="text-surface-800">{r.student.fullName}</span>
+                      {' — '}
+                      <span className={r.status === 'failed' ? 'text-red-700' : 'text-surface-600'}>
+                        {r.status === 'ok' ? 'Marked All Done' : r.status === 'already' ? 'Skipped' : 'Not saved'}
+                        {r.detail ? ` (${r.detail})` : ''}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {failCount > 0 && <p className="text-xs text-surface-600 mt-2">Students not saved are still Behind and can be tried again.</p>}
+            </div>
+          )}
+
+          {error && <div role="alert" className="text-sm text-red-700">{error}</div>}
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-3">
+          {finished ? (
+            <button type="button" onClick={onDone}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              Done
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={onClose} disabled={running}
+                className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                Cancel
+              </button>
+              <button type="submit" disabled={running || !confirmed || dateInvalid || n === 0}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                {running ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <BadgeCheck size={14} aria-hidden="true" />}
+                {running ? 'Saving…' : `Mark ${n} All Done`}
+              </button>
+            </>
           )}
         </div>
       </form>
@@ -3314,7 +3609,20 @@ function PunchStatusBadge({ status }) {
   return <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium ${styles[status] || 'bg-surface-100 text-surface-600'}`}>{status}</span>
 }
 
-function AttBadge({ color, icon, label }) {
+function AttBadge({ color, icon, label, title, srText }) {
   const styles = { green: 'bg-green-100 text-green-700', red: 'bg-red-100 text-red-700', amber: 'bg-amber-100 text-amber-700', purple: 'bg-purple-100 text-purple-700', emerald: 'bg-emerald-100 text-emerald-700', orange: 'bg-orange-100 text-orange-700', blue: 'bg-blue-100 text-blue-700', gray: 'bg-surface-200 text-surface-600' }
-  return <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${styles[color]}`}>{icon} {label}</span>
+  return <span title={title || undefined} className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${styles[color]}`}>{icon} {label}{srText ? <span className="sr-only"> ({srText})</span> : null}</span>
+}
+
+// Who closed the week, from an All Done marker's description:
+//   badge swipe → "All Done — released by <name>"           → "Swiped by <name>"
+//   Time Cards  → "All Done — marked by <name> on Time Cards[ · note]"
+//                                                           → "Marked by <name> on Time Cards[ — note]"
+function allDoneSourceText(entry) {
+  const d = String(entry?.description || '').trim()
+  let m = d.match(/^All Done — released by (.+)$/)
+  if (m) return `Swiped by ${m[1].trim()}`
+  m = d.match(/^All Done — marked by (.+?) on Time Cards(?: · (.+))?$/)
+  if (m) return `Marked by ${m[1].trim()} on Time Cards${m[2] ? ` — ${m[2].trim()}` : ''}`
+  return d ? d.replace(/^All Done — /, '') : 'All Done'
 }

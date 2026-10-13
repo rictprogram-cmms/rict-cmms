@@ -2505,23 +2505,71 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
 
   // opts: { userId, date (YYYY-MM-DD, inside the week), weekStart (Monday),
   //         weekEnd (Sunday), fallbackClass { classId, courseName },
-  //         note, cancelSignups }
-  // Returns { success, recordId, cancelledCount } or { success:false, already }.
-  const markWeekAllDone = async ({ userId, date, weekStart, weekEnd, fallbackClass, note, cancelSignups }) => {
-    if (!canEdit) { toast.error('Not authorized'); return { success: false } }
-    if (!profile) { toast.error('Not logged in'); return { success: false } }
-    if (!userId || !date || !weekStart || !weekEnd) { toast.error('Missing student or week'); return { success: false } }
-    if (date < weekStart || date > weekEnd) { toast.error('The date must be inside the selected week'); return { success: false } }
+  //         note, cancelSignups, quiet }
+  // quiet: no toasts (bulk marking reports a summary instead).
+  // Returns { success, recordId, cancelledCount, via } or
+  //         { success:false, already, recordedOn } / { success:false, error }.
+  //
+  // Primary path: the server function mark_all_done_manual (20261012), which
+  // checks Reports / edit_time on the server and writes the marker, sign-up
+  // cancels and audit row in ONE transaction. If the function isn't installed
+  // yet, the browser path below does the same steps (deploy order safe).
+  const ALL_DONE_ERRORS = {
+    not_signed_in: 'You are not signed in.',
+    not_authorized: 'You do not have permission to mark All Done for this student.',
+    future_date: 'All Done cannot be dated in the future.',
+    student_not_found: 'Student not found.',
+    missing_input: 'Missing student or date.',
+  }
+  const isMissingFunction = (err) => {
+    const code = String(err?.code || '')
+    const msg = String(err?.message || '')
+    return code === 'PGRST202' || code === '42883' || /could not find the function/i.test(msg)
+  }
+  const markWeekAllDone = async ({ userId, date, weekStart, weekEnd, fallbackClass, note, cancelSignups, quiet = false }) => {
+    const say = quiet ? { ok() {}, err() {}, info() {} }
+      : { ok: (m) => toast.success(m), err: (m) => toast.error(m), info: (m) => toast(m, { icon: 'ℹ️' }) }
+    if (!canEdit) { say.err('Not authorized'); return { success: false, error: 'Not authorized' } }
+    if (!profile) { say.err('Not logged in'); return { success: false, error: 'Not logged in' } }
+    if (!userId || !date || !weekStart || !weekEnd) { say.err('Missing student or week'); return { success: false, error: 'Missing student or week' } }
+    if (date < weekStart || date > weekEnd) { say.err('The date must be inside the selected week'); return { success: false, error: 'Date outside the week' } }
     const todayStr = toDateStr(new Date())
-    if (date > todayStr) { toast.error('All Done cannot be dated in the future'); return { success: false } }
+    if (date > todayStr) { say.err('All Done cannot be dated in the future'); return { success: false, error: 'Future date' } }
 
     setSaving(true)
     try {
+      // ── Server path ──
+      const cleanNoteRpc = String(note || '').trim().slice(0, 500)
+      const rpc = await supabase.rpc('mark_all_done_manual', {
+        p_user_id: userId,
+        p_date: date,
+        p_class_id: fallbackClass?.classId || '',
+        p_course_id: fallbackClass?.courseName || '',
+        p_note: cleanNoteRpc,
+        p_cancel_signups: !!cancelSignups,
+      })
+      if (!rpc.error) {
+        const d = rpc.data || {}
+        if (d.ok) {
+          say.ok('Marked All Done for the week')
+          return { success: true, recordId: d.record_id, cancelledCount: d.cancelled_signups || 0, via: 'server' }
+        }
+        if (d.error === 'already') {
+          say.info('This week is already marked All Done')
+          return { success: false, already: true, recordedOn: d.recorded_on || null }
+        }
+        const msg = ALL_DONE_ERRORS[d.error] || 'All Done failed'
+        say.err(msg)
+        return { success: false, error: msg }
+      }
+      if (!isMissingFunction(rpc.error)) throw rpc.error
+
+      // ── Browser path (server function not installed yet) ──
       // Re-read right before writing so a swipe made in the meantime isn't doubled.
       const ctx = await loadAllDoneWeekContext(userId, weekStart, weekEnd)
       if (ctx.existingAllDone) {
-        toast('This week is already marked All Done', { icon: 'ℹ️' })
-        return { success: false, already: true }
+        say.info('This week is already marked All Done')
+        return { success: false, already: true, recordedOn: String(ctx.existingAllDone.punch_in || '').substring(0, 10) || null }
       }
       const st = ctx.student
       const studentName = `${st.first_name} ${(st.last_name || '').charAt(0)}.`
@@ -2578,7 +2626,7 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
           cancelledCount = (data || []).length
         } catch (signupErr) {
           console.error('markWeekAllDone: cancelling sign-ups failed:', signupErr)
-          toast.error('All Done saved, but their remaining sign-ups could not be cancelled — please cancel them on Lab Signup.')
+          say.err('All Done saved, but their remaining sign-ups could not be cancelled — please cancel them on Lab Signup.')
         }
       }
 
@@ -2602,12 +2650,12 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         console.error('Audit log error:', auditErr)
       }
 
-      toast.success(`${st.first_name} marked All Done for the week`)
-      return { success: true, recordId, cancelledCount }
+      say.ok(`${st.first_name} marked All Done for the week`)
+      return { success: true, recordId, cancelledCount, via: 'client' }
     } catch (err) {
       console.error('Mark week All Done error:', err)
-      toast.error(err.message || 'All Done failed')
-      return { success: false }
+      say.err(err.message || 'All Done failed')
+      return { success: false, error: err.message || 'All Done failed' }
     } finally {
       setSaving(false)
     }
