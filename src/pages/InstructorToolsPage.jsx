@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { useNavigate } from 'react-router-dom'
-import { GraduationCap, BookOpen, DollarSign, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive, Library } from 'lucide-react'
+import { GraduationCap, BookOpen, DollarSign, ShoppingBag, Wrench, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Settings, X, Save, Upload, Check, ImageIcon, Trash2, Plus, Pencil, Search, Loader2, AlertCircle, FilePlus, FileEdit, LayoutTemplate, Send, CheckCircle2, Clock, FileDown, Archive, Library } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
@@ -351,6 +351,19 @@ const tiles = [
     clickable: true,
   },
   {
+    key: 'bookstore-adoption',
+    title: 'Bookstore Adoption',
+    description: 'Pick a term and see every course\'s tools, supplies, and textbooks marked Required or Already Have.',
+    icon: ShoppingBag,
+    iconBg: 'bg-indigo-50',
+    iconColor: 'text-indigo-600',
+    accentFrom: 'from-indigo-400',
+    accentTo: 'to-indigo-600',
+    badgeColor: 'bg-indigo-50 text-indigo-700',
+    badge: 'New',
+    clickable: true,
+  },
+  {
     key: 'required-tools',
     title: 'Required Tools & Materials',
     description: 'Master catalog of tools and materials used across program courses.',
@@ -489,7 +502,7 @@ function Tile({ tile, onOpen, onSettings }) {
               className={`flex items-center gap-1.5 min-h-[44px] px-1 -mx-1 rounded text-xs font-medium ${tile.key === 'required-tools' ? 'text-amber-600' : 'text-brand-600'}`+' focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1'}
             >
               <ChevronRight size={13} aria-hidden="true" />
-              <span>{tile.key === 'required-tools' ? 'Open catalog' : tile.key === 'syllabus-library' ? 'Open Syllabus Library' : tile.key === 'new-course-proposal' ? 'Open Course Proposal Wizard' : tile.key === 'course-revision' ? 'Open Revision Wizards' : tile.key === 'program-planner' ? 'Open Program Planner' : tile.key === 'program-cost' ? 'Open Program Cost' : tile.key === 'course-outline-export' ? 'Open Course Outline Export' : tile.key === 'course-end-date' ? 'Open Course End Date' : 'Open Syllabus Generator'}</span>
+              <span>{tile.key === 'required-tools' ? 'Open catalog' : tile.key === 'syllabus-library' ? 'Open Syllabus Library' : tile.key === 'new-course-proposal' ? 'Open Course Proposal Wizard' : tile.key === 'course-revision' ? 'Open Revision Wizards' : tile.key === 'program-planner' ? 'Open Program Planner' : tile.key === 'program-cost' ? 'Open Program Cost' : tile.key === 'bookstore-adoption' ? 'Open Bookstore Adoption' : tile.key === 'course-outline-export' ? 'Open Course Outline Export' : tile.key === 'course-end-date' ? 'Open Course End Date' : 'Open Syllabus Generator'}</span>
             </button>
           ) : (
             <div className="flex items-center gap-1.5 text-xs text-surface-400">
@@ -1605,6 +1618,7 @@ export default function InstructorToolsPage() {
     else if (key === 'course-revision')      { setEditRevision(null); setShowRevision(true) }
     else if (key === 'program-planner')      { navigate('/program-planner') }
     else if (key === 'program-cost')         { navigate('/program-cost') }
+    else if (key === 'bookstore-adoption')   { navigate('/bookstore-adoption') }
     else if (key === 'course-outline-export'){ navigate('/course-outline-export') }
     else if (key === 'course-end-date')      { setEditEndDate(null); setShowEndDate(true) }
   }

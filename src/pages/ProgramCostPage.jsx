@@ -8,7 +8,7 @@ import { parseTermName } from '@/lib/academicTerms'
 import {
   DollarSign, Printer, ChevronDown, ChevronRight, ChevronLeft,
   GraduationCap, AlertCircle, Settings, Check, Wifi, Building2,
-  Search, Download, ArrowUpDown, X, Link2Off,
+  Search, Download, ArrowUpDown, X, Link2Off, ShoppingBag,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -1121,10 +1121,16 @@ export default function ProgramCostPage() {
             <p className="text-sm text-surface-500">Full cost breakdown from start to finish by semester, course, and category.</p>
           </div>
         </div>
-        <button onClick={()=>setShowTuitionModal(true)}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-          <Settings size={13} aria-hidden="true" /> Tuition Rates
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>navigate('/bookstore-adoption')}
+            className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-xs font-medium border border-indigo-200 bg-indigo-50 rounded-lg text-indigo-800 hover:bg-indigo-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            <ShoppingBag size={13} aria-hidden="true" /> Bookstore Adoption
+          </button>
+          <button onClick={()=>setShowTuitionModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-surface-200 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+            <Settings size={13} aria-hidden="true" /> Tuition Rates
+          </button>
+        </div>
       </div>
 
       {/* Rate summary pills */}

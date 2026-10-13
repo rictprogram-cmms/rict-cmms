@@ -92,6 +92,7 @@ const SOPsPage = lazyPage(() => import('@/pages/SOPsPage'))
 const InstructorToolsPage = lazyPage(() => import('@/pages/InstructorToolsPage'))
 const ProgramPlannerPage = lazyPage(() => import('@/pages/ProgramPlannerPage'))
 const ProgramCostPage = lazyPage(() => import('@/pages/ProgramCostPage'))
+const BookstoreAdoptionPage = lazyPage(() => import('@/pages/BookstoreAdoptionPage'))
 const CourseOutlineExportPage = lazyPage(() => import('@/pages/CourseOutlineExportPage'))
 const AttendanceReportsPage = lazyPage(() => import('@/pages/AttendanceReportsPage'))
 const AccountabilityReportPage = lazyPage(() => import('@/pages/AccountabilityReportPage'))
@@ -522,6 +523,7 @@ function AppRoutes() {
             <Route path="/instructor-tools" element={<Lazy><InstructorToolsPage /></Lazy>} />
             <Route path="/program-planner" element={<Lazy><ProgramPlannerPage /></Lazy>} />
             <Route path="/program-cost" element={<Lazy><ProgramCostPage /></Lazy>} />
+            <Route path="/bookstore-adoption" element={<Lazy><BookstoreAdoptionPage /></Lazy>} />
             <Route path="/course-outline-export" element={<Lazy><CourseOutlineExportPage /></Lazy>} />
           </Route>
 
