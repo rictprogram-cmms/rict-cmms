@@ -27,6 +27,13 @@
  *   Weekly Labs Tracker page. Students confirm hours, get swiped, then punch out.
  *   Instructors undo an All Done by deleting its time_clock marker row from the
  *   entry list; ConfirmDeleteModal explains that when the row is an All Done.
+ * - Mark All Done by hand (Reports / edit_time): "Mark week All Done" on the
+ *   Individual Time Card and "Mark All Done" on each Behind row of the Class
+ *   Weekly Report. Both open MarkAllDoneModal, which writes the same All Done
+ *   marker the badge swipe writes (useTimeEntryActions.markWeekAllDone), so
+ *   every report already treats it the same and the undo above still applies.
+ *   Only offered when the selected range is a single Mon–Sun week that has
+ *   started.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
@@ -281,6 +288,8 @@ export default function TimeCardsPage() {
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [showEditRequestModal, setShowEditRequestModal] = useState(false)
   const [editRequestEntry, setEditRequestEntry] = useState(null)
+  // Manual All Done: { userId, name, fallbackClass, source: 'timecard' | 'classweekly' }
+  const [allDoneTarget, setAllDoneTarget] = useState(null)
 
   // Report
   const [showReportModal, setShowReportModal] = useState(false)
@@ -627,6 +636,30 @@ export default function TimeCardsPage() {
   const canAddEntry = hasPerm('edit_time') && tab === 'timecard' && selectedUserId
   const canRequestEntry = !hasPerm('edit_time') && tab === 'timecard' && selectedUserId
 
+  // ── Manual All Done ──
+  // Offered only when the selected range sits inside ONE Mon–Sun week that has
+  // already started (an All Done can't be dated in the future).
+  const allDoneWeek = useMemo(() => {
+    if (!startDate || !endDate || endDate < startDate) return { single: false, reason: 'Pick a single week (Mon–Sun) to mark All Done.' }
+    const range = getWeekRange(new Date(startDate + 'T00:00:00'))
+    const weekStart = toDateStr(range.start)
+    const weekEnd = toDateStr(range.end)
+    if (endDate > weekEnd) return { single: false, reason: 'Pick a single week (Mon–Sun) to mark All Done.' }
+    const today = toDateStr(new Date())
+    if (weekStart > today) return { single: false, reason: 'This week hasn’t started yet.' }
+    return { single: true, weekStart, weekEnd, reason: '' }
+  }, [startDate, endDate])
+  const canMarkAllDone = canEditTime && isInstructor
+  const handleAllDoneSaved = () => {
+    const source = allDoneTarget?.source
+    setAllDoneTarget(null)
+    if (source === 'classweekly') {
+      if (selectedClass) classReport.fetchReport(selectedClass, startDate, endDate)
+    } else if (selectedUserId) {
+      timeCard.fetchTimeCard(selectedUserId, startDate, endDate)
+    }
+  }
+
   // If report is active, show the report view
   if (reportData) {
     return <ReportView reportData={reportData} onClose={() => setReportData(null)} />
@@ -751,6 +784,16 @@ export default function TimeCardsPage() {
                     if (res?.success) timeCard.fetchTimeCard(selectedUserId, startDate, endDate)
                   }}
                   saving={actions.saving}
+                  allDoneWeek={canMarkAllDone ? allDoneWeek : null}
+                  onMarkAllDone={canMarkAllDone && allDoneWeek.single ? () => {
+                    const firstTile = Object.entries(timeCard.classSummary || {}).find(([k]) => k !== 'Work Study')
+                    setAllDoneTarget({
+                      userId: selectedUserId,
+                      name: selectedUserName,
+                      fallbackClass: firstTile ? { classId: firstTile[1].classId || '', courseName: firstTile[0] } : null,
+                      source: 'timecard',
+                    })
+                  } : null}
                 />
               )}
             </div>
@@ -801,6 +844,15 @@ export default function TimeCardsPage() {
                   students={classReport.students}
                   classInfo={classReport.classInfo}
                   dateRange={formatDateRange(startDate, endDate)}
+                  allDoneWeek={canMarkAllDone ? allDoneWeek : null}
+                  onMarkAllDone={canMarkAllDone && allDoneWeek.single ? (s) => setAllDoneTarget({
+                    userId: s.userId,
+                    name: s.fullName,
+                    fallbackClass: classReport.classInfo
+                      ? { classId: classReport.classInfo.class_id || '', courseName: classReport.classInfo.course_id || selectedClass }
+                      : { classId: '', courseName: selectedClass },
+                    source: 'classweekly',
+                  }) : null}
                 />
               )}
             </div>
@@ -922,6 +974,15 @@ export default function TimeCardsPage() {
         <ConfirmDeleteModal entry={confirmDelete} saving={actions.saving} classes={classes}
           onConfirm={() => handleDelete(confirmDelete.record_id)}
           onCancel={() => setConfirmDelete(null)} />
+      )}
+      {allDoneTarget && allDoneWeek.single && (
+        <MarkAllDoneModal
+          target={allDoneTarget}
+          weekStart={allDoneWeek.weekStart}
+          weekEnd={allDoneWeek.weekEnd}
+          actions={actions}
+          onClose={() => setAllDoneTarget(null)}
+          onSaved={handleAllDoneSaved} />
       )}
       {showReportModal && (
         <ReportModal
@@ -1943,7 +2004,7 @@ function ReportStatBox({ value, label, color, sub }) {
 // TIME CARD CONTENT (with attendance analysis)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary, pendingEdits, userName, dateRange, isInstructor, onEdit, onDelete, onRequestEdit, onPunchOut, saving }) {
+function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary, pendingEdits, userName, dateRange, isInstructor, onEdit, onDelete, onRequestEdit, onPunchOut, saving, allDoneWeek = null, onMarkAllDone = null }) {
   const as = attendanceSummary
 
   // ── Live hours overlay ──
@@ -2053,7 +2114,30 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
       {/* Class Summary */}
       {Object.keys(classSummary).length > 0 && (
         <div className="mb-6">
-          <h4 className="text-sm font-semibold text-surface-700 mb-3">Weekly Hours by Class</h4>
+          {(() => {
+            // Manual All Done (instructors with edit_time). Hidden once the week is
+            // closed — the tiles already say "Week Closed by Instructor" and the
+            // All Done row in the entry list is the undo.
+            const weekAlreadyClosed = (entries || []).some(e => e.entry_type === 'All Done') ||
+              Object.values(classSummary).some(d => d && d.allDone)
+            const showButton = !!allDoneWeek && !weekAlreadyClosed && !!onMarkAllDone
+            const showHint = !!allDoneWeek && !weekAlreadyClosed && !onMarkAllDone && !!allDoneWeek.reason
+            return (
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h4 className="text-sm font-semibold text-surface-700">Weekly Hours by Class</h4>
+                {showButton && (
+                  <button type="button" onClick={onMarkAllDone}
+                    aria-label={`Mark ${userName || 'this student'} All Done for this week`}
+                    className="print:hidden inline-flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-lg text-xs font-medium border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                    <BadgeCheck size={14} aria-hidden="true" /> Mark week All Done
+                  </button>
+                )}
+                {showHint && (
+                  <span className="print:hidden text-xs text-surface-500">{allDoneWeek.reason}</span>
+                )}
+              </div>
+            )
+          })()}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {Object.entries(classSummary).map(([name, data]) => {
               // Stored hours + any in-progress time for today's open punch (display only)
@@ -2275,7 +2359,7 @@ function TimeCardContent({ entries, classSummary, totalHours, attendanceSummary,
 // CLASS WEEKLY REPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ClassWeeklyContent({ students, classInfo, dateRange }) {
+function ClassWeeklyContent({ students, classInfo, dateRange, allDoneWeek = null, onMarkAllDone = null }) {
   const metCount = students.filter(s => s.metRequirement).length
   // Students counted as met only because the week was closed (All Done), not by hours
   const allDoneCount = students.filter(s => s.weekClosed && !s.hoursMet).length
@@ -2365,7 +2449,16 @@ function ClassWeeklyContent({ students, classInfo, dateRange }) {
                         <span className="sr-only"> (week closed by instructor regardless of hours)</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={11} aria-hidden="true" /> Behind</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={11} aria-hidden="true" /> Behind</span>
+                        {onMarkAllDone && (
+                          <button type="button" onClick={() => onMarkAllDone(s)}
+                            aria-label={`Mark ${s.fullName} All Done for this week`}
+                            className="print:hidden inline-flex items-center gap-1 px-2.5 min-h-[44px] rounded-lg text-xs font-medium border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                            <BadgeCheck size={12} aria-hidden="true" /> Mark All Done
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="px-3 py-2.5 text-center">
@@ -2707,6 +2800,167 @@ function EditEntryModal({ entry, classes, actions, profile, onClose, onSaved }) 
   )
 }
 
+/**
+ * MarkAllDoneModal — instructor marks a student's week All Done without a
+ * badge swipe (WCAG 2.1 AA: labelled dialog via ModalOverlay, visible labels,
+ * 44px targets, focus-visible rings, role="status" while loading,
+ * role="alert" for errors, live note counter).
+ *
+ * Reads the student's week first (actions.loadAllDoneWeekContext) so it can
+ * say "already marked" instead of writing a second marker, and default the
+ * date to today (current week) or the student's last punch day that week
+ * (else Friday). The date is limited to the week and never in the future.
+ */
+const NOOP = () => {}
+function MarkAllDoneModal({ target, weekStart, weekEnd, actions, onClose, onSaved }) {
+  const today = toDateStr(new Date())
+  const isCurrentWeek = today >= weekStart && today <= weekEnd
+  const maxDate = today < weekEnd ? today : weekEnd
+  const friday = (() => {
+    const d = new Date(weekStart + 'T00:00:00'); d.setDate(d.getDate() + 4); return toDateStr(d)
+  })()
+
+  const [ctx, setCtx] = useState(null)
+  const [loadError, setLoadError] = useState('')
+  const [date, setDate] = useState(isCurrentWeek ? today : (friday <= maxDate ? friday : maxDate))
+  const [note, setNote] = useState('')
+  const [cancelSignups, setCancelSignups] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const c = await actions.loadAllDoneWeekContext(target.userId, weekStart, weekEnd)
+        if (!alive) return
+        setCtx(c)
+        if (!isCurrentWeek && c.lastPunchDate && c.lastPunchDate >= weekStart && c.lastPunchDate <= maxDate) {
+          setDate(c.lastPunchDate)
+        }
+      } catch (err) {
+        if (alive) setLoadError(err.message || 'Could not load this week')
+      }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target.userId, weekStart, weekEnd])
+
+  const already = ctx?.existingAllDone || null
+  const dateInvalid = !date || date < weekStart || date > maxDate
+  const canSubmit = !!ctx && !already && !dateInvalid && !actions.saving
+
+  const handleSubmit = async (e) => {
+    e?.preventDefault?.()
+    if (dateInvalid) { setError(`Pick a date from ${formatDate(weekStart + 'T00:00:00Z')} to ${formatDate(maxDate + 'T00:00:00Z')}.`); return }
+    setError('')
+    const res = await actions.markWeekAllDone({
+      userId: target.userId, date, weekStart, weekEnd,
+      fallbackClass: target.fallbackClass, note,
+      cancelSignups: isCurrentWeek && cancelSignups,
+    })
+    if (res?.success || res?.already) onSaved()
+  }
+
+  const studentName = target.name || 'this student'
+  return (
+    <ModalOverlay onClose={actions.saving ? NOOP : onClose} zIndex="z-[60]" labelledBy="tc-alldone-title">
+      <form className="bg-white rounded-xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()} onSubmit={handleSubmit}
+        aria-describedby="tc-alldone-desc" noValidate>
+        <div className="px-5 py-4 border-b border-surface-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 id="tc-alldone-title" className="font-semibold text-surface-900">Mark All Done</h3>
+            <p id="tc-alldone-desc" className="text-xs text-surface-500 mt-0.5">
+              <strong className="text-surface-700">{studentName}</strong> · week of {formatDate(weekStart + 'T00:00:00Z')} – {formatDate(weekEnd + 'T00:00:00Z')}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} disabled={actions.saving} aria-label="Close"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-surface-500 hover:bg-surface-100 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-4">
+          {!ctx && !loadError && (
+            <div role="status" className="flex items-center gap-2 text-sm text-surface-500">
+              <Loader2 size={14} className="animate-spin" aria-hidden="true" /> Checking this week…
+            </div>
+          )}
+          {loadError && (
+            <div role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{loadError}</div>
+          )}
+          {already && (
+            <div role="status" className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-start gap-2">
+              <BadgeCheck size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>Already marked All Done on {formatDate(already.punch_in)}. To undo it, delete the All Done row from the time card.</span>
+            </div>
+          )}
+
+          {ctx && !already && (
+            <>
+              <p className="text-sm text-surface-600">
+                Closes this week for every class on {studentName.split(' ')[0]}’s time card, the same as a badge swipe. Their hours are not changed.
+              </p>
+
+              <div>
+                <label htmlFor="tc-alldone-date" className="block text-xs font-medium text-surface-700 mb-1">
+                  Date to record it on <span className="text-red-600" aria-hidden="true">*</span><span className="sr-only">(required)</span>
+                </label>
+                <input id="tc-alldone-date" type="date" required value={date}
+                  min={weekStart} max={maxDate}
+                  onChange={e => { setDate(e.target.value); setError('') }}
+                  aria-invalid={dateInvalid || undefined}
+                  aria-describedby="tc-alldone-date-help"
+                  className="w-full px-3 py-2 min-h-[44px] border border-surface-300 rounded-lg text-sm bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <p id="tc-alldone-date-help" className="text-xs text-surface-500 mt-1">
+                  Must be in this week and not in the future. A Left Early flag on this day is cleared, as with a swipe.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="tc-alldone-note" className="block text-xs font-medium text-surface-700 mb-1">Note (optional)</label>
+                <textarea id="tc-alldone-note" rows={2} maxLength={500} value={note}
+                  onChange={e => setNote(e.target.value)}
+                  aria-describedby="tc-alldone-note-count"
+                  placeholder="e.g. Finished the lab in class on Thursday"
+                  className="w-full px-3 py-2 border border-surface-300 rounded-lg text-sm bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                <p id="tc-alldone-note-count" className="text-xs text-surface-400 mt-1" aria-live="polite">{note.length}/500 · shown on the time card entry and in the audit log</p>
+              </div>
+
+              {isCurrentWeek && (
+                <label htmlFor="tc-alldone-cancel" className="flex items-start gap-3 min-h-[44px] cursor-pointer">
+                  <input id="tc-alldone-cancel" type="checkbox" checked={cancelSignups}
+                    onChange={e => setCancelSignups(e.target.checked)}
+                    className="mt-1 h-5 w-5 rounded border-surface-300 text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
+                  <span className="text-sm text-surface-700">
+                    Cancel their remaining lab sign-ups this week (today onward)
+                    <span className="block text-xs text-surface-500">Same as the badge swipe. Earlier days are never changed.</span>
+                  </span>
+                </label>
+              )}
+            </>
+          )}
+
+          {error && <div role="alert" className="text-sm text-red-700">{error}</div>}
+        </div>
+
+        <div className="px-5 py-3 border-t border-surface-100 flex justify-end gap-3">
+          <button type="button" onClick={onClose} disabled={actions.saving}
+            className="px-4 py-2 rounded-lg text-sm text-surface-600 hover:bg-surface-100 border border-surface-200 min-h-[44px] disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            {already ? 'Close' : 'Cancel'}
+          </button>
+          {!already && (
+            <button type="submit" disabled={!canSubmit}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-700 text-white hover:bg-emerald-800 disabled:opacity-40 flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <BadgeCheck size={14} aria-hidden="true" />}
+              {actions.saving ? 'Saving…' : 'Mark All Done'}
+            </button>
+          )}
+        </div>
+      </form>
+    </ModalOverlay>
+  )
+}
+
 function ConfirmDeleteModal({ entry, saving, classes, onConfirm, onCancel }) {
   const classId = entry.course_id || entry.class_id
   const classConfig = (classes || []).find(c => c.course_id === classId || c.class_id === classId)
@@ -2716,7 +2970,10 @@ function ConfirmDeleteModal({ entry, saving, classes, onConfirm, onCancel }) {
   // Say so plainly instead of the generic "delete entry" wording.
   const isAllDone = entry.entry_type === 'All Done'
   const studentName = (entry.user_name || '').trim() || 'this student'
-  const swipedBy = (entry.description || '').replace(/^All Done — released by /, '').trim()
+  // Swipe markers read "All Done — released by <name>"; manual ones from this
+  // page read "All Done — marked by <name> on Time Cards[ · note]".
+  const manualAllDone = /^All Done — marked by /.test(entry.description || '')
+  const swipedBy = (entry.description || '').replace(/^All Done — (released|marked) by /, '').trim()
   return (
     <ModalOverlay onClose={onCancel} zIndex="z-[60]" labelledBy="tc-delete-title">
       <div className="bg-white rounded-xl w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -2725,12 +2982,12 @@ function ConfirmDeleteModal({ entry, saving, classes, onConfirm, onCancel }) {
           {isAllDone ? (
             <>
               <p className="text-sm text-surface-700">
-                This will undo the All Done for <strong>{studentName}</strong> on {formatDate(entry.punch_in)}{swipedBy ? <span className="text-xs text-surface-400"> (swiped by {swipedBy})</span> : null}.
+                This will undo the All Done for <strong>{studentName}</strong> on {formatDate(entry.punch_in)}{swipedBy ? <span className="text-xs text-surface-400"> ({manualAllDone ? 'marked by' : 'swiped by'} {swipedBy})</span> : null}.
               </p>
               <p className="text-xs text-surface-500 mt-2">
                 Their Time Card and Dashboard will show the day as not done, and left-early checks apply again. Lab signups that were cancelled at swipe time stay cancelled. The student's own punches are not affected.
               </p>
-              <p className="text-xs text-surface-400 mt-1">They can be swiped All Done again if needed.</p>
+              <p className="text-xs text-surface-400 mt-1">They can be swiped or marked All Done again if needed.</p>
             </>
           ) : (
             <>

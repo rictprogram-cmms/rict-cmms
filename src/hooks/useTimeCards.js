@@ -1239,6 +1239,7 @@ export function useTimeCardData() {
             makeupHours: mu.hours,
             makeupRequestIds: mu.requestIds,
             courseName: c.course_name || '',
+            classId: c.class_id || '',
             allDone: closure.allDone,
             requiredHoursMet: closure.requiredHoursMet,
           }
@@ -1258,6 +1259,7 @@ export function useTimeCardData() {
             makeupHours: mu.hours,
             makeupRequestIds: mu.requestIds,
             courseName: c.course_name || '',
+            classId: c.class_id || '',
             allDone: closure.allDone,
             requiredHoursMet: closure.requiredHoursMet,
           }
@@ -1800,6 +1802,7 @@ export function useClassWeeklyReport() {
           trackerClosedUsers.has(u.user_id) || (!!u.email && trackerClosedUsers.has(u.email))
         return {
           userId: u.user_id,
+          email: u.email || '',
           name: `${u.first_name} ${(u.last_name || '').charAt(0)}.`,
           fullName: `${u.first_name} ${u.last_name}`,
           role: u.role,
@@ -2455,10 +2458,166 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
     }
   }
 
+  // ── Instructor: mark a student's week All Done by hand (no badge swipe) ──
+  //
+  // Writes the same zero-duration time_clock marker the badge swipe writes
+  // (entry_type 'All Done'), so every reader that already understands a swipe —
+  // the time card's "Week Closed by Instructor", cross-class propagation, GB
+  // Items / On Track %, Class Weekly Report, Dashboard, Metrics Report no-show
+  // excusal — treats it identically. Undo is unchanged: delete the marker row
+  // from the entry list.
+  //
+  // Dates follow the fake-UTC convention (local wall-clock stamped +00).
+  // user_id MUST be the legacy USR#### id: the time card loads entries by
+  // user_id (see 2026-10-08 All Done marker fix).
+
+  // Read what the dialog needs for one student-week. Returns
+  // { student, existingAllDone, lastPunchDate, firstClass }.
+  const loadAllDoneWeekContext = async (userId, weekStart, weekEnd) => {
+    const student = mustData(await supabase
+      .from('profiles')
+      .select('user_id, first_name, last_name, email')
+      .eq('user_id', userId)
+      .maybeSingle(), 'profiles.select')
+    if (!student) throw new Error('Student not found')
+
+    const rows = mustData(await supabase
+      .from('time_clock')
+      .select('record_id, entry_type, class_id, course_id, punch_in, description')
+      .eq('user_id', userId)
+      .gte('punch_in', weekStart)
+      .lte('punch_in', weekEnd + 'T23:59:59')
+      .order('punch_in', { ascending: true }), 'time_clock.select') || []
+
+    const existingAllDone = rows.find(r => r.entry_type === 'All Done') || null
+    const classRows = rows.filter(r =>
+      r.entry_type !== 'All Done' && r.entry_type !== 'Volunteer' &&
+      r.entry_type !== 'Club Activity' && r.entry_type !== 'Work Study' &&
+      (r.course_id || r.class_id))
+    const lastPunchDate = classRows.length
+      ? String(classRows[classRows.length - 1].punch_in).substring(0, 10)
+      : null
+    const firstClass = classRows.length
+      ? { classId: classRows[0].class_id || '', courseName: classRows[0].course_id || '' }
+      : null
+    return { student, existingAllDone, lastPunchDate, firstClass }
+  }
+
+  // opts: { userId, date (YYYY-MM-DD, inside the week), weekStart (Monday),
+  //         weekEnd (Sunday), fallbackClass { classId, courseName },
+  //         note, cancelSignups }
+  // Returns { success, recordId, cancelledCount } or { success:false, already }.
+  const markWeekAllDone = async ({ userId, date, weekStart, weekEnd, fallbackClass, note, cancelSignups }) => {
+    if (!canEdit) { toast.error('Not authorized'); return { success: false } }
+    if (!profile) { toast.error('Not logged in'); return { success: false } }
+    if (!userId || !date || !weekStart || !weekEnd) { toast.error('Missing student or week'); return { success: false } }
+    if (date < weekStart || date > weekEnd) { toast.error('The date must be inside the selected week'); return { success: false } }
+    const todayStr = toDateStr(new Date())
+    if (date > todayStr) { toast.error('All Done cannot be dated in the future'); return { success: false } }
+
+    setSaving(true)
+    try {
+      // Re-read right before writing so a swipe made in the meantime isn't doubled.
+      const ctx = await loadAllDoneWeekContext(userId, weekStart, weekEnd)
+      if (ctx.existingAllDone) {
+        toast('This week is already marked All Done', { icon: 'ℹ️' })
+        return { success: false, already: true }
+      }
+      const st = ctx.student
+      const studentName = `${st.first_name} ${(st.last_name || '').charAt(0)}.`
+      const cls = ctx.firstClass || fallbackClass || {}
+      const byName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || profile.email
+      const cleanNote = String(note || '').trim().slice(0, 500)
+
+      // Today → the current wall-clock time; an earlier day → noon. The time is
+      // never scored (day-span logic short-circuits on entry_type 'All Done').
+      const stamp = date === todayStr ? localToUtcIso(new Date()) : `${date}T12:00:00+00`
+      const recordId = await generateSafeTcId()
+
+      await withNetworkRetry(async () => {
+        const { error } = assertWrite(
+          await supabase.from('time_clock').insert({
+            record_id: recordId,
+            user_id: st.user_id,
+            user_name: studentName,
+            user_email: st.email,
+            class_id: cls.classId || '',
+            course_id: cls.courseName || '',
+            punch_in: stamp,
+            punch_out: stamp,
+            total_hours: 0,
+            status: 'Punched Out',
+            week_start: weekStart,
+            entry_type: 'All Done',
+            description: `All Done — marked by ${byName} on Time Cards${cleanNote ? ` · ${cleanNote}` : ''}`,
+            approval_status: 'Approved',
+          }).select(),
+          'time_clock.insert'
+        )
+        if (error) throw error
+      }, {
+        failureMessage: 'Connection problem — All Done was not saved. Please check your signal and try again.',
+      })
+
+      // Optional: cancel the student's remaining Confirmed sign-ups this week,
+      // today onward — the same thing the badge swipe does. Past days are never
+      // touched so no-show history stays intact. Failure here does not undo
+      // the All Done.
+      let cancelledCount = 0
+      if (cancelSignups && todayStr >= weekStart && todayStr <= weekEnd && st.email) {
+        try {
+          const { data, error } = await supabase
+            .from('lab_signup')
+            .update({ status: 'Cancelled' })
+            .eq('user_email', st.email)
+            .eq('status', 'Confirmed')
+            .gte('date', todayStr)
+            .lte('date', weekEnd + 'T23:59:59')
+            .select('signup_id')
+          if (error) throw error
+          cancelledCount = (data || []).length
+        } catch (signupErr) {
+          console.error('markWeekAllDone: cancelling sign-ups failed:', signupErr)
+          toast.error('All Done saved, but their remaining sign-ups could not be cancelled — please cancel them on Lab Signup.')
+        }
+      }
+
+      try {
+        await supabase.from('audit_log').insert({
+          log_id: 'LOG' + Date.now(),
+          timestamp: new Date().toISOString(),
+          user_email: profile.email,
+          user_name: byName,
+          action: 'ALL_DONE',
+          entity_type: 'time_clock',
+          entity_id: recordId,
+          field_changed: 'all_done',
+          old_value: 'No',
+          new_value: 'Yes',
+          details: `Marked All Done on Time Cards for ${st.first_name} ${st.last_name} — week of ${weekStart}, recorded on ${date}` +
+            (cancelledCount ? `; cancelled ${cancelledCount} sign-up(s)` : '') +
+            (cleanNote ? ` — Note: ${cleanNote}` : ''),
+        })
+      } catch (auditErr) {
+        console.error('Audit log error:', auditErr)
+      }
+
+      toast.success(`${st.first_name} marked All Done for the week`)
+      return { success: true, recordId, cancelledCount }
+    } catch (err) {
+      console.error('Mark week All Done error:', err)
+      toast.error(err.message || 'All Done failed')
+      return { success: false }
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return {
     saving, addEntry, submitTimeRequest, submitEditRequest,
     updateEntry, deleteEntry, punchOutEntry,
     approveTimeRequest, rejectTimeRequest,
+    loadAllDoneWeekContext, markWeekAllDone,
   }
 }
 
