@@ -18,13 +18,19 @@
  *    slide (WO, slide 1, WO, slide 2, WO, ... then repeat)
  *  - Slate countdown bar along the panel bottom shows time until the
  *    next slide (hidden when rotation is paused/pinned)
- *  - Dark theme
+ *  - Dark theme (index.html also paints kiosk routes dark before load, so a
+ *    reload never flashes white)
+ *  - Updates: the TV no longer polls for new versions. It reloads when an
+ *    instructor presses "Reload TVs now" (Settings → General → TV Displays),
+ *    and at midnight as a backstop
+ *  - Work order and attendance lists loop smoothly; a count change keeps
+ *    the scroll position instead of jumping to the top
+ *  - Names sized to read from across the room
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { shortName } from '@/lib/utils'
 import { createClient } from '@supabase/supabase-js'
-import { useVersionCheck } from '@/hooks/useVersionCheck'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
 import { fetchKioskFeed, subscribeKioskFeed } from '@/lib/kioskFeed'
@@ -72,6 +78,85 @@ function formatTimeTv(min) {
 // Fallback polling interval (5 minutes) — realtime handles instant updates,
 // this is a safety net in case a subscription message is missed
 const FALLBACK_POLL_MS = 5 * 60 * 1000
+
+// ── "Reload TVs now" signal ─────────────────────────────────────────
+// Settings → General → TV Displays writes the current time (real UTC ISO)
+// to this settings key. Every TV records the value it saw when it loaded,
+// listens for changes, and reloads when the value moves forward. The key is
+// on the logged-out read list (migration 20261015_tv_reload_signal.sql).
+// Replaces the 10-minute /version.json polling the TV used to do.
+export const TV_RELOAD_KEY = 'tv_reload_requested_at'
+// Small random delay so several TVs don't all hit the server in the same second.
+const TV_RELOAD_JITTER_MS = 3000
+
+// True when `next` is a valid timestamp later than `baseline`. A missing or
+// unreadable baseline counts as older (any real request wins).
+export function isNewerReloadRequest(baseline, next) {
+  const n = Date.parse(next || '')
+  if (!Number.isFinite(n)) return false
+  const b = Date.parse(baseline || '')
+  return !Number.isFinite(b) || n > b
+}
+
+// ── Looping auto-scroll for the Work Orders and Lab Attendance lists ──
+// When one copy of the list is taller than its panel, a second copy is
+// rendered under it (aria-hidden) and the pair scrolls up by exactly one
+// copy (-50%) on a loop, so the seam is invisible.
+// Two things this fixes over the old version:
+//  • The second copy was added whenever there were more than 6 items, not
+//    when the list actually overflowed — so a short list of tall rows
+//    scrolled half-way and snapped back to the top.
+//  • A change in the item count changed the scroll speed, and re-setting
+//    the animation restarted it from the top (a visible jump every time a
+//    work order opened or closed). Now the new speed picks up from the
+//    same point in the loop.
+// resetKey: when the list's element is remounted (the WO board returns
+// after a slide), scrolling starts fresh straight away instead of waiting
+// for the next data refresh.
+const woScrollSeconds  = n => Math.max(30, n * 4)
+const pplScrollSeconds = n => Math.max(20, n * 3)
+
+export function loopDelaySeconds(prev, nowMs, newDurationS) {
+  if (!prev || !(prev.durationS > 0)) return 0
+  const elapsedS = Math.max(0, (nowMs - prev.startedAt) / 1000)
+  const progress = (elapsedS % prev.durationS) / prev.durationS
+  return -progress * newDurationS
+}
+
+function useLoopScroll(items, keyframe, secondsFor, resetKey) {
+  const scrollRef = useRef(null)
+  const copyRef   = useRef(null)
+  const stateRef  = useRef(null)   // { el, durationS, startedAt }
+  const [loop, setLoop] = useState(false)
+
+  // 1. Does one copy overflow its panel? Only then render the second copy.
+  useEffect(() => {
+    const el = scrollRef.current
+    const copy = copyRef.current
+    const box = el?.parentElement
+    setLoop(!!(el && copy && box && copy.offsetHeight > box.clientHeight))
+  }, [items, resetKey])
+
+  // 2. Start, stop or re-time the animation.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) { stateRef.current = null; return }
+    if (!loop) {
+      el.style.animation = 'none'
+      stateRef.current = null
+      return
+    }
+    const durationS = secondsFor(items.length)
+    const prev = stateRef.current && stateRef.current.el === el ? stateRef.current : null
+    if (prev && prev.durationS === durationS) return   // already running at this speed
+    const now = performance.now()
+    const delayS = loopDelaySeconds(prev, now, durationS)
+    el.style.animation = `${keyframe} ${durationS}s linear ${delayS}s infinite`
+    stateRef.current = { el, durationS, startedAt: now + delayS * 1000 }
+  }, [loop, items, resetKey, keyframe, secondsFor])
+
+  return { scrollRef, copyRef, loop }
+}
 
 
 // ════════════════════════════════════════════════════════════════════
@@ -246,18 +331,69 @@ export default function TVDisplayPage() {
   // Each entry: { startMin, endMin, startStr, endStr, reason, isCurrent, isUpcoming }
   const [todayClosures, setTodayClosures] = useState([])
 
-  const woScrollRef = useRef(null)
   // 1-based index of the slide to show after the next Open Work Orders beat
   // (rotation interleaves WO between every slide)
   const nextSlideRef = useRef(1)
   // Latest slides array, readable inside timers without being an effect
   // dependency (see rotation timer note below)
   const slidesRef = useRef([])
-  const pplScrollRef = useRef(null)
 
-  // ── Version check: reload within ~10 min of a new deploy ─────────
-  // (The midnight refresh below remains as a backstop.)
-  useVersionCheck({ label: 'TVDisplay' })
+  // ── "Reload TVs now" listener ────────────────────────────────────
+  // No version polling: the TV reloads only when an instructor asks (or at
+  // midnight, below). On load it records the current request time as its
+  // baseline, so a reload never triggers another. If the realtime link
+  // drops and comes back, it re-reads the key and catches a press it missed.
+  const reloadBaselineRef = useRef(undefined)   // undefined = not read yet
+  const reloadingRef = useRef(false)
+  useEffect(() => {
+    let cancelled = false
+    let jitterTimer = null
+
+    function reloadSoon(requestedAt) {
+      if (reloadingRef.current) return
+      reloadingRef.current = true
+      const wait = Math.floor(Math.random() * TV_RELOAD_JITTER_MS)
+      console.log(`[TVDisplay] Reload requested at ${requestedAt} — reloading in ${wait} ms`)
+      jitterTimer = setTimeout(() => { if (!cancelled) window.location.reload() }, wait)
+    }
+
+    function consider(value) {
+      if (reloadBaselineRef.current === undefined) {
+        reloadBaselineRef.current = value || ''
+        return
+      }
+      if (isNewerReloadRequest(reloadBaselineRef.current, value)) reloadSoon(value)
+    }
+
+    async function readSignal() {
+      try {
+        const row = mustData(await supabase
+          .from('settings')
+          .select('setting_value')
+          .eq('setting_key', TV_RELOAD_KEY)
+          .maybeSingle(), 'settings.select')
+        if (!cancelled) consider(row?.setting_value || '')
+      } catch (e) {
+        // Leave the baseline unset; the next successful read sets it.
+        console.warn('[TVDisplay] Reload signal read failed:', e?.message || e)
+      }
+    }
+    readSignal()
+
+    const unsubscribe = subscribeWithReconnect('tv-reload-signal', ch => ch
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'settings',
+        filter: `setting_key=eq.${TV_RELOAD_KEY}`,
+      }, (p) => {
+        const v = p.new?.setting_value || ''
+        // A press while the first read is still in flight still counts.
+        if (reloadBaselineRef.current === undefined) reloadBaselineRef.current = ''
+        consider(v)
+      })
+    , { ...TV_RT_OPTS, onReconnect: readSignal })
+
+    return () => { cancelled = true; clearTimeout(jitterTimer); unsubscribe() }
+  }, [])
 
   // ── Auto-refresh page at midnight so deployed updates take effect (backstop) ──
   useEffect(() => {
@@ -788,8 +924,11 @@ export default function TVDisplayPage() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { loadData() })
   , TV_RT_OPTS), [loadData])
 
-  // ── Minute-tick refresh so closure "isCurrent / isUpcoming" labels stay accurate ──
-  // (The data itself doesn't change, just our derived now-relative flags.)
+  // ── Minute-tick refresh ──
+  // Keeps every clock-relative label accurate: closure "now / upcoming",
+  // and Lab Attendance statuses (Expected → Missing when a session starts,
+  // "Until 3pm", Left Early, On Break). Those are derived against the wall
+  // clock inside loadData, so this re-runs it rather than only the closures.
   useEffect(() => {
     const id = setInterval(loadData, 60_000)
     return () => clearInterval(id)
@@ -804,31 +943,13 @@ export default function TVDisplayPage() {
     return () => { clearInterval(id); clearTimeout(retryTimerRef.current); window.removeEventListener('online', onOnline) }
   }, [loadData])
 
-  // ── Auto-scroll work orders ────────────────────────────────────
-  useEffect(() => {
-    const el = woScrollRef.current
-    if (!el) return
-    const container = el.parentElement
-    if (el.scrollHeight > container.clientHeight) {
-      const speed = Math.max(30, workOrders.length * 4)
-      el.style.animation = `scrollUp ${speed}s linear infinite`
-    } else {
-      el.style.animation = 'none'
-    }
-  }, [workOrders])
-
-  // ── Auto-scroll people ─────────────────────────────────────────
-  useEffect(() => {
-    const el = pplScrollRef.current
-    if (!el) return
-    const container = el.parentElement
-    if (el.scrollHeight > container.clientHeight) {
-      const speed = Math.max(20, people.length * 3)
-      el.style.animation = `scrollPeople ${speed}s linear infinite`
-    } else {
-      el.style.animation = 'none'
-    }
-  }, [people])
+  // ── Auto-scroll work orders + people (see useLoopScroll) ───────
+  // The WO list remounts each time the board rotates back in, so its
+  // resetKey follows whether the board is showing.
+  const { scrollRef: woScrollRef, copyRef: woCopyRef, loop: woLoop } =
+    useLoopScroll(workOrders, 'scrollUp', woScrollSeconds, slideIndex === 0)
+  const { scrollRef: pplScrollRef, copyRef: pplCopyRef, loop: pplLoop } =
+    useLoopScroll(people, 'scrollPeople', pplScrollSeconds, 0)
 
   // ── Priority dot colour ────────────────────────────────────────
   const dotColour = p => {
@@ -944,8 +1065,12 @@ export default function TVDisplayPage() {
                 <div style={S.empty}>No open work orders 🎉</div>
               ) : (
                 <>
-                  {/* Render twice for seamless loop when scrolling */}
-                  {[...workOrders, ...(workOrders.length > 6 ? workOrders : [])].map((wo, i) => (
+                  {/* Copy A is always shown; copy B (identical, hidden from
+                      screen readers) is added only when A overflows, so the
+                      loop scrolls exactly one copy and the seam is invisible. */}
+                  {[0, 1].filter(c => c === 0 || woLoop).map(c => (
+                  <div key={`wo-copy-${c}`} ref={c === 0 ? woCopyRef : undefined} aria-hidden={c === 1 ? 'true' : undefined}>
+                  {workOrders.map((wo, i) => (
                     <div key={`${wo.wo_id}-${i}`} style={{
                       ...S.woCard,
                       ...(wo.isLate ? S.woCardLate : {}),
@@ -957,8 +1082,8 @@ export default function TVDisplayPage() {
                       <div style={S.woInfo}>
                         <div style={S.woDesc}>{wo.description}</div>
                         <div style={S.woMeta}>
-                          <span>{shortName(wo.assigned_to)}</span>
-                          <span style={{ color: '#475569' }}>•</span>
+                          <span style={S.woAssignee}>{shortName(wo.assigned_to)}</span>
+                          <span style={{ color: '#64748b' }} aria-hidden="true">•</span>
                           <span>{wo.asset_name || ''}</span>
                         </div>
                       </div>
@@ -975,6 +1100,8 @@ export default function TVDisplayPage() {
                         )}
                       </div>
                     </div>
+                  ))}
+                  </div>
                   ))}
                 </>
               )}
@@ -1132,7 +1259,10 @@ export default function TVDisplayPage() {
                   <div style={S.empty}>No one in lab today</div>
                 ) : (
                   <>
-                    {[...people, ...(people.length > 6 ? people : [])].map((p, i) => {
+                    {/* Same two-copy loop as the WO list (see useLoopScroll) */}
+                    {[0, 1].filter(c => c === 0 || pplLoop).map(c => (
+                    <div key={`ppl-copy-${c}`} ref={c === 0 ? pplCopyRef : undefined} aria-hidden={c === 1 ? 'true' : undefined}>
+                    {people.map((p, i) => {
                       // Left Early: slate avatar (#64748b, white initials 4.8:1),
                       // lighter slate text (#94a3b8) so it reads on the dark card.
                       const bg = p.status === 'good' ? '#22c55e'
@@ -1167,8 +1297,18 @@ export default function TVDisplayPage() {
                           ...S.personCard,
                           background: cardBg,
                         }}>
-                          <div style={{ ...S.personAvatar, background: bg }}>{p.initials}</div>
-                          <div style={S.personName}>{p.displayName}</div>
+                          <div style={{ ...S.personAvatar, background: bg }} aria-hidden="true">{p.initials}</div>
+                          {/* Name gets the whole middle of the row (readable
+                              across the room); the time sits under it so the
+                              status column stays narrow. */}
+                          <div style={S.personMain}>
+                            <div style={S.personName}>{p.displayName}</div>
+                            {p.timeRange && (
+                              <div style={{ ...S.personTimeRange, color: statusColor }}>
+                                {p.timeRange}
+                              </div>
+                            )}
+                          </div>
                           <div style={S.personStatus}>
                             <div style={{
                               ...S.personStatusText,
@@ -1177,15 +1317,12 @@ export default function TVDisplayPage() {
                             }}>
                               {statusText}
                             </div>
-                            {p.timeRange && (
-                              <div style={{ ...S.personTimeRange, color: statusColor }}>
-                                {p.timeRange}
-                              </div>
-                            )}
                           </div>
                         </div>
                       )
                     })}
+                    </div>
+                    ))}
                   </>
                 )}
               </div>
@@ -1291,7 +1428,8 @@ const S = {
     marginTop: 80,
     height: 'calc(100vh - 80px)',
     display: 'grid',
-    gridTemplateColumns: '1fr 450px',
+    // Right column was 450px; widened so the larger attendance names fit.
+    gridTemplateColumns: '1fr 540px',
     gap: 24,
     padding: 24,
   },
@@ -1325,7 +1463,10 @@ const S = {
   priorityDot: { display: 'inline-block', width: 24, height: 24, borderRadius: '50%', flexShrink: 0 },
   woInfo: { minWidth: 0 },
   woDesc: { fontSize: '1.3rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  woMeta: { fontSize: '1.1rem', color: '#64748b', marginTop: 6, display: 'flex', gap: 12 },
+  // Meta line was #64748b (≈3:1 on the panel); #94a3b8 is ≈6:1.
+  woMeta: { fontSize: '1.2rem', color: '#94a3b8', marginTop: 6, display: 'flex', gap: 12, alignItems: 'baseline' },
+  // Assigned student's name — larger and brighter than the rest of the line.
+  woAssignee: { fontSize: '1.6rem', fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap' },
   woDue: { textAlign: 'right' },
   woDueDate: { fontSize: '1.2rem', fontWeight: 600, color: '#94a3b8' },
   woLateBadge: { fontSize: '1rem', color: '#fbbf24', marginTop: 4 },
@@ -1393,21 +1534,28 @@ const S = {
   peopleList: { flex: 1, overflow: 'hidden', position: 'relative' },
   pplScroll: { position: 'absolute', top: 0, left: 0, right: 0 },
   personCard: {
-    padding: '18px 24px', borderBottom: '1px solid #334155',
-    display: 'flex', alignItems: 'center', gap: 16,
+    padding: '14px 20px', borderBottom: '1px solid #334155',
+    display: 'flex', alignItems: 'center', gap: 14,
   },
   personAvatar: {
-    width: 52, height: 52, borderRadius: '50%',
+    width: 56, height: 56, borderRadius: '50%',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontWeight: 700, fontSize: '1.25rem', color: '#fff', flexShrink: 0,
+    fontWeight: 700, fontSize: '1.3rem', color: '#fff', flexShrink: 0,
   },
-  personName: { fontSize: '1.4rem', fontWeight: 500 },
-  personStatus: { marginLeft: 'auto', textAlign: 'right' },
+  personMain: { flex: 1, minWidth: 0 },
+  // Was 1.4rem / 500. Sized to read from across the lab; very long names
+  // end in an ellipsis rather than pushing the status off the row.
+  personName: {
+    fontSize: '2.1rem', fontWeight: 700, lineHeight: 1.15,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  personStatus: { flexShrink: 0, textAlign: 'right' },
   personStatusText: {
-    fontSize: '1rem', padding: '6px 14px', borderRadius: 12, display: 'inline-block',
+    fontSize: '1.15rem', fontWeight: 600, padding: '6px 14px', borderRadius: 12, display: 'inline-block',
   },
-  personTimeRange: { fontSize: '0.85rem', marginTop: 4 },
-  lastUpdated: { textAlign: 'center', padding: 12, fontSize: '1rem', color: '#475569' },
+  personTimeRange: { fontSize: '1.05rem', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  // Was #475569 (≈2:1 on the panel); #94a3b8 is ≈6:1.
+  lastUpdated: { textAlign: 'center', padding: 12, fontSize: '1rem', color: '#94a3b8' },
 
   // ── Help Queue (right panel) ──
   helpPanel: {
@@ -1427,8 +1575,10 @@ const S = {
   helpDot: {
     width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
   },
+  // Was 1.3rem — matched to the larger attendance names.
   helpName: {
-    fontSize: '1.3rem', fontWeight: 600, flex: 1,
+    fontSize: '1.9rem', fontWeight: 700, flex: 1, minWidth: 0,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4,
   },
   helpStatus: {
     fontSize: '0.95rem', fontWeight: 600, padding: '6px 14px',

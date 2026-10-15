@@ -49,6 +49,7 @@ import {
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
   LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
   History, Globe, FileSearch, Archive, ArchiveRestore, Wrench, UserMinus, HelpCircle,
+  Monitor, RefreshCw,
 } from 'lucide-react'
 import {
   useMaintenanceWindow, formatMaintenanceDateTime,
@@ -612,6 +613,7 @@ function buildRegistry() {
   reg.push({ key: 'maintenance_start_at', tab: 'general', label: 'Planned Maintenance Schedule', desc: 'Shutdown time shown on dashboards before a maintenance window', aliases: 'maintenance schedule shutdown downtime offline notice window' })
   reg.push({ key: 'instructor_away_mode', tab: 'general', label: 'Instructor Away Mode', desc: 'In-meeting toggle — students see "away" notice on help requests', aliases: 'meeting away help return available' })
   reg.push({ key: 'instructor_return_time', tab: 'general', label: 'Expected Return Time', desc: 'Time shown to students when you are away', aliases: 'meeting return time clock' })
+  reg.push({ key: 'tv_reload_requested_at', tab: 'general', label: 'Reload TVs now', desc: 'Make every TV Display reload so it picks up the latest update', aliases: 'tv display kiosk refresh reload update deploy screen' })
 
   // SETTING_META → registry
   Object.entries(SETTING_META).forEach(([key, m]) => {
@@ -1986,6 +1988,170 @@ function InstructorAwayCard() {
   )
 }
 // ═══════════════════════════════════════════════════════════════════════════════
+// TV DISPLAYS — "Reload TVs now"
+// ═══════════════════════════════════════════════════════════════════════════════
+// The TV Display no longer polls for new versions. Pressing the button writes
+// the current time (real UTC, Convention B) to settings.tv_reload_requested_at;
+// every TV listening on realtime sees the change and reloads within a few
+// seconds, picking up whatever is deployed. TVs also still reload at midnight.
+// The key is readable by the logged-out TV (migration 20261015_tv_reload_signal).
+
+const TV_RELOAD_KEY = 'tv_reload_requested_at'
+const TV_RELOAD_COOLDOWN_MS = 15_000   // stops an accidental double press
+
+function formatReloadTime(iso) {
+  const d = iso ? new Date(iso) : null
+  if (!d || isNaN(d.getTime())) return ''
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function TVReloadCard() {
+  const { profile } = useAuth()
+  const [last, setLast] = useState(undefined)     // undefined = loading, null = never sent
+  const [sending, setSending] = useState(false)
+  const [coolingDown, setCoolingDown] = useState(false)
+  const [status, setStatus] = useState('')
+  const cooldownRef = useRef(null)
+  const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
+
+  const fetchLast = useCallback(async () => {
+    try {
+      const row = mustData(await supabase
+        .from('settings')
+        .select('setting_value, updated_by')
+        .eq('setting_key', TV_RELOAD_KEY)
+        .maybeSingle(), 'settings.select')
+      setLast(row?.setting_value ? { at: row.setting_value, by: row.updated_by || '' } : null)
+    } catch {
+      setLast(null)
+    }
+  }, [])
+
+  useEffect(() => { fetchLast() }, [fetchLast])
+
+  useEffect(() => {
+    const channelId = `tv-reload-card-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const unsubscribe = subscribeWithReconnect(channelId, ch => ch
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'settings',
+        filter: `setting_key=eq.${TV_RELOAD_KEY}`,
+      }, (payload) => {
+        const v = payload.new?.setting_value
+        if (v) setLast({ at: v, by: payload.new?.updated_by || '' })
+      }), { onReconnect: fetchLast })
+    return () => { unsubscribe() }
+  }, [fetchLast])
+
+  useEffect(() => () => clearTimeout(cooldownRef.current), [])
+
+  const sendReload = async () => {
+    if (sending || coolingDown) return
+    setSending(true)
+    setStatus('Sending reload…')
+    const now = new Date().toISOString()
+    try {
+      const rows = mustData(await supabase
+        .from('settings')
+        .update({ setting_value: now, updated_at: now, updated_by: userName })
+        .eq('setting_key', TV_RELOAD_KEY)
+        .select('setting_key'), 'settings.update')
+      if (!rows || rows.length === 0) {
+        const inserted = mustData(await supabase
+          .from('settings')
+          .insert({
+            setting_key: TV_RELOAD_KEY,
+            setting_value: now,
+            description: 'Set by Settings → TV Displays → Reload TVs now. TV Displays reload when this changes.',
+            category: 'System',
+            updated_at: now,
+            updated_by: userName,
+          })
+          .select('setting_key'), 'settings.insert')
+        if (!inserted || inserted.length === 0) throw new Error('The reload request was not saved.')
+      }
+      setLast({ at: now, by: userName })
+
+      try {
+        await supabase.from('audit_log').insert({
+          user_email: profile?.email || 'unknown',
+          user_name: profile ? `${profile.first_name} ${profile.last_name}` : 'Unknown',
+          action: 'Reload TV Displays',
+          entity_type: 'Setting',
+          entity_id: TV_RELOAD_KEY,
+          field_changed: TV_RELOAD_KEY,
+          new_value: now,
+          details: 'Sent a reload to every TV Display.',
+        })
+      } catch (auditErr) {
+        console.warn('[TVReload] Audit log failed (non-fatal):', auditErr.message)
+      }
+
+      const msg = `Reload sent at ${formatReloadTime(now)}. TV Displays will reload within a few seconds.`
+      setStatus(msg)
+      toast.success('Reload sent to TV Displays')
+      setCoolingDown(true)
+      clearTimeout(cooldownRef.current)
+      cooldownRef.current = setTimeout(() => setCoolingDown(false), TV_RELOAD_COOLDOWN_MS)
+    } catch (err) {
+      const msg = `Reload not sent: ${err?.message || 'unknown error'}`
+      setStatus(msg)
+      toast.error(msg)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const pill = last === undefined
+    ? { tone: 'gray', text: 'Loading…' }
+    : last
+      ? { tone: 'gray', text: `Last sent ${formatReloadTime(last.at)}` }
+      : { tone: 'gray', text: 'Never sent' }
+
+  return (
+    <SettingCard
+      icon={Monitor}
+      title="TV Displays"
+      accent="gray"
+      pill={pill}
+      footer={
+        <>
+          <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
+          <span>TVs no longer check for updates on their own. They reload when you press this button, and every night at midnight.</span>
+        </>
+      }
+    >
+      <SettingRow
+        id="setting-tv_reload_requested_at"
+        label="Reload TVs now"
+        helper={
+          last
+            ? `Last sent ${formatReloadTime(last.at)}${last.by ? ' by ' + last.by : ''}. Use after pushing a change you want on the TVs right away.`
+            : 'Use after pushing a change you want on the TVs right away.'
+        }
+        details={{
+          what: 'Makes every open TV Display reload so it loads the latest deployed version.',
+          where: 'TV Display page (/tv-display) on every screen that has it open.',
+          effect: 'Each TV goes dark for a moment and comes back on the latest version, within a few seconds. Nothing else is affected; Lab Status and Time Clock keep their own update check.',
+        }}
+      >
+        <button
+          type="button"
+          onClick={sendReload}
+          disabled={sending || coolingDown || last === undefined}
+          className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+        >
+          {sending
+            ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+            : <RefreshCw size={16} aria-hidden="true" />}
+          {sending ? 'Sending…' : coolingDown ? 'Reload sent' : 'Reload TVs now'}
+        </button>
+        <span className="sr-only" role="status" aria-live="polite">{status}</span>
+      </SettingRow>
+    </SettingCard>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // GENERAL SETTINGS — auto-grouped by category, auto-saved on change
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2043,6 +2209,7 @@ function GeneralSettings() {
     'maintenance_notice_days', // → LabAccessModeCard → MaintenanceScheduler
     'instructor_away_mode',    // → InstructorAwayCard (top of tab)
     'instructor_return_time',  // → InstructorAwayCard (top of tab)
+    'tv_reload_requested_at',  // → TVReloadCard (top of tab) — written by its button, not edited
     'accountability_last_sweep', // set automatically by the Dashboard alert sweep — not user-editable
   ])
   const groups = useMemo(() => {
@@ -2082,6 +2249,7 @@ function GeneralSettings() {
       {/* Critical mode toggles always at top */}
       <LabAccessModeCard />
       <InstructorAwayCard />
+      <TVReloadCard />
 
       {/* Auto-grouped category cards */}
       {Object.entries(groups).map(([category, items]) => {

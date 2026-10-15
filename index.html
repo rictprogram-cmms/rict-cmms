@@ -5,6 +5,28 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#072a49" />
+    <!--
+      Kiosk screens (TV Display, Lab Status, Time Clock) are dark, but <body>
+      below is light (bg-surface-50). When a kiosk reloads (new deploy or the
+      midnight refresh) the browser paints that light body for a moment before
+      React draws the page, which reads as a white flash across the room.
+      This runs before any CSS or JS loads and paints the page dark on those
+      routes only, so a reload looks like a brief dark pause instead.
+      Every other page is untouched. !important beats the Tailwind class.
+    -->
+    <script>
+      (function () {
+        try {
+          var p = (location.pathname || '').replace(/\/+$/, '').toLowerCase();
+          if (p === '/tv-display' || p === '/lab-status' || p === '/time-clock') {
+            document.documentElement.className += ' kiosk-dark';
+            var s = document.createElement('style');
+            s.textContent = 'html.kiosk-dark, html.kiosk-dark body { background: #0f172a !important; color-scheme: dark; }';
+            document.head.appendChild(s);
+          }
+        } catch (e) { /* never block the app from loading */ }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />

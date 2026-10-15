@@ -33,14 +33,24 @@ import { useEffect, useRef, useState } from 'react'
 //   the screen away mid-punch. Once an update is pending, idleness is
 //   re-checked every 15s until satisfied. The TV has no input — pass 0.
 //
+// TIME-OF-DAY GUARD (canReload, optional)
+//   A function returning true when a reload is acceptable right now. If it
+//   returns false the update waits, and the hook asks again every minute
+//   until it says yes. The TV uses this to hold deploy reloads until after
+//   lab hours, so a push during the day doesn't blank the screen in front of
+//   students. Omit it (the default) to keep the old behaviour; Time Clock and
+//   Lab Status don't pass it. The function is read through a ref, so passing
+//   a new inline function each render does not restart the polling.
+//
 // USAGE
-//   useVersionCheck({ label: 'TVDisplay' })                       // reload ASAP
+//   useVersionCheck({ label: 'TVDisplay', canReload: afterHours })  // reload after-hours
 //   useVersionCheck({ label: 'TimeClock', idleMs: 60_000 })       // reload when idle
 //   const { updateAvailable } = useVersionCheck({ autoReload: false }) // toast use
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const RELOADED_FOR_KEY = '__rict_version_reloaded_for'
 const IDLE_RECHECK_MS = 15_000
+const DEFER_RECHECK_MS = 60_000
 
 export function useVersionCheck({
   label = 'VersionCheck',
@@ -48,10 +58,13 @@ export function useVersionCheck({
   idleMs = 0,             // 0 = reload immediately on mismatch
   autoReload = true,
   enabled = true,
+  canReload = null,       // optional () => boolean; false = wait and ask again
 } = {}) {
   const [updateAvailable, setUpdateAvailable] = useState(false)
   const lastActivityRef = useRef(Date.now())
   const pendingVersionRef = useRef(null)
+  const canReloadRef = useRef(canReload)
+  canReloadRef.current = canReload
 
   useEffect(() => {
     if (!enabled) return
@@ -60,6 +73,7 @@ export function useVersionCheck({
 
     let cancelled = false
     let idleTimer = null
+    let deferLoggedFor = null
 
     // ── Idle tracking (only wired when an idle guard is requested) ──
     const markActivity = () => { lastActivityRef.current = Date.now() }
@@ -79,9 +93,26 @@ export function useVersionCheck({
         console.warn(`[${label}] Already reloaded for ${serverVersion}; skipping to avoid a loop`)
         return
       }
+      let allowedNow = true
+      try { allowedNow = canReloadRef.current ? canReloadRef.current() !== false : true } catch { allowedNow = true }
+      if (!allowedNow) {
+        // Not a good time (e.g. TV during lab hours) — ask again in a minute.
+        // Only one pending re-check at a time, even though the 10-minute poll
+        // keeps finding the same new version.
+        if (deferLoggedFor !== serverVersion) {
+          deferLoggedFor = serverVersion
+          console.log(`[${label}] Update ${serverVersion} pending; waiting for the reload window`)
+        }
+        clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          if (!cancelled) attemptReload(serverVersion)
+        }, DEFER_RECHECK_MS)
+        return
+      }
       if (idleMs > 0 && Date.now() - lastActivityRef.current < idleMs) {
         // Someone is using the screen — try again shortly.
         console.log(`[${label}] Update pending; waiting for ${Math.round(idleMs / 1000)}s of idle`)
+        clearTimeout(idleTimer)
         idleTimer = setTimeout(() => {
           if (!cancelled) attemptReload(serverVersion)
         }, IDLE_RECHECK_MS)
