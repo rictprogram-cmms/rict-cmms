@@ -1,3 +1,11 @@
+-- ############################################################################
+-- DO NOT RE-RUN (note added 2026-10-17)
+--   This file is history. It was applied live, then patched in place by
+--   20261017_pm_rotation_in_session.sql (PMs only to students in session,
+--   break hold, Chicago "today"). Re-running it would replace the live
+--   function and silently undo that patch.
+--   To change the PM generator, patch the LIVE body the way 20261017 does.
+-- ############################################################################
 -- ============================================================================
 -- PM Auto-Generation: TRUE round-robin assignment
 -- ============================================================================

@@ -1,3 +1,13 @@
+-- ############################################################################
+-- NOT APPLIED LIVE — DO NOT RUN (note added 2026-10-17)
+--   The live database never used this version. SOPs reach PM work orders
+--   through the trigger trg_copy_pm_sops_to_new_wo → copy_pm_sops_to_new_wo()
+--   (recorded in 20261017_record_pm_sop_trigger.sql); live check 2026-10-17:
+--   5 of 5 auto PM work orders since Sep 1 received their SOPs.
+--   Running this file would replace the live PM function with an older body
+--   and undo 20261017_pm_rotation_in_session.sql (in-session rotation, break
+--   hold, Chicago "today"). Kept only as a record of the approach.
+-- ############################################################################
 -- ============================================================================
 -- PM Auto-Generation: carry linked SOPs forward to generated work orders
 -- ============================================================================
