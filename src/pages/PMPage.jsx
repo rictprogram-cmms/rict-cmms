@@ -768,6 +768,11 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
           <label htmlFor="pm-fld-frequency-3" className="label">Frequency</label>
           <select id="pm-fld-frequency-3" value={form.frequency} onChange={e => setForm(f => ({ ...f, frequency: e.target.value }))} className="input text-sm">
             {FREQ_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+            {/* A stored value outside the list (e.g. legacy 'Yearly') still shows as itself,
+                so opening and saving a PM never silently changes its frequency. */}
+            {form.frequency && !FREQ_OPTIONS.includes(form.frequency) && (
+              <option value={form.frequency}>{form.frequency}</option>
+            )}
           </select>
           <p className="text-[10px] text-surface-400 mt-0.5">{getDueDateLabel(form.frequency)}</p>
         </div>
@@ -791,14 +796,18 @@ function PMForm({ pm, assets, actions, onClose, onSaved }) {
         )}
       </div>
 
-      {pm && (
-        <div>
-          <label htmlFor="pm-fld-next-due-date-6" className="label">Next Due Date</label>
-          <input id="pm-fld-next-due-date-6" type="date" value={form.nextDueDate}
-            onChange={e => setForm(f => ({ ...f, nextDueDate: e.target.value }))}
-            className="input text-sm" />
-        </div>
-      )}
+      <div>
+        <label htmlFor="pm-fld-next-due-date-6" className="label">{pm ? 'Next Due Date' : 'First Generates On'}</label>
+        <input id="pm-fld-next-due-date-6" type="date" value={form.nextDueDate}
+          onChange={e => setForm(f => ({ ...f, nextDueDate: e.target.value }))}
+          aria-describedby="pm-fld-next-due-date-6-help"
+          className="input text-sm min-h-[44px]" />
+        <p id="pm-fld-next-due-date-6-help" className="text-[10px] text-surface-500 mt-0.5">
+          {pm
+            ? 'The day this PM next generates a work order. It then repeats at its frequency from this date.'
+            : 'Optional. Leave blank to generate the first work order right away; it then repeats at its frequency from that date.'}
+        </p>
+      </div>
 
       {/* ── Procedure File Section ── */}
       <div>

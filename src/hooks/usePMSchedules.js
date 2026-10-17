@@ -5,37 +5,88 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { generateSafeWoId } from '@/utils/generateSafeWoId'
+import { chicagoToday } from '@/lib/pmRotation'
 
-// ─── Calculate Next Due Date ─────────────────────────────────────────────────
-// Daily = next day, Weekly = 1 week, everything else = 3 weeks (21 days)
-// This ensures appropriate lead time for Monthly, Quarterly, Annually, Custom
+// ─── PM intervals ────────────────────────────────────────────────────────────
+// Mirrors private.pm_step / pm_advance in
+// supabase/migrations/20261017_pm_frequency_intervals.sql (the database is the
+// authority for automatic generation; this copy serves the manual paths).
+//
+// Two different things, deliberately kept apart (2026-10-17 fix):
+//   • REPEAT interval — when the PM generates again:
+//       Daily 1 day · Weekly 7 days · Monthly 1 month · Quarterly 3 months ·
+//       Annually/Yearly 1 year · Custom <frequency_value> days (21 if none) ·
+//       anything else 21 days
+//   • WO LEAD time — how long the generated work order has to be finished:
+//       Daily 1 · Weekly 7 · everything else 21 days (see generateWO)
+// Before the fix both used the lead time, so Monthly/Quarterly/Annual PMs came
+// back every 21 days.
 
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+function parseYmd(v) {
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate())
+  const s = String(v || '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const [y, m, d] = s.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+/** { months, days } for one repeat of this frequency. */
+export function pmStep(frequency, frequencyValue) {
+  switch (String(frequency || '').trim().toLowerCase()) {
+    case 'daily': return { months: 0, days: 1 }
+    case 'weekly': return { months: 0, days: 7 }
+    case 'monthly': return { months: 1, days: 0 }
+    case 'quarterly': return { months: 3, days: 0 }
+    case 'annually':
+    case 'annual':
+    case 'yearly': return { months: 12, days: 0 }
+    case 'custom': {
+      const n = parseInt(frequencyValue, 10)
+      return { months: 0, days: n > 0 ? n : 21 }
+    }
+    default: return { months: 0, days: 21 }
+  }
+}
+
+/** base + n steps; month steps clamp to month end like Postgres (Jan 31 + 1 month = Feb 28). */
+function addSteps(base, step, n) {
+  if (step.months) {
+    const total = base.getMonth() + step.months * n
+    const y = base.getFullYear() + Math.floor(total / 12)
+    const m = ((total % 12) + 12) % 12
+    const last = new Date(y, m + 1, 0).getDate()
+    return new Date(y, m, Math.min(base.getDate(), last))
+  }
+  const d = new Date(base)
+  d.setDate(d.getDate() + step.days * n)
+  return d
+}
+
+/**
+ * Next scheduled date after `today`: scheduled + n × interval (n ≥ 1), counted
+ * from the SCHEDULED date so the cadence never drifts. Missed cycles are skipped.
+ * All dates 'YYYY-MM-DD'.
+ */
+export function advancePMDate(scheduled, frequency, frequencyValue, today) {
+  const step = pmStep(frequency, frequencyValue)
+  const t = parseYmd(today) || parseYmd(new Date())
+  const base = parseYmd(scheduled)
+  if (!base) return ymd(addSteps(t, step, 1))
+  let n = 1
+  let next = addSteps(base, step, n)
+  while (next <= t && n < 20000) { n += 1; next = addSteps(base, step, n) }
+  return ymd(next)
+}
+
+/**
+ * One repeat interval after `fromDate` ('YYYY-MM-DD' or Date) → 'YYYY-MM-DD'.
+ * Kept for callers that need a single step; no longer the 21-day lead time.
+ */
 export function calculateNextDueDate(fromDate, frequency, frequencyValue) {
-  // If fromDate is a bare YYYY-MM-DD string, parse as local midnight to avoid UTC shift.
-  // If it's already a Date object or full ISO timestamp, use as-is.
-  let next
-  if (typeof fromDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fromDate.substring(0, 10)) && fromDate.length === 10) {
-    next = new Date(fromDate + 'T00:00:00')
-  } else {
-    next = new Date(fromDate)
-  }
-  switch (frequency) {
-    case 'Daily':
-      next.setDate(next.getDate() + 1)
-      break
-    case 'Weekly':
-      next.setDate(next.getDate() + 7)
-      break
-    case 'Monthly':
-    case 'Quarterly':
-    case 'Annually':
-    case 'Custom':
-    default:
-      next.setDate(next.getDate() + 21) // 3 weeks for everything else
-      break
-  }
-  // Return as plain local YYYY-MM-DD — not toISOString() which would give UTC and shift the date
-  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+  const base = parseYmd(fromDate) || parseYmd(new Date(fromDate))
+  return ymd(addSteps(base, pmStep(frequency, frequencyValue), 1))
 }
 
 // ─── PM Schedules List + Client-Side Auto-Generation Fallback ────────────────
@@ -410,7 +461,10 @@ export function usePMActions() {
         if (asset) assetName = asset.name
       }
 
-      const nextDue = calculateNextDueDate(new Date(), pmData.frequency, pmData.frequencyValue)
+      // New PMs generate right away: on the chosen first date, otherwise today
+      // (the next generator run picks it up). Decision 2026-10-17.
+      const chosen = String(pmData.nextDueDate || '').slice(0, 10)
+      const nextDue = /^\d{4}-\d{2}-\d{2}$/.test(chosen) ? chosen : chicagoToday()
 
       // Upload procedure file if provided
       let procedureFileId = ''
@@ -666,8 +720,12 @@ export function usePMActions() {
       }
 
       // Update PM: last generated + next due
-      // Next due is calculated from TODAY, not from the previous due date
-      const nextDue = calculateNextDueDate(new Date(), pm.frequency, pm.frequency_value)
+      // A manual generation counts as this PM's upcoming cycle: the next date is
+      // its scheduled date + the real interval (skipping any cycle already past),
+      // the same rule as the automatic generator. (2026-10-17: was today + 21.)
+      const today = chicagoToday()
+      const scheduled = pm.next_due_date ? String(pm.next_due_date).slice(0, 10) : today
+      const nextDue = advancePMDate(scheduled, pm.frequency, pm.frequency_value, today)
       await supabase.from('pm_schedules').update({
         last_generated: now,
         next_due_date: nextDue,
