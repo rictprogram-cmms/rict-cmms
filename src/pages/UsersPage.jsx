@@ -15,14 +15,15 @@ import {
   AlertCircle, Clock, UserCheck, UserX, Eye, EyeOff, Save, Archive,
   Trash2, AlertTriangle, UserMinus, Wifi, KeyRound, Copy, Check,
   RefreshCcw, FileSearch, ScanLine, PackageCheck, PackageX, Hourglass,
-  ClipboardCheck, GraduationCap, HelpCircle, History
+  ClipboardCheck, GraduationCap, HelpCircle, History, CalendarClock
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { useAcademicTerms } from '@/hooks/useAcademicTerms'
-import { useStudentEnrollments, useEnrollmentActions } from '@/hooks/useEnrollments'
+import { useStudentEnrollments, useEnrollmentActions, usePMRotationStatus } from '@/hooks/useEnrollments'
+import { rotationStatusFor, rotationLabel, rotationExplanation } from '@/lib/pmRotation'
 import { RUNS_SHORT } from '@/lib/academicTerms'
 import {
   usePooledCheckouts,
@@ -288,6 +289,17 @@ export default function UsersPage() {
   // False until the 20261005 migration is live — the page then behaves as before.
   const canSetArchiveReason = canSeeArchiveReasons && archiveInfoAvailable
   const [reasonFilter, setReasonFilter] = useState('')        // '', a reason value, or 'none'
+  // ── PM rotation (instructors only) ───────────────────────────────────
+  // Students with no class in session get no PMs (20261017 migration); label
+  // them so it's clear why. Hidden unless roster data could be read.
+  const { byEmail: rotationByEmail, available: rotationAvailable } = usePMRotationStatus({ enabled: canSeeArchiveReasons })
+  const pmRotationNote = (u) => {
+    if (!canSeeArchiveReasons || !rotationAvailable) return null
+    if (u.status !== 'Active' || !['Student', 'Work Study'].includes(u.role) || u.time_clock_only === 'Yes') return null
+    const st = rotationStatusFor(rotationByEmail, u.email)
+    if (st.inSession) return null
+    return { label: rotationLabel(st), explanation: rotationExplanation(st) }
+  }
   const [yearFilter, setYearFilter] = useState('')            // '', 'YYYY', or 'unknown'
   const [reasonEdit, setReasonEdit] = useState(null)          // archived user row whose reason is being edited
   const showArchiveFilters = canSetArchiveReason && statusFilter === 'Archived'
@@ -692,6 +704,17 @@ export default function UsersPage() {
                                   <Clock size={12} aria-hidden="true" /> TCO
                                 </span>
                               )}
+                              {(() => {
+                                const note = pmRotationNote(u)
+                                if (!note) return null
+                                return (
+                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-surface-100 text-surface-700 font-medium border border-surface-300 whitespace-nowrap" title={note.explanation}>
+                                    <CalendarClock size={12} aria-hidden="true" />
+                                    <span aria-hidden="true">{note.label}</span>
+                                    <span className="sr-only">{note.explanation}</span>
+                                  </span>
+                                )
+                              })()}
                             </span>
                           </td>
                           <td className="px-3 py-2 text-surface-500 text-xs">{u.email}</td>

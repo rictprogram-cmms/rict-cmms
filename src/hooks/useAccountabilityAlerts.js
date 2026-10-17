@@ -16,6 +16,11 @@
  *     acknowledgement and it comes back as "still open, week N"; if the
  *     pattern stops, the sweep clears the alert and it disappears for good.
  *
+ * Students with no class in session (e.g. a new student enrolled for next
+ * term, or everyone over a break) are not evaluated, and any alert still open
+ * for them is cleared — the same rule the PM generator uses
+ * (src/lib/pmRotation.js). If roster data can't be read, nobody is skipped.
+ *
  * The sweep uses loadStudentReport() with skipWoc so a 60-student pass
  * doesn't re-read every work order 60 times; work-order lateness for alerts
  * comes from report.meta.woLate instead.
@@ -42,6 +47,7 @@ import { currentTerm } from '@/lib/academicTerms'
 import { loadShared, loadStudentReport } from '@/hooks/useAccountabilityReport'
 import { evaluateAlerts, readThresholds, ALERT_DEFAULTS } from '@/lib/accountabilityAlerts'
 import { lower } from '@/lib/accountabilityRules'
+import { loadRotationStatus, rotationStatusFor } from '@/lib/pmRotation'
 
 const SETTING_KEYS = [...Object.keys(ALERT_DEFAULTS), 'accountability_last_sweep']
 let sweepInFlight = false   // module-level: one sweep per browser tab at a time
@@ -101,16 +107,34 @@ export async function runAlertSweep({ profile, onProgress } = {}) {
   await writeLastSweep('started:' + new Date().toISOString())   // claim the sweep before the slow part
 
   const shared = await loadShared(term)
-  const people = (mustData(await supabase.from('profiles')
+  const everyone = (mustData(await supabase.from('profiles')
     .select('user_id, id, email, first_name, last_name, role, status, classes, created_at, time_clock_only')
     .eq('status', 'Active').in('role', ['Student', 'Work Study']).neq('email', SUPER_ADMIN_EMAIL), 'profiles.select') || [])
     .filter(p => p.email && !(p.time_clock_only === 'Yes' || p.time_clock_only === true))
+
+  // Only students in a class in session are checked (2026-10-17). When roster
+  // data is unavailable everyone is checked, as before.
+  const rotation = await loadRotationStatus()
+  const people = rotation.available
+    ? everyone.filter(p => rotationStatusFor(rotation.byEmail, p.email).inSession)
+    : everyone
+  const notInSession = rotation.available
+    ? new Set(everyone.filter(p => !rotationStatusFor(rotation.byEmail, p.email).inSession).map(p => lower(p.email)))
+    : new Set()
 
   const open = mustData(await supabase.from('accountability_alerts').select('*').eq('status', 'open'), 'accountability_alerts.select') || []
   const openByKey = new Map(open.map(a => [`${lower(a.user_email)}|${a.rule}`, a]))
   const now = new Date().toISOString()
   const seen = new Set()
   let fired = 0, cleared = 0, done = 0
+
+  // Alerts left open for students with no class in session → clear
+  for (const [key, existing] of openByKey) {
+    if (!notInSession.has(lower(existing.user_email))) continue
+    const { error } = await supabase.from('accountability_alerts').update({ status: 'cleared', cleared_at: now }).eq('alert_id', existing.alert_id)
+    if (!error) { cleared++; openByKey.delete(key) }
+    else console.warn('alert clear failed:', error.message)
+  }
   const CONCURRENCY = 3
 
   for (let i = 0; i < people.length; i += CONCURRENCY) {

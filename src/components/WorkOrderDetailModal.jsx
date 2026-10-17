@@ -58,6 +58,8 @@ export default function WorkOrderDetailModal({
 
   // Lookups
   assets,
+  // Optional: email → ' — not in PM rotation …' suffix for the add-assignee list (instructors)
+  rotationNoteFor,
   users,
   openStatuses,
   statusColorMap,
@@ -390,7 +392,7 @@ export default function WorkOrderDetailModal({
                       <option value="">{assigneeSaving ? 'Adding…' : 'Select person to add…'}</option>
                       {addableOptions.map(u => (
                         <option key={u.email} value={u.email}>
-                          {u.email === myEmail ? `${u.first_name} ${u.last_name} (Me)` : `${u.first_name} ${u.last_name}`}
+                          {u.email === myEmail ? `${u.first_name} ${u.last_name} (Me)` : `${u.first_name} ${u.last_name}`}{rotationNoteFor ? rotationNoteFor(u) : ''}
                         </option>
                       ))}
                     </select>

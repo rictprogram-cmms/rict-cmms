@@ -9,6 +9,9 @@
  *   useClassRoster(classId)        → { roster: [{ enrollment_id, email, name, archived }], loading, refresh }
  *   useStudentEnrollments(email)   → { enrollments: [{ enrollment_id, class }], loading }
  *   useEnrollmentActions()         → { saving, setRoster(cls, emails), enroll(cls, email), unenroll(cls, email) }
+ *   usePMRotationStatus({ enabled }) → { byEmail: Map<lowerEmail, { inSession, nextStart }>, available, loading, refresh }
+ *                                    who the PM generator can assign today (class in session) — realtime
+ *                                    on class_enrollments + classes; see src/lib/pmRotation.js
  *
  * Every write is validated (row counts) and audited ("Enrollment" /
  * class_id, details name the students). Instructors only (RLS + UI).
@@ -21,6 +24,7 @@ import { supabase } from '@/lib/supabase'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
+import { loadRotationStatus } from '@/lib/pmRotation'
 import toast from 'react-hot-toast'
 
 const fullName = (p) => `${p?.first_name || ''} ${p?.last_name || ''}`.trim() || p?.email || ''
@@ -197,6 +201,43 @@ export function useEnrollmentActions() {
   }, [who, profile?.email]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return { saving, setRoster, enroll, unenroll }
+}
+
+/**
+ * Who is in the PM rotation today: enrolled in a class in session (the same
+ * rule the PM generator uses). `available` stays false until a read succeeds
+ * with roster data, so a viewer who can't read rosters sees no labels at all.
+ * Re-reads at the next Chicago midnight so the labels roll over with the day.
+ */
+export function usePMRotationStatus({ enabled = true } = {}) {
+  const [state, setState] = useState({ byEmail: new Map(), available: false, day: '' })
+  const [loading, setLoading] = useState(!!enabled)
+
+  const load = useCallback(async () => {
+    if (!enabled) { setLoading(false); return }
+    const next = await loadRotationStatus()
+    setState(next)
+    setLoading(false)
+  }, [enabled])
+
+  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (!enabled) return undefined
+    return subscribeWithReconnect(`pm-rotation-${Math.random().toString(36).slice(2)}`, ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'class_enrollments' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'classes' }, load)
+    , { tag: 'PMRotation', onReconnect: load })
+  }, [enabled, load])
+  // Day rollover: check hourly whether the Chicago date moved on
+  useEffect(() => {
+    if (!enabled) return undefined
+    const t = setInterval(() => {
+      loadRotationStatus().then(next => setState(prev => (prev.day && prev.day !== next.day ? next : prev)))
+    }, 3600000)
+    return () => clearInterval(t)
+  }, [enabled])
+
+  return { ...state, loading, refresh: load }
 }
 
 /** Helper for pages that only have profile rows: current course numbers from the cache. */

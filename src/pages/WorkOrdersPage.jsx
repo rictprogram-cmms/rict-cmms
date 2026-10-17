@@ -38,6 +38,8 @@ import WorkOrderDetailModal from '@/components/WorkOrderDetailModal';
 import { useRejectionNotification } from '@/hooks/useRejectionNotification';
 import { useWORequestStatusEmail, buildWODescriptionFromRequest, formatRequestLocation } from '@/hooks/useWORequestStatusEmail';
 import { useLocation } from 'react-router-dom';
+import { usePMRotationStatus } from '@/hooks/useEnrollments';
+import { rotationStatusFor, shortDate } from '@/lib/pmRotation';
 
 // Accessible sortable column header.
 // The <th> keeps aria-sort (the implicit columnheader role is correct), and the
@@ -2222,6 +2224,21 @@ export default function WorkOrdersPage() {
     setCustomPartQty(1);
   };
 
+  // PM rotation note for instructors: students with no class in session get no
+  // automatic PMs (20261017 migration). They stay pickable by hand; the option
+  // text just says so. Empty unless roster data could be read.
+  const isStaffViewer = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
+  const { byEmail: rotationByEmail, available: rotationAvailable } = usePMRotationStatus({ enabled: isStaffViewer });
+  const pmRotationSuffix = useCallback((u) => {
+    if (!isStaffViewer || !rotationAvailable || !u) return '';
+    if (!['Student', 'Work Study'].includes(u.role)) return '';
+    const st = rotationStatusFor(rotationByEmail, u.email);
+    if (st.inSession) return '';
+    return st.nextStart
+      ? ` — not in PM rotation until ${shortDate(st.nextStart)}`
+      : ' — not in PM rotation (no class in session)';
+  }, [isStaffViewer, rotationAvailable, rotationByEmail]);
+
   // User dropdown options for the create WO / approve request modal (single primary assignee).
   // Students and Work Study can only select themselves.
   // Instructors can select anyone.
@@ -2232,11 +2249,11 @@ export default function WorkOrdersPage() {
     }
     return users.map(u => ({
       email: u.email,
-      name: u.email === user.email
+      name: (u.email === user.email
         ? `${u.first_name} ${u.last_name} (Me)`
-        : `${u.first_name} ${u.last_name}`
+        : `${u.first_name} ${u.last_name}`) + pmRotationSuffix(u)
     }));
-  }, [users, profile, user]);
+  }, [users, profile, user, pmRotationSuffix]);
 
   // ---------- RENDER ----------
   return (
@@ -2639,6 +2656,7 @@ export default function WorkOrdersPage() {
           // Lookups
           assets={assets}
           users={users}
+          rotationNoteFor={pmRotationSuffix}
           openStatuses={openStatuses}
           statusColorMap={statusColorMap}
           profile={profile}
