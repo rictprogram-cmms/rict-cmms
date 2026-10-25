@@ -24,6 +24,7 @@
  */
 
 import { mustData, assertWrite } from '@/lib/supabaseData';
+import { Loader2, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { isPmWorkOrder } from '@/lib/utils';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
@@ -39,7 +40,34 @@ import { useRejectionNotification } from '@/hooks/useRejectionNotification';
 import { useWORequestStatusEmail, buildWODescriptionFromRequest, formatRequestLocation } from '@/hooks/useWORequestStatusEmail';
 import { useLocation } from 'react-router-dom';
 import { usePMRotationStatus } from '@/hooks/useEnrollments';
-import { rotationStatusFor, shortDate } from '@/lib/pmRotation';
+import { rotationStatusFor, shortDate, chicagoToday } from '@/lib/pmRotation';
+
+/**
+ * A work order can only be closed by a student when it has a real work log
+ * entry dated today (America/Chicago). Mirrors the database trigger
+ * private.wo_close_requires_work_log (migration 20261025_wo_close_requires_work_log.sql):
+ *   - any person's entry counts (team work orders),
+ *   - entry_type is not 'Close' (closing notes don't count),
+ *   - hours > 0 (auto-written "Parts ordered" rows are 0 h and don't count),
+ *   - description has at least MIN_WORK_LOG_CHARS characters (after trimming),
+ *   - timestamp (real UTC) falls on today's Chicago calendar date.
+ */
+const MIN_WORK_LOG_CHARS = 10;
+const MIN_WORK_LOG_MSG = `Describe the work in at least ${MIN_WORK_LOG_CHARS} characters — say what you did, not just "done".`;
+
+function isTodayWorkLogEntry(log, today = chicagoToday()) {
+  if (!log) return false;
+  if (String(log.entry_type || '').trim() === 'Close') return false;
+  const hrs = Number(log.hours);
+  if (!Number.isFinite(hrs) || hrs <= 0) return false;
+  if (String(log.work_description || '').trim().length < MIN_WORK_LOG_CHARS) return false;
+  if (!log.timestamp) return false;
+  const ts = new Date(log.timestamp);
+  if (Number.isNaN(ts.getTime())) return false;
+  return chicagoToday(ts) === today;
+}
+
+const WORK_LOG_REQUIRED_MSG = 'A work log entry from today is required before this work order can be closed.';
 
 // Accessible sortable column header.
 // The <th> keeps aria-sort (the implicit columnheader role is correct), and the
@@ -137,6 +165,11 @@ export default function WorkOrdersPage() {
   const [formData, setFormData] = useState({});
   const [workLogForm, setWorkLogForm] = useState({ hours: 0, mins: 15, notes: '' });
   const [closeNotes, setCloseNotes] = useState('');
+  // Close requires a work log from today (students / work study; instructors exempt).
+  // closeLogCheck: { status: 'checking' | 'ok' | 'missing' | 'error', entries: number }
+  const [closeLogCheck, setCloseLogCheck] = useState({ status: 'checking', entries: 0 });
+  const [closeLogForm, setCloseLogForm] = useState({ hours: 0, mins: 15, notes: '' });
+  const [closeError, setCloseError] = useState('');
   const [approveForm, setApproveForm] = useState({ priority: 'Medium', assignEmail: '', notes: '' });
   const [currentRequest, setCurrentRequest] = useState(null);
 
@@ -227,6 +260,10 @@ export default function WorkOrdersPage() {
   }, []);
 
   const { hasPerm } = usePermissions('Work Orders');
+
+  // Instructors / Super Admin are exempt from the "work log from today" close rule
+  // and from the minimum work-log description length.
+  const closeExempt = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
 
   // ---------- DIALOG A11Y ----------
   // useDialogA11y handles Escape-to-close, focus-into-dialog on open, focus-restore on close,
@@ -1607,6 +1644,7 @@ export default function WorkOrdersPage() {
     const totalMins = (workLogForm.hours * 60) + workLogForm.mins;
     if (totalMins <= 0) { showToast('Time must be greater than 0', 'error'); return; }
     if (!workLogForm.notes.trim()) { showToast('Work notes required', 'error'); return; }
+    if (!closeExempt && workLogForm.notes.trim().length < MIN_WORK_LOG_CHARS) { showToast(MIN_WORK_LOG_MSG, 'error'); return; }
 
     const hours = totalMins / 60;
     const roundedHours = Math.round(hours * 4) / 4;
@@ -1788,10 +1826,96 @@ export default function WorkOrdersPage() {
     });
   };
 
+
+  // Fresh read of the WO's work log (never trusts the possibly-stale workLogs state).
+  // Returns the number of qualifying entries from today. Throws on a read failure.
+  const countTodayWorkLogs = async (woId) => {
+    const rows = mustData(
+      await supabase.from('work_log')
+        .select('log_id, entry_type, hours, work_description, timestamp')
+        .eq('wo_id', woId),
+      'work_log.select'
+    );
+    const today = chicagoToday();
+    return (rows || []).filter(l => isTodayWorkLogEntry(l, today)).length;
+  };
+
+  const runCloseLogCheck = async (woId) => {
+    if (closeExempt) { setCloseLogCheck({ status: 'ok', entries: 0 }); return; }
+    setCloseLogCheck({ status: 'checking', entries: 0 });
+    try {
+      const n = await countTodayWorkLogs(woId);
+      setCloseLogCheck({ status: n > 0 ? 'ok' : 'missing', entries: n });
+    } catch (e) {
+      console.error('Close work-log check failed:', e);
+      // Fail safe: treat as missing so the student logs today's work in the dialog.
+      setCloseLogCheck({ status: 'error', entries: 0 });
+    }
+  };
+
+  const closeLogMinutes = (closeLogForm.hours * 60) + closeLogForm.mins;
+  const closeNeedsLog = !closeExempt && (closeLogCheck.status === 'missing' || closeLogCheck.status === 'error');
+  const closeLogNotesLen = closeLogForm.notes.trim().length;
+  const closeLogValid = closeLogMinutes > 0 && closeLogNotesLen >= MIN_WORK_LOG_CHARS;
+  const closeBlocked = !closeExempt && (closeLogCheck.status === 'checking' || (closeNeedsLog && !closeLogValid));
+
   const closeWorkOrder = async () => {
+    if (closeBlocked) {
+      setCloseError(closeLogCheck.status === 'checking'
+        ? 'Still checking the work log — try again in a moment.'
+        : (closeLogMinutes > 0 && closeLogNotesLen > 0 ? MIN_WORK_LOG_MSG : 'Enter today\'s time worked and what you did before closing.'));
+      return;
+    }
+    setCloseError('');
     try {
       setLoading(true);
       const userName = profile ? `${profile.first_name} ${profile.last_name?.charAt(0)}.` : '';
+      let totalHours = currentWO.total_hours;
+
+      // ── Work log requirement (students / work study) ──
+      // Re-checked at the moment of closing, so a log deleted in another tab can't slip through.
+      if (!closeExempt) {
+        let todayCount = 0;
+        try { todayCount = await countTodayWorkLogs(currentWO.wo_id); } catch (e) { todayCount = 0; }
+        if (todayCount === 0) {
+          if (!closeLogValid) {
+            setCloseLogCheck({ status: 'missing', entries: 0 });
+            setCloseError(closeLogMinutes > 0 && closeLogNotesLen > 0 ? MIN_WORK_LOG_MSG : 'Enter today\'s time worked and what you did before closing.');
+            setLoading(false);
+            return;
+          }
+          const roundedHours = Math.round((closeLogMinutes / 60) * 4) / 4;
+          let logId = null;
+          try { const { data: lid } = await supabase.rpc('get_next_id', { p_type: 'work_log' }); logId = lid; } catch {}
+          const { data: logRows, error: logErr } = await supabase.from('work_log').insert([{
+            log_id: logId || `LOG${Date.now()}`,
+            wo_id: currentWO.wo_id,
+            timestamp: new Date().toISOString(),
+            user_name: userName,
+            user_email: user.email,
+            hours: roundedHours,
+            work_description: closeLogForm.notes.trim(),
+            entry_type: 'Work'
+          }]).select();
+          if (logErr) throw logErr;
+          if (!logRows || logRows.length === 0) {
+            setCloseError('Your work log could not be saved — you may not have permission to add work logs. The work order was not closed.');
+            setLoading(false);
+            return;
+          }
+          totalHours = (Number(currentWO.total_hours) || 0) + roundedHours;
+          // Keep the open row's total in step (same as Add Work Log); non-fatal.
+          try {
+            await supabase.from('work_orders').update({
+              total_hours: totalHours,
+              updated_at: new Date().toISOString(),
+              updated_by: userName
+            }).eq('wo_id', currentWO.wo_id).select();
+          } catch (e) { console.warn('total_hours update failed:', e); }
+          setCloseLogCheck({ status: 'ok', entries: 1 });
+        }
+      }
+
       const now = new Date();
       const createdDate = currentWO.created_at ? new Date(currentWO.created_at) : now;
       const daysOpen = Math.ceil((now - createdDate) / (1000 * 60 * 60 * 24));
@@ -1822,7 +1946,7 @@ export default function WorkOrdersPage() {
         request_id: currentWO.request_id,
         is_pm: currentWO.is_pm,
         pm_id: currentWO.pm_id,
-        total_hours: currentWO.total_hours,
+        total_hours: totalHours,
         days_open: daysOpen,
         was_late: wasLate,
         // WOC Ratio exclusion travels with the row
@@ -1832,7 +1956,25 @@ export default function WorkOrdersPage() {
         woc_excluded_at: currentWO.woc_excluded_at || null,
       };
 
-      // Add closing notes as work log if provided
+      const { data: closedRows, error: closeErr } = await supabase.from('work_orders_closed').upsert([closedRow], { onConflict: 'wo_id' }).select();
+      if (closeErr) {
+        // Database guard (20261025_wo_close_requires_work_log.sql) — keep the dialog open.
+        if (String(closeErr.message || '').includes('WORK_LOG_REQUIRED')) {
+          setCloseLogCheck({ status: 'missing', entries: 0 });
+          setCloseError(WORK_LOG_REQUIRED_MSG + ' Add today\'s work below.');
+          setLoading(false);
+          return;
+        }
+        throw closeErr;
+      }
+      if (!closedRows || closedRows.length === 0) {
+        showToast('Close failed — you may not have permission to close work orders.', 'error');
+        setLoading(false);
+        return;
+      }
+
+      // Add closing notes as work log if provided (written after the close succeeds,
+      // so a refused close never leaves a stray closing-notes row behind).
       if (closeNotes.trim()) {
         await supabase.from('work_log').insert([{
           log_id: `LOG${Date.now()}`,
@@ -1844,14 +1986,6 @@ export default function WorkOrdersPage() {
           work_description: `CLOSING NOTES: ${closeNotes}`,
           entry_type: 'Close'
         }]);
-      }
-
-      const { data: closedRows, error: closeErr } = await supabase.from('work_orders_closed').upsert([closedRow], { onConflict: 'wo_id' }).select();
-      if (closeErr) throw closeErr;
-      if (!closedRows || closedRows.length === 0) {
-        showToast('Close failed — you may not have permission to close work orders.', 'error');
-        setLoading(false);
-        return;
       }
       const { data: delRows, error: delErr } = await supabase.from('work_orders').delete().eq('wo_id', currentWO.wo_id).select();
       if (delErr) throw delErr;
@@ -1870,7 +2004,10 @@ export default function WorkOrdersPage() {
         const emailed = await sendClosedEmail({ wo: currentWO, closedDate: closedLocal, closingNotes: closeNotes.trim() });
         if (!emailed) showToast('Work order closed, but the completion email to the requester could not be sent.', 'error');
       }
-    } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    } catch (e) {
+      setCloseError('Error: ' + e.message);
+      showToast('Error: ' + e.message, 'error');
+    }
     setLoading(false);
   };
 
@@ -2179,8 +2316,24 @@ export default function WorkOrdersPage() {
 
   const openCloseWOModalFn = () => {
     setCloseNotes('');
+    setCloseError('');
+    setCloseLogForm({
+      hours: Math.floor(defaultWorkMinutes / 60),
+      mins: defaultWorkMinutes % 60,
+      notes: ''
+    });
     setShowCloseModal(true);
+    if (currentWO?.wo_id) runCloseLogCheck(currentWO.wo_id);
   };
+
+  // While the Close dialog is open and today's log is missing, re-check whenever the
+  // work log changes (realtime) — e.g. a teammate logs work at the same time.
+  useEffect(() => {
+    if (!showCloseModal || closeExempt || loading || !currentWO?.wo_id) return;
+    if (closeLogCheck.status !== 'missing' && closeLogCheck.status !== 'error') return;
+    runCloseLogCheck(currentWO.wo_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workLogs]);
 
   // Closes the WO detail modal and clears the ref so the realtime handler stops
   // firing loadWODetailSilent for a WO that's no longer being viewed.
@@ -2711,7 +2864,18 @@ export default function WorkOrdersPage() {
               </div>
               <div className="form-group">
                 <label htmlFor="wo-fld-work-performed-6" className="form-label">Work Performed *</label>
-                <textarea id="wo-fld-work-performed-6" className="form-input" rows="3" placeholder="Describe work done..." value={workLogForm.notes} onChange={e => setWorkLogForm({ ...workLogForm, notes: e.target.value })} />
+                <textarea id="wo-fld-work-performed-6" className="form-input" rows="3" placeholder="Describe work done..." aria-required="true" aria-describedby={closeExempt ? undefined : 'wo-worklog-min-help'} value={workLogForm.notes} onChange={e => setWorkLogForm({ ...workLogForm, notes: e.target.value })} />
+                {!closeExempt && (() => {
+                  const n = workLogForm.notes.trim().length;
+                  const left = MIN_WORK_LOG_CHARS - n;
+                  return (
+                    <p id="wo-worklog-min-help" style={{ margin: '6px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary, #475569)' }}>
+                      At least {MIN_WORK_LOG_CHARS} characters — say what you did, not just &ldquo;done&rdquo;.{' '}
+                      <span aria-hidden="true">{left > 0 ? `${left} more character${left === 1 ? '' : 's'} needed.` : 'Length OK.'}</span>
+                      <span className="sr-only" aria-live="polite">{left > 0 ? '' : 'Description length OK.'}</span>
+                    </p>
+                  );
+                })()}
               </div>
             </div>
             <div className="modal-footer">
@@ -2799,14 +2963,122 @@ export default function WorkOrdersPage() {
             <div className="modal-header"><h3 id="wo-closewo-modal-title">Close Work Order</h3><button className="modal-close" aria-label="Close dialog" onClick={() => setShowCloseModal(false)}>&times;</button></div>
             <div className="modal-body">
               <p style={{ marginBottom: 16 }}>Are you sure you want to close this work order?</p>
+
+              {/* Work log requirement — students / work study only; instructors are exempt */}
+              {!closeExempt && (
+                <div aria-live="polite" role="status" style={{ marginBottom: 16 }}>
+                  {closeLogCheck.status === 'checking' && (
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-secondary, #475569)' }}>
+                      <Loader2 size={16} aria-hidden="true" className="animate-spin" style={{ display: 'inline', marginRight: 6, verticalAlign: '-3px' }} />
+                      Checking for a work log entry from today…
+                    </p>
+                  )}
+                  {closeLogCheck.status === 'ok' && (
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: '#166534', background: '#dcfce7', border: '1px solid #86efac', borderRadius: 6, padding: '8px 12px' }}>
+                      <CheckCircle2 size={16} aria-hidden="true" style={{ display: 'inline', marginRight: 6, verticalAlign: '-3px' }} />
+                      Work log from today found{closeLogCheck.entries > 1 ? ` (${closeLogCheck.entries} entries)` : ''}.
+                    </p>
+                  )}
+                  {(closeLogCheck.status === 'missing' || closeLogCheck.status === 'error') && (
+                    <p style={{ margin: 0, fontSize: '0.9rem', color: '#78350f', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 6, padding: '8px 12px' }}>
+                      <AlertTriangle size={16} aria-hidden="true" style={{ display: 'inline', marginRight: 6, verticalAlign: '-3px' }} />
+                      <strong>Work log required.</strong>{' '}
+                      {closeLogCheck.status === 'error'
+                        ? 'The work log could not be checked, so add today\'s work below to close.'
+                        : `There is no work log entry from today on this work order (with time and a description of at least ${MIN_WORK_LOG_CHARS} characters). Add what you did today below — it is saved to the work log when you close.`}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {closeNeedsLog && (
+                <fieldset style={{ border: '1px solid var(--border-color, #cbd5e1)', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
+                  <legend style={{ padding: '0 6px', fontWeight: 600 }}>Today&apos;s work log</legend>
+                  <div className="form-group">
+                    <div id="wo-close-time-label" className="form-label">Time Worked <span aria-hidden="true">*</span><span className="sr-only">(required)</span></div>
+                    <div role="group" aria-labelledby="wo-close-time-label" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                          type="number"
+                          className="form-input"
+                          aria-label="Hours worked today"
+                          aria-required="true"
+                          aria-invalid={closeError && closeLogMinutes <= 0 ? 'true' : undefined}
+                          min="0" max="23"
+                          value={closeLogForm.hours}
+                          onChange={e => setCloseLogForm({ ...closeLogForm, hours: Math.max(0, parseInt(e.target.value) || 0) })}
+                          style={{ width: 70, minHeight: 44, textAlign: 'center' }}
+                        />
+                        <span aria-hidden="true">hrs</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                          type="number"
+                          className="form-input"
+                          aria-label="Minutes worked today"
+                          aria-required="true"
+                          aria-invalid={closeError && closeLogMinutes <= 0 ? 'true' : undefined}
+                          min="0" max="59" step={timeIncrement}
+                          value={closeLogForm.mins}
+                          onChange={e => setCloseLogForm({ ...closeLogForm, mins: Math.max(0, parseInt(e.target.value) || 0) })}
+                          style={{ width: 70, minHeight: 44, textAlign: 'center' }}
+                        />
+                        <span aria-hidden="true">mins</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label htmlFor="wo-close-work-performed" className="form-label">Work Performed Today <span aria-hidden="true">*</span><span className="sr-only">(required)</span></label>
+                    <textarea
+                      id="wo-close-work-performed"
+                      className="form-input"
+                      rows="3"
+                      placeholder="Describe what you did today..."
+                      aria-required="true"
+                      aria-invalid={closeError && closeLogNotesLen < MIN_WORK_LOG_CHARS ? 'true' : undefined}
+                      aria-describedby="wo-close-work-help"
+                      value={closeLogForm.notes}
+                      onChange={e => setCloseLogForm({ ...closeLogForm, notes: e.target.value })}
+                    />
+                    <p id="wo-close-work-help" style={{ margin: '6px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary, #475569)' }}>
+                      At least {MIN_WORK_LOG_CHARS} characters — say what you did, not just &ldquo;done&rdquo;. Saved to the work log under your name, the same as Add Work Log.{' '}
+                      <span aria-hidden="true">
+                        {closeLogNotesLen < MIN_WORK_LOG_CHARS
+                          ? `${MIN_WORK_LOG_CHARS - closeLogNotesLen} more character${MIN_WORK_LOG_CHARS - closeLogNotesLen === 1 ? '' : 's'} needed.`
+                          : 'Length OK.'}
+                      </span>
+                      <span className="sr-only" aria-live="polite">{closeLogNotesLen < MIN_WORK_LOG_CHARS ? '' : 'Description length OK.'}</span>
+                    </p>
+                  </div>
+                </fieldset>
+              )}
+
               <div className="form-group">
                 <label htmlFor="wo-fld-final-notes-10" className="form-label">Final Notes</label>
                 <textarea id="wo-fld-final-notes-10" className="form-input" rows="2" placeholder="Optional closing notes..." value={closeNotes} onChange={e => setCloseNotes(e.target.value)} />
               </div>
+
+              {closeError && (
+                <p role="alert" style={{ margin: '4px 0 0', fontSize: '0.9rem', color: '#991b1b', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: '8px 12px' }}>
+                  <XCircle size={16} aria-hidden="true" style={{ display: 'inline', marginRight: 6, verticalAlign: '-3px' }} />
+                  {closeError}
+                </p>
+              )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => setShowCloseModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={closeWorkOrder} disabled={loading}>{loading ? 'Closing...' : 'Close Work Order'}</button>
+              <button className="btn btn-secondary" style={{ minHeight: 44 }} onClick={() => setShowCloseModal(false)}>Cancel</button>
+              <button
+                className="btn btn-primary"
+                style={{ minHeight: 44 }}
+                onClick={closeWorkOrder}
+                disabled={loading || closeBlocked}
+                aria-describedby={closeBlocked && closeNeedsLog ? 'wo-close-blocked-reason' : undefined}
+              >
+                {loading ? 'Closing...' : (closeNeedsLog ? 'Save Log & Close' : 'Close Work Order')}
+              </button>
+              {closeBlocked && closeNeedsLog && (
+                <span id="wo-close-blocked-reason" className="sr-only">{`Enter time worked and at least ${MIN_WORK_LOG_CHARS} characters of work performed today to enable closing.`}</span>
+              )}
             </div>
           </div>
         </div>
