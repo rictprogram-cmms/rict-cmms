@@ -21,6 +21,13 @@
  * "Make-up complete" (lab hours) and "Work received" (the assignment). Work
  * not received by the new due date shows "Past due — score 0" (derived from
  * the timestamps, never stored; ticking Work received later accepts it).
+ * Once past due, "Work not complete" closes the request: score 0, no longer
+ * accepted (stored as work_not_complete; undoable).
+ *
+ * Archiving (derived — isArchived in useAbsenceRequests.js): Rejected, or
+ * Approved with the work closed (received / not complete) and any owed lab
+ * time complete. Instructors get an Active / Archived / All toggle (default
+ * Active); students' My Requests splits into Open and a collapsible Past.
  *
  * Student / Work Study view:
  *   - "Submit Request" button → modal (type toggle, class, dates, hours,
@@ -32,6 +39,9 @@
  *   - Approve → modal requiring the deduction decision + new due date
  *   - Reject → shared RejectionModal (reason required)
  *   - Make-up complete + Work received checkboxes on Approved rows
+ *   - "Work not complete" button on past-due rows (confirm modal with an
+ *     optional instructor-only note); "Undo Work not complete" afterwards
+ *   - Active / Archived / All view toggle (aria-pressed buttons with counts)
  *   - "Nth late this semester" chip on late-submission cards
  *   - Instructor-only follow-up notes per request (absence_request_notes,
  *     RLS-hidden from students)
@@ -57,6 +67,7 @@ import {
   Calendar, Clock, FileText, CheckCircle2, XCircle, AlertTriangle,
   Search, X, ClipboardCheck, MessageSquareText, Trash2,
   CalendarClock, FileWarning, StickyNote, PackageCheck, Ban, BookOpen,
+  Archive, Undo2, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -75,6 +86,7 @@ import {
   lateLabTimeWeekStart,
   requestTypeLabel,
   workDueState,
+  isArchived,
   fakeUtcToLocalDate,
   formatDueAt,
   toDatetimeLocalValue,
@@ -262,8 +274,9 @@ function DeductionBadge({ deduction }) {
 /**
  * Due-date outcome for an Approved request (derived in workDueState):
  *   due       → "Work due <date time>"
- *   received  → "Work received"
- *   past_due  → "Past due — score 0"
+ *   received     → "Work received"
+ *   not_complete → "Work not complete — score 0"
+ *   past_due     → "Past due — score 0"
  * Nothing is rendered for legacy rows without a new due date.
  */
 function WorkDueBadge({ req }) {
@@ -277,6 +290,17 @@ function WorkDueBadge({ req }) {
       >
         <PackageCheck size={11} aria-hidden="true" />
         Work received
+      </span>
+    )
+  }
+  if (state === 'not_complete') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-surface-200 text-surface-800"
+        aria-label={`Work not complete — not done by ${formatDueAt(req.new_due_at)}, score 0, no longer accepted`}
+      >
+        <Ban size={11} aria-hidden="true" />
+        Work not complete — score 0
       </span>
     )
   }
@@ -298,6 +322,20 @@ function WorkDueBadge({ req }) {
     >
       <CalendarClock size={11} aria-hidden="true" />
       Due {formatDueAt(req.new_due_at)}
+    </span>
+  )
+}
+
+/** "Archived" chip — shown on archived cards so they stand out in the All view. */
+function ArchivedBadge({ req }) {
+  if (!isArchived(req)) return null
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-surface-100 text-surface-700 border border-surface-200"
+      aria-label="Archived — nothing left to do on this request"
+    >
+      <Archive size={11} aria-hidden="true" />
+      Archived
     </span>
   )
 }
@@ -1290,6 +1328,105 @@ function DeleteConfirmModal({ open, request, onClose, onConfirm, saving }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// WORK NOT COMPLETE MODAL (close a past-due request: score 0, no longer accepted)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function WorkNotCompleteModal({ open, request, onClose, onConfirm, saving }) {
+  const titleId = useId()
+  const descId = useId()
+  const noteId = useId()
+  const noteHelpId = useId()
+  const [note, setNote] = useState('')
+  const dialogRef = useDialogA11y(open, onClose)
+
+  useEffect(() => { if (open) setNote('') }, [open, request?.request_id])
+
+  if (!open || !request) return null
+  const hrs = Number(request.hours_missed) || 0
+  const labPending = hrs > 0 && !request.makeup_complete
+  const late = isLateSubmission(request)
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      onClick={() => { if (!saving) onClose() }}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="bg-white rounded-xl w-full max-w-md shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-surface-100 flex items-center gap-2">
+          <div className="w-8 h-8 rounded-lg bg-surface-200 flex items-center justify-center">
+            <Ban size={16} className="text-surface-700" aria-hidden="true" />
+          </div>
+          <h2 id={titleId} className="font-semibold text-surface-900">Mark Work Not Complete</h2>
+        </div>
+        <div className="p-5 space-y-4">
+          <div id={descId} className="space-y-2 text-sm text-surface-600">
+            <p>
+              <span className="font-semibold">{request.user_name || request.user_email}</span>
+              {late && request.assignment_name ? <> — <span className="font-semibold">{request.assignment_name}</span></> : null}
+              {' '}was due {formatDueAt(request.new_due_at)} and was not turned in.
+            </p>
+            <p>
+              The assignment scores 0 and the student can no longer turn it in.
+              {labPending
+                ? ' The request stays active until the lab time is marked complete, then moves to Archived.'
+                : ' The request moves to Archived.'}
+              {' '}You can undo this later.
+            </p>
+          </div>
+          <div>
+            <label htmlFor={noteId} className="block text-xs font-medium text-surface-700 mb-1">
+              Instructor note (optional)
+            </label>
+            <textarea
+              id={noteId}
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              rows={3}
+              maxLength={1000}
+              aria-describedby={noteHelpId}
+              className="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+              placeholder="e.g. Talked with the student on Monday"
+            />
+            <p id={noteHelpId} className="text-[11px] text-surface-400 mt-1">
+              Saved to Instructor notes on this request. Students don't see it.
+            </p>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 text-sm font-medium text-surface-600 rounded-lg hover:bg-surface-100
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-400 min-h-[44px]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => onConfirm(note)}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-surface-800 text-white
+                rounded-lg hover:bg-surface-900 disabled:opacity-50 shadow-sm
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-500 focus-visible:ring-offset-2 min-h-[44px]"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Ban size={14} aria-hidden="true" />}
+              Mark not complete
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // INSTRUCTOR NOTES (per request; hidden from students by RLS)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1391,6 +1528,7 @@ function InstructorNotes({ req, notes, saving, onAdd, onDelete }) {
 function RequestCard({
   req, isReviewer, canMarkMakeup, canDelete, saving,
   onApprove, onReject, onToggleMakeup, onToggleWorkReceived, onDelete,
+  onMarkNotComplete = () => {}, onUndoNotComplete = () => {},
   classEndDate = null, lateOrdinal = null, notes = null, onAddNote, onDeleteNote,
 }) {
   const late = isLateSubmission(req)
@@ -1437,6 +1575,7 @@ function RequestCard({
           <StatusBadge status={req.status} />
           <DeductionBadge deduction={req.deduction_status} />
           <WorkDueBadge req={req} />
+          <ArchivedBadge req={req} />
           <span className="text-[10px] text-surface-400" title={req.created_at}>{timeAgo(req.created_at)}</span>
           {canDelete && (
             <button
@@ -1519,7 +1658,15 @@ function RequestCard({
             <Ban size={12} className="flex-shrink-0 mt-px" aria-hidden="true" />
             <span>
               Work was due {formatDueAt(req.new_due_at)} and hasn't been marked received — this assignment scores 0.
-              {isReviewer ? ' Tick "Work received" below if you choose to accept it.' : ''}
+              {isReviewer ? ' Tick "Work received" below if you choose to accept it, or mark "Work not complete" to close it.' : ''}
+            </span>
+          </div>
+        )}
+        {dueState === 'not_complete' && (
+          <div className="flex items-start gap-1.5 bg-surface-100 rounded-lg px-3 py-2 text-xs text-surface-800 border border-surface-200" role="note">
+            <Ban size={12} className="flex-shrink-0 mt-px" aria-hidden="true" />
+            <span>
+              Work was due {formatDueAt(req.new_due_at)} and was not completed — this assignment scores 0 and can no longer be turned in.
             </span>
           </div>
         )}
@@ -1540,6 +1687,12 @@ function RequestCard({
             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-green-700">
               <PackageCheck size={11} aria-hidden="true" />
               Received ({req.work_received_by})
+            </span>
+          )}
+          {req.work_not_complete && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-surface-700">
+              <Ban size={11} aria-hidden="true" />
+              Closed as not complete{req.work_not_complete_by ? ` (${req.work_not_complete_by})` : ''}
             </span>
           )}
         </div>
@@ -1593,7 +1746,7 @@ function RequestCard({
               </label>
             )}
             {/* Work received — the assignment (reviewers); shown whenever a due date exists */}
-            {isReviewer && (req.new_due_at || req.work_received) && (
+            {isReviewer && (req.new_due_at || req.work_received) && !req.work_not_complete && (
               <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-surface-700 min-h-[44px]">
                 <input
                   type="checkbox"
@@ -1606,6 +1759,37 @@ function RequestCard({
                 />
                 <span className="font-medium">Work received</span>
               </label>
+            )}
+            {/* Work not complete — only once past due; closes the request (score 0) */}
+            {isReviewer && dueState === 'past_due' && (
+              <button
+                type="button"
+                onClick={() => onMarkNotComplete(req)}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                  bg-white text-surface-700 border border-surface-300 rounded-lg hover:bg-surface-100 active:bg-surface-200
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-500 focus-visible:ring-offset-2 min-h-[44px]"
+                aria-label={`Mark work not complete for ${req.request_id} — scores 0, no longer accepted`}
+              >
+                <Ban size={12} aria-hidden="true" />
+                Work not complete
+              </button>
+            )}
+            {isReviewer && req.work_not_complete && (
+              <button
+                type="button"
+                onClick={() => onUndoNotComplete(req)}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium
+                  bg-white text-surface-600 border border-surface-200 rounded-lg hover:bg-surface-100
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-surface-500 focus-visible:ring-offset-2 min-h-[44px]"
+                aria-label={`Undo work not complete for ${req.request_id}`}
+              >
+                <Undo2 size={12} aria-hidden="true" />
+                Undo Work not complete
+              </button>
             )}
           </div>
         )}
@@ -1636,7 +1820,7 @@ export default function AbsenceRequestPage() {
   const {
     requests, loading, saving,
     submitRequest, approveRequest, rejectRequest, toggleMakeupComplete, toggleWorkReceived,
-    deleteRequest, fetchDefaultDueAt,
+    markWorkNotComplete, deleteRequest, fetchDefaultDueAt,
   } = useAbsenceRequests({ enabled: true })
 
   const isReviewer = hasPerm('review_requests')
@@ -1674,8 +1858,12 @@ export default function AbsenceRequestPage() {
   const [approveTarget, setApproveTarget] = useState(null)
   const [rejectTarget, setRejectTarget] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [notCompleteTarget, setNotCompleteTarget] = useState(null)
+  const [showMyPast, setShowMyPast] = useState(false)
+  const myPastRegionId = useId()
 
   // Instructor filters
+  const [viewFilter, setViewFilter] = useState('Active')  // 'Active' | 'Archived' | 'All'
   const [statusFilter, setStatusFilter] = useState('All') // default: show every status
   const [typeFilter, setTypeFilter] = useState('All')     // 'All' | 'Absence' | 'Late Submission'
   const [semesterFilter, setSemesterFilter] = useState(() => semesterOf(todayStr()) || 'All')
@@ -1689,6 +1877,9 @@ export default function AbsenceRequestPage() {
     () => requests.filter(r => (r.user_email || '').toLowerCase() === myEmail),
     [requests, myEmail]
   )
+  // Students' own list: Open first, Past (archived) behind a disclosure.
+  const myOpenRequests = useMemo(() => myRequests.filter(r => !isArchived(r)), [myRequests])
+  const myPastRequests = useMemo(() => myRequests.filter(r => isArchived(r)), [myRequests])
 
   // "Nth late this semester" — per student + semester, counting non-rejected
   // late submissions in submission order (instructors see every row via RLS).
@@ -1729,7 +1920,9 @@ export default function AbsenceRequestPage() {
     return weeks
   }, [requests, semesterFilter])
 
-  const filteredRequests = useMemo(() => {
+  // Every filter EXCEPT the Active/Archived view, so the view buttons can
+  // show how many requests each would list.
+  const baseFilteredRequests = useMemo(() => {
     if (!isReviewer) return []
     const term = searchTerm.trim().toLowerCase()
     return requests.filter(r => {
@@ -1744,6 +1937,17 @@ export default function AbsenceRequestPage() {
       return true
     })
   }, [requests, isReviewer, statusFilter, typeFilter, semesterFilter, weekFilter, searchTerm])
+
+  const viewCounts = useMemo(() => {
+    const archived = baseFilteredRequests.filter(r => isArchived(r)).length
+    return { Active: baseFilteredRequests.length - archived, Archived: archived, All: baseFilteredRequests.length }
+  }, [baseFilteredRequests])
+
+  const filteredRequests = useMemo(() => {
+    if (viewFilter === 'All') return baseFilteredRequests
+    const wantArchived = viewFilter === 'Archived'
+    return baseFilteredRequests.filter(r => isArchived(r) === wantArchived)
+  }, [baseFilteredRequests, viewFilter])
 
   const pendingCount = useMemo(() => requests.filter(r => r.status === 'Pending').length, [requests])
 
@@ -1786,6 +1990,31 @@ export default function AbsenceRequestPage() {
       toast.error(result?.message || 'Update failed')
     }
   }, [toggleWorkReceived])
+
+  const handleMarkNotCompleteConfirm = useCallback(async (noteText) => {
+    const target = notCompleteTarget
+    if (!target) return
+    const result = await markWorkNotComplete(target, true)
+    if (!result?.success) {
+      toast.error(result?.message || 'Update failed')
+      return
+    }
+    const labPending = Number(target.hours_missed) > 0 && !target.makeup_complete
+    toast.success(labPending
+      ? 'Marked work not complete — stays active until lab time is complete'
+      : 'Marked work not complete — moved to Archived')
+    setNotCompleteTarget(null)
+    if (noteText && noteText.trim()) {
+      const noteResult = await addNote(target, `Work not complete: ${noteText.trim()}`)
+      if (!noteResult?.success) toast.error(noteResult?.message || 'The note could not be saved')
+    }
+  }, [markWorkNotComplete, addNote, notCompleteTarget])
+
+  const handleUndoNotComplete = useCallback(async (req) => {
+    const result = await markWorkNotComplete(req, false)
+    if (result?.success) toast.success('Work not complete undone — back to past due')
+    else toast.error(result?.message || 'Update failed')
+  }, [markWorkNotComplete])
 
   const handleAddNote = useCallback(async (req, text) => {
     const result = await addNote(req, text)
@@ -1876,7 +2105,7 @@ export default function AbsenceRequestPage() {
           extra lab time if you need it.{' '}
           <span className="font-semibold">Both:</span> approval sets the assignment outcome — 20% deduction, or waived for institutional
           excused events (Section 4.3 / 5.2) — and a new due date (default: second lab day of the following week at lab close).
-          Work not received by the new due date scores 0.
+          Work not received by the new due date scores 0, and once it is marked not complete it can no longer be turned in.
         </p>
       </div>
 
@@ -1897,6 +2126,32 @@ export default function AbsenceRequestPage() {
                   </p>
                 </div>
               </div>
+            </div>
+
+            {/* Active / Archived / All — archived = nothing left to do */}
+            <div role="group" aria-label="Show active or archived requests" className="inline-flex flex-wrap rounded-lg border border-surface-200 bg-surface-50 p-0.5">
+              {[
+                { key: 'Active', label: 'Active', Icon: Inbox },
+                { key: 'Archived', label: 'Archived', Icon: Archive },
+                { key: 'All', label: 'All', Icon: null },
+              ].map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setViewFilter(key)}
+                  aria-pressed={viewFilter === key}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md min-h-[44px]
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                      viewFilter === key
+                        ? 'bg-white text-surface-900 shadow-sm border border-surface-200'
+                        : 'text-surface-600 hover:text-surface-900 hover:bg-white/60 border border-transparent'
+                    }`}
+                >
+                  {Icon && <Icon size={12} aria-hidden="true" />}
+                  {label}
+                  <span className="text-[10px] text-surface-500">({viewCounts[key]})</span>
+                </button>
+              ))}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -1977,7 +2232,7 @@ export default function AbsenceRequestPage() {
 
             {/* Screen-reader result announcement */}
             <p role="status" aria-live="polite" className="sr-only">
-              {filteredRequests.length} request{filteredRequests.length !== 1 ? 's' : ''} shown
+              {filteredRequests.length} {viewFilter === 'All' ? '' : `${viewFilter.toLowerCase()} `}request{filteredRequests.length !== 1 ? 's' : ''} shown
             </p>
           </div>
 
@@ -1993,7 +2248,9 @@ export default function AbsenceRequestPage() {
               </div>
               <p className="text-sm font-medium text-surface-700">No matching requests</p>
               <p className="text-xs text-surface-400 mt-1">
-                {statusFilter === 'Pending' ? 'All requests have been reviewed.' : 'Try adjusting the filters.'}
+                {viewFilter === 'Active' && viewCounts.Archived > 0
+                  ? `Nothing left to act on — ${viewCounts.Archived} finished request${viewCounts.Archived !== 1 ? 's are' : ' is'} under Archived.`
+                  : statusFilter === 'Pending' ? 'All requests have been reviewed.' : 'Try adjusting the filters.'}
               </p>
             </div>
           ) : (
@@ -2010,6 +2267,8 @@ export default function AbsenceRequestPage() {
                   onReject={setRejectTarget}
                   onToggleMakeup={handleToggleMakeup}
                   onToggleWorkReceived={handleToggleWorkReceived}
+                  onMarkNotComplete={setNotCompleteTarget}
+                  onUndoNotComplete={handleUndoNotComplete}
                   onDelete={setDeleteTarget}
                   classEndDate={endDateFor(req)}
                   lateOrdinal={lateOrdinalById[req.request_id] || null}
@@ -2033,7 +2292,7 @@ export default function AbsenceRequestPage() {
             <div>
               <h2 className="font-semibold text-surface-900">My Requests</h2>
               <p className="text-xs text-surface-400">
-                {myRequests.length} request{myRequests.length !== 1 ? 's' : ''}
+                {myOpenRequests.length} open · {myPastRequests.length} past
               </p>
             </div>
           </div>
@@ -2053,24 +2312,68 @@ export default function AbsenceRequestPage() {
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-surface-100">
-              {myRequests.map(req => (
-                <RequestCard
-                  key={req.request_id}
-                  req={req}
-                  isReviewer={false}
-                  canMarkMakeup={false}
-                  canDelete={isSuperAdmin}
-                  saving={anySaving}
-                  onApprove={() => {}}
-                  onReject={() => {}}
-                  onToggleMakeup={() => {}}
-                  onToggleWorkReceived={() => {}}
-                  onDelete={setDeleteTarget}
-                  classEndDate={endDateFor(req)}
-                />
-              ))}
-            </div>
+            <>
+              {myOpenRequests.length === 0 ? (
+                <p className="px-5 py-6 text-sm text-surface-500">
+                  No open requests. Finished requests are under Past requests below.
+                </p>
+              ) : (
+                <div className="divide-y divide-surface-100">
+                  {myOpenRequests.map(req => (
+                    <RequestCard
+                      key={req.request_id}
+                      req={req}
+                      isReviewer={false}
+                      canMarkMakeup={false}
+                      canDelete={isSuperAdmin}
+                      saving={anySaving}
+                      onApprove={() => {}}
+                      onReject={() => {}}
+                      onToggleMakeup={() => {}}
+                      onToggleWorkReceived={() => {}}
+                      onDelete={setDeleteTarget}
+                      classEndDate={endDateFor(req)}
+                    />
+                  ))}
+                </div>
+              )}
+              {myPastRequests.length > 0 && (
+                <div className="border-t border-surface-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowMyPast(v => !v)}
+                    aria-expanded={showMyPast}
+                    aria-controls={myPastRegionId}
+                    className="w-full flex items-center gap-2 px-5 py-3 text-sm font-medium text-surface-700 hover:bg-surface-50 min-h-[44px]
+                      focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
+                  >
+                    {showMyPast ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+                    <Archive size={14} className="text-surface-400" aria-hidden="true" />
+                    Past requests ({myPastRequests.length})
+                  </button>
+                  {(
+                    <div id={myPastRegionId} hidden={!showMyPast} className="divide-y divide-surface-100 border-t border-surface-100 bg-surface-50/40">
+                      {myPastRequests.map(req => (
+                        <RequestCard
+                          key={req.request_id}
+                          req={req}
+                          isReviewer={false}
+                          canMarkMakeup={false}
+                          canDelete={isSuperAdmin}
+                          saving={anySaving}
+                          onApprove={() => {}}
+                          onReject={() => {}}
+                          onToggleMakeup={() => {}}
+                          onToggleWorkReceived={() => {}}
+                          onDelete={setDeleteTarget}
+                          classEndDate={endDateFor(req)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -2092,6 +2395,14 @@ export default function AbsenceRequestPage() {
         onConfirm={handleApproveConfirm}
         saving={saving}
         fetchDefaultDueAt={fetchDefaultDueAt}
+      />
+
+      <WorkNotCompleteModal
+        open={!!notCompleteTarget}
+        request={notCompleteTarget}
+        onClose={() => setNotCompleteTarget(null)}
+        onConfirm={handleMarkNotCompleteConfirm}
+        saving={anySaving}
       />
 
       <DeleteConfirmModal

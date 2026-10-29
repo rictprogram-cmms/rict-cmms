@@ -17,7 +17,13 @@
  * missed/late work) or reject, and can later check off "Make-up complete"
  * (lab hours) and "Work received" (the assignment). Work not received by
  * new_due_at scores 0 — that outcome is DERIVED here from the timestamps
- * (see workDueState), never stored.
+ * (see workDueState), never stored. Once past due, an instructor can close
+ * it as "Work not complete" (work_not_complete — stored, mutually exclusive
+ * with work_received): it still scores 0 and is no longer accepted.
+ *
+ * Archiving is DERIVED (see isArchived), never stored: Rejected, or Approved
+ * with the work closed and any owed lab time complete. Undoing an outcome
+ * un-archives the request.
  *
  * Approved requests with hours_missed > 0 add those hours to the FOLLOWING
  * week's requirement for the same course (useMakeupHours.js overlay +
@@ -26,7 +32,8 @@
  * Exports:
  *   useAbsenceRequests()          — list + realtime + submit/approve/reject/
  *                                   toggleMakeupComplete/toggleWorkReceived/
- *                                   deleteRequest/fetchDefaultDueAt
+ *                                   markWorkNotComplete/deleteRequest/
+ *                                   fetchDefaultDueAt
  *   useAbsenceRequestNotes()      — instructor-only follow-up notes
  *                                   (absence_request_notes, RLS-hidden from
  *                                   students) + add/delete
@@ -37,7 +44,7 @@
  *                                   instructor "submit on behalf" picker
  *   REQUEST_TYPES, isLateSubmission, requestTypeLabel,
  *   isNotYetTurnedIn, lateLabTimeWeekStart
- *   workDueState, fakeUtcToLocalDate, formatDueAt,
+ *   workDueState, isArchived, fakeUtcToLocalDate, formatDueAt,
  *   toDatetimeLocalValue, datetimeLocalToFakeUtc, ordinal
  *   mondayOf, makeupWeekOf, makeupPastClassEnd
  *
@@ -174,16 +181,40 @@ export function datetimeLocalToFakeUtc(value) {
 /**
  * Work due-date outcome for a request (derived, never stored):
  *   'none'      — not Approved, or legacy row with no new_due_at
- *   'received'  — instructor marked the work received
- *   'past_due'  — new_due_at has passed and work was not received → score 0
- *   'due'       — approved, due date in the future, awaiting work
+ *   'received'     — instructor marked the work received
+ *   'not_complete' — instructor closed it as Work not complete → score 0,
+ *                    no longer accepted (stored: work_not_complete)
+ *   'past_due'     — new_due_at has passed and work was not received → score 0
+ *   'due'          — approved, due date in the future, awaiting work
  */
 export function workDueState(request, now = new Date()) {
   if (!request || request.status !== 'Approved') return 'none'
   if (request.work_received) return 'received'
+  if (request.work_not_complete) return 'not_complete'
   const due = fakeUtcToLocalDate(request.new_due_at)
   if (!due) return 'none'
   return now.getTime() > due.getTime() ? 'past_due' : 'due'
+}
+
+/**
+ * Archived = nothing left for anyone to do on the request (derived, never
+ * stored, so undoing an outcome brings it back to the active list):
+ *   Rejected                                     → archived
+ *   Pending                                      → active
+ *   Approved — archived only when BOTH:
+ *     the work is closed: Work received, Work not complete, or (legacy rows)
+ *       no new due date was ever set, so there is no work to track; AND
+ *     lab time is settled: none owed (hours_missed = 0) or Make-up complete
+ *       (trg_auto_makeup_complete usually ticks it automatically).
+ */
+export function isArchived(request, now = new Date()) {
+  if (!request) return false
+  if (request.status === 'Rejected') return true
+  if (request.status !== 'Approved') return false
+  const state = workDueState(request, now)
+  const workClosed = state === 'received' || state === 'not_complete' || state === 'none'
+  const labDone = !(Number(request.hours_missed) > 0) || !!request.makeup_complete
+  return workClosed && labDone
 }
 
 /** 1 → "1st", 2 → "2nd", 3 → "3rd", 11 → "11th" … */
@@ -815,6 +846,9 @@ export function useAbsenceRequests({ enabled = true } = {}) {
   const toggleWorkReceived = useCallback(async (request, value) => {
     if (!profile?.email) return { success: false, message: 'Not signed in.' }
     if (!request?.request_id) return { success: false, message: 'Missing request.' }
+    if (value && request.work_not_complete) {
+      return { success: false, message: 'This request was closed as Work not complete. Undo that first to accept the work.' }
+    }
 
     setSaving(true)
     try {
@@ -850,6 +884,68 @@ export function useAbsenceRequests({ enabled = true } = {}) {
       return { success: true }
     } catch (e) {
       console.error('toggleWorkReceived failed:', e.message)
+      return { success: false, message: e.message }
+    } finally {
+      setSaving(false)
+    }
+  }, [profile, fetchRequests])
+
+  // ── Work not complete (instructor, approved + past-due rows only) ──────────
+  // Closes the request: the work was not done by new_due_at, it scores 0 and
+  // the student may no longer turn it in. value=false undoes it (back to the
+  // derived "Past due — score 0"). Never set together with work_received —
+  // the DB CHECK absence_requests_work_outcome_check enforces that too.
+  const markWorkNotComplete = useCallback(async (request, value) => {
+    if (!profile?.email) return { success: false, message: 'Not signed in.' }
+    if (!request?.request_id) return { success: false, message: 'Missing request.' }
+    if (value) {
+      if (request.work_received) {
+        return { success: false, message: 'Work is already marked received. Clear Work received first.' }
+      }
+      if (workDueState({ ...request, work_not_complete: false }) !== 'past_due') {
+        return { success: false, message: 'Work not complete can only be marked after the new due date has passed.' }
+      }
+    }
+
+    setSaving(true)
+    try {
+      let q = supabase
+        .from('absence_requests')
+        .update({
+          work_not_complete: !!value,
+          work_not_complete_by: value ? fullNameFrom(profile) : null,
+          work_not_complete_date: value ? localToUtcIso(new Date()) : null,
+          updated_at: localToUtcIso(new Date()),
+          updated_by: fullNameFrom(profile),
+        })
+        .eq('request_id', request.request_id)
+        .eq('status', 'Approved')
+      if (value) q = q.eq('work_received', false)
+      const { data: updated, error: updErr } = await q.select()
+      if (updErr) {
+        if (updErr.code === 'PGRST204' || /work_not_complete/i.test(updErr.message || '')) {
+          throw new Error('Work not complete needs the 2026-10-29 database update (20261029_absence_work_not_complete.sql). Run it in Supabase, then try again.')
+        }
+        throw updErr
+      }
+      if (!updated || updated.length === 0) {
+        throw new Error('Update blocked (request must be Approved and not already marked received). Refresh and try again.')
+      }
+
+      await writeAudit(
+        profile,
+        'ABSENCE_WORK_NOT_COMPLETE',
+        request.request_id,
+        'work_not_complete',
+        String(!!request.work_not_complete),
+        String(!!value),
+        value ? `Closed as not complete — was due ${formatDueAt(request.new_due_at)}; score 0, no longer accepted` : 'Work not complete undone'
+      )
+
+      fetchRequests() // direct refresh — don't depend on realtime for our own writes
+      return { success: true }
+    } catch (e) {
+      console.error('markWorkNotComplete failed:', e.message)
       return { success: false, message: e.message }
     } finally {
       setSaving(false)
@@ -905,6 +1001,7 @@ export function useAbsenceRequests({ enabled = true } = {}) {
     rejectRequest,
     toggleMakeupComplete,
     toggleWorkReceived,
+    markWorkNotComplete,
     deleteRequest,
   }
 }

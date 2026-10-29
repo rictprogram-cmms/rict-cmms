@@ -736,15 +736,26 @@ export function checkLateSubmissions({ absences }) {
     help: 'Requests to turn work in late, in the order they were filed.' }, items)
 }
 
-/** 21. Approved late work whose new due date passed with nothing received. */
+/**
+ * 21. Approved late work whose new due date passed with nothing received —
+ *     still open (past due) or closed by an instructor as Work not complete.
+ *     Both score 0, so both count.
+ */
 export function checkWorkPastDue({ absences, now }) {
-  const items = (absences || []).filter(a => isLateSub(a) && workDueState(a, now) === 'past_due').map(a => ({
-    date: fakeUtcDateKey(a.new_due_at), week: mondayKeyOf(fakeUtcDateKey(a.new_due_at)),
-    label: `${a.assignment_name || 'assignment'} (${a.course_id || a.class_id || ''}) — was due ${fmtFakeUtc(a.new_due_at)}`,
-    detail: 'Extended due date has passed and the work has not been marked received.',
-  }))
-  return makeCheck({ id: 'workPastDue', num: 21, section: 'absences', label: 'Late work still not received', severity: 'high', counts: true,
-    help: 'Approved late submissions past their extended due date with work_received still unchecked.' }, items)
+  const items = (absences || [])
+    .filter(a => isLateSub(a) && ['past_due', 'not_complete'].includes(workDueState(a, now)))
+    .map(a => {
+      const closed = workDueState(a, now) === 'not_complete'
+      return {
+        date: fakeUtcDateKey(a.new_due_at), week: mondayKeyOf(fakeUtcDateKey(a.new_due_at)),
+        label: `${a.assignment_name || 'assignment'} (${a.course_id || a.class_id || ''}) — was due ${fmtFakeUtc(a.new_due_at)}${closed ? ' — work not complete' : ''}`,
+        detail: closed
+          ? `Closed as Work not complete${a.work_not_complete_by ? ` by ${a.work_not_complete_by}` : ''}${a.work_not_complete_date ? ` ${fmtFakeUtc(a.work_not_complete_date)}` : ''} — scores 0, no longer accepted.`
+          : 'Extended due date has passed and the work has not been marked received.',
+      }
+    })
+  return makeCheck({ id: 'workPastDue', num: 21, section: 'absences', label: 'Late work not received', severity: 'high', counts: true,
+    help: 'Approved late submissions past their extended due date with no work received — still past due, or closed as Work not complete.' }, items)
 }
 
 /** 22. Deduction status on late submissions (info). */
@@ -1246,7 +1257,7 @@ export function studentFacingLabel(check) {
     filedLate: 'Absences I filed after the day',
     makeupIncomplete: 'Make-up hours I have not completed',
     lateSubmissions: 'My late-work requests',
-    workPastDue: 'Late work I still owe',
+    workPastDue: 'Late work I did not turn in',
     deductions: 'Late-work deductions',
     ownWOsLate: 'My work orders past due',
     staleWOs: 'My work orders with no recent update',
