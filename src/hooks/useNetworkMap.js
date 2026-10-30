@@ -723,6 +723,61 @@ export function useNetworkMap() {
     return ip
   }, [profile])
 
+  /**
+   * Instructor: release someone else's self-assigned address.
+   * Gate at the UI with hasPerm('delete_devices') — same rule as deleting a
+   * device, which is what the database checks. Logged as 'Release IP' so the
+   * device history reads as a release, not a delete.
+   */
+  const releaseUserIp = useCallback(async (deviceId) => {
+    const existing = devices.find(d => d.device_id === deviceId)
+    if (!existing) throw new Error('Device not found.')
+    if (!existing.self_assigned) throw new Error('Only self-assigned addresses can be released this way.')
+    const { error } = assertWrite(
+      await supabase
+        .from('network_devices')
+        .delete()
+        .eq('device_id', deviceId).select(),
+      'network_devices.delete'
+    )
+    if (error) throw new Error(error.message)
+    if (mountedRef.current) setDevices(prev => prev.filter(d => d.device_id !== deviceId))
+    const holder = existing.assigned_user_name || existing.assigned_user_email || 'a user'
+    await writeAudit(profile, 'Release IP', 'Network Device', deviceId,
+      `Released ${existing.ip_address} — ${existing.device_name || '(no name)'} (released by ${senderDisplayName(profile)} for ${holder})`)
+
+    // Tell the student (bell + Inbox; the announcements insert also triggers
+    // their phone push). Non-fatal: the release already happened.
+    let notified = false
+    const to = (existing.assigned_user_email || '').toLowerCase()
+    if (to && to !== (profile?.email || '').toLowerCase()) {
+      try {
+        const sender = senderDisplayName(profile)
+        const device = existing.device_name ? ` (${existing.device_name})` : ''
+        const { error: nErr } = assertWrite(
+          await supabase.from('announcements').insert({
+            recipient_email: to,
+            sender_email: (profile?.email || '').toLowerCase(),
+            sender_name: sender,
+            subject: `Your IP address ${existing.ip_address} was released`,
+            body: `${sender} released the static IP address ${existing.ip_address}${device} that was assigned to you.`
+              + `\n\nRemove the static IP setting from that device now. The address may already be assigned to someone else, and using it would cause an IP conflict on the lab network.`
+              + `\n\nIf you still need a static address, use "Get an IP address" on the Network Map. Never guess an address.`,
+            read: false,
+            notification_type: 'ip_released',
+            created_at: new Date().toISOString(),
+          }).select(),
+          'announcements.insert'
+        )
+        if (nErr) throw nErr
+        notified = true
+      } catch (e) {
+        console.warn('[useNetworkMap] IP release notification failed:', e?.message || e)
+      }
+    }
+    return { ip: existing.ip_address, notified, holder }
+  }, [devices, profile])
+
   return {
     // state
     devices,
@@ -749,6 +804,7 @@ export function useNetworkMap() {
     nextOpenSelfIp,
     claimSelfIp,
     releaseSelfIp,
+    releaseUserIp,
     // crud
     addDevice,
     updateDevice,

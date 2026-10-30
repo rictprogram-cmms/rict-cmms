@@ -707,6 +707,7 @@ export default function NotificationBell() {
     (data || []).forEach(a => {
       const isWOAssign = a.notification_type === 'wo_assignment';
       const isWODue = a.notification_type === 'wo_due_reminder';
+      const isIpReleased = a.notification_type === 'ip_released';
       const isStudentMsg = a.notification_type === 'student_message';
       // Type / icon / color matrix:
       //   wo_assignment  → orange clipboard ('assignment_ind')
@@ -734,6 +735,14 @@ export default function NotificationBell() {
         color = '#d97706';
         title = a.subject || 'Work Order Due Soon';
         subtitle = (a.body || '').split('\n\n')[0] || 'A work order assigned to you is coming due';
+      } else if (isIpReleased) {
+        // ip_released → red router icon, written by useNetworkMap.releaseUserIp
+        // when an instructor releases a student's self-assigned IP address.
+        type = 'ip_released';
+        icon = 'router';
+        color = '#dc2626';
+        title = a.subject || 'Your IP address was released';
+        subtitle = 'Remove the static IP setting from your device';
       } else if (isStudentMsg) {
         type = 'student_message';
         icon = 'forum';
@@ -1898,6 +1907,7 @@ export default function NotificationBell() {
     student_message: 'STUDENT MESSAGE',
     wo_assignment: 'WORK ORDER ASSIGNED',
     wo_due_reminder: 'WORK ORDER DUE SOON',
+    ip_released: 'IP ADDRESS RELEASED',
     help: 'NEEDS HELP',
     netchg: 'NETWORK CHANGE',
     absence: 'ABSENCE REQUEST',
@@ -1917,6 +1927,16 @@ export default function NotificationBell() {
       await supabase.from('announcements').update({ read: true }).eq('id', item.raw.id);
     } catch {}
     navigate('/work-orders');
+  };
+
+  // ip_released: mark read and open the Network Map (where they can get a new
+  // address). The full message stays in the Inbox.
+  const viewIpReleased = async (item) => {
+    setOpen(false);
+    try {
+      await supabase.from('announcements').update({ read: true }).eq('id', item.raw.id);
+    } catch {}
+    navigate('/network-map');
   };
 
   // Navigate to the Network Map page so the instructor can review pending changes.
@@ -1950,6 +1970,7 @@ export default function NotificationBell() {
       case 'student_message': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#10b981' }} onClick={() => viewAnnouncement(item)} aria-label={`View student message: ${item.title}`}><span className="material-icons" aria-hidden="true">forum</span>View &amp; Reply</button>);
       case 'wo_assignment': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
       case 'wo_due_reminder': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#b45309' }} onClick={() => viewWOAssignment(item)} aria-label={`View work orders coming due: ${item.title}`}><span className="material-icons" aria-hidden="true">schedule</span>View WO</button>);
+      case 'ip_released': return (<><button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#b91c1c' }} onClick={() => viewIpReleased(item)} aria-label={`Open the Network Map: ${item.title}`}><span className="material-icons" aria-hidden="true">router</span>Network Map</button><button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => viewAnnouncement(item)} aria-label={`Read the full message: ${item.title}`}><span className="material-icons" aria-hidden="true">visibility</span>View</button></>);
       case 'help': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary min-h-[44px]" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       case 'netchg': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
       case 'absence': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review ${item.raw?.request_type === 'Late Submission' ? 'late submission' : 'absence'} request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence / Late Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);

@@ -48,6 +48,7 @@ const SYSTEM_NOTIFICATION_TYPES = new Set([
   'wo_unassignment',
   'temp_access_update',   // written by edit_temp_access_request() RPC when an instructor edits a grant
   'wo_due_reminder',      // written daily by the send-wo-due-reminders Edge Function
+  'ip_released',          // written when an instructor releases a student's self-assigned IP (Network Map)
 ])
 function isSystemNotificationType(t) {
   return !!t && SYSTEM_NOTIFICATION_TYPES.has(t)

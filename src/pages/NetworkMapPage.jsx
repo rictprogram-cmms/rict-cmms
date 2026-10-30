@@ -28,7 +28,8 @@
  * address; the "Your IP address" banner at the top shows it with mask and
  * gateway, Copy and Release. Archiving the user releases it automatically.
  * Everyone sees a "Self-assigned" tag on those rows; users who can edit or
- * approve also see who holds it.
+ * approve also see who holds it. Users with delete_devices (instructors) get a
+ * Release button on other people's self-assigned rows in place of Delete.
  *
  * Deep link: /network-map?focus=<ip> selects the right tab and searches for
  * that address (used by the Assets page "Open" button).
@@ -149,7 +150,7 @@ export default function NetworkMapPage() {
     addDevice, updateDevice, deleteDevice,
     submitChangeRequest, cancelChangeRequest,
     approveChangeRequest, rejectChangeRequest,
-    myDevice, nextOpenSelfIp, claimSelfIp, releaseSelfIp,
+    myDevice, nextOpenSelfIp, claimSelfIp, releaseSelfIp, releaseUserIp,
   } = useNetworkMap()
 
   const [activeTab, setActiveTab] = useState(DEFAULT_SUBNET)
@@ -167,6 +168,7 @@ export default function NetworkMapPage() {
   const [historyTarget, setHistoryTarget] = useState(null) // device row
   const [getIpOpen, setGetIpOpen] = useState(false)         // self-service "Get an IP address"
   const [releaseIpOpen, setReleaseIpOpen] = useState(false) // confirm releasing own IP
+  const [releaseOtherTarget, setReleaseOtherTarget] = useState(null) // instructor: someone else's self-assigned row
 
   const canEdit = hasPerm('edit_devices')
   const canAdd = hasPerm('add_devices')
@@ -420,6 +422,22 @@ export default function NetworkMapPage() {
       const ip = await releaseSelfIp()
       showToast(`Released ${ip}`, 'success')
       setReleaseIpOpen(false)
+    } catch (e) {
+      showToast(e.message, 'error')
+      throw e
+    }
+  }
+
+  const handleReleaseOther = async () => {
+    const d = releaseOtherTarget
+    try {
+      const { ip, notified, holder } = await releaseUserIp(d.device_id)
+      if (notified) {
+        showToast(`Released ${ip} — ${holder} was notified`, 'success')
+      } else {
+        showToast(`Released ${ip}, but the notification to ${holder} could not be sent. Please tell them directly.`, 'error')
+      }
+      setReleaseOtherTarget(null)
     } catch (e) {
       showToast(e.message, 'error')
       throw e
@@ -818,6 +836,7 @@ export default function NetworkMapPage() {
                   isMine={!!myDevice && r.device?.device_id === myDevice.device_id}
                   onEdit={() => setEditTarget(r.device)}
                   onDelete={() => setDeleteTarget(r.device)}
+                  onRelease={() => setReleaseOtherTarget(r.device)}
                   onSuggest={(mode) => setSuggestTarget({
                     device: r.device, ip: r.ip, subnet: r.subnetId, mode,
                   })}
@@ -941,6 +960,15 @@ export default function NetworkMapPage() {
           device={myDevice}
           onCancel={() => setReleaseIpOpen(false)}
           onConfirm={handleReleaseIp}
+        />
+      )}
+      {releaseOtherTarget && (
+        <ReleaseIpModal
+          device={releaseOtherTarget}
+          title="Release this IP address?"
+          body={`${releaseOtherTarget.assigned_user_name || releaseOtherTarget.assigned_user_email || 'A user'} self-assigned this address. Releasing it returns it to the open pool, and it may be given to someone else right away. They'll get a notification telling them to remove the static IP setting from their device.`}
+          onCancel={() => setReleaseOtherTarget(null)}
+          onConfirm={handleReleaseOther}
         />
       )}
       {historyTarget && (
@@ -1089,7 +1117,7 @@ function PendingCard({ count, onClick }) {
 function NetworkRow({
   row, zebra, showSubnetTag, effectiveDeviceName, assetById,
   canEdit, canDelete, canSuggest, canSeeAssignee, isMine,
-  onEdit, onDelete, onSuggest, onAdd, onHistory,
+  onEdit, onDelete, onSuggest, onAdd, onHistory, onRelease,
 }) {
   const navigate = useNavigate()
   const { ip, device, pending, isReserved, isGateway, subnetId } = row
@@ -1222,7 +1250,21 @@ function NetworkRow({
               <Edit3 size={14} aria-hidden="true" />
             </button>
           )}
-          {canDelete && hasDevice && !isGateway && (
+          {/* Instructor: release a student's self-assigned address (replaces Delete) */}
+          {canDelete && isSelf && !isMine && (
+            <button
+              type="button"
+              onClick={onRelease}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold
+                text-red-700 bg-red-50 hover:bg-red-100
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 min-h-[44px]"
+              aria-label={`Release ${ip}${assigneeLabel ? ` held by ${assigneeLabel}` : ''}`}
+              title="Release this self-assigned address"
+            >
+              <Undo2 size={11} aria-hidden="true" /> Release
+            </button>
+          )}
+          {canDelete && hasDevice && !isGateway && !(isSelf && !isMine) && (
             <button
               type="button"
               onClick={onDelete}
@@ -1781,7 +1823,7 @@ function GetIpModal({ nextOpenIp, findDuplicateMac, onClaim, onClose }) {
 }
 
 // Confirm before giving the address back.
-function ReleaseIpModal({ device, onCancel, onConfirm }) {
+function ReleaseIpModal({ device, title, body, onCancel, onConfirm }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const busyRef = useRef(false)
@@ -1804,7 +1846,7 @@ function ReleaseIpModal({ device, onCancel, onConfirm }) {
 
   return (
     <ModalShell
-      title="Release your IP address?"
+      title={title || 'Release your IP address?'}
       subtitle={`${device.ip_address} — ${device.device_name || 'your device'}`}
       icon={Undo2}
       onClose={safeCancel}
@@ -1812,8 +1854,7 @@ function ReleaseIpModal({ device, onCancel, onConfirm }) {
     >
       <div className="p-5 space-y-3">
         <p className="text-sm text-surface-700">
-          The address goes back to the open pool and may be given to someone else right away.
-          Remove the static IP setting from your device so the two don't conflict.
+          {body || "The address goes back to the open pool and may be given to someone else right away. Remove the static IP setting from your device so the two don't conflict."}
         </p>
         {error && (
           <p role="alert" className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg p-2">{error}</p>

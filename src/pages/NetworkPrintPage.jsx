@@ -35,6 +35,12 @@
  * users with the 'print_map' permission can mark sheets printed, which
  * stamps last_printed_at/by and clears the flags.
  *
+ * Self-assigned IPs (2026-10-29): addresses students give themselves with
+ * "Get an IP address" come and go, so they are NOT printed (their rows print
+ * blank) and do not flag sheets (flag_network_print_sheet skips them —
+ * 20261029_network_print_skip_self_ip.sql). Every sheet carries a note that
+ * blank rows may be in use and to get an address from the Network Map.
+ *
  * File: src/pages/NetworkPrintPage.jsx
  */
 
@@ -214,8 +220,9 @@ export default function NetworkPrintPage() {
   const allPages = useMemo(() => {
     // One-pass lookup map — avoids devices.find() scanning the whole
     // list for each of the 762 IPs (O(n) per IP → O(1) per IP).
+    // Self-assigned (student) addresses are not printed — see header note.
     const deviceByIp = new Map()
-    devices.forEach(d => deviceByIp.set(d.ip_address, d))
+    devices.forEach(d => { if (!d.self_assigned) deviceByIp.set(d.ip_address, d) })
 
     const out = []
     NETWORK_CONFIG.subnets.forEach(subnet => {
@@ -387,6 +394,9 @@ export default function NetworkPrintPage() {
               <div><strong>DHCP Pool:</strong> {NETWORK_CONFIG.dhcpPool.prefix}x (student laptops)</div>
               <div style={{ marginTop: 4, color: '#991b1b' }}>
                 <strong>Do not use:</strong> {NETWORK_CONFIG.doNotUse.subnet.replace('.0', '')}.250 – .254
+              </div>
+              <div style={{ marginTop: 4, color: '#0f172a', fontWeight: 600 }}>
+                Blank rows may be in use. Need an address? Use Get an IP address on the Network Map — never guess.
               </div>
               <div style={{ marginTop: 4, color: '#6b7280', fontSize: 10 }}>
                 Printed {printedAt.toLocaleString()}
