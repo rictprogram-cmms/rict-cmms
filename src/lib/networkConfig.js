@@ -202,6 +202,38 @@ export function isDoNotUseIp(ip) {
   return false
 }
 
+// ── Self-service IP assignment ──────────────────────────────────────────────
+//
+// "Get an IP address" on the Network Map gives a user the LOWEST open address
+// across these wired subnets, in this order. The database function
+// claim_self_ip() (supabase/migrations/20261029_network_self_ip.sql) does the
+// real pick inside a lock — KEEP ITS SUBNET LIST AND DO-NOT-USE RANGE IN SYNC
+// WITH THIS. The app only uses this list to preview the likely address.
+// The IT-managed wireless segment and the DHCP pool are never used.
+export const SELF_ASSIGN_SUBNET_IDS = ['10.171.193.0', '10.171.194.0', '10.171.195.0']
+
+/**
+ * Preview the address claim_self_ip() would most likely hand out.
+ *   deviceByIp     — Map<ip, device> from useNetworkMap
+ *   pendingAddIps  — Set<ip> with a Pending "add" change request
+ * Returns '' when nothing is open. The database may still pick a different
+ * address if someone claims one first — always show the address it returns.
+ */
+export function findNextOpenSelfIp(deviceByIp, pendingAddIps = new Set()) {
+  for (const id of SELF_ASSIGN_SUBNET_IDS) {
+    const seg = getSegment(id)
+    if (!seg) continue
+    for (let octet = 1; octet <= 254; octet++) {
+      const ip = `${seg.prefix}${octet}`
+      if (isDoNotUseIp(ip) || isGatewayIp(ip)) continue
+      if (deviceByIp?.has(ip)) continue
+      if (pendingAddIps.has(ip)) continue
+      return ip
+    }
+  }
+  return ''
+}
+
 /**
  * Validate a MAC address. Accepts XX-XX-XX-XX-XX-XX or XX:XX:XX:XX:XX:XX
  * (6 pairs of hex, separator either - or :).

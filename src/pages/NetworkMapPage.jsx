@@ -21,6 +21,14 @@
  *   print_map          — everyone
  *   export_data        — work_study / instructor
  *   manage_it_segments — instructor (add/edit/delete on IT-managed segments)
+ *   request_ip         — everyone (self-service: "Get an IP address")
+ *
+ * Self-service IP (2026-10-29): a user with request_ip can give themselves ONE
+ * static address. The database (claim_self_ip) picks the lowest open wired
+ * address; the "Your IP address" banner at the top shows it with mask and
+ * gateway, Copy and Release. Archiving the user releases it automatically.
+ * Everyone sees a "Self-assigned" tag on those rows; users who can edit or
+ * approve also see who holds it.
  *
  * Deep link: /network-map?focus=<ip> selects the right tab and searches for
  * that address (used by the Assets page "Open" button).
@@ -43,12 +51,14 @@ import RejectionModal from '@/components/RejectionModal'
 import {
   NETWORK_CONFIG, ALL_SEGMENTS, getSegment, findSegmentForIp, isManagedSegmentId,
   buildIp, isDoNotUseIp, isGatewayIp, isValidMac, normaliseMac,
+  gatewayForIp, subnetMaskForIp,
 } from '@/lib/networkConfig'
 import {
   Network, Search, Printer, Download, Plus, Edit3, Trash2, Send, X,
   CheckCircle2, XCircle, AlertTriangle, Inbox, Info, Loader2, Lock,
   ChevronDown, ChevronRight, FileSpreadsheet, ClipboardList, Clock,
   History, Filter, Link2, ExternalLink, Wifi,
+  Copy, Check, MonitorSmartphone, User, Undo2, MapPin,
 } from 'lucide-react'
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -127,7 +137,7 @@ function buildSegmentRows(segment, deviceByIp, pendingByDevice, devicesBySubnet)
 export default function NetworkMapPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { profile } = useAuth()
+  const { profile, isEmulating } = useAuth()
   const { hasPerm, permsLoading } = usePermissions('Network Map')
   const { sendRejectionNotification } = useRejectionNotification()
   const {
@@ -139,6 +149,7 @@ export default function NetworkMapPage() {
     addDevice, updateDevice, deleteDevice,
     submitChangeRequest, cancelChangeRequest,
     approveChangeRequest, rejectChangeRequest,
+    myDevice, nextOpenSelfIp, claimSelfIp, releaseSelfIp,
   } = useNetworkMap()
 
   const [activeTab, setActiveTab] = useState(DEFAULT_SUBNET)
@@ -154,6 +165,8 @@ export default function NetworkMapPage() {
   const [approveTarget, setApproveTarget] = useState(null) // change request
   const [rejectTarget, setRejectTarget] = useState(null)   // change request
   const [historyTarget, setHistoryTarget] = useState(null) // device row
+  const [getIpOpen, setGetIpOpen] = useState(false)         // self-service "Get an IP address"
+  const [releaseIpOpen, setReleaseIpOpen] = useState(false) // confirm releasing own IP
 
   const canEdit = hasPerm('edit_devices')
   const canAdd = hasPerm('add_devices')
@@ -165,6 +178,11 @@ export default function NetworkMapPage() {
   // IT-managed segments (wireless AP): add/edit/delete is a separate,
   // instructor-only permission because the addresses come from IT.
   const canManageIt = hasPerm('manage_it_segments')
+  // Self-service IP. Release has no permission check (anyone may give back
+  // their own). Both are off while a Super Admin emulates someone, because
+  // the database acts on the real signed-in account, not the emulated one.
+  const canRequestIp = hasPerm('request_ip')
+  const canSeeAssignee = canEdit || canApprove
 
   const showToast = useCallback((msg, type = 'info') => {
     setToast({ msg, type })
@@ -237,9 +255,11 @@ export default function NetworkMapPage() {
       d?.device_name, liveName, d?.profinet_name, d?.location, d?.notes,
       d?.asset_id,
       macRaw, macStripped,
+      canSeeAssignee ? d?.assigned_user_name : null,
+      canSeeAssignee ? d?.assigned_user_email : null,
     ].filter(Boolean).join(' ').toLowerCase()
     return tokens.every(t => haystack.includes(t))
-  }, [tokens, effectiveDeviceName])
+  }, [tokens, effectiveDeviceName, canSeeAssignee])
 
   // ── Apply search + filter ────────────────────────────────────────────
   // When searching, search ALL three subnets and hide empty/available rows
@@ -390,6 +410,28 @@ export default function NetworkMapPage() {
       throw e
     }
   }
+
+  // ── Self-service IP ─────────────────────────────────────────────────────
+  // The popup shows its own success view, so no toast on claim.
+  const handleClaimIp = async (values) => claimSelfIp(values)
+
+  const handleReleaseIp = async () => {
+    try {
+      const ip = await releaseSelfIp()
+      showToast(`Released ${ip}`, 'success')
+      setReleaseIpOpen(false)
+    } catch (e) {
+      showToast(e.message, 'error')
+      throw e
+    }
+  }
+
+  const showMyIpOnMap = useCallback(() => {
+    if (!myDevice) return
+    setFilter('all')
+    setSearch(myDevice.ip_address)
+    setTimeout(() => document.getElementById('nm-search')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
+  }, [myDevice])
 
   const handleCancelPending = async (requestId) => {
     try {
@@ -557,6 +599,19 @@ export default function NetworkMapPage() {
           )}
         </div>
       </div>
+
+      {/* ── Your IP address (self-service) ── */}
+      {(myDevice || canRequestIp) && (
+        <MyIpBanner
+          device={myDevice}
+          canRequest={canRequestIp}
+          isEmulating={isEmulating}
+          nextOpenIp={nextOpenSelfIp}
+          onGet={() => setGetIpOpen(true)}
+          onRelease={() => setReleaseIpOpen(true)}
+          onShowOnMap={showMyIpOnMap}
+        />
+      )}
 
       {/* ── Summary Cards ── */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" role="region" aria-label="Subnet usage">
@@ -759,6 +814,8 @@ export default function NetworkMapPage() {
                   canEdit={rowManaged ? canManageIt : canEdit}
                   canDelete={rowManaged ? canManageIt : canDelete}
                   canSuggest={canSuggest}
+                  canSeeAssignee={canSeeAssignee}
+                  isMine={!!myDevice && r.device?.device_id === myDevice.device_id}
                   onEdit={() => setEditTarget(r.device)}
                   onDelete={() => setDeleteTarget(r.device)}
                   onSuggest={(mode) => setSuggestTarget({
@@ -869,6 +926,21 @@ export default function NetworkMapPage() {
           assetById={assetById}
           onCancel={() => setApproveTarget(null)}
           onConfirm={handleApprove}
+        />
+      )}
+      {getIpOpen && (
+        <GetIpModal
+          nextOpenIp={nextOpenSelfIp}
+          findDuplicateMac={findDuplicateMac}
+          onClaim={handleClaimIp}
+          onClose={() => setGetIpOpen(false)}
+        />
+      )}
+      {releaseIpOpen && myDevice && (
+        <ReleaseIpModal
+          device={myDevice}
+          onCancel={() => setReleaseIpOpen(false)}
+          onConfirm={handleReleaseIp}
         />
       )}
       {historyTarget && (
@@ -1016,7 +1088,8 @@ function PendingCard({ count, onClick }) {
 // ── Table row ──────────────────────────────────────────────────────────────
 function NetworkRow({
   row, zebra, showSubnetTag, effectiveDeviceName, assetById,
-  canEdit, canDelete, canSuggest, onEdit, onDelete, onSuggest, onAdd, onHistory,
+  canEdit, canDelete, canSuggest, canSeeAssignee, isMine,
+  onEdit, onDelete, onSuggest, onAdd, onHistory,
 }) {
   const navigate = useNavigate()
   const { ip, device, pending, isReserved, isGateway, subnetId } = row
@@ -1037,10 +1110,21 @@ function NetworkRow({
   // Styling: Do-Not-Use rows get a distinctive background, never color-only
   const rowBg = isGateway || isReserved
     ? 'bg-red-50 hover:bg-red-100'
+    : isMine ? 'bg-emerald-50 hover:bg-emerald-100'
     : zebra ? 'bg-surface-25 hover:bg-surface-50' : 'bg-white hover:bg-surface-50'
 
+  // Self-assigned: everyone sees the tag; staff also see who holds it.
+  const isSelf = !!device?.self_assigned
+  const assigneeLabel = isMine ? 'You'
+    : canSeeAssignee ? (device?.assigned_user_name || device?.assigned_user_email || '')
+    : ''
+
   return (
-    <tr className={`${rowBg} transition-colors`} style={isReserved || isGateway ? { borderLeft: '3px solid #dc2626' } : undefined}>
+    <tr
+      className={`${rowBg} transition-colors`}
+      style={isReserved || isGateway ? { borderLeft: '3px solid #dc2626' }
+           : isMine ? { borderLeft: '3px solid #059669' } : undefined}
+    >
       <td className="px-3 py-2 font-mono text-xs text-surface-700">
         <div className="flex items-center gap-2">
           {showSubnetTag && (
@@ -1077,6 +1161,16 @@ function NetworkRow({
         {liveName ? (
           <div className="flex items-center gap-2 flex-wrap">
             <span>{liveName}</span>
+            {isSelf && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold
+                  bg-emerald-50 text-emerald-800 border border-emerald-200"
+                title={assigneeLabel ? `Self-assigned by ${assigneeLabel}` : 'Self-assigned by a user'}
+              >
+                <User size={9} aria-hidden="true" />
+                {assigneeLabel ? `Self-assigned · ${assigneeLabel}` : 'Self-assigned'}
+              </span>
+            )}
             {linkedAsset && (
               <button
                 type="button"
@@ -1307,6 +1401,449 @@ function PendingRequestCard({ req, canApprove, isOwn, assetById, onApprove, onRe
 // ═══════════════════════════════════════════════════════════════════════════
 // Modals
 // ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Self-service IP address
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Copy text to the clipboard; falls back to a hidden textarea for browsers
+// (or non-secure origins) without navigator.clipboard.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.setAttribute('readonly', '')
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
+}
+
+// Copy button with its own polite status message ("Copied 10.171.193.6").
+function CopyIpButton({ ip, label = 'Copy', className = '' }) {
+  const [state, setState] = useState('idle') // idle | copied | failed
+  const timer = useRef(null)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  const handleCopy = async () => {
+    const ok = await copyText(ip)
+    setState(ok ? 'copied' : 'failed')
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setState('idle'), 2500)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={handleCopy}
+        className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg
+          bg-white border border-surface-300 text-surface-700
+          hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px] ${className}`}
+        aria-label={`Copy IP address ${ip}`}
+      >
+        {state === 'copied'
+          ? <><Check size={14} aria-hidden="true" /> Copied</>
+          : <><Copy size={14} aria-hidden="true" /> {label}</>}
+      </button>
+      <span className="sr-only" role="status" aria-live="polite">
+        {state === 'copied' ? `Copied ${ip} to the clipboard`
+          : state === 'failed' ? `Could not copy. The address is ${ip}` : ''}
+      </span>
+    </>
+  )
+}
+
+// Banner at the top of the page: the user's own address, or a prompt to get one.
+function MyIpBanner({ device, canRequest, isEmulating, nextOpenIp, onGet, onRelease, onShowOnMap }) {
+  const emulatingNote = isEmulating
+    ? 'Not available while viewing as another user — the request would be made for your own account.'
+    : ''
+
+  if (device) {
+    const mask = subnetMaskForIp(device.ip_address)
+    const gateway = gatewayForIp(device.ip_address)
+    return (
+      <section
+        className="rounded-xl border border-emerald-300 bg-emerald-50 p-4"
+        aria-labelledby="my-ip-heading"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 id="my-ip-heading" className="text-[11px] font-semibold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+              <MonitorSmartphone size={13} aria-hidden="true" /> Your IP address
+            </h2>
+            <p className="text-2xl font-bold font-mono text-surface-900 mt-1 break-all">{device.ip_address}</p>
+            <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-surface-700">
+              <dt className="font-semibold">Subnet mask</dt><dd className="font-mono">{mask}</dd>
+              <dt className="font-semibold">Gateway</dt><dd className="font-mono">{gateway}</dd>
+              <dt className="font-semibold">Device</dt><dd>{device.device_name || '—'}</dd>
+              {device.mac_address && (<><dt className="font-semibold">MAC</dt><dd className="font-mono">{device.mac_address}</dd></>)}
+              <dt className="font-semibold">Assigned</dt><dd>{formatDate(device.assigned_at || device.created_at)}</dd>
+            </dl>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <CopyIpButton ip={device.ip_address} />
+            <button
+              type="button"
+              onClick={onShowOnMap}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg
+                bg-white border border-surface-300 text-surface-700
+                hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 min-h-[44px]"
+            >
+              <MapPin size={14} aria-hidden="true" /> Show on map
+            </button>
+            <button
+              type="button"
+              onClick={onRelease}
+              disabled={isEmulating}
+              title={emulatingNote || undefined}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg
+                bg-white border border-red-300 text-red-700
+                hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500
+                disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
+              aria-label={`Release IP address ${device.ip_address}`}
+            >
+              <Undo2 size={14} aria-hidden="true" /> Release
+            </button>
+          </div>
+        </div>
+        <p className="text-[11px] text-emerald-900 mt-2">
+          Set this as a static address on your device. Release it when you no longer need it so someone else can use it.
+          {emulatingNote && <span className="block mt-1 font-semibold">{emulatingNote}</span>}
+        </p>
+      </section>
+    )
+  }
+
+  if (!canRequest) return null
+
+  const none = !nextOpenIp
+  return (
+    <section
+      className="rounded-xl border border-surface-200 bg-white p-4 flex flex-wrap items-center justify-between gap-3"
+      aria-labelledby="my-ip-heading"
+    >
+      <div className="min-w-0">
+        <h2 id="my-ip-heading" className="text-sm font-semibold text-surface-900 flex items-center gap-1.5">
+          <MonitorSmartphone size={15} className="text-brand-600" aria-hidden="true" /> Need a static IP address?
+        </h2>
+        <p className="text-xs text-surface-600 mt-0.5">
+          {none
+            ? 'There are no open addresses right now. Please ask an instructor.'
+            : 'Get one assigned to you automatically. It stays yours until you release it.'}
+          {emulatingNote && <span className="block mt-1 font-semibold text-amber-800">{emulatingNote}</span>}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onGet}
+        disabled={none || isEmulating}
+        className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg
+          bg-brand-600 text-white shadow-sm hover:bg-brand-700
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-500
+          disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
+      >
+        <Plus size={15} aria-hidden="true" /> Get an IP address
+      </button>
+    </section>
+  )
+}
+
+// Popup: device name, MAC (optional), purpose / class → assign → success view.
+function GetIpModal({ nextOpenIp, findDuplicateMac, onClaim, onClose }) {
+  const [form, setForm] = useState({ deviceName: '', macAddress: '', purpose: '' })
+  const [touched, setTouched] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [assigned, setAssigned] = useState(null) // network_devices row once claimed
+  const successRef = useRef(null)
+  const errorRef = useRef(null)
+  // Stable close for ModalShell (its effect re-runs — and re-focuses the first
+  // field — whenever onClose changes identity). Ignored while assigning.
+  const savingRef = useRef(false)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const safeClose = useCallback(() => { if (!savingRef.current) onCloseRef.current() }, [])
+
+  const name = form.deviceName.trim()
+  const purpose = form.purpose.trim()
+  const mac = form.macAddress.trim()
+  const nameInvalid = name.length < 2 || name.length > 80
+  const purposeInvalid = purpose.length < 3 || purpose.length > 200
+  const macInvalid = !!mac && !isValidMac(mac)
+  const dupMac = mac && !macInvalid ? findDuplicateMac(mac) : null
+
+  useEffect(() => {
+    if (assigned) setTimeout(() => successRef.current?.focus(), 30)
+  }, [assigned])
+
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
+
+  const handleSubmit = async (e) => {
+    e?.preventDefault()
+    setTouched(true)
+    setError('')
+    if (nameInvalid || purposeInvalid || macInvalid) {
+      setError('Please fix the highlighted fields.')
+      setTimeout(() => errorRef.current?.focus(), 0)
+      return
+    }
+    setSaving(true)
+    savingRef.current = true
+    try {
+      const row = await onClaim({ deviceName: name, macAddress: mac, purpose })
+      setAssigned(row)
+    } catch (err) {
+      setError(err.message || 'Could not assign an address.')
+      setTimeout(() => errorRef.current?.focus(), 0)
+    } finally {
+      setSaving(false)
+      savingRef.current = false
+    }
+  }
+
+  const inputCls = (bad) => `w-full px-3 py-2 text-sm border rounded-lg min-h-[44px]
+    focus:outline-none focus:ring-2 focus:border-transparent
+    ${bad ? 'border-red-400 focus:ring-red-500' : 'border-surface-300 focus:ring-brand-500'}`
+
+  if (assigned) {
+    const ip = assigned.ip_address
+    return (
+      <ModalShell title="Your IP address is ready" icon={CheckCircle2} onClose={safeClose} size="sm">
+        <div className="p-5 space-y-3">
+          <div
+            ref={successRef}
+            tabIndex={-1}
+            role="status"
+            aria-live="polite"
+            className="rounded-xl bg-emerald-50 border border-emerald-300 p-4 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+          >
+            <p className="text-xs font-semibold text-emerald-800">Assigned to {assigned.device_name}</p>
+            <p className="text-2xl font-bold font-mono text-surface-900 mt-1 break-all">{ip}</p>
+            <p className="text-xs text-surface-700 mt-1 font-mono">
+              Mask {subnetMaskForIp(ip)} · Gateway {gatewayForIp(ip)}
+            </p>
+          </div>
+          <p className="text-xs text-surface-600">
+            It now shows at the top of the Network Map. Release it there when you are done with it.
+          </p>
+          <div className="flex justify-end gap-2">
+            <CopyIpButton ip={ip} label="Copy address" />
+            <button
+              type="button"
+              onClick={safeClose}
+              className="px-4 py-2 text-sm font-semibold rounded-lg bg-brand-600 text-white hover:bg-brand-700
+                focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-500 min-h-[44px]"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </ModalShell>
+    )
+  }
+
+  return (
+    <ModalShell
+      title="Get an IP address"
+      subtitle={nextOpenIp
+        ? `The next open address is ${nextOpenIp}. You will get the lowest open address when you confirm.`
+        : 'There are no open addresses right now.'}
+      icon={MonitorSmartphone}
+      onClose={safeClose}
+    >
+      <form className="p-5 space-y-4" onSubmit={handleSubmit} noValidate>
+        <p className="text-xs text-surface-500">Fields marked <span aria-hidden="true">*</span><span className="sr-only">with an asterisk</span> are required.</p>
+
+        <div>
+          <label htmlFor="selfip-name" className="block text-xs font-semibold text-surface-700 mb-1">
+            Device name / description <span aria-hidden="true" className="text-red-600">*</span>
+          </label>
+          <input
+            id="selfip-name"
+            type="text"
+            value={form.deviceName}
+            onChange={set('deviceName')}
+            maxLength={80}
+            required
+            aria-required="true"
+            aria-invalid={touched && nameInvalid}
+            aria-describedby="selfip-name-help"
+            placeholder="e.g. My laptop, Raspberry Pi, PLC trainer"
+            className={inputCls(touched && nameInvalid)}
+          />
+          <p id="selfip-name-help" className={`text-[11px] mt-1 ${touched && nameInvalid ? 'text-red-700' : 'text-surface-500'}`}>
+            {touched && nameInvalid ? 'Enter 2–80 characters.' : 'What will use this address?'}
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="selfip-mac" className="block text-xs font-semibold text-surface-700 mb-1">
+            MAC address <span className="font-normal text-surface-500">(optional)</span>
+          </label>
+          <input
+            id="selfip-mac"
+            type="text"
+            value={form.macAddress}
+            onChange={set('macAddress')}
+            maxLength={17}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={macInvalid}
+            aria-describedby="selfip-mac-help"
+            placeholder="XX-XX-XX-XX-XX-XX"
+            className={`${inputCls(macInvalid)} font-mono`}
+          />
+          <p id="selfip-mac-help" className={`text-[11px] mt-1 ${macInvalid ? 'text-red-700' : dupMac ? 'text-amber-800' : 'text-surface-500'}`}>
+            {macInvalid
+              ? 'Use the format XX-XX-XX-XX-XX-XX (or with colons).'
+              : dupMac
+                ? `Heads up: this MAC is already recorded on ${dupMac.ip_address}.`
+                : 'Helps instructors identify the device on the network.'}
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="selfip-purpose" className="block text-xs font-semibold text-surface-700 mb-1">
+            Purpose / class <span aria-hidden="true" className="text-red-600">*</span>
+          </label>
+          <input
+            id="selfip-purpose"
+            type="text"
+            value={form.purpose}
+            onChange={set('purpose')}
+            maxLength={200}
+            required
+            aria-required="true"
+            aria-invalid={touched && purposeInvalid}
+            aria-describedby="selfip-purpose-help"
+            placeholder="e.g. RICT1610 PLC lab, capstone project"
+            className={inputCls(touched && purposeInvalid)}
+          />
+          <p id="selfip-purpose-help" className={`text-[11px] mt-1 ${touched && purposeInvalid ? 'text-red-700' : 'text-surface-500'}`}>
+            {touched && purposeInvalid ? 'Enter 3–200 characters.' : 'Which class or project needs it?'}
+          </p>
+        </div>
+
+        {error && (
+          <div
+            ref={errorRef}
+            tabIndex={-1}
+            role="alert"
+            className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800 focus:outline-none"
+          >
+            <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={safeClose}
+            disabled={saving}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-white border border-surface-300 text-surface-700
+              hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 min-h-[44px]"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving || !nextOpenIp}
+            aria-busy={saving}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg
+              bg-brand-600 text-white hover:bg-brand-700
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-brand-500
+              disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
+          >
+            {saving
+              ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Assigning…</>
+              : 'Assign my IP address'}
+          </button>
+        </div>
+        <span className="sr-only" aria-live="polite">{saving ? 'Assigning an address…' : ''}</span>
+      </form>
+    </ModalShell>
+  )
+}
+
+// Confirm before giving the address back.
+function ReleaseIpModal({ device, onCancel, onConfirm }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const busyRef = useRef(false)
+  const onCancelRef = useRef(onCancel)
+  onCancelRef.current = onCancel
+  const safeCancel = useCallback(() => { if (!busyRef.current) onCancelRef.current() }, [])
+
+  const handle = async () => {
+    setBusy(true)
+    busyRef.current = true
+    setError('')
+    try {
+      await onConfirm()
+    } catch (e) {
+      setError(e.message || 'Could not release the address.')
+      setBusy(false)
+      busyRef.current = false
+    }
+  }
+
+  return (
+    <ModalShell
+      title="Release your IP address?"
+      subtitle={`${device.ip_address} — ${device.device_name || 'your device'}`}
+      icon={Undo2}
+      onClose={safeCancel}
+      size="sm"
+    >
+      <div className="p-5 space-y-3">
+        <p className="text-sm text-surface-700">
+          The address goes back to the open pool and may be given to someone else right away.
+          Remove the static IP setting from your device so the two don't conflict.
+        </p>
+        {error && (
+          <p role="alert" className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg p-2">{error}</p>
+        )}
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={safeCancel}
+            disabled={busy}
+            className="px-4 py-2 text-sm font-medium rounded-lg bg-white border border-surface-300 text-surface-700
+              hover:bg-surface-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-50 min-h-[44px]"
+          >
+            Keep it
+          </button>
+          <button
+            type="button"
+            onClick={handle}
+            disabled={busy}
+            aria-busy={busy}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg
+              bg-red-600 text-white hover:bg-red-700
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-red-500 disabled:opacity-50 min-h-[44px]"
+          >
+            {busy ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Releasing…</> : `Release ${device.ip_address}`}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
 
 // Shared modal shell (focus trap + escape-to-close)
 function ModalShell({ title, subtitle, onClose, children, icon: Icon, size = 'md' }) {

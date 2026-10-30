@@ -6,18 +6,25 @@
  * direct edits (instructor), student/work-study "suggest change" submissions,
  * and stale wall-sheet print tracking (staleSheets / markSheetsPrinted).
  *
+ * Self-service IPs (2026-10-29): myDevice is the signed-in user's own
+ * self-assigned address (one per user). claimSelfIp / releaseSelfIp call the
+ * SECURITY DEFINER functions claim_self_ip() / release_self_ip(), which pick
+ * the lowest open wired address inside a lock (students have no direct write
+ * rights on network_devices). Archiving a user releases theirs in the
+ * database (trigger profiles_release_self_ip_archive).
+ *
  * Writes are guarded at the UI layer via usePermissions; this hook only does
  * the data work.
  *
  * File: src/hooks/useNetworkMap.js
  */
 
-import { assertWrite } from '@/lib/supabaseData'
+import { assertWrite, mustData } from '@/lib/supabaseData'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
-import { ALL_SEGMENTS, isDoNotUseIp, isGatewayIp, normaliseMac } from '@/lib/networkConfig'
+import { ALL_SEGMENTS, isDoNotUseIp, isGatewayIp, normaliseMac, findNextOpenSelfIp } from '@/lib/networkConfig'
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -214,6 +221,33 @@ export function useNetworkMap() {
     })
     return m
   }, [changeRequests])
+
+  // ── Self-service IP (one per user) ──────────────────────────────────────
+  // Matched by profile id; email is a fallback. While a Super Admin emulates
+  // a user, `profile` is the emulated user, so this shows THEIR address
+  // (the page makes it read-only while emulating).
+  const myDevice = useMemo(() => {
+    if (!profile) return null
+    const email = (profile.email || '').toLowerCase()
+    return devices.find(d => d.assigned_user_id && profile.id && d.assigned_user_id === profile.id)
+      || devices.find(d => d.self_assigned && email && (d.assigned_user_email || '').toLowerCase() === email)
+      || null
+  }, [devices, profile])
+
+  // IPs with a Pending "add" request — claim_self_ip() skips these too.
+  const pendingAddIps = useMemo(() => {
+    const s = new Set()
+    changeRequests.forEach(r => {
+      if (r.status === 'Pending' && r.change_type === 'add' && r.ip_address) s.add(r.ip_address)
+    })
+    return s
+  }, [changeRequests])
+
+  // Preview only — the database makes the real pick.
+  const nextOpenSelfIp = useMemo(
+    () => findNextOpenSelfIp(deviceByIp, pendingAddIps),
+    [deviceByIp, pendingAddIps]
+  )
 
   const pendingCount = useMemo(() =>
     changeRequests.filter(r => r.status === 'Pending').length,
@@ -645,6 +679,50 @@ export function useNetworkMap() {
       `Rejected ${req.change_type} of ${req.ip_address}. Reason: ${rejectionReason.trim()}`)
   }, [changeRequests, profile])
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // Self-service IP — any user with Network Map / request_ip
+  // ═══════════════════════════════════════════════════════════════════════
+
+  /**
+   * Give the signed-in user the lowest open wired address.
+   * Returns the new network_devices row. Throws with the database's message
+   * (already have one, none left, validation) so the popup can show it.
+   */
+  const claimSelfIp = useCallback(async ({ deviceName, macAddress, purpose }) => {
+    if (!profile?.email) throw new Error('Not signed in.')
+    const row = mustData(
+      await supabase.rpc('claim_self_ip', {
+        p_device_name: (deviceName || '').trim(),
+        p_mac_address: macAddress ? normaliseMac(macAddress) : null,
+        p_purpose: (purpose || '').trim(),
+      }),
+      'claim_self_ip'
+    )
+    if (!row || !row.device_id) throw new Error('No address was assigned. Please try again.')
+    // Show it right away; the realtime event will replace it with the same row.
+    if (mountedRef.current) {
+      setDevices(prev => {
+        const next = prev.filter(d => d.device_id !== row.device_id)
+        next.push(row)
+        next.sort((a, b) => (a.ip_address || '').localeCompare(b.ip_address || '', undefined, { numeric: true }))
+        return next
+      })
+    }
+    return row
+  }, [profile])
+
+  /**
+   * Give back the signed-in user's self-assigned address. Returns the IP.
+   */
+  const releaseSelfIp = useCallback(async () => {
+    if (!profile?.email) throw new Error('Not signed in.')
+    const ip = mustData(await supabase.rpc('release_self_ip'), 'release_self_ip')
+    if (mountedRef.current && ip) {
+      setDevices(prev => prev.filter(d => d.ip_address !== ip))
+    }
+    return ip
+  }, [profile])
+
   return {
     // state
     devices,
@@ -666,6 +744,11 @@ export function useNetworkMap() {
     assetDeviceCounts,
     devicesByAsset,
     effectiveDeviceName,
+    // self-service IP
+    myDevice,
+    nextOpenSelfIp,
+    claimSelfIp,
+    releaseSelfIp,
     // crud
     addDevice,
     updateDevice,
