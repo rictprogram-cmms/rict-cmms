@@ -6,7 +6,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
-import { getHelpAvailability } from '@/lib/helpAvailability'
+import { getHelpAvailability, serverLockReason, lockForServerReason } from '@/lib/helpAvailability'
 import { useInstructorAway } from '@/hooks/useInstructorAway'
 import { cn } from '@/lib/utils'
 import NotificationBell from '@/components/NotificationBell'
@@ -990,13 +990,16 @@ function HelpButton({ profile }) {
         .gte('date', `${todayKey}T00:00:00`)
         .lte('date', `${todayKey}T23:59:59`)
         .limit(1), 'lab_calendar.select')
-      setCalendarRow(data && data.length > 0 ? data[0] : null)
+      const row = data && data.length > 0 ? data[0] : null
+      setCalendarRow(row)
       setCalendarLoaded(true)
+      return row
     } catch {
       // Couldn't read the calendar — skip the schedule rules rather than
       // lock students out because of a connection problem.
       setCalendarRow(undefined)
       setCalendarLoaded(true)
+      return undefined
     }
   }, [profile?.email, isInstructor, todayKey])
 
@@ -1157,8 +1160,24 @@ function HelpButton({ profile }) {
       setHelpRequest({ request_id: requestId, status: 'pending', location })
       showHelpTooltip(`Help requested — ${location}`, 'success')
     } catch (e) {
-      console.error('Help request error:', e)
-      showHelpTooltip('Failed to request help', 'error')
+      // Refused by the database rules (migration 20261103_help_request_rules)?
+      // Re-read the schedule and Away Mode, then explain the lock the same
+      // way the button does — never a bare "failed".
+      const reason = serverLockReason(e)
+      if (reason) {
+        if (reason === 'not_clocked_in') {
+          setIsClockedIn(false)
+          showHelpTooltip('You must be clocked in to request help', 'error')
+        } else {
+          const [row] = await Promise.all([loadCalendar(), away.reload()])
+          const fresh = getHelpAvailability({ now: new Date(), calendarRow: row, away: away.settings })
+          const lock = fresh.locked && fresh.code === reason ? fresh : lockForServerReason(reason)
+          showHelpTooltip(lock.short, 'locked', 6000, lock)
+        }
+      } else {
+        console.error('Help request error:', e)
+        showHelpTooltip('Failed to request help', 'error')
+      }
     }
     setHelpLoading(false)
   }

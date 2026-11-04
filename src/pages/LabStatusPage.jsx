@@ -35,6 +35,8 @@ import { fetchKioskFeed, subscribeKioskFeed } from '@/lib/kioskFeed';
 import { shortName } from '@/lib/utils';
 import { mergeSignupSessions, pickSession, minutesToTime12, minutesToDate, nowMinutes, lastPunchOutMinute, leftSessionEarly } from '@/lib/labSessions';
 import { useInstructorAway } from '@/hooks/useInstructorAway';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
+import { openWindow, localMinutes, formatMinutes12 } from '@/lib/helpAvailability';
 
 const SCROLL_THRESHOLD = 6;
 
@@ -263,6 +265,85 @@ function SoundUnlockOverlay({ instructors, loadingInstructors, onSelectInstructo
 
 // ─── Person Row — unified display for all statuses ─────────────────────────
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PAUSE HELP DIALOG — instructor pauses new help requests from the kiosk.
+// Calls kiosk_instructor_pause_help (migration 20261103_help_request_rules),
+// which sets Away – pause help with an end time and logs who did it.
+// ═══════════════════════════════════════════════════════════════════════════
+function PauseHelpDialog({ open, instructorName, closeLabel, onPause, onClose }) {
+  const dialogRef = useDialogA11y(open, onClose);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => { if (open) { setBusy(false); setError(''); } }, [open]);
+
+  if (!open) return null;
+
+  const choose = async (opt) => {
+    if (busy) return;
+    setBusy(true); setError('');
+    const res = await onPause(opt);
+    if (res?.ok) { onClose(); return; }
+    setBusy(false);
+    setError(res?.error === 'no_close_time'
+      ? 'The lab has no closing time left today. Pick a number of minutes instead.'
+      : 'Could not pause help. Check the connection and try again.');
+  };
+
+  const options = [
+    { key: '30', label: '30 minutes', sub: 'Help reopens on its own', minutes: 30 },
+    { key: '60', label: '1 hour', sub: 'Help reopens on its own', minutes: 60 },
+    { key: 'close', label: 'Until the lab closes', sub: closeLabel ? `Ends at ${closeLabel}, when the lab closes` : 'Not available — no closing time left today', untilClose: true, disabled: !closeLabel },
+  ];
+
+  const big = (extra = {}) => ({
+    display: 'flex', alignItems: 'center', gap: 14, width: '100%', minHeight: 64, padding: '14px 22px',
+    background: '#1c2333', border: '2px solid #2d3748', borderRadius: 14, cursor: 'pointer', textAlign: 'left',
+    WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', fontFamily: 'inherit', ...extra,
+  });
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9998, background: 'rgba(10, 12, 18, 0.9)', backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="pause-help-title" aria-describedby="pause-help-desc"
+        style={{ width: '100%', maxWidth: 460, background: '#141824', border: '1px solid #2d3748', borderRadius: 18, padding: 24, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span className="material-icons" aria-hidden="true" style={{ color: '#fbbf24', fontSize: '2rem' }}>pause_circle</span>
+          <div>
+            <h2 id="pause-help-title" style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: '#e9ecef' }}>Pause help requests</h2>
+            <p id="pause-help-desc" style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#adb5bd', lineHeight: 1.5 }}>
+              Students won’t be able to send new help requests until the time runs out or you tap AWAY to return.
+              {instructorName ? <> Recorded as <strong style={{ color: '#74c0fc' }}>{instructorName}</strong>.</> : null}
+            </p>
+          </div>
+        </div>
+
+        {options.map(opt => (
+          <button key={opt.key} type="button" className="pause-help-option"
+            onClick={() => { if (!opt.disabled) choose(opt); }}
+            aria-disabled={opt.disabled || busy || undefined}
+            aria-label={`Pause help for ${opt.label}. ${opt.sub}`}
+            style={big({ cursor: (opt.disabled || busy) ? 'not-allowed' : 'pointer', opacity: opt.disabled ? 0.5 : 1 })}>
+            <span className="material-icons" aria-hidden="true" style={{ color: '#fbbf24', fontSize: '1.5rem' }}>{opt.untilClose ? 'event_busy' : 'timer'}</span>
+            <span style={{ flex: 1 }}>
+              <span style={{ display: 'block', fontWeight: 700, fontSize: '1.05rem', color: '#e9ecef' }}>{opt.label}</span>
+              <span style={{ display: 'block', fontSize: '0.72rem', color: '#868e96', marginTop: 2 }}>{opt.sub}</span>
+            </span>
+          </button>
+        ))}
+
+        <div role="alert" aria-live="assertive" style={{ minHeight: error ? 'auto' : 0, color: '#fca5a5', fontSize: '0.85rem' }}>{error}</div>
+        <div role="status" aria-live="polite" className="sr-only">{busy ? 'Pausing help…' : ''}</div>
+
+        <button type="button" className="pause-help-option" onClick={onClose}
+          style={big({ justifyContent: 'center', background: 'transparent', color: '#adb5bd', fontWeight: 700, fontSize: '1rem', minHeight: 56 })}>
+          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.2rem' }}>close</span>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PersonRow({ person }) {
   const cfg = STATUS_CONFIG[person.status] || STATUS_CONFIG.good;
   const initials = (person.userName || '?').split(' ').map(p => p[0] || '').join('').toUpperCase().slice(0, 2);
@@ -460,6 +541,9 @@ export default function LabStatusPage() {
   const [awayToggling, setAwayToggling] = useState(false);
   // Today's hour-level lab closures (e.g. "2-3pm Faculty Meeting")
   const [todayClosures, setTodayClosures] = useState([]);
+  // Today's lab_calendar status + end_time (for "Pause until the lab closes")
+  const [todayCalendar, setTodayCalendar] = useState(null);
+  const [pauseOpen, setPauseOpen] = useState(false);
 
   const toggleAwayOff = useCallback(async () => {
     setAwayToggling(true);
@@ -474,6 +558,27 @@ export default function LabStatusPage() {
     catch (err) { console.error('[LabStatus] Toggle away off error:', err); }
     setAwayToggling(false);
   }, [awayMode.reload]);
+
+  // ── Pause help from the kiosk (instructor picked on the start screen) ──
+  const pauseHelp = useCallback(async (opt) => {
+    try {
+      const { data, error } = await supabase.rpc('kiosk_instructor_pause_help', {
+        p_minutes: opt.untilClose ? null : opt.minutes,
+        p_until_close: !!opt.untilClose,
+        p_by: selectedInstructor?.displayName || null,
+      });
+      if (error) throw error;
+      if (data?.ok) await awayMode.reload();
+      return data || { ok: false };
+    } catch (err) {
+      console.error('[LabStatus] Pause help error:', err);
+      return { ok: false, error: 'failed' };
+    }
+  }, [selectedInstructor, awayMode.reload]);
+
+  // "Until the lab closes" — offered only while today's closing time is ahead
+  const closeWin = openWindow(todayCalendar);
+  const closeLabel = closeWin && closeWin.endMin > localMinutes(new Date()) ? formatMinutes12(closeWin.endMin) : '';
 
   // ── Data Fetching — unified people list ──────────────────────────────────
 
@@ -498,7 +603,7 @@ export default function LabStatusPage() {
       // Weekly Labs). The lab_calendar row is still read directly.
       const [feed, calRes] = await Promise.all([
         fetchKioskFeed(supabase, todayStr),
-        supabase.from('lab_calendar').select('closed_blocks').eq('date', todayStr + 'T12:00:00').maybeSingle(),
+        supabase.from('lab_calendar').select('closed_blocks, status, end_time').eq('date', todayStr + 'T12:00:00').maybeSingle(),
       ]);
       const clockRes = feed.punchedIn;
       const helpRes = feed.help;
@@ -521,6 +626,7 @@ export default function LabStatusPage() {
       const signupData   = mustData(signupRes, 'lab_signup');
       if (calRes.error) console.warn('[LabStatus] lab_calendar query error (closures banner skipped):', calRes.error.message);
       const calData = calRes.error ? null : calRes.data;
+      if (!calRes.error) setTodayCalendar(calData ? { status: calData.status, end_time: calData.end_time } : null);
       if (outRes.error) console.warn('[LabStatus] time_clock punched-out query error (On Break rows skipped):', outRes.error.message);
       const outData = outRes.error ? [] : (outRes.data || []);
 
@@ -778,6 +884,9 @@ export default function LabStatusPage() {
           switching={audioUnlocked && switchingInstructor} currentInstructor={selectedInstructor} onCancel={cancelSwitchInstructor} />
       )}
 
+      <PauseHelpDialog open={pauseOpen} instructorName={selectedInstructor?.displayName || ''}
+        closeLabel={closeLabel} onPause={pauseHelp} onClose={() => setPauseOpen(false)} />
+
       {/* ══ HEADER 58px ══ */}
       <header style={{ display: 'flex', alignItems: 'center', padding: '0 20px', borderBottom: '1px solid #1e2433', background: '#141824', flexShrink: 0, height: 58, gap: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
@@ -808,6 +917,15 @@ export default function LabStatusPage() {
             <span className="material-icons" aria-hidden="true" style={{ fontSize: '0.95rem', color: audioUnlocked ? '#4ade80' : '#6c757d' }}>{audioUnlocked ? 'volume_up' : 'volume_off'}</span>
             <span style={{ fontSize: '0.68rem', color: '#6c757d' }}>{audioUnlocked ? 'Audio on' : 'Audio off'}</span>
           </div>
+        )}
+        {!instructorAway && selectedInstructor && (
+          <button type="button" className="pause-help-option" onClick={() => setPauseOpen(true)}
+            aria-label={`Pause help requests (signed in as ${selectedInstructor.displayName})`}
+            aria-haspopup="dialog"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 44, background: 'transparent', border: '2px solid #92400e', borderRadius: 10, padding: '6px 16px', flexShrink: 0, marginRight: 12, cursor: 'pointer', color: '#fbbf24', fontWeight: 700, fontSize: '0.78rem', letterSpacing: '0.5px', textTransform: 'uppercase', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', userSelect: 'none', fontFamily: 'inherit' }}>
+            <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.15rem' }}>pause_circle</span>
+            Pause help
+          </button>
         )}
         {instructorAway && (
           <button onClick={toggleAwayOff} disabled={awayToggling} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#dc2626', border: '2px solid #ef4444', borderRadius: 10, padding: '8px 18px', flexShrink: 0, marginRight: 12, cursor: awayToggling ? 'wait' : 'pointer', animation: 'awayPulse 1.6s ease-in-out infinite', WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation', userSelect: 'none' }}>
@@ -979,6 +1097,8 @@ export default function LabStatusPage() {
         @keyframes slideIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes cardPendingPulse { 0%, 100% { border-color: #b91c1c; background: rgba(127,29,29,0.18); } 50% { border-color: #ef4444; background: rgba(127,29,29,0.30); } }
         @keyframes awayPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.5); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }
+        .pause-help-option:focus { outline: none; }
+        .pause-help-option:focus-visible { outline: 3px solid #74c0fc; outline-offset: 2px; }
         .footer-switch-btn:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; border-radius: 6px; }
         .footer-switch-btn:hover { color: #74c0fc; }
       `}</style>

@@ -292,7 +292,6 @@ details[open] .settings-disclosure-summary-icon { transform: rotate(90deg); }
   background: white; color: #6c757d;
   border: none; cursor: pointer;
   transition: background 0.15s, color 0.15s;
-  min-height: 40px;  /* WCAG tap-target leniency */
   font-family: inherit;
 }
 .settings-segmented-btn + .settings-segmented-btn {

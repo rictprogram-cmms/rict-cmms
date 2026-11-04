@@ -320,3 +320,43 @@ export function awayUntilForPreset(preset, { now = new Date(), calendarRow } = {
   if (!Number.isFinite(mins) || mins <= 0) return ''
   return toFakeUtc(new Date(now.getTime() + mins * 60000))
 }
+
+// ── Database refusals ───────────────────────────────────────────────────────
+
+/**
+ * The reason code from a help_requests insert refused by the database
+ * trigger (migration 20261103_help_request_rules.sql), or null.
+ * The error message looks like 'HELP_LOCKED:closure'.
+ */
+export function serverLockReason(error) {
+  const msg = String(error?.message || error || '')
+  const m = msg.match(/HELP_LOCKED:([a-z_]+)/)
+  return m ? m[1] : null
+}
+
+/**
+ * A lock message for a database refusal when the app's own copy of the
+ * schedule didn't predict it (e.g. a closure added a moment ago).
+ */
+export function lockForServerReason(reason) {
+  const base = { locked: true, code: reason, icon: '🔒', tone: 'gray' }
+  switch (reason) {
+    case 'not_clocked_in':
+      return { ...base, title: 'You aren’t clocked in', message: 'Clock in at the Time Clock, then ask for help.', short: 'You must be clocked in to request help' }
+    case 'no_calendar':
+    case 'closed_day':
+      return { ...base, title: 'The lab is closed today', message: 'Help requests are only available during open lab hours.', short: 'Help unavailable — the lab is closed today' }
+    case 'before_open':
+      return { ...base, title: 'The lab isn’t open yet', message: 'Help requests open when the lab opens.', short: 'Help unavailable — the lab isn’t open yet' }
+    case 'after_close':
+      return { ...base, title: 'The lab is closed for the day', message: 'You can ask for help during the next open lab.', short: 'Help unavailable — the lab is closed for the day' }
+    case 'closure':
+      return { ...base, tone: 'red', title: 'The lab is closed right now', message: 'There is a scheduled closure. Keep working — you can ask for help when it ends.', short: 'Help unavailable — the lab is closed right now' }
+    case 'lunch':
+      return { ...base, icon: '🍽️', tone: 'amber', title: 'Instructors are on lunch', message: 'Keep working — you can ask for help after lunch.', short: 'Help unavailable — instructors are on lunch' }
+    case 'paused':
+      return { ...base, icon: '🏢', tone: 'red', title: 'Help requests are paused', message: 'Instructors are in a meeting. Keep working — you can ask for help when they return.', short: 'Help paused — instructors are in a meeting' }
+    default:
+      return { ...base, title: 'Help isn’t available right now', message: 'Please try again in a little while.', short: 'Help unavailable right now' }
+  }
+}

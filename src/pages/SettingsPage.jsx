@@ -77,6 +77,17 @@ import { RUNS, RUNS_SHORT, datesForRuns, calendarFromTerm, classMatchesTerm, inf
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const SETTING_META = {
+  // ── Help requests ──
+  help_server_rules: {
+    label: 'Help Request Rules (server check)',
+    type: 'custom', category: 'System',
+    desc: 'The database refuses help requests when the lab is closed, at lunch, during a closure, while help is paused, or when the student is not clocked in.',
+    details: {
+      what: 'A second, server-side check of the same rules the help button follows.',
+      where: 'Every new student help request.',
+      effect: 'Off turns only the server check off (use it if requests are being refused by mistake). The help button still locks on its own schedule.',
+    },
+  },
   // ── Work Orders ──
   priority_low_days: {
     label: 'Low Priority — Default Due Days',
@@ -2543,6 +2554,31 @@ function GeneralSettingRow({ setting, value, onChange, onBlur, saveState }) {
             </button>
           ))}
         </div>
+        <SavedIndicator state={saveState} />
+      </SettingRow>
+    )
+  }
+
+  // ── On/Off toggle for the help request server rules (kill switch) ──
+  if (setting.setting_key === 'help_server_rules') {
+    const on = String(value ?? 'true') !== 'false'
+    return (
+      <SettingRow
+        id={`setting-${setting.setting_key}`}
+        label={label}
+        helper={helper}
+        details={meta.details}
+      >
+        <SegmentedToggle
+          value={on ? 'true' : 'false'}
+          ariaLabel="Help request server rules"
+          variant={on ? 'green' : 'orange'}
+          options={[
+            { value: 'true', label: 'On', icon: CheckCircle2 },
+            { value: 'false', label: 'Off', icon: X },
+          ]}
+          onChange={(v) => onChange(v)}
+        />
         <SavedIndicator state={saveState} />
       </SettingRow>
     )
