@@ -6,6 +6,8 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
+import { getHelpAvailability } from '@/lib/helpAvailability'
+import { useInstructorAway } from '@/hooks/useInstructorAway'
 import { cn } from '@/lib/utils'
 import NotificationBell from '@/components/NotificationBell'
 import WhatsNewModal from '@/components/WhatsNewModal'
@@ -911,32 +913,33 @@ function localDateKey(d = new Date()) {
   return `${y}-${m}-${day}`
 }
 
-// 12 → "12:00 PM", 13 → "1:00 PM"
-function formatHourLabel(h) {
-  const n = ((parseInt(h, 10) % 24) + 24) % 24
-  const suffix = n >= 12 ? 'PM' : 'AM'
-  const h12 = n % 12 === 0 ? 12 : n % 12
-  return `${h12}:00 ${suffix}`
-}
-
 function HelpButton({ profile }) {
   const [helpStatus, setHelpStatus] = useState('idle') // 'idle', 'picking', 'pending', 'acknowledged'
   const [helpRequest, setHelpRequest] = useState(null)
   const [helpLoading, setHelpLoading] = useState(false)
   const [helpTooltip, setHelpTooltip] = useState(null)
   const [showLocationPicker, setShowLocationPicker] = useState(false)
-  // ── New: clock-in gate and lunch detection ──
+  // ── Clock-in gate and today's lab schedule ──
   const [isClockedIn, setIsClockedIn] = useState(null)   // null=loading, true/false
-  const [lunchHour, setLunchHour] = useState(null)        // integer hour (e.g. 12) or null
-  // Clock tick so the lunch lock turns on/off on the hour without a refresh
+  // Today's lab_calendar row (status, hours, lunch_hour, closed_blocks).
+  //   undefined = not loaded yet, or the read failed → schedule rules skipped
+  //               (a network blip must never block help)
+  //   null      = no calendar row for today → lab not open (help locked)
+  const [calendarRow, setCalendarRow] = useState(undefined)
+  const [calendarLoaded, setCalendarLoaded] = useState(false) // first read attempted
+  // Clock tick so the schedule locks turn on/off without a refresh
   const [now, setNow] = useState(() => new Date())
-  // ── Meeting / Away mode ──
-  const [instructorAway, setInstructorAway] = useState(false)
-  const [awayReturnTime, setAwayReturnTime] = useState('')
   const timerRef = useRef(null)
   const pickerRef = useRef(null)
 
   const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin'
+
+  // ── Meeting / Away mode (notify or pause; clears itself at its end time) ──
+  const away = useInstructorAway({
+    name: 'help-btn-away-' + (profile?.email || 'anon'),
+    tag: 'AppLayout',
+    enabled: !!profile?.email && !isInstructor,
+  })
 
   const userName = profile ? `${profile.first_name} ${profile.last_name}` : ''
 
@@ -963,7 +966,7 @@ function HelpButton({ profile }) {
     return () => { cancelled = true; clearInterval(interval) }
   }, [profile?.email, isInstructor])
 
-  // ── Clock tick (every 30 s) — drives the lunch-hour lock ──
+  // ── Clock tick (every 30 s) — drives the schedule / lunch locks ──
   useEffect(() => {
     if (!profile?.email || isInstructor) return
     const id = setInterval(() => setNow(new Date()), 30000)
@@ -972,93 +975,45 @@ function HelpButton({ profile }) {
 
   const todayKey = localDateKey(now)
 
-  // ── Load today's lab calendar to get lunch_hour ──
-  // Re-runs when the local date changes so a tab left open overnight
-  // picks up the new day's lunch hour (or lack of one).
-  useEffect(() => {
+  // ── Load today's lab calendar row ──
+  // lab_calendar.date is saved as 'YYYY-MM-DDT12:00:00' by Lab Sign Up, so
+  // match the whole local day rather than an exact value (same range the
+  // closure proration uses). Re-runs when the local date changes so a tab
+  // left open overnight picks up the new day, and on any lab_calendar change
+  // so a closure added mid-day applies right away.
+  const loadCalendar = useCallback(async () => {
     if (!profile?.email || isInstructor) return
-    let cancelled = false
-    async function loadLunchHour() {
-      try {
-        const data = mustData(await supabase
-          .from('lab_calendar')
-          .select('lunch_hour')
-          .eq('date', todayKey)
-          .limit(1), 'lab_calendar.select')
-        if (cancelled) return
-        const raw = data && data.length > 0 ? data[0].lunch_hour : null
-        const parsed = raw == null || raw === '' ? null : parseInt(raw, 10)
-        setLunchHour(Number.isNaN(parsed) ? null : parsed)
-      } catch {
-        // No lunch_hour — that's fine
-        if (!cancelled) setLunchHour(null)
-      }
+    try {
+      const data = mustData(await supabase
+        .from('lab_calendar')
+        .select('status, start_time, end_time, lunch_hour, closed_blocks')
+        .gte('date', `${todayKey}T00:00:00`)
+        .lte('date', `${todayKey}T23:59:59`)
+        .limit(1), 'lab_calendar.select')
+      setCalendarRow(data && data.length > 0 ? data[0] : null)
+      setCalendarLoaded(true)
+    } catch {
+      // Couldn't read the calendar — skip the schedule rules rather than
+      // lock students out because of a connection problem.
+      setCalendarRow(undefined)
+      setCalendarLoaded(true)
     }
-    loadLunchHour()
-    return () => { cancelled = true }
   }, [profile?.email, isInstructor, todayKey])
 
-  // ── Load instructor away / meeting mode settings ──
   useEffect(() => {
     if (!profile?.email || isInstructor) return
-    let cancelled = false
-    async function loadAwayMode() {
-      try {
-        const data = mustData(await supabase
-          .from('settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
-        if (cancelled) return
-        const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode')
-        const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time')
-        setInstructorAway(modeRow?.setting_value === 'true')
-        setAwayReturnTime(timeRow?.setting_value || '')
-      } catch {
-        // Non-fatal
-      }
-    }
-    loadAwayMode()
-    return () => { cancelled = true }
-  }, [profile?.email, isInstructor])
+    loadCalendar()
+    // Refresh every 5 min as a fallback to the realtime channel below
+    const id = setInterval(loadCalendar, 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [profile?.email, isInstructor, loadCalendar])
 
-  // ── Realtime: stay in sync with instructor away mode changes ──
   useEffect(() => {
     if (!profile?.email || isInstructor) return
-    // The handlers below apply the event payload directly, so a change made
-    // while the connection was down would be missed. After a reconnect,
-    // re-read both keys (same query as the mount-time load above).
-    let cancelled = false
-    const reloadAwayMode = async () => {
-      try {
-        const data = mustData(await supabase
-          .from('settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
-        if (cancelled) return
-        const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode')
-        const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time')
-        setInstructorAway(modeRow?.setting_value === 'true')
-        setAwayReturnTime(timeRow?.setting_value || '')
-      } catch {
-        // Non-fatal
-      }
-    }
-    const stopAwayRealtime = subscribeWithReconnect('help-btn-away-' + profile.email, ch => ch
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_away_mode',
-      }, (p) => {
-        setInstructorAway(p.new?.setting_value === 'true')
-      })
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_return_time',
-      }, (p) => {
-        setAwayReturnTime(p.new?.setting_value || '')
-      })
-    , { tag: 'AppLayout', onReconnect: reloadAwayMode })
-    return () => { cancelled = true; stopAwayRealtime() }
-  }, [profile?.email, isInstructor])
+    return subscribeWithReconnect('help-btn-calendar-' + profile.email, ch => ch
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lab_calendar' }, () => { loadCalendar() })
+    , { tag: 'AppLayout', onReconnect: loadCalendar })
+  }, [profile?.email, isInstructor, loadCalendar])
 
   // ── Close picker on outside click ──
   useEffect(() => {
@@ -1151,23 +1106,22 @@ function HelpButton({ profile }) {
     return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [helpStatus, helpRequest?.expires_at, helpRequest?.request_id, isInstructor])
 
-  // ── Derived: is it currently the designated lunch hour (Lab Sign Up setup)? ──
-  const isLunchTime = lunchHour !== null && now.getHours() === lunchHour
-  const lunchEndsLabel = lunchHour !== null ? formatHourLabel(lunchHour + 1) : ''
-  const lunchMessage = `Instructors are on lunch until ${lunchEndsLabel}. Keep working — you can ask for help after lunch.`
+  // ── Derived: can a NEW request be sent right now? (src/lib/helpAvailability.js) ──
+  // Lab open today → inside open hours → not in a closure block → not lunch →
+  // help not paused. Re-evaluated on every 30 s tick and settings change.
+  const availability = getHelpAvailability({ now, calendarRow, away: away.settings })
+  // New requests are blocked while locked. A request already open from
+  // before the lock started can still be cancelled / cleared.
+  const scheduleLocked = availability.locked && helpStatus === 'idle'
 
-  // ── If the room picker is open when lunch starts, close it ──
+  // ── If the room picker is open when a lock starts, close it ──
   useEffect(() => {
-    if (isLunchTime && !isInstructor) setShowLocationPicker(false)
-  }, [isLunchTime, isInstructor])
+    if (scheduleLocked && !isInstructor) setShowLocationPicker(false)
+  }, [scheduleLocked, isInstructor])
 
   // ─── EARLY RETURN — safe now because all hooks are above ───────────
   // Don't render for instructors
   if (isInstructor) return null
-
-  // New requests are blocked during lunch. A request already open from
-  // before lunch can still be cancelled / cleared.
-  const lunchLocked = isLunchTime && helpStatus === 'idle'
 
   // ── Determine if button should be disabled (not clocked in, still loading treated as disabled) ──
   const notClockedIn = isClockedIn === false
@@ -1175,10 +1129,11 @@ function HelpButton({ profile }) {
   // ── Request help with location ──
   const requestHelp = async (location) => {
     if (helpLoading) return
-    // Belt-and-braces: lunch may have started while the picker was open
-    if (lunchHour !== null && new Date().getHours() === lunchHour) {
+    // Belt-and-braces: a lock may have started while the picker was open
+    const fresh = getHelpAvailability({ now: new Date(), calendarRow, away: away.settings })
+    if (fresh.locked) {
       setShowLocationPicker(false)
-      showHelpTooltip(lunchMessage, 'lunch', 6000)
+      showHelpTooltip(fresh.short, 'locked', 6000, fresh)
       return
     }
     setHelpLoading(true)
@@ -1243,8 +1198,10 @@ function HelpButton({ profile }) {
     setHelpLoading(false)
   }
 
-  const showHelpTooltip = (msg, type, duration = 2500) => {
-    setHelpTooltip({ msg, type })
+  // `lock` (optional) — the availability object behind a 'locked' tooltip,
+  // used for its icon, title and message panel.
+  const showHelpTooltip = (msg, type, duration = 2500, lock = null) => {
+    setHelpTooltip({ msg, type, lock })
     setTimeout(() => setHelpTooltip(null), duration)
   }
 
@@ -1255,9 +1212,9 @@ function HelpButton({ profile }) {
       showHelpTooltip('You must be clocked in to request help', 'error')
       return
     }
-    // Gate: no new help requests during the designated lunch hour
-    if (lunchLocked) {
-      showHelpTooltip(lunchMessage, 'lunch', 6000)
+    // Gate: lab closed / closure / lunch / help paused
+    if (scheduleLocked) {
+      showHelpTooltip(availability.short, 'locked', 6000, availability)
       return
     }
     if (helpStatus === 'idle') {
@@ -1273,8 +1230,8 @@ function HelpButton({ profile }) {
     if (notClockedIn) {
       return { color: '#9ca3af', bg: 'transparent', border: 'transparent', title: 'You must be clocked in to request help' }
     }
-    if (lunchLocked) {
-      return { color: '#9ca3af', bg: 'transparent', border: 'transparent', title: `Help unavailable — instructors are on lunch until ${lunchEndsLabel}` }
+    if (scheduleLocked) {
+      return { color: '#9ca3af', bg: 'transparent', border: 'transparent', title: availability.short }
     }
     if (helpStatus === 'acknowledged') {
       return { color: '#22c55e', bg: '#dcfce7', border: '#22c55e', title: 'Instructor acknowledged — click to clear' }
@@ -1287,26 +1244,34 @@ function HelpButton({ profile }) {
   }
 
   const style = getStyle()
+  const locked = notClockedIn || scheduleLocked
+
+  // Colours for the lock explanation panel (amber = lunch, as before)
+  const LOCK_TONES = {
+    amber: { bg: '#fffbeb', border: '#f59e0b', title: '#78350f', text: '#92400e' },
+    red:   { bg: '#fef2f2', border: '#f87171', title: '#991b1b', text: '#b91c1c' },
+    gray:  { bg: '#f9fafb', border: '#9ca3af', title: '#1f2937', text: '#4b5563' },
+  }
 
   return (
     <div style={{ position: 'relative' }} ref={pickerRef}>
       <button
         onClick={handleClick}
-        disabled={helpLoading || isClockedIn === null}
-        // aria-disabled (not disabled) for the clock-in and lunch locks so the
-        // button stays focusable/clickable and can explain *why* it is locked.
-        aria-disabled={notClockedIn || lunchLocked || undefined}
+        disabled={helpLoading || isClockedIn === null || !calendarLoaded}
+        // aria-disabled (not disabled) for the clock-in and schedule locks so
+        // the button stays focusable/clickable and can explain *why* it is locked.
+        aria-disabled={locked || undefined}
         aria-label={style.title}
-        aria-haspopup={helpStatus === 'idle' && !notClockedIn && !lunchLocked ? 'true' : undefined}
-        aria-expanded={helpStatus === 'idle' && !notClockedIn && !lunchLocked ? showLocationPicker : undefined}
+        aria-haspopup={helpStatus === 'idle' && !locked ? 'true' : undefined}
+        aria-expanded={helpStatus === 'idle' && !locked ? showLocationPicker : undefined}
         className="p-2 rounded-lg transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
         style={{
           background: style.bg,
           border: `2px solid ${style.border}`,
           color: style.color,
-          cursor: (helpLoading || notClockedIn || lunchLocked || isClockedIn === null) ? 'not-allowed' : 'pointer',
+          cursor: (helpLoading || locked || isClockedIn === null || !calendarLoaded) ? 'not-allowed' : 'pointer',
           animation: helpStatus === 'pending' ? 'helpPulse 1.5s ease-in-out infinite' : 'none',
-          opacity: (helpLoading || notClockedIn || lunchLocked) ? 0.45 : 1,
+          opacity: (helpLoading || locked) ? 0.45 : 1,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -1355,25 +1320,26 @@ function HelpButton({ profile }) {
             Where are you?
           </div>
 
-          {/* Lunch: the picker can no longer open during the lunch hour —
-              the button itself is locked and shows the lunch message. */}
+          {/* Lunch / closed / paused: the picker can't open while locked —
+              the button itself is locked and explains why. */}
 
-          {/* Meeting / Away notice banner — shown when instructor has enabled away mode */}
-          {instructorAway && (
+          {/* Meeting / Away notice banner — shown when instructor is Away
+              in "notify only" mode (requests still go through) */}
+          {away.state === 'notify' && (
             <div style={{
               padding: '10px 14px',
               background: '#fef2f2',
               borderBottom: '1px solid #fecaca',
               display: 'flex', alignItems: 'flex-start', gap: 8,
             }}>
-              <span style={{ fontSize: '1rem', lineHeight: 1.3 }}>🏢</span>
+              <span style={{ fontSize: '1rem', lineHeight: 1.3 }} aria-hidden="true">🏢</span>
               <div>
                 <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#991b1b', marginBottom: 2 }}>
                   Instructors are in a meeting
                 </div>
                 <div style={{ fontSize: '0.74rem', color: '#b91c1c', lineHeight: 1.4 }}>
-                  {awayReturnTime
-                    ? `They will be back around ${awayReturnTime}. Your request will be seen as soon as they return.`
+                  {away.returnLabel
+                    ? `They will be back around ${away.returnLabel}. Your request will be seen as soon as they return.`
                     : 'Your request will be seen and responded to as soon as they are back.'}
                 </div>
               </div>
@@ -1401,27 +1367,31 @@ function HelpButton({ profile }) {
       )}
 
       {/* Tooltip (visual) */}
-      {helpTooltip && (helpTooltip.type === 'lunch' ? (
-        <div aria-hidden="true" style={{
-          position: 'absolute', top: '100%', right: 0, marginTop: 8,
-          padding: '10px 14px', borderRadius: 10, zIndex: 5000,
-          width: 260, maxWidth: 'calc(100vw - 32px)',
-          background: '#fffbeb', border: '1px solid #f59e0b',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-          display: 'flex', alignItems: 'flex-start', gap: 8,
-          animation: 'helpTooltipIn 0.2s ease',
-        }}>
-          <span style={{ fontSize: '1rem', lineHeight: 1.3 }}>🍽️</span>
-          <div>
-            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#78350f', marginBottom: 2 }}>
-              Instructors are on lunch
-            </div>
-            <div style={{ fontSize: '0.76rem', color: '#92400e', lineHeight: 1.4 }}>
-              Help requests reopen at {lunchEndsLabel}. Keep working — you can ask for help after lunch.
+      {helpTooltip && (helpTooltip.type === 'locked' && helpTooltip.lock ? (() => {
+        const lock = helpTooltip.lock
+        const tone = LOCK_TONES[lock.tone] || LOCK_TONES.gray
+        return (
+          <div aria-hidden="true" style={{
+            position: 'absolute', top: '100%', right: 0, marginTop: 8,
+            padding: '10px 14px', borderRadius: 10, zIndex: 5000,
+            width: 260, maxWidth: 'calc(100vw - 32px)',
+            background: tone.bg, border: `1px solid ${tone.border}`,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+            display: 'flex', alignItems: 'flex-start', gap: 8,
+            animation: 'helpTooltipIn 0.2s ease',
+          }}>
+            <span style={{ fontSize: '1rem', lineHeight: 1.3 }}>{lock.icon}</span>
+            <div>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: tone.title, marginBottom: 2 }}>
+                {lock.title}
+              </div>
+              <div style={{ fontSize: '0.76rem', color: tone.text, lineHeight: 1.4 }}>
+                {lock.message}
+              </div>
             </div>
           </div>
-        </div>
-      ) : (
+        )
+      })() : (
         <div aria-hidden="true" style={{
           position: 'absolute', top: '100%', right: 0, marginTop: 8,
           padding: '8px 14px', borderRadius: 8, fontSize: '0.8rem',
@@ -1437,7 +1407,9 @@ function HelpButton({ profile }) {
 
       {/* Screen-reader announcement for every help status message (always mounted) */}
       <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {helpTooltip?.msg || ''}
+        {helpTooltip?.type === 'locked' && helpTooltip.lock
+          ? `${helpTooltip.lock.title}. ${helpTooltip.lock.message}`
+          : (helpTooltip?.msg || '')}
       </span>
 
       <style>{`
@@ -1636,41 +1608,11 @@ export default function AppLayout() {
   const [glossaryOpen, setGlossaryOpen] = useState(false)
 
   // ── Instructor Away Mode (banner for students / work study) ──
-  const [instructorAway, setInstructorAway] = useState(false)
-  const [awayReturnTime, setAwayReturnTime] = useState('')
-
-  useEffect(() => {
-    if (isInstructor) return
-    let cancelled = false
-    async function loadAwayMode() {
-      try {
-        const data = mustData(await supabase
-          .from('settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
-        if (!cancelled && data) {
-          const modeRow = data.find(r => r.setting_key === 'instructor_away_mode')
-          const timeRow = data.find(r => r.setting_key === 'instructor_return_time')
-          setInstructorAway(modeRow?.setting_value === 'true')
-          setAwayReturnTime(timeRow?.setting_value || '')
-        }
-      } catch { /* ignore */ }
-    }
-    loadAwayMode()
-
-    const stopRealtime = subscribeWithReconnect('layout-away-mode', ch => ch
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_away_mode',
-      }, (p) => { if (!cancelled) setInstructorAway(p.new?.setting_value === 'true') })
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_return_time',
-      }, (p) => { if (!cancelled) setAwayReturnTime(p.new?.setting_value || '') })
-    , { tag: 'AppLayout', onReconnect: loadAwayMode })   // handlers apply the payload; after a drop, re-read both keys
-
-    return () => { cancelled = true; stopRealtime() }
-  }, [isInstructor])
+  // Shared hook: live over realtime, and the banner clears itself when an
+  // Away end time passes (src/hooks/useInstructorAway.js).
+  const awayMode = useInstructorAway({ name: 'layout-away-mode', tag: 'AppLayout', enabled: !isInstructor })
+  const instructorAway = awayMode.active
+  const awayReturnTime = awayMode.returnLabel
 
   // ── Load view_page permissions from DB for sidebar filtering ──
   const [viewPerms, setViewPerms] = useState({})
@@ -2191,12 +2133,16 @@ export default function AppLayout() {
               <span style={{ fontSize: '1.3rem', flexShrink: 0, marginTop: 1 }} aria-hidden="true">🏢</span>
               <div>
                 <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#991b1b', marginBottom: 2 }}>
-                  Instructors are in a meeting
+                  {awayMode.paused ? 'Instructors are in a meeting — help requests are paused' : 'Instructors are in a meeting'}
                 </div>
                 <div style={{ fontSize: '0.82rem', color: '#b91c1c', lineHeight: 1.45 }}>
-                  {awayReturnTime
-                    ? `They will be back around ${awayReturnTime}. Your request will be seen as soon as they return.`
-                    : 'Your request will be seen and responded to as soon as they are back.'}
+                  {awayMode.paused
+                    ? (awayReturnTime
+                        ? `They will be back around ${awayReturnTime}. Keep working — you can ask for help when they return.`
+                        : 'Keep working — you can ask for help when they are back.')
+                    : (awayReturnTime
+                        ? `They will be back around ${awayReturnTime}. Your request will be seen as soon as they return.`
+                        : 'Your request will be seen and responded to as soon as they are back.')}
                 </div>
               </div>
             </div>

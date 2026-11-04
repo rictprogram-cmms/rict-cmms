@@ -49,8 +49,12 @@ import {
   AlertCircle, RotateCcw, Copy, EyeOff, Eye, MoonStar, Sun, AlertTriangle,
   LayoutDashboard, FlaskConical, MessageSquare, Target, Info, Check,
   History, Globe, FileSearch, Archive, ArchiveRestore, Wrench, UserMinus, HelpCircle,
-  Monitor, RefreshCw,
+  Monitor, RefreshCw, PauseCircle,
 } from 'lucide-react'
+import {
+  AWAY_SETTING_KEYS, readAwaySettings, awayState, isAwayExpired,
+  awayReturnLabel, awayUntilForPreset, fakeUtcLabel,
+} from '@/lib/helpAvailability'
 import {
   useMaintenanceWindow, formatMaintenanceDateTime,
   fakeUtcToInputValue, inputValueToFakeUtc, DEFAULT_NOTICE_DAYS,
@@ -611,8 +615,9 @@ function buildRegistry() {
   // Critical mode toggles (top of General tab)
   reg.push({ key: 'lab_access_mode', tab: 'general', label: 'Lab Access Mode', desc: 'In Session / Summer Break / Planned Maintenance — locks out students', aliases: 'summer break shutdown students lockout closed maintenance' })
   reg.push({ key: 'maintenance_start_at', tab: 'general', label: 'Planned Maintenance Schedule', desc: 'Shutdown time shown on dashboards before a maintenance window', aliases: 'maintenance schedule shutdown downtime offline notice window' })
-  reg.push({ key: 'instructor_away_mode', tab: 'general', label: 'Instructor Away Mode', desc: 'In-meeting toggle — students see "away" notice on help requests', aliases: 'meeting away help return available' })
+  reg.push({ key: 'instructor_away_mode', tab: 'general', label: 'Instructor Away Mode', desc: 'In-meeting toggle — notify students, or pause new help requests', aliases: 'meeting away help return available pause disable help button block' })
   reg.push({ key: 'instructor_return_time', tab: 'general', label: 'Expected Return Time', desc: 'Time shown to students when you are away', aliases: 'meeting return time clock' })
+  reg.push({ key: 'instructor_away_until', tab: 'general', label: 'Away Ends', desc: 'Turn Away Mode off automatically — 15 min to when the lab closes', aliases: 'meeting away auto off end time timer pause help disable help button' })
   reg.push({ key: 'tv_reload_requested_at', tab: 'general', label: 'Reload TVs now', desc: 'Make every TV Display reload so it picks up the latest update', aliases: 'tv display kiosk refresh reload update deploy screen' })
 
   // SETTING_META → registry
@@ -1737,16 +1742,41 @@ function LabAccessConfirmModal({ confirm, saving, maint, onCancel, onConfirm }) 
 // INSTRUCTOR AWAY (MEETING) MODE CARD
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Away end-time presets. 'close' = today's lab closing time (Lab Sign Up).
+const AWAY_END_PRESETS = [
+  { value: 15, label: '15 min' },
+  { value: 30, label: '30 min' },
+  { value: 60, label: '1 hr' },
+  { value: 120, label: '2 hr' },
+  { value: 'close', label: 'When lab closes' },
+  { value: 'none', label: 'No end time' },
+]
+
+const AWAY_DESC = {
+  instructor_away_mode: 'When true, students are told instructor is in a meeting when requesting help',
+  instructor_return_time: 'Return time shown to students when instructor is away in a meeting',
+  instructor_away_blocks_help: 'When true (and Away Mode is on), students cannot send new help requests',
+  instructor_away_until: 'When Away Mode turns itself off (fake-UTC); empty = no end time',
+}
+
 function InstructorAwayCard() {
   const { profile } = useAuth()
-  const [awayMode, setAwayMode] = useState(null)         // null = loading
+  const [away, setAway] = useState(null)                 // readAwaySettings() result; null = loading
   const [returnTime, setReturnTime] = useState('')
   const [savedReturnTime, setSavedReturnTime] = useState('')
   const [saving, setSaving] = useState(false)
   const [returnTimeSaveState, setReturnTimeSaveState] = useState(null)  // 'saving' | 'saved'
+  // Which end-time preset applies the next time Away is switched on (or is
+  // re-applied while away). null = keep the end time already saved.
+  const [endPreset, setEndPreset] = useState(null)
+  const [calendarRow, setCalendarRow] = useState(undefined) // today's lab_calendar row (for "When lab closes")
+  const [now, setNow] = useState(() => new Date())
+  const [announce, setAnnounce] = useState('')
   const userName = profile ? `${profile.first_name} ${(profile.last_name || '').charAt(0)}.` : ''
   const returnTimeId = useId()
+  const presetsLabelId = useId()
   const returnTimeDebounceRef = useRef(null)
+  const autoClearingRef = useRef(false)
 
   // ── Fetch current values ──
   const fetchAway = useCallback(async () => {
@@ -1754,43 +1784,65 @@ function InstructorAwayCard() {
       const data = mustData(await supabase
         .from('settings')
         .select('setting_key, setting_value')
-        .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
-      const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode')
-      const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time')
-      setAwayMode(modeRow?.setting_value === 'true')
-      const t = timeRow?.setting_value || ''
-      setReturnTime(t)
-      setSavedReturnTime(t)
+        .in('setting_key', AWAY_SETTING_KEYS), 'settings.select')
+      const s = readAwaySettings(data)
+      setAway(s)
+      setReturnTime(s.returnTime)
+      setSavedReturnTime(s.returnTime)
     } catch {
-      setAwayMode(false)
+      setAway(prev => prev || readAwaySettings([]))
     }
   }, [])
 
   useEffect(() => { fetchAway() }, [fetchAway])
 
-  // ── Realtime sync ──
+  // ── Today's lab hours (for the "When lab closes" preset) ──
+  const todayKey = (() => {
+    const p = n => String(n).padStart(2, '0')
+    return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
+  })()
   useEffect(() => {
-    const channelId = `instructor-away-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    const channel = subscribeWithReconnect(channelId, ch => ch
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_away_mode',
-      }, (payload) => {
-        setAwayMode(payload.new?.setting_value === 'true')
-      })
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_return_time',
-      }, (payload) => {
-        const t = payload.new?.setting_value || ''
-        setReturnTime(t)
-        setSavedReturnTime(t)
-      }))
-    return () => { channel() }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const data = mustData(await supabase
+          .from('lab_calendar')
+          .select('status, start_time, end_time')
+          .gte('date', `${todayKey}T00:00:00`)
+          .lte('date', `${todayKey}T23:59:59`)
+          .limit(1), 'lab_calendar.select')
+        if (!cancelled) setCalendarRow(data && data.length > 0 ? data[0] : null)
+      } catch {
+        if (!cancelled) setCalendarRow(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [todayKey])
+
+  // ── 30 s tick so the card notices an end time passing ──
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000)
+    return () => clearInterval(id)
   }, [])
 
+  // ── Realtime sync (any of the four keys → re-read all four) ──
+  useEffect(() => {
+    const channelId = `instructor-away-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const channel = subscribeWithReconnect(channelId, ch => {
+      let c = ch
+      for (const key of AWAY_SETTING_KEYS) {
+        c = c.on('postgres_changes', {
+          event: '*', schema: 'public', table: 'settings',
+          filter: `setting_key=eq.${key}`,
+        }, () => { fetchAway() })
+      }
+      return c
+    }, { tag: 'Settings', onReconnect: fetchAway })
+    return () => { channel() }
+  }, [fetchAway])
+
   // ── Upsert helper ──
-  const upsertSetting = async (key, value, description) => {
+  const upsertSetting = async (key, value) => {
     const { data: rows, error } = await supabase
       .from('settings')
       .update({
@@ -1802,66 +1854,127 @@ function InstructorAwayCard() {
       .select()
     if (error) throw error
     if (!rows || rows.length === 0) {
-      await supabase.from('settings').insert({
+      const { data: ins, error: insErr } = await supabase.from('settings').insert({
         setting_key: key,
         setting_value: value,
-        description,
+        description: AWAY_DESC[key] || '',
         category: 'System',
         updated_at: new Date().toISOString(),
         updated_by: userName,
-      })
+      }).select()
+      if (insErr) throw insErr
+      if (!ins || ins.length === 0) throw new Error(`Could not save ${key} (permission denied)`)
     }
   }
 
-  // ── Toggle away mode (immediate save) ──
-  const toggleAway = async (newVal) => {
+  const writeAudit = async (action, oldValue, newValue, details) => {
+    try {
+      await supabase.from('audit_log').insert({
+        user_email: profile?.email || 'unknown',
+        user_name: profile ? `${profile.first_name} ${profile.last_name}` : 'Unknown',
+        action,
+        entity_type: 'Setting',
+        entity_id: 'instructor_away_mode',
+        field_changed: 'instructor_away_mode',
+        old_value: oldValue,
+        new_value: newValue,
+        details,
+      })
+    } catch (auditErr) {
+      console.warn('[InstructorAway] Audit log failed (non-fatal):', auditErr.message)
+    }
+  }
+
+  // Default preset for the next "go Away": the lab's closing time when there
+  // is one still ahead today, otherwise no end time.
+  const closeUntil = awayUntilForPreset('close', { now, calendarRow })
+  const canUseClose = closeUntil != null && closeUntil !== ''
+  const effectivePreset = endPreset ?? (canUseClose ? 'close' : 'none')
+
+  // ── Switch to Available (manual or automatic) ──
+  const goAvailable = async ({ automatic = false } = {}) => {
+    const prev = away ? awayState(away, now) : 'available'
+    await upsertSetting('instructor_away_mode', 'false')
+    await upsertSetting('instructor_away_blocks_help', 'false')
+    await upsertSetting('instructor_away_until', '')
+    await upsertSetting('instructor_return_time', '')
+    setAway({ away: false, returnTime: '', blocksHelp: false, until: '' })
+    setReturnTime('')
+    setSavedReturnTime('')
+    setEndPreset(null)
+    await writeAudit(
+      automatic ? 'Instructor Away Mode Ended Automatically' : 'Disable Instructor Away Mode',
+      automatic ? 'true (expired)' : prev, 'false',
+      automatic
+        ? `Instructor away mode turned itself off at its end time (${fakeUtcLabel(away?.until) || 'unknown'}).`
+        : 'Instructor away mode disabled — back from meeting.')
+  }
+
+  // ── An end time passed while still marked Away → clear it ──
+  // Every screen already treats an expired Away as Available; this just
+  // makes the stored values match, once, by whoever has Settings open.
+  useEffect(() => {
+    if (!away || autoClearingRef.current) return
+    if (!isAwayExpired(away, now)) return
+    autoClearingRef.current = true
+    ;(async () => {
+      try {
+        await goAvailable({ automatic: true })
+        setAnnounce('Away Mode ended at its scheduled time. You are now Available.')
+      } catch (err) {
+        console.warn('[InstructorAway] Auto-clear failed (non-fatal):', err.message)
+      } finally {
+        autoClearingRef.current = false
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [away, now])
+
+  // ── Change availability: 'available' | 'notify' | 'pause' ──
+  const changeState = async (next) => {
+    if (!away) return
+    const prev = awayState(away, now)
+    if (next === prev) return
     setSaving(true)
     try {
-      await upsertSetting(
-        'instructor_away_mode',
-        String(newVal),
-        'When true, students are told instructor is in a meeting when requesting help'
-      )
-      // Sync return-time field on toggle
-      if (newVal && returnTime.trim()) {
-        await upsertSetting(
-          'instructor_return_time', returnTime.trim(),
-          'Return time shown to students when instructor is away in a meeting'
-        )
-        setSavedReturnTime(returnTime.trim())
-      }
-      if (!newVal) {
-        await upsertSetting(
-          'instructor_return_time', '',
-          'Return time shown to students when instructor is away in a meeting'
-        )
-        setReturnTime('')
-        setSavedReturnTime('')
-      }
-      setAwayMode(newVal)
-
-      // Audit log
-      try {
-        await supabase.from('audit_log').insert({
-          user_email: profile?.email || 'unknown',
-          user_name: profile ? `${profile.first_name} ${profile.last_name}` : 'Unknown',
-          action: newVal ? 'Enable Instructor Away Mode' : 'Disable Instructor Away Mode',
-          entity_type: 'Setting',
-          entity_id: 'instructor_away_mode',
-          field_changed: 'instructor_away_mode',
-          old_value: String(!newVal),
-          new_value: String(newVal),
-          details: newVal
-            ? `Instructor away mode enabled. Return time: ${returnTime.trim() || '(not set)'}`
-            : 'Instructor away mode disabled — back from meeting.',
-        })
-      } catch (auditErr) {
-        console.warn('[InstructorAway] Audit log failed (non-fatal):', auditErr.message)
+      if (next === 'available') {
+        await goAvailable()
+        toast.success('Away mode disabled — welcome back!')
+        setAnnounce('You are now Available. Students can request help.')
+        return
       }
 
-      toast.success(newVal
-        ? `Away mode enabled${returnTime.trim() ? ' — returning at ' + returnTime.trim() : ''}`
-        : 'Away mode disabled — welcome back!')
+      const blocks = next === 'pause'
+      if (prev !== 'available') {
+        // Already away — only switching between notify and pause.
+        await upsertSetting('instructor_away_blocks_help', String(blocks))
+        setAway(a => ({ ...a, blocksHelp: blocks }))
+        await writeAudit('Change Instructor Away Mode', prev, next,
+          blocks ? 'Help requests paused while away.' : 'Away notice only — help requests allowed.')
+        toast.success(blocks ? 'Help requests paused' : 'Help requests allowed — students see the meeting notice')
+        setAnnounce(blocks ? 'Help requests are paused.' : 'Help requests are allowed. Students see the meeting notice.')
+        return
+      }
+
+      // Going Away from Available: set the end time first, then switch on,
+      // so students never see Away without its end time.
+      const until = awayUntilForPreset(effectivePreset, { now: new Date(), calendarRow }) || ''
+      const typed = returnTime.trim()
+      const label = typed || fakeUtcLabel(until)
+      await upsertSetting('instructor_away_blocks_help', String(blocks))
+      await upsertSetting('instructor_away_until', until)
+      await upsertSetting('instructor_return_time', label)
+      await upsertSetting('instructor_away_mode', 'true')
+      setAway({ away: true, returnTime: label, blocksHelp: blocks, until })
+      setReturnTime(label)
+      setSavedReturnTime(label)
+      setEndPreset(null)
+
+      const endText = until ? `ends ${fakeUtcLabel(until)}` : 'no end time'
+      await writeAudit('Enable Instructor Away Mode', 'false', 'true',
+        `Instructor away mode enabled (${blocks ? 'help paused' : 'notify only'}, ${endText}). Return time: ${label || '(not set)'}`)
+      toast.success(`${blocks ? 'Help paused' : 'Away mode enabled'}${label ? ' — returning at ' + label : ''}`)
+      setAnnounce(`${blocks ? 'Help requests paused' : 'Away Mode on'}${until ? `, ends at ${fakeUtcLabel(until)}` : ', no end time'}.`)
     } catch (err) {
       toast.error('Failed to update away mode: ' + err.message)
     } finally {
@@ -1869,14 +1982,48 @@ function InstructorAwayCard() {
     }
   }
 
+  // ── Pick an end-time preset ──
+  // While away it applies immediately (and refreshes the shown return time);
+  // while available it is remembered for the next time Away is switched on.
+  const choosePreset = async (preset) => {
+    if (preset === 'close' && !canUseClose) return
+    setEndPreset(preset)
+    if (!away?.away || awayState(away, now) === 'available') {
+      setAnnounce(`Away will end ${preset === 'none' ? 'only when you switch back' : presetLabel(preset)}.`)
+      return
+    }
+    setSaving(true)
+    try {
+      const until = awayUntilForPreset(preset, { now: new Date(), calendarRow }) || ''
+      const label = until ? fakeUtcLabel(until) : returnTime.trim()
+      await upsertSetting('instructor_away_until', until)
+      if (until) {
+        await upsertSetting('instructor_return_time', label)
+        setReturnTime(label)
+        setSavedReturnTime(label)
+      }
+      setAway(a => ({ ...a, until, returnTime: until ? label : a.returnTime }))
+      await writeAudit('Change Instructor Away End Time', fakeUtcLabel(away.until) || '(none)', fakeUtcLabel(until) || '(none)',
+        until ? `Away mode now ends at ${fakeUtcLabel(until)}.` : 'Away mode end time removed — stays on until switched off.')
+      setAnnounce(until ? `Away Mode now ends at ${fakeUtcLabel(until)}.` : 'Away Mode has no end time.')
+    } catch (err) {
+      toast.error('Failed to update end time: ' + err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function presetLabel(preset) {
+    if (preset === 'close') return canUseClose ? `when the lab closes (${fakeUtcLabel(closeUntil)})` : 'when the lab closes'
+    const p = AWAY_END_PRESETS.find(x => x.value === preset)
+    return p ? `in ${p.label}` : ''
+  }
+
   // ── Auto-save return-time (debounced) ──
   const saveReturnTime = async (val) => {
     setReturnTimeSaveState('saving')
     try {
-      await upsertSetting(
-        'instructor_return_time', val,
-        'Return time shown to students when instructor is away in a meeting'
-      )
+      await upsertSetting('instructor_return_time', val)
       setSavedReturnTime(val)
       setReturnTimeSaveState('saved')
       setTimeout(() => setReturnTimeSaveState(s => s === 'saved' ? null : s), 2000)
@@ -1909,13 +2056,31 @@ function InstructorAwayCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const isAway = awayMode === true
-  const isLoading = awayMode === null
+  const isLoading = away === null
+  const state = isLoading ? 'available' : awayState(away, now)
+  const isAway = state !== 'available'
+  const isPaused = state === 'pause'
+  const endLabel = isAway ? fakeUtcLabel(away.until) : ''
+  const backLabel = isAway ? awayReturnLabel(away) : ''
 
   const accent = isAway ? 'red' : 'gray'
-  const pill = isAway
-    ? { tone: 'red', text: savedReturnTime ? `Away · back ${savedReturnTime}` : 'Away — In a meeting' }
-    : { tone: 'gray', text: 'Available — In Lab' }
+  const pill = isPaused
+    ? { tone: 'red', text: backLabel ? `Help paused · back ${backLabel}` : 'Help paused — In a meeting' }
+    : isAway
+      ? { tone: 'red', text: backLabel ? `Away · back ${backLabel}` : 'Away — In a meeting' }
+      : { tone: 'gray', text: 'Available — In Lab' }
+
+  // Which preset button shows as pressed: the one picked in this visit, or —
+  // while away with no pick — none (the saved end time is shown as text).
+  const pressedPreset = isAway ? endPreset : effectivePreset
+
+  const endStatus = isAway
+    ? (endLabel
+        ? `Away Mode turns off automatically at ${endLabel}.`
+        : 'No end time — Away Mode stays on until you switch back to Available.')
+    : (effectivePreset === 'none'
+        ? 'Next time you go Away it will have no end time.'
+        : `Next time you go Away it will end ${presetLabel(effectivePreset)}.`)
 
   return (
     <SettingCard
@@ -1928,7 +2093,9 @@ function InstructorAwayCard() {
           <Info size={13} className="settings-card-footer-icon" aria-hidden="true" />
           <span>
             {isAway
-              ? 'This will NOT auto-disable. Remember to toggle back to Available when you return from your meeting.'
+              ? (endLabel
+                  ? `This turns off by itself at ${endLabel}. Switch to Available sooner if you are back early.`
+                  : 'This will NOT auto-disable. Remember to toggle back to Available when you return from your meeting.')
               : 'Changes take effect immediately for all student help requests and the Lab Status kiosk.'}
           </span>
         </>
@@ -1938,26 +2105,29 @@ function InstructorAwayCard() {
         id="setting-instructor_away_mode"
         label="Availability for student help"
         helper={
-          isAway
-            ? 'Students requesting help see a meeting notice. The Lab Status kiosk shows a red AWAY indicator. Toggle off when you return.'
-            : 'Enable this when you step into a meeting. Students will be informed via the help button and Lab Status page.'
+          isPaused
+            ? 'Help requests are paused: the help button is locked and tells students when you will be back. Requests already open can still be cleared.'
+            : isAway
+              ? 'Students requesting help see a meeting notice but can still send requests. The Lab Status kiosk shows a red AWAY indicator.'
+              : 'Choose Away when you step into a meeting. "Away – notify" lets students still ask; "Away – pause help" stops new requests until you are back.'
         }
         details={{
-          what: 'Communicates your availability to students. Does not block any feature.',
-          where: 'Help button on student-facing pages and the Lab Status kiosk display.',
-          effect: 'When Away, students see a soft notice asking them to wait or come back at the return time. Instructors are not affected.',
+          what: 'Communicates your availability to students and can pause new help requests.',
+          where: 'Help button and meeting banner on student-facing pages, the Lab Status kiosk and the TV Display.',
+          effect: 'Away – notify: students see a meeting notice and can still ask for help. Away – pause help: the help button is locked with a message until you return or the end time passes. Instructors are not affected.',
         }}
       >
         <SegmentedToggle
-          value={isAway ? 'away' : 'available'}
+          value={state}
           ariaLabel="Instructor availability"
           disabled={saving || isLoading}
           variant={isAway ? 'red' : 'green'}
           options={[
             { value: 'available', label: 'Available', icon: CheckCircle2 },
-            { value: 'away', label: 'Away', icon: Clock },
+            { value: 'notify', label: 'Away – notify', icon: Clock },
+            { value: 'pause', label: 'Away – pause help', icon: PauseCircle },
           ]}
-          onChange={(v) => toggleAway(v === 'away')}
+          onChange={(v) => changeState(v)}
         />
         {saving && (
           <span className="settings-saved-indicator settings-saved-indicator--saving">
@@ -1967,10 +2137,54 @@ function InstructorAwayCard() {
       </SettingRow>
 
       <SettingRow
+        id="setting-instructor_away_until"
+        label={<span id={presetsLabelId}>Away ends</span>}
+        helper={endStatus}
+      >
+        <div
+          role="group"
+          aria-labelledby={presetsLabelId}
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxWidth: 420 }}
+        >
+          {AWAY_END_PRESETS.map(p => {
+            const unavailable = p.value === 'close' && !canUseClose
+            const pressed = pressedPreset === p.value
+            const label = p.value === 'close' && canUseClose ? `${p.label} (${fakeUtcLabel(closeUntil)})` : p.label
+            return (
+              <button
+                key={String(p.value)}
+                type="button"
+                aria-pressed={pressed}
+                aria-disabled={unavailable || undefined}
+                disabled={saving || isLoading}
+                title={unavailable ? 'The lab has no closing time still ahead today' : undefined}
+                aria-label={unavailable ? `${p.label} — not available, the lab has no closing time still ahead today` : undefined}
+                onClick={() => { if (!unavailable) choosePreset(p.value) }}
+                className="focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
+                style={{
+                  minHeight: 44, minWidth: 44, padding: '8px 12px',
+                  borderRadius: 8, fontSize: '0.8rem', fontWeight: 600,
+                  fontFamily: 'inherit',
+                  border: `1px solid ${pressed ? '#1c7ed6' : '#dee2e6'}`,
+                  background: pressed ? '#1c7ed6' : 'white',
+                  color: pressed ? 'white' : (unavailable ? '#868e96' : '#343a40'),
+                  cursor: unavailable ? 'not-allowed' : 'pointer',
+                  opacity: unavailable ? 0.6 : 1,
+                  textDecoration: unavailable ? 'line-through' : 'none',
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+      </SettingRow>
+
+      <SettingRow
         id="setting-instructor_return_time"
         label="Expected Return Time"
         labelFor={returnTimeId}
-        helper="Optional. Free-form text shown alongside the away notice (e.g. &quot;2:30 PM&quot;). Auto-saves as you type."
+        helper="Optional. Free-form text shown alongside the away notice (e.g. &quot;2:30 PM&quot;). Picking an end time fills this in. Auto-saves as you type."
       >
         <DebouncedInput
           id={returnTimeId}
@@ -1984,6 +2198,8 @@ function InstructorAwayCard() {
         />
         <SavedIndicator state={returnTimeSaveState} />
       </SettingRow>
+
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announce}</span>
     </SettingCard>
   )
 }
@@ -2209,6 +2425,8 @@ function GeneralSettings() {
     'maintenance_notice_days', // → LabAccessModeCard → MaintenanceScheduler
     'instructor_away_mode',    // → InstructorAwayCard (top of tab)
     'instructor_return_time',  // → InstructorAwayCard (top of tab)
+    'instructor_away_blocks_help', // → InstructorAwayCard (Away – pause help)
+    'instructor_away_until',   // → InstructorAwayCard (Away ends presets)
     'tv_reload_requested_at',  // → TVReloadCard (top of tab) — written by its button, not edited
     'accountability_last_sweep', // set automatically by the Dashboard alert sweep — not user-editable
   ])

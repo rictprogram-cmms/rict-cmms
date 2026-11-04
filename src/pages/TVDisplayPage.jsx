@@ -35,6 +35,7 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { mustData } from '@/lib/supabaseData'
 import { fetchKioskFeed, subscribeKioskFeed } from '@/lib/kioskFeed'
 import { mergeSignupSessions, pickSession, minutesToDate, nowMinutes, fakeUtcMinutes, leftSessionEarly, minutesToTime12 } from '@/lib/labSessions'
+import { useInstructorAway } from '@/hooks/useInstructorAway'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -318,8 +319,11 @@ export default function TVDisplayPage() {
   const [people, setPeople] = useState([])
   const [helpQueue, setHelpQueue] = useState([])
   const [lastUpdated, setLastUpdated] = useState('--')
-  const [instructorAway, setInstructorAway] = useState(false)
-  const [awayReturnTime, setAwayReturnTime] = useState('')
+  // Instructor Away Mode — shared hook (live, and clears itself when an
+  // Away end time passes). Reads through this page's own anon client.
+  const awayMode = useInstructorAway({ client: supabase, name: 'tv-away-mode', tag: 'TVDisplay' })
+  const instructorAway = awayMode.active
+  const awayReturnTime = awayMode.returnLabel
   // ── TV slide rotation ──
   // slides: active tv_slides rows within their date window, ordered.
   // rotationSeconds: global dwell from settings (per-slide duration_seconds overrides).
@@ -413,34 +417,8 @@ export default function TVDisplayPage() {
   }, [])
 
   // ── Instructor Away Mode ──────────────────────────────────────
-  useEffect(() => {
-    async function loadAwayMode() {
-      try {
-        const data = mustData(await supabase
-          .from('settings')
-          .select('setting_key, setting_value')
-          .in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select')
-        if (data) {
-          const modeRow = data.find(r => r.setting_key === 'instructor_away_mode')
-          const timeRow = data.find(r => r.setting_key === 'instructor_return_time')
-          setInstructorAway(modeRow?.setting_value === 'true')
-          setAwayReturnTime(timeRow?.setting_value || '')
-        }
-      } catch { /* ignore */ }
-    }
-    loadAwayMode()
-
-    return subscribeWithReconnect('tv-away-mode', ch => ch
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_away_mode',
-      }, (p) => { setInstructorAway(p.new?.setting_value === 'true') })
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'settings',
-        filter: 'setting_key=eq.instructor_return_time',
-      }, (p) => { setAwayReturnTime(p.new?.setting_value || '') })
-    , { ...TV_RT_OPTS, onReconnect: loadAwayMode })   // handlers apply the payload; after a drop, re-read both keys
-  }, [])
+  // Loaded by useInstructorAway() above (same four settings keys, realtime
+  // with reconnect refetch, plus auto-off at the Away end time).
 
   // ── TV slides + rotation setting ───────────────────────────────
   // Active slides within their optional date window, plus the global dwell
@@ -991,11 +969,17 @@ export default function TVDisplayPage() {
         <div style={S.awayBanner} role="alert" aria-live="polite">
           <span style={S.awayIcon}>🏢</span>
           <div>
-            <div style={S.awayTitle}>Instructors are in a meeting</div>
+            <div style={S.awayTitle}>
+              {awayMode.paused ? 'Instructors are in a meeting — help requests paused' : 'Instructors are in a meeting'}
+            </div>
             <div style={S.awayText}>
-              {awayReturnTime
-                ? `They will be back around ${awayReturnTime}. Requests will be seen when they return.`
-                : 'Requests will be seen and responded to as soon as they are back.'}
+              {awayMode.paused
+                ? (awayReturnTime
+                    ? `They will be back around ${awayReturnTime}. Ask for help when they return.`
+                    : 'Ask for help when they are back.')
+                : (awayReturnTime
+                    ? `They will be back around ${awayReturnTime}. Requests will be seen when they return.`
+                    : 'Requests will be seen and responded to as soon as they are back.')}
             </div>
           </div>
         </div>

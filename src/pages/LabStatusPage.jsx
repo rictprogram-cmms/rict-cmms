@@ -34,6 +34,7 @@ import { useVersionCheck } from '@/hooks/useVersionCheck';
 import { fetchKioskFeed, subscribeKioskFeed } from '@/lib/kioskFeed';
 import { shortName } from '@/lib/utils';
 import { mergeSignupSessions, pickSession, minutesToTime12, minutesToDate, nowMinutes, lastPunchOutMinute, leftSessionEarly } from '@/lib/labSessions';
+import { useInstructorAway } from '@/hooks/useInstructorAway';
 
 const SCROLL_THRESHOLD = 6;
 
@@ -451,26 +452,14 @@ export default function LabStatusPage() {
   useEffect(() => { fetchWeather(); const id = setInterval(fetchWeather, 600_000); return () => clearInterval(id); }, [fetchWeather]);
 
   // ── Instructor Away Mode ──
-  const [instructorAway, setInstructorAway] = useState(false);
-  const [awayReturnTime, setAwayReturnTime] = useState('');
+  // Shared hook: the four settings keys, realtime with reconnect refetch, and
+  // the AWAY badge clears itself when an Away end time passes.
+  const awayMode = useInstructorAway({ name: 'lab-status-away-rt', tag: 'LabStatus' });
+  const instructorAway = awayMode.active;
+  const awayReturnTime = awayMode.returnLabel;
   const [awayToggling, setAwayToggling] = useState(false);
   // Today's hour-level lab closures (e.g. "2-3pm Faculty Meeting")
   const [todayClosures, setTodayClosures] = useState([]);
-
-  const fetchAwayMode = useCallback(async () => {
-    try {
-      const data = mustData(await supabase.from('settings').select('setting_key, setting_value').in('setting_key', ['instructor_away_mode', 'instructor_return_time']), 'settings.select');
-      const modeRow = (data || []).find(r => r.setting_key === 'instructor_away_mode');
-      const timeRow = (data || []).find(r => r.setting_key === 'instructor_return_time');
-      setInstructorAway(modeRow?.setting_value === 'true'); setAwayReturnTime(timeRow?.setting_value || '');
-    } catch { /* non-fatal */ }
-  }, []);
-  useEffect(() => { fetchAwayMode(); }, [fetchAwayMode]);
-
-  useEffect(() => subscribeWithReconnect('lab-status-away-rt', ch => ch
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_away_mode' }, p => setInstructorAway(p.new?.setting_value === 'true'))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'settings', filter: 'setting_key=eq.instructor_return_time' }, p => setAwayReturnTime(p.new?.setting_value || ''))
-  , { tag: 'LabStatus', onReconnect: fetchAwayMode }), [fetchAwayMode]);
 
   const toggleAwayOff = useCallback(async () => {
     setAwayToggling(true);
@@ -480,11 +469,11 @@ export default function LabStatusPage() {
       let { error } = await supabase.rpc('kiosk_instructor_away_off');
       if (error) ({ error } = await supabase.rpc('toggle_instructor_away_off'));
       if (error) throw error;
-      setInstructorAway(false); setAwayReturnTime('');
+      await awayMode.reload();
     }
     catch (err) { console.error('[LabStatus] Toggle away off error:', err); }
     setAwayToggling(false);
-  }, []);
+  }, [awayMode.reload]);
 
   // ── Data Fetching — unified people list ──────────────────────────────────
 
@@ -825,7 +814,7 @@ export default function LabStatusPage() {
             <span className="material-icons" aria-hidden="true" style={{ color: 'white', fontSize: '1.2rem' }}>{awayToggling ? 'hourglass_empty' : 'meeting_room'}</span>
             <div style={{ textAlign: 'left' }}>
               <div style={{ color: 'white', fontWeight: 800, fontSize: '0.82rem', letterSpacing: '0.5px', textTransform: 'uppercase', lineHeight: 1.1 }}>AWAY</div>
-              <div style={{ color: '#fecaca', fontSize: '0.58rem', fontWeight: 600, lineHeight: 1.2 }}>{awayReturnTime ? `Back at ${awayReturnTime}` : 'Tap to return'}</div>
+              <div style={{ color: '#fecaca', fontSize: '0.58rem', fontWeight: 600, lineHeight: 1.2 }}>{awayMode.paused ? 'Help paused · ' : ''}{awayReturnTime ? `Back at ${awayReturnTime}` : 'Tap to return'}</div>
             </div>
             <span className="material-icons" aria-hidden="true" style={{ color: '#fecaca', fontSize: '0.9rem', marginLeft: 2 }}>close</span>
           </button>
