@@ -32,6 +32,41 @@ function formatShortDay(dateStr) {
   return `${names[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`
 }
 
+/** 'HH:MM' (24-hour) → '2:00 PM' */
+function formatClockLabel(timeStr) {
+  const min = timeToMinutes(timeStr)
+  if (min == null) return timeStr || ''
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`
+}
+
+/**
+ * Everything closed in a week, with the reason the instructor typed, for the
+ * "Closed this week" list under each Weekly Sign Up grid. Closed days use the
+ * day's Notes (only on CLOSED days — open-day notes stay instructor-only);
+ * closure blocks use their own reason. Days never set up are skipped.
+ */
+function weekClosureItems(week) {
+  const items = []
+  for (const day of week?.days || []) {
+    const when = formatShortDay(day.date)
+    if (day.hasEntry && day.isClosed) {
+      items.push({ key: `${day.date}_day`, when, time: 'All day', reason: (day.notes || '').trim() || 'Lab closed' })
+    } else if (day.isOpen) {
+      for (const b of day.closedBlocks || []) {
+        items.push({
+          key: `${day.date}_${b.start}`,
+          when,
+          time: `${formatClockLabel(b.start)} – ${formatClockLabel(b.end)}`,
+          reason: (b.reason || '').trim() || 'Lab closed',
+        })
+      }
+    }
+  }
+  return items
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // TAB NAVIGATION
 // ═══════════════════════════════════════════════════════════════════════════
@@ -756,9 +791,20 @@ function WeeklySignupTab() {
                   <tr className="bg-surface-50">
                     <th scope="col" className="px-3 py-2 text-left text-surface-500 font-medium w-20">Time</th>
                     {week.days.map(day => (
-                      <th scope="col" key={day.date} className="px-2 py-2 text-center font-medium text-surface-500">
+                      <th scope="col" key={day.date} className="px-2 py-2 text-center font-medium text-surface-500 align-top">
                         <div>{day.dayShort}</div>
                         <div className="text-surface-900 text-sm">{day.dayNum}</div>
+                        {/* Closed day — show the reason (the day's Notes) to everyone */}
+                        {day.hasEntry && day.isClosed && (
+                          <div className="mt-1 flex flex-col items-center gap-0.5">
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[9px] font-bold uppercase leading-none">
+                              <Ban size={9} aria-hidden="true" /> Closed
+                            </span>
+                            {day.notes && (
+                              <span className="text-[10px] font-semibold text-red-700 leading-tight break-words max-w-[9rem]">{day.notes}</span>
+                            )}
+                          </div>
+                        )}
                       </th>
                     ))}
                   </tr>
@@ -824,12 +870,17 @@ function WeeklySignupTab() {
                           // 2-3pm) from the day being closed entirely. Both render
                           // non-interactive, but the closure case shows the reason.
                           if (slot.isHourClosed) {
-                            cellClass += 'bg-red-50 text-red-500 cursor-default border border-red-200'
+                            cellClass += 'bg-red-50 text-red-600 cursor-default border border-red-200'
                             cellContent = (
-                              <span className="inline-flex items-center gap-0.5 leading-none">
-                                <Ban size={10} aria-hidden="true" />
-                                <span className="text-[8px] font-semibold uppercase">Closed</span>
-                              </span>
+                              <>
+                                <span className="inline-flex items-center gap-0.5 leading-none">
+                                  <Ban size={10} aria-hidden="true" />
+                                  <span className="text-[8px] font-semibold uppercase">Closed</span>
+                                </span>
+                                {slot.closureReason && (
+                                  <span className="text-[8px] font-medium normal-case leading-tight truncate max-w-full px-1 text-red-700">{slot.closureReason}</span>
+                                )}
+                              </>
                             )
                           } else {
                             cellClass += 'bg-red-50 text-red-300 cursor-default'
@@ -891,7 +942,7 @@ function WeeklySignupTab() {
                           !cellOpen
                             ? (slot.isHourClosed
                                 ? `Closed: ${slot.closureReason}`
-                                : 'Lab closed')
+                                : (day.hasEntry && day.isClosed && day.notes ? `Lab closed: ${day.notes}` : 'Lab closed'))
                           : isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up${afterHoursBooked ? ' after lab hours' : ''} — click for details`
                           : isMarkedCancel ? 'Click to undo cancel'
                           : isMine && afterHoursBooked ? 'After lab hours, booked by your instructor — click to cancel'
@@ -924,6 +975,30 @@ function WeeklySignupTab() {
                 </tbody>
               </table>
             </div>
+
+            {/* Closed this week — every closure with its reason, readable on
+                phones, by screen readers and in print (tooltips are not) */}
+            {(() => {
+              const closedItems = weekClosureItems(week)
+              if (closedItems.length === 0) return null
+              const headingId = `closed-week-${week.weekStart}`
+              return (
+                <section aria-labelledby={headingId} className="px-4 py-3 border-t border-surface-200 bg-red-50/40">
+                  <h4 id={headingId} className="text-xs font-semibold text-red-800 flex items-center gap-1.5 mb-1.5">
+                    <Ban size={12} aria-hidden="true" /> Lab closed this week
+                  </h4>
+                  <ul className="space-y-1">
+                    {closedItems.map(it => (
+                      <li key={it.key} className="text-xs text-surface-700 flex flex-wrap gap-x-2">
+                        <span className="font-semibold text-surface-900">{it.when}</span>
+                        <span className="text-surface-500">{it.time}</span>
+                        <span className="text-red-800">{it.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )
+            })()}
 
             {/* Action Bar — shows when there are pending changes */}
             {changeCount > 0 && (
