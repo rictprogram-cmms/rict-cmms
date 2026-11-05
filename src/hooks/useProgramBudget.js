@@ -275,7 +275,8 @@ export function useBudgetTransactions(schoolYear) {
           objectCode: '',
           collegePo: o.college_po || '',
           linkedTo: line ? { id: line.id, reference: line.reference || '', description: line.description } : null,
-          countsInBalance: !line,
+          excludedReason: o.budget_excluded_reason || '',
+          countsInBalance: !line && !o.budget_excluded_reason,
         })
       })
 

@@ -3,6 +3,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import { vendorsMatch } from '@/lib/budgetImport'
+import BudgetExcludeDialog, { saveOrderBudgetExclusion, fmtExcludedAt } from '@/components/BudgetExcludeDialog'
 import {
   useBudgetOverview, useBudgetTransactions, useBudgetActions,
   useBudgetYearSummary, useSpreadsheetImport, getCurrentSchoolYear,
@@ -144,7 +145,12 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
   const [releaseTarget, setReleaseTarget] = useState(null)   // open encumbrance row
   const [cancelTarget, setCancelTarget] = useState(null)     // open encumbrance row
   const [linkTarget, setLinkTarget] = useState(null)         // committed order row
+  const [excludeTarget, setExcludeTarget] = useState(null)   // committed order row
+  const [excludeSaving, setExcludeSaving] = useState(false)
   const [showRequested, setShowRequested] = useState(false)
+  const [showExcluded, setShowExcluded] = useState(false)
+  const { profile } = useAuth()
+  const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
   const [liveMsg, setLiveMsg] = useState('')
 
   // re-fetch when refreshKey changes
@@ -194,6 +200,26 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
     const ok = await actions.cancelRelease(t.id)
     if (ok) { setLiveMsg(`Release request cancelled for ${t.description}.`); refresh() }
   }
+  const saveExclude = async (values) => {
+    const t = excludeTarget
+    setExcludeSaving(true)
+    const { error } = await saveOrderBudgetExclusion(t.orderId, values, userName)
+    setExcludeSaving(false)
+    if (error) { toast.error(`Could not update ${t.orderId}: ${error.message}`); return }
+    toast.success(`${t.orderId} kept off the budget`)
+    setLiveMsg(`${t.orderId} (${t.vendor}) marked ${values.reason} and removed from the budget.`)
+    setExcludeTarget(null)
+    refresh()
+  }
+  const countAgain = async (ord) => {
+    setExcludeSaving(true)
+    const { error } = await saveOrderBudgetExclusion(ord.orderId, null, userName)
+    setExcludeSaving(false)
+    if (error) { toast.error(`Could not update ${ord.orderId}: ${error.message}`); return }
+    toast.success(`${ord.orderId} counts in the budget again`)
+    setLiveMsg(`${ord.orderId} (${ord.vendor}) counts against the budget again.`)
+    refresh()
+  }
   const saveLink = async (lineId) => {
     const ok = await actions.linkOrders(lineId, [linkTarget.orderId])
     if (ok) {
@@ -211,6 +237,10 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
       {releaseTarget && (
         <ReleaseDialog target={releaseTarget} saving={actions.saving}
           onSave={saveRelease} onClose={() => setReleaseTarget(null)} />
+      )}
+      {excludeTarget && (
+        <BudgetExcludeDialog order={excludeTarget} saving={excludeSaving}
+          onSave={saveExclude} onClose={() => setExcludeTarget(null)} />
       )}
       {linkTarget && (
         <LinkOrderDialog order={linkTarget} lines={o.collegeLines} saving={actions.saving}
@@ -372,7 +402,7 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
             <ShoppingCart size={14} className="text-blue-500" aria-hidden="true" /> Not Yet on College Report
           </h3>
           <p className="text-[11px] text-surface-500 mt-0.5">
-            Approved CMMS orders that no college budget line covers yet. They count against the budget at the CMMS total until the next report import links them (or you link one by hand).
+            Approved CMMS orders that no college budget line covers yet. They count against the budget at the CMMS total until the next report import links them (or you link one by hand). Orders you paid for another way can be marked &ldquo;Not charged to budget&rdquo;.
           </p>
         </div>
         {o.committedOrderList.length === 0 ? (
@@ -388,6 +418,13 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
                   </div>
                 </div>
                 <span className="text-xs font-bold text-surface-900">{fmt(ord.total)}</span>
+                {canManage && (
+                  <button type="button" onClick={() => setExcludeTarget(ord)}
+                    aria-label={`Mark ${ord.orderId} (${ord.vendor}) as not charged to the budget, for example paid out of pocket`}
+                    className="px-3 rounded-lg text-[11px] font-semibold bg-surface-100 text-surface-700 hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 inline-flex items-center gap-1">
+                    <Ban size={12} aria-hidden="true" /> Not charged to budget
+                  </button>
+                )}
                 {canManage && o.collegeLines.length > 0 && (
                   <button type="button" onClick={() => setLinkTarget(ord)}
                     aria-label={`Link ${ord.orderId} (${ord.vendor}) to a college budget line`}
@@ -398,6 +435,39 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
               </li>
             ))}
           </ul>
+        )}
+        {o.excludedOrderList.length > 0 && (
+          <div className="border-t border-surface-100 px-4 py-2">
+            <button type="button" onClick={() => setShowExcluded(v => !v)} aria-expanded={showExcluded}
+              className="text-[11px] font-medium text-surface-600 hover:text-surface-800 min-h-[44px] inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 rounded">
+              {showExcluded ? <ChevronUp size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+              {o.excludedOrderCount} order{o.excludedOrderCount === 1 ? '' : 's'} not charged to the budget ({fmt(o.excludedOrders)}) — not counted
+            </button>
+            {showExcluded && (
+              <ul className="mt-1 divide-y divide-surface-100">
+                {o.excludedOrderList.map(ord => (
+                  <li key={ord.orderId} className="py-1 flex flex-wrap items-center gap-3">
+                    <div className="flex-1 min-w-[180px]">
+                      <div className="text-xs font-medium text-surface-900">{ord.vendor} <span className="text-surface-500 font-normal">· {ord.orderId} · {ord.status} · {fmtLocalDate(ord.date)}</span></div>
+                      <div className="text-[10px] text-surface-600">
+                        <span className="font-semibold">{ord.reason}</span>
+                        {ord.note ? ` — ${ord.note}` : ''}
+                        {ord.by || ord.at ? ` · marked${ord.by ? ` by ${ord.by}` : ''}${ord.at ? ` ${fmtExcludedAt(ord.at)}` : ''}` : ''}
+                      </div>
+                    </div>
+                    <span className="text-xs text-surface-600">{fmt(ord.total)}</span>
+                    {canManage && (
+                      <button type="button" onClick={() => countAgain(ord)} disabled={excludeSaving}
+                        aria-label={`Count ${ord.orderId} (${ord.vendor}) against the budget again`}
+                        className="px-3 rounded-lg text-[11px] font-medium bg-surface-100 text-surface-700 hover:bg-surface-200 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                        Count in budget again
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         {o.requestedOrderList.length > 0 && (
           <div className="border-t border-surface-100 px-4 py-2">
@@ -615,7 +685,8 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
       if (typeFilter === 'manual') result = result.filter(t => t.source === 'manual')
       else if (typeFilter === 'po') result = result.filter(t => t.source === 'po')
       else if (typeFilter === 'college') result = result.filter(t => t.ledgerSource === 'college_report')
-      else if (typeFilter === 'po-unlinked') result = result.filter(t => t.source === 'po' && !t.linkedTo)
+      else if (typeFilter === 'po-unlinked') result = result.filter(t => t.source === 'po' && !t.linkedTo && !t.excludedReason)
+      else if (typeFilter === 'po-excluded') result = result.filter(t => t.source === 'po' && t.excludedReason)
       else result = result.filter(t => t.type === typeFilter)
     }
     if (paymentFilter !== 'all') {
@@ -637,6 +708,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
         if (t.entryId?.toLowerCase().includes(s)) return true
         if (t.status?.toLowerCase().includes(s)) return true
         if (t.collegePo?.toLowerCase().includes(s)) return true
+        if (t.excludedReason?.toLowerCase().includes(s)) return true
         if (t.linkedTo?.reference?.toLowerCase().includes(s)) return true
         if (t.linkedOrderIds?.some(id => id.toLowerCase().includes(s))) return true
 
@@ -765,6 +837,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
           <option value="college">College Report Lines</option>
           <option value="po">CMMS Orders Only</option>
           <option value="po-unlinked">CMMS Orders Not on Report</option>
+          <option value="po-excluded">CMMS Orders Not Charged to Budget</option>
           <option value="Starting Balance">Starting Balance</option>
           <option value="Manual Expense">Expenses</option>
           <option value="Income/Grant">Income/Grants</option>
@@ -870,6 +943,9 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                         if (txn.isCredit) {
                           iconBg = 'bg-emerald-100'
                           iconEl = <ArrowUpCircle size={14} className="text-emerald-600" aria-hidden="true" />
+                        } else if (txn.source === 'po' && txn.excludedReason) {
+                          iconBg = 'bg-surface-100'
+                          iconEl = <Ban size={14} className="text-surface-500" aria-hidden="true" />
                         } else if (txn.source === 'po' && txn.linkedTo) {
                           iconBg = 'bg-surface-100'
                           iconEl = <Link2 size={14} className="text-surface-500" aria-hidden="true" />
@@ -899,7 +975,11 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                           <TypeBadge type={txn.type} />
                           <SourceBadge source={txn.source} notes={txn.notes} ledgerSource={txn.ledgerSource} />
                           {txn.paymentStatus && <PaymentStatusBadge status={txn.paymentStatus} />}
-                          {txn.source === 'po' && (txn.linkedTo ? (
+                          {txn.source === 'po' && (txn.excludedReason ? (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-600">
+                              Not charged to budget — {txn.excludedReason}
+                            </span>
+                          ) : txn.linkedTo ? (
                             <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-600">
                               On college {refLabel(txn.linkedTo.reference) || 'line'} — not counted separately
                             </span>

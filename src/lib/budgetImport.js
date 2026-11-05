@@ -28,7 +28,7 @@
 //       remaining same-vendor orders.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import { COMMITTED_ORDER_STATUSES, orderInSchoolYear, orderVendor } from './budgetMath.js'
+import { COMMITTED_ORDER_STATUSES, orderInSchoolYear, orderVendor, isExcludedOrder } from './budgetMath.js'
 
 // ─── Cell helpers ────────────────────────────────────────────────────────────
 
@@ -375,7 +375,8 @@ export function planImport({ parsed, existing = [], orders = [], schoolYear }) {
   const linkedAlready = new Set()
   for (const e of active) for (const id of e.linked_order_ids || []) linkedAlready.add(id)
   const pool = orders.filter(o =>
-    COMMITTED_ORDER_STATUSES.includes(o.status) && orderInSchoolYear(o, schoolYear) && !linkedAlready.has(o.order_id))
+    COMMITTED_ORDER_STATUSES.includes(o.status) && orderInSchoolYear(o, schoolYear) && !linkedAlready.has(o.order_id) &&
+    !isExcludedOrder(o))   // "not charged to budget" orders are never suggested
   const claimed = new Set()
   const avail = (o) => !claimed.has(o.order_id)
   const total = (o) => Number(o.total) || 0

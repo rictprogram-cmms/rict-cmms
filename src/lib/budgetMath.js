@@ -15,6 +15,8 @@
 //     is linked to a college line (program_budget.linked_order_ids) it stops
 //     counting on its own — the college line's amount is used instead.
 //   • Pending orders are "requested": shown, never subtracted.
+//   • Orders marked "not charged to budget" (paid out of pocket, donated, paid
+//     from another account) are listed separately and never counted.
 //
 // Figures:
 //   totalBudget          = starting balance + income/grants + adjustments
@@ -38,7 +40,16 @@ export const REQUESTED_ORDER_STATUSES = ['Pending']
 export const BUDGET_ORDER_STATUSES = [...COMMITTED_ORDER_STATUSES, ...REQUESTED_ORDER_STATUSES]
 
 export const ORDER_BUDGET_COLUMNS =
-  'order_id, vendor_name, other_vendor, order_date, approved_date, ordered_date, ordered_by, status, total, notes, college_po'
+  'order_id, vendor_name, other_vendor, order_date, approved_date, ordered_date, ordered_by, status, total, notes, college_po, ' +
+  'budget_excluded_reason, budget_excluded_note, budget_excluded_by, budget_excluded_at'
+
+/** Reasons an order is "not charged to budget" (orders.budget_excluded_reason). */
+export const BUDGET_EXCLUDED_REASONS = ['Paid out of pocket', 'Donated', 'Paid from another account']
+
+/** True when the order was marked as not charged to the program budget. */
+export function isExcludedOrder(o) {
+  return !!(o && o.budget_excluded_reason)
+}
 
 /** Statuses on a ledger line that leave money encumbered. */
 const ENCUMBERED_STATUSES = new Set(['Encumbered', 'Partial'])
@@ -174,8 +185,8 @@ export function computeBudget({ entries = [], orders = [], schoolYear, now = new
   }
 
   // Orders
-  let committedOrders = 0, requestedOrders = 0
-  const committedOrderList = [], requestedOrderList = [], linkedOrderList = []
+  let committedOrders = 0, requestedOrders = 0, excludedOrders = 0
+  const committedOrderList = [], requestedOrderList = [], linkedOrderList = [], excludedOrderList = []
   for (const o of orders) {
     if (!orderInSchoolYear(o, schoolYear)) continue
     const total = num(o.total)
@@ -189,6 +200,18 @@ export function computeBudget({ entries = [], orders = [], schoolYear, now = new
       orderedBy: o.ordered_by || '',
       notes: o.notes || '',
       collegePo: o.college_po || '',
+    }
+    if (isExcludedOrder(o)) {
+      if (!REQUESTED_ORDER_STATUSES.includes(o.status) && !COMMITTED_ORDER_STATUSES.includes(o.status)) continue
+      excludedOrders += total
+      excludedOrderList.push({
+        ...row,
+        reason: o.budget_excluded_reason,
+        note: o.budget_excluded_note || '',
+        by: o.budget_excluded_by || '',
+        at: o.budget_excluded_at || null,
+      })
+      continue
     }
     if (REQUESTED_ORDER_STATUSES.includes(o.status)) {
       requestedOrders += total
@@ -216,6 +239,7 @@ export function computeBudget({ entries = [], orders = [], schoolYear, now = new
   openEncumbrances.sort((a, b) => (b.ageDays ?? 0) - (a.ageDays ?? 0) || b.open - a.open)
   committedOrderList.sort((a, b) => String(a.date).localeCompare(String(b.date)))
   requestedOrderList.sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  excludedOrderList.sort((a, b) => String(a.date).localeCompare(String(b.date)))
 
   return {
     schoolYear,
@@ -233,6 +257,8 @@ export function computeBudget({ entries = [], orders = [], schoolYear, now = new
     committedOrderCount: committedOrderList.length,
     requestedOrders: round2(requestedOrders),
     requestedOrderCount: requestedOrderList.length,
+    excludedOrders: round2(excludedOrders),
+    excludedOrderCount: excludedOrderList.length,
     totalSpent: round2(totalSpent),
     availableAfterEnc: round2(availableAfterEnc),
     availableBeforeEnc: round2(availableBeforeEnc),
@@ -247,6 +273,7 @@ export function computeBudget({ entries = [], orders = [], schoolYear, now = new
     committedOrderList,
     requestedOrderList,
     linkedOrderList,
+    excludedOrderList,
     linkedOrderIds,
   }
 }

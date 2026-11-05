@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase'
 import { mustData, assertWrite } from '@/lib/supabaseData'
 import { usePODashboard, usePOList, usePODetail, useVendors, usePOActions, useLowStockItems } from '@/hooks/usePurchaseOrders'
 import { usePOBudgetSummary } from '@/hooks/usePOBudgetSummary'
+import BudgetExcludeDialog, { saveOrderBudgetExclusion, fmtExcludedAt } from '@/components/BudgetExcludeDialog'
 import toast from 'react-hot-toast'
 import RejectionModal from '@/components/RejectionModal'
 import { useRejectionNotification } from '@/hooks/useRejectionNotification'
@@ -85,7 +86,7 @@ function lineItemHaystack(li) {
 function orderHaystack(o) {
   return [
     o.order_id, o.vendor_name, o.other_vendor, o.ordered_by, o.status,
-    o.notes, o.work_order_id, o.rejection_reason, o.college_po,
+    o.notes, o.work_order_id, o.rejection_reason, o.college_po, o.budget_excluded_reason,
     o.total != null ? fmtMoney(o.total) : '',
     o.total != null ? String(o.total) : '',
     fmtDate(o.order_date),
@@ -1166,6 +1167,74 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
 // ORDER DETAIL VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ─── Not charged to budget (paid out of pocket, donated, another account) ────
+// A marked order keeps its total but is left out of the Program Budget and is
+// never matched to college report lines. Editable by anyone who can approve POs.
+function BudgetChargeField({ order, canEdit, onSaved }) {
+  const { profile } = useAuth()
+  const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const userName = profile ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim() : ''
+  const excluded = !!order.budget_excluded_reason
+  const vendor = order.vendor_name || order.other_vendor || 'Unknown'
+
+  const save = async (values) => {
+    setSaving(true)
+    const { error } = await saveOrderBudgetExclusion(order.order_id, values, userName)
+    setSaving(false)
+    if (error) {
+      setMsg(`Could not save: ${error.message}`)
+      toast.error(`Could not update ${order.order_id}: ${error.message}`)
+      return
+    }
+    setMsg(values ? `${order.order_id} is not charged to the program budget (${values.reason}).` : `${order.order_id} counts against the program budget again.`)
+    toast.success(values ? 'Kept off the program budget' : 'Counts in the program budget again')
+    setOpen(false)
+    onSaved?.()
+  }
+
+  if (!excluded && !canEdit) return null
+
+  return (
+    <div className="mt-3 border-t border-surface-100 pt-2 flex flex-wrap items-center gap-2 text-xs">
+      {open && (
+        <BudgetExcludeDialog order={{ orderId: order.order_id, vendor, total: order.total }} saving={saving}
+          onSave={save} onClose={() => setOpen(false)} />
+      )}
+      {excluded ? (
+        <>
+          <span className="font-semibold px-2 py-0.5 rounded-full bg-surface-100 text-surface-700">
+            Not charged to budget — {order.budget_excluded_reason}
+          </span>
+          <span className="text-surface-500">
+            {order.budget_excluded_note ? `${order.budget_excluded_note} · ` : ''}
+            {order.budget_excluded_by ? `marked by ${order.budget_excluded_by}` : ''}
+            {order.budget_excluded_at ? ` ${fmtExcludedAt(order.budget_excluded_at)}` : ''}
+          </span>
+          {canEdit && (
+            <button type="button" onClick={() => save(null)} disabled={saving}
+              aria-label={`Count ${order.order_id} against the program budget again`}
+              className="ml-auto px-3 rounded-lg bg-surface-100 text-surface-700 font-medium hover:bg-surface-200 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              Count in budget again
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <span className="text-surface-500">Counts against the program budget.</span>
+          <button type="button" onClick={() => { setMsg(''); setOpen(true) }}
+            aria-label={`Mark ${order.order_id} as not charged to the program budget, for example paid out of pocket`}
+            className="px-3 rounded-lg bg-surface-100 text-surface-700 font-medium hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            Not charged to budget…
+          </button>
+        </>
+      )}
+      <p className="sr-only" role="status" aria-live="polite">{msg}</p>
+    </div>
+  )
+}
+
 // ─── College PO # (set by the business office) ───────────────────────────────
 // Optional. When filled in, the Program Budget import links this order to the
 // college report line with the same PO number exactly, instead of suggesting a
@@ -1836,6 +1905,7 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false, onView
           }</span></div>
         </div>
         {order.notes && <p className="text-xs text-surface-500 mt-3 italic border-t border-surface-100 pt-2">{order.notes}</p>}
+        <BudgetChargeField order={order} canEdit={canApprove} onSaved={refresh} />
       </div>
 
       {/* Timeline */}
