@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
+import { vendorsMatch } from '@/lib/budgetImport'
 import {
   useBudgetOverview, useBudgetTransactions, useBudgetActions,
   useBudgetYearSummary, useSpreadsheetImport, getCurrentSchoolYear,
@@ -14,7 +16,7 @@ import {
   ArrowUpCircle, ArrowDownCircle, Clock, RefreshCw, AlertCircle,
   Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, FileText,
   Hash, ChevronsUpDown, Eye, EyeOff, HelpCircle, ArrowRight,
-  Check, Ban, ChevronUp
+  Check, Ban, ChevronUp, Link2, Unlink
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
@@ -35,6 +37,8 @@ function fmt(n) { return '$' + (n || 0).toLocaleString(undefined, { minimumFract
 export default function ProgramBudgetPage() {
   const { profile } = useAuth()
   const { hasPerm, permsLoading, isSuperAdmin } = usePermissions('Program Budget')
+  // Linking orders and release requests: same people who can approve POs
+  const { hasPerm: hasPoPerm, permsLoading: poPermsLoading } = usePermissions('Purchase Orders')
   const [tab, setTab] = useState('overview')
   const [schoolYear, setSchoolYear] = useState(getCurrentSchoolYear())
   const [refreshKey, setRefreshKey] = useState(0)
@@ -44,9 +48,9 @@ export default function ProgramBudgetPage() {
   const isInstructor = profile?.role?.toLowerCase() === 'instructor'
   const hasFullAccess = isSuperAdmin || isInstructor
 
-  if (permsLoading) {
+  if (permsLoading || poPermsLoading) {
     return (
-      <div className="p-6 text-center py-20">
+      <div className="p-6 text-center py-20" role="status">
         <Loader2 size={24} className="mx-auto mb-3 text-surface-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-500">Loading...</p>
       </div>
@@ -65,6 +69,7 @@ export default function ProgramBudgetPage() {
 
   // Helper: full access users bypass permission checks
   const can = (feature) => hasFullAccess || hasPerm(feature)
+  const canManageLedger = hasFullAccess || hasPoPerm('approve_po')
 
   // Build tabs based on permissions
   const tabs = [
@@ -93,7 +98,7 @@ export default function ProgramBudgetPage() {
         ))}
       </div>
 
-      {tab === 'overview' && <OverviewTab schoolYear={schoolYear} setSchoolYear={setSchoolYear} refreshKey={refreshKey} />}
+      {tab === 'overview' && <OverviewTab schoolYear={schoolYear} setSchoolYear={setSchoolYear} refreshKey={refreshKey} canManage={canManageLedger} />}
       {tab === 'transactions' && (
         <TransactionsTab
           schoolYear={schoolYear}
@@ -101,11 +106,12 @@ export default function ProgramBudgetPage() {
           onRefresh={triggerRefresh}
           canEdit={can('edit_entries')}
           canDelete={can('delete_entries')}
+          canManage={canManageLedger}
           isSuperAdmin={isSuperAdmin}
         />
       )}
       {tab === 'add' && <AddEntryTab schoolYear={schoolYear} onAdded={triggerRefresh} />}
-      {tab === 'import' && <ImportTab schoolYear={schoolYear} onImported={triggerRefresh} />}
+      {tab === 'import' && <ImportTab schoolYear={schoolYear} onImported={triggerRefresh} onViewOverview={() => setTab('overview')} />}
       {tab === 'years' && <YearManagementTab onRefresh={triggerRefresh} refreshKey={refreshKey} />}
     </div>
   )
@@ -115,26 +121,56 @@ export default function ProgramBudgetPage() {
 // OVERVIEW TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
-  const { overview, availableYears, loading, refresh } = useBudgetOverview(schoolYear)
+function fmtEntryDate(d) {
+  if (!d) return '—'
+  const dt = new Date(d)
+  return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('en-US', { timeZone: 'UTC' })
+}
+function fmtLocalDate(d) {
+  if (!d) return '—'
+  const dt = new Date(d)
+  return isNaN(dt.getTime()) ? '—' : dt.toLocaleDateString('en-US')
+}
+function refLabel(ref) {
+  if (!ref) return ''
+  if (/^\d{4,}$/.test(ref)) return `PO# ${ref}`
+  if (ref.toLowerCase() === 'cc') return 'Credit Card'
+  return ref
+}
+
+function OverviewTab({ schoolYear, setSchoolYear, refreshKey, canManage }) {
+  const { overview, availableYears, loading, loadError, refresh } = useBudgetOverview(schoolYear)
+  const actions = useBudgetActions()
+  const [releaseTarget, setReleaseTarget] = useState(null)   // open encumbrance row
+  const [cancelTarget, setCancelTarget] = useState(null)     // open encumbrance row
+  const [linkTarget, setLinkTarget] = useState(null)         // committed order row
+  const [showRequested, setShowRequested] = useState(false)
+  const [liveMsg, setLiveMsg] = useState('')
 
   // re-fetch when refreshKey changes
   useEffect(() => { refresh() }, [refreshKey])
 
   if (loading) {
     return (
-      <div className="text-center py-16">
+      <div className="text-center py-16" role="status">
         <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
         <p className="text-sm text-surface-400">Loading budget overview…</p>
       </div>
     )
   }
 
-  if (!overview) return <div className="text-center py-12 text-sm text-surface-400">No data available</div>
+  if (!overview) {
+    return (
+      <div className="text-center py-12 text-sm text-surface-500" role="alert">
+        {loadError ? `Could not load the budget: ${loadError}` : 'No data available'}
+      </div>
+    )
+  }
 
   const o = overview
-  const remainColor = o.percentUsed > 90 ? 'text-red-600' : o.percentUsed > 75 ? 'text-amber-600' : 'text-emerald-600'
-  const barColor = o.percentUsed > 90 ? 'bg-red-500' : o.percentUsed > 75 ? 'bg-amber-500' : 'bg-emerald-500'
+  const availColor = o.availableAfterEnc < 0 ? 'text-red-600' : o.percentUsed > 90 ? 'text-amber-600' : 'text-emerald-600'
+  const barColor = o.percentUsed > 100 ? 'bg-red-500' : o.percentUsed > 90 ? 'bg-amber-500' : 'bg-emerald-500'
+  const additions = o.income + o.adjustments
 
   // Category chart data
   const catEntries = Object.entries(o.categoryTotals).sort((a, b) => b[1] - a[1])
@@ -143,70 +179,246 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
   // Monthly chart data
   const maxMonth = Math.max(...(o.monthlyTrend || []).map(m => m.amount), 1)
 
+  const saveRelease = async (values) => {
+    const ok = await actions.requestRelease(releaseTarget.id, values)
+    if (ok) {
+      setLiveMsg(`Release of ${fmt(values.amount)} requested for ${releaseTarget.description}.`)
+      setReleaseTarget(null)
+      refresh()
+    }
+  }
+  const runCancelRelease = async () => {
+    const t = cancelTarget
+    setCancelTarget(null)
+    if (!t) return
+    const ok = await actions.cancelRelease(t.id)
+    if (ok) { setLiveMsg(`Release request cancelled for ${t.description}.`); refresh() }
+  }
+  const saveLink = async (lineId) => {
+    const ok = await actions.linkOrders(lineId, [linkTarget.orderId])
+    if (ok) {
+      const line = o.collegeLines.find(l => l.id === lineId)
+      setLiveMsg(`${linkTarget.orderId} linked to ${line ? `${line.description} ${refLabel(line.reference)}` : 'the college line'}.`)
+      setLinkTarget(null)
+      refresh()
+    }
+  }
+
   return (
     <div className="space-y-4">
+      <p className="sr-only" aria-live="polite" role="status">{liveMsg}</p>
+
+      {releaseTarget && (
+        <ReleaseDialog target={releaseTarget} saving={actions.saving}
+          onSave={saveRelease} onClose={() => setReleaseTarget(null)} />
+      )}
+      {linkTarget && (
+        <LinkOrderDialog order={linkTarget} lines={o.collegeLines} saving={actions.saving}
+          onSave={saveLink} onClose={() => setLinkTarget(null)} />
+      )}
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel this release request?"
+        message={cancelTarget ? `The release request for ${cancelTarget.description} ${refLabel(cancelTarget.reference)} (${fmt(cancelTarget.releaseAmount)}) will be removed. The encumbrance itself is not changed.` : ''}
+        confirmLabel="Cancel request"
+        cancelLabel="Keep request"
+        onConfirm={runCancelRelease}
+        onClose={() => setCancelTarget(null)}
+      />
+
       {/* Hero Card */}
       <div className="bg-white rounded-2xl border border-surface-200 p-5 shadow-sm">
-        {/* Year selector */}
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-3 mb-4">
           <label htmlFor="pb-fld-school-year-1" className="text-xs text-surface-500 font-medium">School Year</label>
           <select id="pb-fld-school-year-1" value={schoolYear} onChange={e => setSchoolYear(e.target.value)}
-            className="bg-surface-50 text-surface-900 border border-surface-200 rounded-lg px-3 py-1.5 text-sm font-medium">
+            className="bg-surface-50 text-surface-900 border border-surface-200 rounded-lg px-3 py-1.5 text-sm font-medium min-h-[44px]">
             {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
         </div>
 
-        {/* Balance grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
-          <BalanceItem label="Total Budget" value={fmt(o.totalBudget)} />
-          <BalanceItem label="Total Spent" value={fmt(o.totalSpent)} className="text-red-600" />
-          <BalanceItem label="Remaining" value={fmt(o.remaining)} className={remainColor} />
-          <BalanceItem label="% Used" value={`${o.percentUsed}%`} className={remainColor} />
+        {/* The two numbers that matter */}
+        <div className="grid sm:grid-cols-2 gap-4 mb-5">
+          <div className="rounded-xl border border-surface-200 p-4">
+            <div className="text-[11px] uppercase tracking-wider text-surface-500 font-semibold">Available — counting encumbrances</div>
+            <div className={`text-2xl font-bold mt-1 ${availColor}`}>{fmt(o.availableAfterEnc)}</div>
+            <p className="text-[11px] text-surface-500 mt-1">
+              What you can spend today. Matches the college&rsquo;s Present Balance, less CMMS orders not on the report yet.
+            </p>
+          </div>
+          <div className="rounded-xl border border-surface-200 p-4">
+            <div className="text-[11px] uppercase tracking-wider text-surface-500 font-semibold">Available — not counting encumbrances</div>
+            <div className={`text-2xl font-bold mt-1 ${o.availableBeforeEnc < 0 ? 'text-red-600' : 'text-surface-900'}`}>{fmt(o.availableBeforeEnc)}</div>
+            <p className="text-[11px] text-surface-500 mt-1">
+              If every open encumbrance ({fmt(o.encumberedOpen)}) were released.
+            </p>
+          </div>
         </div>
 
         {/* Progress bar */}
         <div>
-          <div className="h-2.5 bg-surface-100 rounded-full overflow-hidden">
+          <div className="flex justify-between text-[11px] text-surface-500 mb-1">
+            <span>{o.percentUsed}% of budget used or committed</span>
+            <span>{fmt(o.totalBudget)}</span>
+          </div>
+          <div className="h-2.5 bg-surface-100 rounded-full overflow-hidden" role="progressbar"
+            aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(o.percentUsed, 100)}
+            aria-label={`${o.percentUsed}% of the ${schoolYear} budget used or committed`}>
             <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
               style={{ width: `${Math.min(o.percentUsed, 100)}%` }} />
-          </div>
-          <div className="flex justify-between mt-1.5 text-[10px] text-surface-400">
-            <span>$0</span>
-            <span>{fmt(o.totalBudget)}</span>
           </div>
         </div>
       </div>
 
       {/* Metric cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <MetricCard icon={DollarSign} label="Starting Balance" value={fmt(o.startingBalance)} color="bg-purple-100 text-purple-600" />
-        <MetricCard icon={ArrowUpCircle} label="Income/Grants" value={fmt(o.income)} color="bg-emerald-100 text-emerald-600" />
-        <MetricCard icon={CreditCard} label="Manual Expenses" value={fmt(o.manualExpenses)} color="bg-red-100 text-red-600" />
-        <MetricCard icon={ShoppingCart} label={`POs (${o.poCount})`} value={fmt(o.poExpenses)} color="bg-amber-100 text-amber-600" />
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <MetricCard icon={DollarSign} label="Budget" value={fmt(o.totalBudget)} color="bg-purple-100 text-purple-600"
+          sub={additions ? `${fmt(o.startingBalance)} + ${fmt(additions)} added` : `Starting balance`} />
+        <MetricCard icon={CheckCircle2} label="Paid" value={fmt(o.paid)} color="bg-emerald-100 text-emerald-600" />
+        <MetricCard icon={Clock} label="Open encumbered" value={fmt(o.encumberedOpen)} color="bg-amber-100 text-amber-600"
+          sub={o.releaseRequestedTotal > 0 ? `${fmt(o.releaseRequestedTotal)} release requested` : `${o.openEncumbrances.length} line${o.openEncumbrances.length === 1 ? '' : 's'}`} />
+        <MetricCard icon={ShoppingCart} label="Not yet on college report" value={fmt(o.committedOrders)} color="bg-blue-100 text-blue-600"
+          sub={`${o.committedOrderCount} CMMS order${o.committedOrderCount === 1 ? '' : 's'}`} />
+        <MetricCard icon={HelpCircle} label="Requested (not counted)" value={fmt(o.requestedOrders)} color="bg-surface-100 text-surface-600"
+          sub={`${o.requestedOrderCount} pending approval`} />
       </div>
 
-      {/* Payment Status breakdown */}
-      {(o.paidTotal > 0 || o.encumberedTotal > 0 || o.partialTotal > 0) && (
-        <div className="bg-white rounded-xl border border-surface-200 p-4">
-          <h3 className="text-sm font-semibold text-surface-900 mb-3 flex items-center gap-1.5">
-            <CreditCard size={14} className="text-brand-500" aria-hidden="true" /> Payment Status Breakdown
+      {/* Open encumbrances */}
+      <section className="bg-white rounded-xl border border-surface-200" aria-labelledby="pb-open-enc-h">
+        <div className="p-4 border-b border-surface-100">
+          <h3 id="pb-open-enc-h" className="text-sm font-semibold text-surface-900 flex items-center gap-1.5">
+            <Clock size={14} className="text-amber-500" aria-hidden="true" /> Open Encumbrances
           </h3>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-emerald-50 rounded-lg p-3 text-center">
-              <div className="text-[10px] uppercase tracking-wide text-emerald-600 font-medium">Paid</div>
-              <div className="text-sm font-bold text-emerald-700 mt-0.5">{fmt(o.paidTotal)}</div>
-            </div>
-            <div className="bg-amber-50 rounded-lg p-3 text-center">
-              <div className="text-[10px] uppercase tracking-wide text-amber-600 font-medium">Encumbered</div>
-              <div className="text-sm font-bold text-amber-700 mt-0.5">{fmt(o.encumberedTotal)}</div>
-            </div>
-            <div className="bg-blue-50 rounded-lg p-3 text-center">
-              <div className="text-[10px] uppercase tracking-wide text-blue-600 font-medium">Partial</div>
-              <div className="text-sm font-bold text-blue-700 mt-0.5">{fmt(o.partialTotal)}</div>
-            </div>
-          </div>
+          <p className="text-[11px] text-surface-500 mt-0.5">
+            Money set aside on college POs but not yet paid. Unused money can be released to free it up — record the request here after you ask the business office; it clears when a later report shows it released.
+          </p>
         </div>
-      )}
+        {o.openEncumbrances.length === 0 ? (
+          <p className="text-xs text-surface-500 p-4 text-center">No open encumbrances.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <caption className="sr-only">Open encumbrances for {schoolYear}, oldest first</caption>
+              <thead className="bg-surface-50">
+                <tr>
+                  <th scope="col" className="text-left p-2 font-semibold text-surface-500">Line</th>
+                  <th scope="col" className="text-left p-2 font-semibold text-surface-500">Date</th>
+                  <th scope="col" className="text-right p-2 font-semibold text-surface-500">Age</th>
+                  <th scope="col" className="text-right p-2 font-semibold text-surface-500">Encumbered</th>
+                  <th scope="col" className="text-right p-2 font-semibold text-surface-500">Paid</th>
+                  <th scope="col" className="text-right p-2 font-semibold text-surface-500">Unused</th>
+                  <th scope="col" className="text-left p-2 font-semibold text-surface-500">Release</th>
+                  {canManage && <th scope="col" className="p-2"><span className="sr-only">Actions</span></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {o.openEncumbrances.map(e => (
+                  <tr key={e.id} className="border-t border-surface-100">
+                    <td className="p-2">
+                      <div className="font-medium text-surface-900">{e.description}</div>
+                      <div className="text-[10px] text-surface-500">{refLabel(e.reference)}{e.objectCode ? ` · Code ${e.objectCode}` : ''}</div>
+                    </td>
+                    <td className="p-2 whitespace-nowrap text-surface-600">{fmtEntryDate(e.date)}</td>
+                    <td className="p-2 text-right whitespace-nowrap text-surface-600">{e.ageDays != null ? `${e.ageDays} days` : '—'}</td>
+                    <td className="p-2 text-right whitespace-nowrap">{fmt(e.amount)}</td>
+                    <td className="p-2 text-right whitespace-nowrap text-surface-600">{fmt(e.paid)}</td>
+                    <td className="p-2 text-right whitespace-nowrap font-bold text-amber-700">{fmt(e.open)}</td>
+                    <td className="p-2">
+                      {e.releaseRequestedAt ? (
+                        <span className="inline-flex flex-col">
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 w-fit">Requested {fmt(e.releaseAmount)}</span>
+                          <span className="text-[10px] text-surface-500 mt-0.5">{fmtEntryDate(e.releaseRequestedAt)}{e.releaseRequestedBy ? ` · ${e.releaseRequestedBy}` : ''}</span>
+                          {e.releaseNote && <span className="text-[10px] text-surface-500 italic">{e.releaseNote}</span>}
+                        </span>
+                      ) : <span className="text-surface-400">—</span>}
+                    </td>
+                    {canManage && (
+                      <td className="p-2 text-right whitespace-nowrap">
+                        {e.releaseRequestedAt ? (
+                          <button type="button" onClick={() => setCancelTarget(e)}
+                            aria-label={`Cancel release request for ${e.description} ${refLabel(e.reference)}`}
+                            className="px-3 rounded-lg text-[11px] font-medium bg-surface-100 text-surface-600 hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                            Cancel request
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => setReleaseTarget(e)}
+                            aria-label={`Request release of unused money on ${e.description} ${refLabel(e.reference)}`}
+                            className="px-3 rounded-lg text-[11px] font-semibold bg-amber-50 text-amber-800 hover:bg-amber-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                            Request release
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-surface-50 border-t border-surface-200">
+                <tr>
+                  <th scope="row" colSpan={3} className="p-2 text-right font-semibold text-surface-600">Totals</th>
+                  <td className="p-2 text-right font-semibold">{fmt(o.openEncumbrances.reduce((s, e) => s + e.amount, 0))}</td>
+                  <td className="p-2 text-right font-semibold">{fmt(o.openEncumbrances.reduce((s, e) => s + e.paid, 0))}</td>
+                  <td className="p-2 text-right font-bold text-amber-700">{fmt(o.encumberedOpen)}</td>
+                  <td colSpan={canManage ? 2 : 1} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* CMMS orders not yet on the college report */}
+      <section className="bg-white rounded-xl border border-surface-200" aria-labelledby="pb-not-on-report-h">
+        <div className="p-4 border-b border-surface-100">
+          <h3 id="pb-not-on-report-h" className="text-sm font-semibold text-surface-900 flex items-center gap-1.5">
+            <ShoppingCart size={14} className="text-blue-500" aria-hidden="true" /> Not Yet on College Report
+          </h3>
+          <p className="text-[11px] text-surface-500 mt-0.5">
+            Approved CMMS orders that no college budget line covers yet. They count against the budget at the CMMS total until the next report import links them (or you link one by hand).
+          </p>
+        </div>
+        {o.committedOrderList.length === 0 ? (
+          <p className="text-xs text-surface-500 p-4 text-center">Every approved order is on a college report.</p>
+        ) : (
+          <ul className="divide-y divide-surface-100">
+            {o.committedOrderList.map(ord => (
+              <li key={ord.orderId} className="px-4 py-2 flex flex-wrap items-center gap-3">
+                <div className="flex-1 min-w-[180px]">
+                  <div className="text-xs font-medium text-surface-900">{ord.vendor} <span className="text-surface-500 font-normal">· {ord.orderId}</span></div>
+                  <div className="text-[10px] text-surface-500">
+                    {ord.status} · {fmtLocalDate(ord.date)}{ord.orderedBy ? ` · ${ord.orderedBy}` : ''}{ord.collegePo ? ` · College PO# ${ord.collegePo}` : ''}
+                  </div>
+                </div>
+                <span className="text-xs font-bold text-surface-900">{fmt(ord.total)}</span>
+                {canManage && o.collegeLines.length > 0 && (
+                  <button type="button" onClick={() => setLinkTarget(ord)}
+                    aria-label={`Link ${ord.orderId} (${ord.vendor}) to a college budget line`}
+                    className="px-3 rounded-lg text-[11px] font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 inline-flex items-center gap-1">
+                    <Link2 size={12} aria-hidden="true" /> Link to college line
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {o.requestedOrderList.length > 0 && (
+          <div className="border-t border-surface-100 px-4 py-2">
+            <button type="button" onClick={() => setShowRequested(v => !v)} aria-expanded={showRequested}
+              className="text-[11px] font-medium text-surface-600 hover:text-surface-800 min-h-[44px] inline-flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 rounded">
+              {showRequested ? <ChevronUp size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
+              {o.requestedOrderList.length} pending order{o.requestedOrderList.length === 1 ? '' : 's'} awaiting approval ({fmt(o.requestedOrders)}) — not counted
+            </button>
+            {showRequested && (
+              <ul className="mt-1 space-y-1">
+                {o.requestedOrderList.map(ord => (
+                  <li key={ord.orderId} className="text-[11px] text-surface-600 flex justify-between gap-2">
+                    <span>{ord.vendor} · {ord.orderId} · {fmtLocalDate(ord.date)}</span>
+                    <span>{fmt(ord.total)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Charts row */}
       <div className="grid lg:grid-cols-2 gap-4">
@@ -222,10 +434,10 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
               {catEntries.map(([cat, amt], i) => (
                 <div key={cat}>
                   <div className="flex justify-between text-xs mb-0.5">
-                    <span className="font-medium text-surface-700">{cat}</span>
+                    <span className="font-medium text-surface-700">{cat === 'Purchase Orders' ? 'CMMS orders not on report' : cat}</span>
                     <span className="text-surface-500">{fmt(amt)}</span>
                   </div>
-                  <div className="h-1.5 bg-surface-100 rounded-full overflow-hidden">
+                  <div className="h-1.5 bg-surface-100 rounded-full overflow-hidden" aria-hidden="true">
                     <div className="h-full rounded-full transition-all"
                       style={{
                         width: `${(amt / maxCat) * 100}%`,
@@ -246,22 +458,27 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
           {(o.monthlyTrend || []).length === 0 ? (
             <p className="text-xs text-surface-400 py-4 text-center">No monthly data yet</p>
           ) : (
-            <div className="flex items-end gap-1 h-40 pt-2">
-              {o.monthlyTrend.map((m, i) => {
-                const pct = maxMonth > 0 ? (m.amount / maxMonth) * 100 : 0
-                return (
-                  <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-                    {/* Tooltip */}
-                    <div className="hidden group-hover:block absolute bottom-full mb-1 bg-slate-800 text-white text-[10px] px-2 py-1 rounded-lg whitespace-nowrap z-10">
-                      {m.label}: {fmt(m.amount)}
+            <>
+              <div className="flex items-end gap-1 h-40 pt-2" aria-hidden="true">
+                {o.monthlyTrend.map((m, i) => {
+                  const pct = maxMonth > 0 ? (m.amount / maxMonth) * 100 : 0
+                  return (
+                    <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                      {/* Tooltip */}
+                      <div className="hidden group-hover:block absolute bottom-full mb-1 bg-slate-800 text-white text-[10px] px-2 py-1 rounded-lg whitespace-nowrap z-10">
+                        {m.label}: {fmt(m.amount)}
+                      </div>
+                      <div className="w-full max-w-[32px] rounded-t transition-all bg-brand-500 hover:bg-brand-600"
+                        style={{ height: `${Math.max(pct, 2)}%` }} />
+                      <span className="text-[9px] text-surface-400 mt-1 leading-tight">{m.shortLabel}</span>
                     </div>
-                    <div className="w-full max-w-[32px] rounded-t transition-all bg-brand-500 hover:bg-brand-600"
-                      style={{ height: `${Math.max(pct, 2)}%` }} />
-                    <span className="text-[9px] text-surface-400 mt-1 leading-tight">{m.shortLabel}</span>
-                  </div>
-                )
-              })}
-            </div>
+                  )
+                })}
+              </div>
+              <ul className="sr-only">
+                {o.monthlyTrend.map(m => <li key={m.label}>{m.label}: {fmt(m.amount)}</li>)}
+              </ul>
+            </>
           )}
         </div>
       </div>
@@ -269,11 +486,109 @@ function OverviewTab({ schoolYear, setSchoolYear, refreshKey }) {
   )
 }
 
+/** Request release of unused money on an open encumbrance. */
+function ReleaseDialog({ target, saving, onSave, onClose }) {
+  const [amount, setAmount] = useState(target.open.toFixed(2))
+  const [note, setNote] = useState('')
+  const [err, setErr] = useState('')
+  const dialogRef = useDialogA11y(true, onClose)
+
+  const submit = (e) => {
+    e.preventDefault()
+    const amt = parseFloat(amount)
+    if (!amt || amt <= 0) return setErr('Enter an amount greater than $0.')
+    if (amt > target.open + 0.005) return setErr(`The most that can be released is the unused ${fmt(target.open)}.`)
+    setErr('')
+    onSave({ amount: amt, note })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9100] flex items-center justify-center bg-black/50 p-4"
+      onClick={e => { if (e.target === e.currentTarget && !saving) onClose() }}>
+      <form ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="pb-release-title" aria-describedby="pb-release-desc"
+        onSubmit={submit} className="bg-white rounded-xl w-full max-w-md shadow-xl p-5 space-y-3">
+        <h2 id="pb-release-title" className="text-sm font-bold text-surface-900">Request release</h2>
+        <p id="pb-release-desc" className="text-xs text-surface-600">
+          {target.description} {refLabel(target.reference)} — encumbered {fmt(target.amount)}, paid {fmt(target.paid)}, unused <strong>{fmt(target.open)}</strong>.
+          Record this after you ask the business office to release the money. It clears automatically when a later report shows the line reduced, paid or liquidated.
+        </p>
+        <div>
+          <label htmlFor="pb-release-amount" className="text-xs font-semibold text-surface-600 block mb-1">Amount to release ($)</label>
+          <input id="pb-release-amount" type="number" step="0.01" min="0.01" max={target.open} value={amount}
+            onChange={e => setAmount(e.target.value)} className="input text-sm" required
+            aria-invalid={!!err} aria-describedby={err ? 'pb-release-err' : undefined} />
+        </div>
+        <div>
+          <label htmlFor="pb-release-note" className="text-xs font-semibold text-surface-600 block mb-1">Note (optional)</label>
+          <textarea id="pb-release-note" rows={2} value={note} onChange={e => setNote(e.target.value)}
+            placeholder="e.g. Emailed business office 11/5 — need funds for trainer parts" className="input text-sm resize-y" />
+        </div>
+        {err && <p id="pb-release-err" role="alert" className="text-xs text-red-700">{err}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} disabled={saving}
+            className="px-4 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            Cancel
+          </button>
+          <button type="submit" disabled={saving}
+            className="px-4 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 min-h-[44px] inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            {saving && <Loader2 size={12} className="animate-spin" aria-hidden="true" />} Record request
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+/** Link a CMMS order to a college budget line by hand. */
+function LinkOrderDialog({ order, lines, saving, onSave, onClose }) {
+  const sorted = useMemo(() => {
+    const score = (l) => (vendorsMatch(l.description, order.vendor) ? 0 : 1)
+    return [...lines].sort((a, b) => score(a) - score(b) || String(b.date).localeCompare(String(a.date)))
+  }, [lines, order.vendor])
+  const [lineId, setLineId] = useState(sorted[0]?.id || '')
+  const dialogRef = useDialogA11y(true, onClose)
+
+  return (
+    <div className="fixed inset-0 z-[9100] flex items-center justify-center bg-black/50 p-4"
+      onClick={e => { if (e.target === e.currentTarget && !saving) onClose() }}>
+      <form ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="pb-link-title" aria-describedby="pb-link-desc"
+        onSubmit={e => { e.preventDefault(); if (lineId) onSave(lineId) }}
+        className="bg-white rounded-xl w-full max-w-md shadow-xl p-5 space-y-3">
+        <h2 id="pb-link-title" className="text-sm font-bold text-surface-900">Link {order.orderId} to a college line</h2>
+        <p id="pb-link-desc" className="text-xs text-surface-600">
+          {order.vendor} · {fmt(order.total)} · {order.status}. Once linked, this order stops counting on its own — the college line&rsquo;s amount is used instead.
+        </p>
+        <div>
+          <label htmlFor="pb-link-line" className="text-xs font-semibold text-surface-600 block mb-1">College budget line</label>
+          <select id="pb-link-line" value={lineId} onChange={e => setLineId(e.target.value)} className="input text-sm" required>
+            {sorted.map(l => (
+              <option key={l.id} value={l.id}>
+                {l.description} — {refLabel(l.reference) || 'no ref'} — {fmt(l.amount)} — {fmtEntryDate(l.date)}{l.linkedOrderIds.length ? ` (linked: ${l.linkedOrderIds.join(', ')})` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} disabled={saving}
+            className="px-4 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            Cancel
+          </button>
+          <button type="submit" disabled={saving || !lineId}
+            className="px-4 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 min-h-[44px] inline-flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            {saving && <Loader2 size={12} className="animate-spin" aria-hidden="true" />} Link order
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRANSACTIONS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete, isSuperAdmin }) {
+function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete, canManage, isSuperAdmin }) {
   const { transactions, loading, refresh } = useBudgetTransactions(schoolYear)
   const actions = useBudgetActions()
   const [search, setSearch] = useState('')
@@ -283,7 +598,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
   const [editingId, setEditingId] = useState(null)
   const [editForm, setEditForm] = useState({})
   const [expandedId, setExpandedId] = useState(null)
-  const [confirmAction, setConfirmAction] = useState(null) // { kind: 'void' | 'delete', txn }
+  const [confirmAction, setConfirmAction] = useState(null) // { kind: 'void' | 'delete' | 'unlink', txn }
 
   // Debounce search input by 200ms
   useEffect(() => {
@@ -299,6 +614,8 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
     if (typeFilter !== 'all') {
       if (typeFilter === 'manual') result = result.filter(t => t.source === 'manual')
       else if (typeFilter === 'po') result = result.filter(t => t.source === 'po')
+      else if (typeFilter === 'college') result = result.filter(t => t.ledgerSource === 'college_report')
+      else if (typeFilter === 'po-unlinked') result = result.filter(t => t.source === 'po' && !t.linkedTo)
       else result = result.filter(t => t.type === typeFilter)
     }
     if (paymentFilter !== 'all') {
@@ -319,6 +636,9 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
         if (t.source?.toLowerCase().includes(s)) return true
         if (t.entryId?.toLowerCase().includes(s)) return true
         if (t.status?.toLowerCase().includes(s)) return true
+        if (t.collegePo?.toLowerCase().includes(s)) return true
+        if (t.linkedTo?.reference?.toLowerCase().includes(s)) return true
+        if (t.linkedOrderIds?.some(id => id.toLowerCase().includes(s))) return true
 
         // Object code label lookup (e.g. searching "Equipment" matches code "1420")
         if (t.objectCode && OBJECT_CODES[t.objectCode]?.toLowerCase().includes(s)) return true
@@ -364,7 +684,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
     let running = 0
     const balances = {}
     sorted.forEach(t => {
-      if (t.status === 'Voided') return
+      if (t.status === 'Voided' || t.countsInBalance === false) return
       running += t.isCredit ? t.amount : -t.amount
       balances[t.id] = running
     })
@@ -381,6 +701,7 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
       reference: txn.reference,
       paymentStatus: txn.paymentStatus || '',
       objectCode: txn.objectCode || '',
+      paidAmount: txn.paidAmount ?? 0,
     })
   }
 
@@ -395,7 +716,9 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
     const act = confirmAction
     setConfirmAction(null)
     if (!act) return
-    const ok = act.kind === 'void' ? await actions.voidEntry(act.txn.id) : await actions.deleteEntry(act.txn.id)
+    const ok = act.kind === 'void' ? await actions.voidEntry(act.txn.id)
+      : act.kind === 'unlink' ? await actions.unlinkOrder(act.txn.linkedTo.id, act.txn.id)
+      : await actions.deleteEntry(act.txn.id)
     if (ok) { refresh(); onRefresh() }
   }
 
@@ -411,11 +734,14 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
   const confirmDialog = (
     <ConfirmDialog
       open={!!confirmAction}
-      title={confirmAction?.kind === 'void' ? 'Void this entry?' : 'Permanently delete this entry?'}
+      title={confirmAction?.kind === 'void' ? 'Void this entry?'
+        : confirmAction?.kind === 'unlink' ? 'Unlink this order?' : 'Permanently delete this entry?'}
       message={confirmAction?.kind === 'void'
         ? `"${confirmAction?.txn?.description}" will remain in the list with a strikethrough.`
+        : confirmAction?.kind === 'unlink'
+        ? `${confirmAction?.txn?.id} will no longer be covered by ${confirmAction?.txn?.linkedTo?.description} ${refLabel(confirmAction?.txn?.linkedTo?.reference)}. It will count on its own again (${fmt(confirmAction?.txn?.amount)}) under "Not yet on college report".`
         : `"${confirmAction?.txn?.description}" (${fmt(confirmAction?.txn?.amount)}) will be removed completely from the database. This cannot be undone.`}
-      confirmLabel={confirmAction?.kind === 'void' ? 'Void entry' : 'Delete permanently'}
+      confirmLabel={confirmAction?.kind === 'void' ? 'Void entry' : confirmAction?.kind === 'unlink' ? 'Unlink order' : 'Delete permanently'}
       cancelLabel="Cancel"
       onConfirm={runConfirmedAction}
       onClose={() => setConfirmAction(null)}
@@ -435,8 +761,10 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
         <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} aria-label="Filter by type"
           className="input text-sm w-auto">
           <option value="all">All Types</option>
-          <option value="manual">Manual Only</option>
-          <option value="po">POs Only</option>
+          <option value="manual">Ledger Entries Only</option>
+          <option value="college">College Report Lines</option>
+          <option value="po">CMMS Orders Only</option>
+          <option value="po-unlinked">CMMS Orders Not on Report</option>
           <option value="Starting Balance">Starting Balance</option>
           <option value="Manual Expense">Expenses</option>
           <option value="Income/Grant">Income/Grants</option>
@@ -512,6 +840,14 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                         onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
                         className="input text-sm" placeholder="Notes" />
                     </div>
+                    {['Encumbered', 'Partial'].includes(editForm.paymentStatus) && (
+                      <div className="grid grid-cols-2 gap-2 items-center">
+                        <label htmlFor={`pb-edit-paid-${txn.id}`} className="text-xs text-surface-600">Paid so far on this encumbrance ($)</label>
+                        <input id={`pb-edit-paid-${txn.id}`} type="number" step="0.01" min="0" value={editForm.paidAmount ?? 0}
+                          onChange={e => setEditForm(f => ({ ...f, paidAmount: e.target.value }))}
+                          className="input text-sm" />
+                      </div>
+                    )}
                     <div className="flex gap-2">
                       <button onClick={saveEdit}
                         className="px-3 py-1 rounded-lg bg-brand-600 text-white text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
@@ -534,6 +870,9 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                         if (txn.isCredit) {
                           iconBg = 'bg-emerald-100'
                           iconEl = <ArrowUpCircle size={14} className="text-emerald-600" aria-hidden="true" />
+                        } else if (txn.source === 'po' && txn.linkedTo) {
+                          iconBg = 'bg-surface-100'
+                          iconEl = <Link2 size={14} className="text-surface-500" aria-hidden="true" />
                         } else if (txn.source === 'po') {
                           iconBg = 'bg-amber-100'
                           iconEl = <ShoppingCart size={14} className="text-amber-600" aria-hidden="true" />
@@ -558,8 +897,18 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                             <Highlight text={txn.description} search={debouncedSearch} />
                           </span>
                           <TypeBadge type={txn.type} />
-                          <SourceBadge source={txn.source} notes={txn.notes} />
+                          <SourceBadge source={txn.source} notes={txn.notes} ledgerSource={txn.ledgerSource} />
                           {txn.paymentStatus && <PaymentStatusBadge status={txn.paymentStatus} />}
+                          {txn.source === 'po' && (txn.linkedTo ? (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-surface-100 text-surface-600">
+                              On college {refLabel(txn.linkedTo.reference) || 'line'} — not counted separately
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">Not yet on college report</span>
+                          ))}
+                          {txn.releaseRequestedAt && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">Release requested {fmt(txn.releaseAmount)}</span>
+                          )}
                         </div>
                         <div className="text-[10px] text-surface-400 mt-0.5 flex flex-wrap gap-x-3">
                           {txn.date && <span><Highlight text={new Date(txn.date).toLocaleDateString('en-US', { timeZone: 'UTC' })} search={debouncedSearch} /></span>}
@@ -584,12 +933,15 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                           )}
                           {txn.category && txn.category !== 'Other' && <span><Highlight text={txn.category} search={debouncedSearch} /></span>}
                           {txn.createdBy && <span><Highlight text={txn.createdBy} search={debouncedSearch} /></span>}
+                          {txn.openAmount > 0 && <span className="text-amber-700">Paid {fmt(txn.paidAmount)} · {fmt(txn.openAmount)} still encumbered</span>}
+                          {txn.linkedOrderIds?.length > 0 && <span>Covers <Highlight text={txn.linkedOrderIds.join(', ')} search={debouncedSearch} /></span>}
+                          {txn.collegePo && <span>College <Highlight text={`PO# ${txn.collegePo}`} search={debouncedSearch} /></span>}
                         </div>
                       </div>
 
                       {/* Amount */}
                       <span className={`text-sm font-bold flex-shrink-0 ${
-                        txn.isCredit ? 'text-emerald-600' : 'text-red-600'
+                        txn.countsInBalance === false ? 'text-surface-400' : txn.isCredit ? 'text-emerald-600' : 'text-red-600'
                       }`}>
                         {txn.isCredit ? '+' : '-'}<Highlight text={fmt(txn.amount)} search={debouncedSearch} />
                       </span>
@@ -600,6 +952,13 @@ function TransactionsTab({ schoolYear, refreshKey, onRefresh, canEdit, canDelete
                           <button type="button" onClick={() => setExpandedId(isExpanded ? null : txn.id)} title="Details" aria-expanded={isExpanded} aria-label={`${isExpanded ? 'Hide' : 'Show'} details for ${txn.description}`}
                             className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
                             {isExpanded ? <EyeOff size={12} aria-hidden="true" /> : <Eye size={12} aria-hidden="true" />}
+                          </button>
+                        )}
+                        {txn.source === 'po' && txn.linkedTo && canManage && (
+                          <button type="button" onClick={() => setConfirmAction({ kind: 'unlink', txn })} title="Unlink from college line"
+                            aria-label={`Unlink ${txn.id} from ${txn.linkedTo.description} ${refLabel(txn.linkedTo.reference)}`}
+                            className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center">
+                            <Unlink size={12} aria-hidden="true" />
                           </button>
                         )}
                         {txn.source === 'manual' && !isVoided && canEdit && (
@@ -794,20 +1153,44 @@ function AddEntryTab({ schoolYear, onAdded }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// IMPORT TAB  (Suggestion #3 – Spreadsheet Import)
+// IMPORT TAB  –  college budget printout → ledger (add, update, link orders)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ImportTab({ schoolYear, onImported }) {
+const LINK_HOW_LABEL = {
+  college_po: 'College PO # on the order',
+  exact: 'same vendor and amount',
+  sum: 'orders add up to this line',
+  close: 'same vendor, amount within 10%',
+  split: 'this line and another add up to the order',
+  loose: 'same vendor, nearby date — amounts differ',
+}
+
+function ImportTab({ schoolYear, onImported, onViewOverview }) {
   const actions = useBudgetActions()
   const importer = useSpreadsheetImport(schoolYear)
-  const [selectedRows, setSelectedRows] = useState(new Set())
   const [step, setStep] = useState('upload')  // upload → preview → done
   const [isDragging, setIsDragging] = useState(false)
+  const [choices, setChoices] = useState({ additions: new Set(), newLines: {}, changed: new Set() })
+  const [result, setResult] = useState(null)
+  const [liveMsg, setLiveMsg] = useState('')
 
-  // Track review decisions for potential matches: 'accepted' | 'declined' | undefined
-  const [reviewDecisions, setReviewDecisions] = useState({})
-  // Track which review card is expanded for side-by-side
-  const [expandedReview, setExpandedReview] = useState(null)
+  const data = importer.parsed
+  const plan = data?.plan
+
+  // Default choices: import every new line with its suggested links, apply every update,
+  // add every new budget addition.
+  useEffect(() => {
+    if (!plan) return
+    const newLines = {}
+    plan.newLines.forEach((n, i) => { newLines[i] = { include: true, orderIds: [...n.suggestedOrderIds] } })
+    setChoices({
+      additions: new Set(plan.additions.map((a, i) => (a.status === 'new' ? i : null)).filter(i => i != null)),
+      newLines,
+      changed: new Set(plan.changedLines.map((_, i) => i)),
+    })
+    const n = plan.newLines.length, c = plan.changedLines.length
+    setLiveMsg(`Report read: ${data.totalFromFile} lines. ${n} new, ${c} to update, ${plan.unchangedLines.length} already up to date.`)
+  }, [plan])
 
   const processFile = async (file) => {
     if (!file) return
@@ -816,15 +1199,12 @@ function ImportTab({ schoolYear, onImported }) {
       toast.error('Please upload a .xls, .xlsx, or .csv file')
       return
     }
+    setResult(null)
     await importer.parseFile(file)
     setStep('preview')
-    setReviewDecisions({})
-    setExpandedReview(null)
   }
 
-  const handleFile = async (e) => {
-    processFile(e.target.files?.[0])
-  }
+  const handleFile = (e) => { processFile(e.target.files?.[0]); e.target.value = '' }
 
   // ─── Drag & Drop handlers ─────────────────────────────────────────────────
   const handleDragEnter = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true) }
@@ -839,101 +1219,71 @@ function ImportTab({ schoolYear, onImported }) {
     processFile(e.dataTransfer?.files?.[0])
   }
 
-  // Pull parsed data
-  const newEntries = importer.parsed?.newEntries || []
-  const exactDuplicates = importer.parsed?.exactDuplicates || []
-  const potentialMatches = importer.parsed?.potentialMatches || []
-  const meta = importer.parsed?.meta || {}
-
-  // Entries accepted from review
-  const acceptedFromReview = potentialMatches
-    .filter((_, i) => reviewDecisions[i] === 'accepted')
-    .map(pm => pm.entry)
-
-  // Combined importable entries: confirmed new + accepted from review
-  const allImportable = [...newEntries, ...acceptedFromReview]
-
-  // Selection management (indexes into newEntries only; accepted review items always included)
-  useEffect(() => {
-    if (importer.parsed?.newEntries) {
-      setSelectedRows(new Set(importer.parsed.newEntries.map((_, i) => i)))
-    }
-  }, [importer.parsed?.newEntries])
-
-  const selectAll = () => setSelectedRows(new Set(newEntries.map((_, i) => i)))
-  const selectNone = () => setSelectedRows(new Set())
-  const toggleRow = (idx) => {
-    setSelectedRows(prev => {
-      const next = new Set(prev)
-      next.has(idx) ? next.delete(idx) : next.add(idx)
-      return next
-    })
-  }
-
-  // Review actions
-  const acceptMatch = (idx) => setReviewDecisions(d => ({ ...d, [idx]: 'accepted' }))
-  const declineMatch = (idx) => setReviewDecisions(d => ({ ...d, [idx]: 'declined' }))
-  const resetMatch = (idx) => setReviewDecisions(d => {
-    const next = { ...d }
-    delete next[idx]
-    return next
+  const toggleSet = (key, idx) => setChoices(c => {
+    const next = new Set(c[key])
+    next.has(idx) ? next.delete(idx) : next.add(idx)
+    return { ...c, [key]: next }
   })
-  const acceptAllMatches = () => {
-    const all = {}
-    potentialMatches.forEach((_, i) => { all[i] = 'accepted' })
-    setReviewDecisions(all)
-  }
-  const declineAllMatches = () => {
-    const all = {}
-    potentialMatches.forEach((_, i) => { all[i] = 'declined' })
-    setReviewDecisions(all)
-  }
-
-  // Count pending reviews
-  const pendingReviews = potentialMatches.filter((_, i) => !reviewDecisions[i]).length
-
-  const handleImport = async () => {
-    const selectedNew = newEntries.filter((_, i) => selectedRows.has(i))
-    const rowsToImport = [...selectedNew, ...acceptedFromReview]
-    if (rowsToImport.length === 0) return toast.error('No entries selected')
-
-    const ok = await actions.bulkImport(rowsToImport, schoolYear)
-    if (ok) { setStep('done'); onImported() }
-  }
+  const toggleLine = (idx) => setChoices(c => ({
+    ...c, newLines: { ...c.newLines, [idx]: { ...c.newLines[idx], include: !c.newLines[idx]?.include } },
+  }))
+  const toggleLink = (idx, orderId) => setChoices(c => {
+    const cur = c.newLines[idx] || { include: true, orderIds: [] }
+    const ids = cur.orderIds.includes(orderId) ? cur.orderIds.filter(x => x !== orderId) : [...cur.orderIds, orderId]
+    return { ...c, newLines: { ...c.newLines, [idx]: { ...cur, orderIds: ids } } }
+  })
+  const setAllNew = (include) => setChoices(c => {
+    const nl = {}
+    Object.entries(c.newLines).forEach(([k, v]) => { nl[k] = { ...v, include } })
+    return { ...c, newLines: nl }
+  })
 
   const handleReset = () => {
     importer.reset()
     setStep('upload')
-    setSelectedRows(new Set())
-    setReviewDecisions({})
-    setExpandedReview(null)
+    setResult(null)
+    setLiveMsg('')
   }
 
-  // Date formatter
-  const fmtDate = (d) => {
-    if (!d) return '—'
-    try {
-      const dt = new Date(d)
-      if (isNaN(dt.getTime())) return '—'
-      return dt.toLocaleDateString('en-US', { timeZone: 'UTC' })
-    } catch { return '—' }
+  const newCount = plan ? plan.newLines.filter((_, i) => choices.newLines[i]?.include).length : 0
+  const changedCount = choices.changed.size
+  const additionCount = choices.additions.size
+  const linkCount = plan ? plan.newLines.reduce((s, _, i) => s + (choices.newLines[i]?.include ? (choices.newLines[i].orderIds || []).length : 0), 0) : 0
+  const nothingToDo = plan && plan.newLines.length === 0 && plan.changedLines.length === 0 && !plan.additions.some(a => a.status === 'new')
+  const checkCount = plan ? plan.newLines.filter((n, i) => n.needsCheck && choices.newLines[i]?.include && (choices.newLines[i].orderIds || []).length).length : 0
+
+  const handleImport = async () => {
+    if (!newCount && !changedCount && !additionCount) return toast.error('Nothing selected to import')
+    const res = await actions.applyCollegeImport({ plan, parsed: data.parsed, choices, schoolYear })
+    setResult(res)
+    if (res.ok) {
+      setStep('done')
+      setLiveMsg(`Import complete: ${res.added} added, ${res.updated} updated, ${res.additions} budget additions, ${res.linked} CMMS orders linked.`)
+      onImported()
+    }
   }
+
+  const meta = data?.meta || {}
+  const linesTotal = data ? data.parsed.lines.reduce((s, l) => s + l.amount, 0) : 0
+  const totalsMismatch = meta.totals != null && Math.abs(meta.totals - linesTotal) > 0.01
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="max-w-5xl mx-auto space-y-4">
+      <p className="sr-only" aria-live="polite" role="status">{liveMsg}</p>
+
       {/* Header */}
       <div className="bg-white rounded-xl border border-surface-200 p-5">
         <h2 className="text-sm font-bold text-surface-900 flex items-center gap-2 mb-1">
-          <FileSpreadsheet size={16} className="text-brand-600" aria-hidden="true" /> Import Budget from Spreadsheet
-          <span className="ml-auto text-[10px] font-normal text-surface-400 bg-surface-100 px-2 py-0.5 rounded-full">{schoolYear}</span>
+          <FileSpreadsheet size={16} className="text-brand-600" aria-hidden="true" /> Import College Budget Report
+          <span className="ml-auto text-[10px] font-normal text-surface-500 bg-surface-100 px-2 py-0.5 rounded-full">{schoolYear}</span>
         </h2>
         <p className="text-xs text-surface-500">
-          Upload a .xls, .xlsx, or .csv file. The RICT budget format is auto-detected. Exact duplicates are skipped, and similar entries are flagged for your review.
+          Upload the college budget printout as .xls, .xlsx or .csv. Columns are found by their headings. Lines already in the CMMS are updated (paid, encumbered, amounts) instead of duplicated, and CMMS orders are linked to the college line that covers them so nothing is counted twice.
         </p>
       </div>
 
       {/* Step: Upload */}
-      {step === 'upload' && (
+      {step === 'upload' && !importer.parsing && (
         <div
           onDragEnter={handleDragEnter}
           onDragOver={handleDragOver}
@@ -945,426 +1295,329 @@ function ImportTab({ schoolYear, onImported }) {
         >
           <Upload size={32} className={`mx-auto mb-3 transition-colors ${isDragging ? 'text-brand-500' : 'text-surface-400'}`} aria-hidden="true" />
           <p className="text-sm font-medium text-surface-700 mb-1">
-            {isDragging ? 'Drop your file here…' : 'Drag & drop a spreadsheet here, or click to browse'}
+            {isDragging ? 'Drop your file here…' : 'Drag & drop a spreadsheet here, or choose a file'}
           </p>
-          <p className="text-xs text-surface-400 mb-4">Supports .xls, .xlsx, .csv files</p>
-          <label className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand-600 text-white text-sm font-semibold cursor-pointer hover:bg-brand-700 transition-colors">
+          <p className="text-xs text-surface-500 mb-4">Supports .xls, .xlsx, .csv files</p>
+          <label className="inline-flex items-center gap-2 px-5 min-h-[44px] rounded-xl bg-brand-600 text-white text-sm font-semibold cursor-pointer hover:bg-brand-700 transition-colors focus-within:ring-2 focus-within:ring-brand-500 focus-within:ring-offset-2">
             <FileSpreadsheet size={16} aria-hidden="true" />
             Choose File
-            <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFile} className="hidden" />
+            <input type="file" accept=".xls,.xlsx,.csv" onChange={handleFile} className="sr-only" />
           </label>
         </div>
       )}
 
       {/* Parsing indicator */}
       {importer.parsing && (
-        <div className="text-center py-12">
+        <div className="text-center py-12" role="status">
           <Loader2 size={24} className="mx-auto mb-2 text-brand-400 animate-spin" aria-hidden="true" />
-          <p className="text-sm text-surface-400">Parsing spreadsheet and checking for duplicates…</p>
+          <p className="text-sm text-surface-500">Reading the report and matching it to the CMMS…</p>
         </div>
       )}
 
       {/* Error */}
       {importer.error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3" role="alert">
           <AlertCircle size={18} className="text-red-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <div>
-            <p className="text-sm font-medium text-red-800">Failed to parse file</p>
-            <p className="text-xs text-red-600 mt-1">{importer.error}</p>
-            <button onClick={handleReset} className="mt-2 text-xs font-medium text-red-700 underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Try again</button>
+            <p className="text-sm font-medium text-red-800">This file could not be imported</p>
+            <p className="text-xs text-red-700 mt-1">{importer.error}</p>
+            <button type="button" onClick={handleReset} className="mt-2 text-xs font-medium text-red-700 underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Choose a different file</button>
           </div>
         </div>
       )}
 
       {/* Step: Preview */}
-      {step === 'preview' && importer.parsed && (
+      {step === 'preview' && data && plan && (
         <>
-          {/* Meta info */}
-          {meta.program && (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-              <h3 className="text-xs font-bold text-blue-800 mb-2 flex items-center gap-1.5">
-                <FileText size={13} aria-hidden="true" /> Detected RICT Budget Format
-              </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                {meta.program && (
-                  <div><span className="text-blue-500">Program:</span> <span className="font-medium text-blue-800">{meta.program}</span></div>
+          {/* Report info + checks */}
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-2">
+            <h3 className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+              <FileText size={13} aria-hidden="true" /> {data.format === 'RICT' ? 'College budget report' : 'Spreadsheet'} detected
+            </h3>
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              {meta.program && <div><dt className="text-blue-700 inline">Program: </dt><dd className="font-medium text-blue-900 inline">{meta.program}</dd></div>}
+              {meta.fiscalYear && <div><dt className="text-blue-700 inline">FY: </dt><dd className="font-medium text-blue-900 inline">{meta.fiscalYear}</dd></div>}
+              {meta.account && <div><dt className="text-blue-700 inline">Account: </dt><dd className="font-medium text-blue-900 inline">{meta.account}</dd></div>}
+              {meta.balancedAsOf && <div><dt className="text-blue-700 inline">Balanced as of: </dt><dd className="font-medium text-blue-900 inline">{fmtEntryDate(`${meta.balancedAsOf}T12:00:00Z`)}</dd></div>}
+              {meta.beginningBalance != null && <div><dt className="text-blue-700 inline">Beginning: </dt><dd className="font-medium text-blue-900 inline">{fmt(meta.beginningBalance)}</dd></div>}
+              {meta.currentBalance != null && <div><dt className="text-blue-700 inline">Current: </dt><dd className="font-medium text-blue-900 inline">{fmt(meta.currentBalance)}</dd></div>}
+              {meta.presentBalance != null && <div><dt className="text-blue-700 inline">Present: </dt><dd className="font-medium text-blue-900 inline">{fmt(meta.presentBalance)}</dd></div>}
+              <div><dt className="text-blue-700 inline">Lines read: </dt><dd className="font-medium text-blue-900 inline">{data.totalFromFile} ({fmt(linesTotal)})</dd></div>
+            </dl>
+            {(data.yearMismatch || totalsMismatch || (meta.beginningBalance != null && Math.abs((data.startingBalance || 0) - meta.beginningBalance) > 0.005) || data.warnings.length > 0) && (
+              <ul className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2 space-y-1">
+                {data.yearMismatch && <li className="flex gap-1.5"><AlertTriangle size={12} className="mt-0.5 flex-shrink-0" aria-hidden="true" />This report is for {meta.fiscalYear} ({data.yearMismatch}) but you are importing into {schoolYear}. Change the school year on the Overview tab if that&rsquo;s not intended.</li>}
+                {totalsMismatch && <li className="flex gap-1.5"><AlertTriangle size={12} className="mt-0.5 flex-shrink-0" aria-hidden="true" />Lines read add up to {fmt(linesTotal)} but the report&rsquo;s TOTALS row says {fmt(meta.totals)}. Some rows may not have been read.</li>}
+                {meta.beginningBalance != null && Math.abs((data.startingBalance || 0) - meta.beginningBalance) > 0.005 && (
+                  <li className="flex gap-1.5"><AlertTriangle size={12} className="mt-0.5 flex-shrink-0" aria-hidden="true" />The report&rsquo;s beginning balance is {fmt(meta.beginningBalance)}; the CMMS starting balance for {schoolYear} is {fmt(data.startingBalance || 0)}. Set it on the Year Mgmt tab if it should match.</li>
                 )}
-                {meta.fiscalYear && (
-                  <div><span className="text-blue-500">FY:</span> <span className="font-medium text-blue-800">{meta.fiscalYear}</span></div>
-                )}
-                {meta.account && (
-                  <div><span className="text-blue-500">Account:</span> <span className="font-medium text-blue-800">{meta.account}</span></div>
-                )}
-                {meta.beginningBalance > 0 && (
-                  <div><span className="text-blue-500">Beginning Bal:</span> <span className="font-medium text-blue-800">{fmt(meta.beginningBalance)}</span></div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Summary cards — 4 columns now */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-white rounded-xl border border-surface-200 p-3 text-center">
-              <div className="text-lg font-bold text-surface-900">{importer.parsed.totalFromFile}</div>
-              <div className="text-[10px] text-surface-500 uppercase tracking-wide">In File</div>
-            </div>
-            <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-3 text-center">
-              <div className="text-lg font-bold text-emerald-700">{newEntries.length}</div>
-              <div className="text-[10px] text-emerald-600 uppercase tracking-wide">New</div>
-            </div>
-            <div className="bg-orange-50 rounded-xl border border-orange-200 p-3 text-center">
-              <div className="text-lg font-bold text-orange-700">{potentialMatches.length}</div>
-              <div className="text-[10px] text-orange-600 uppercase tracking-wide">Needs Review</div>
-            </div>
-            <div className="bg-surface-50 rounded-xl border border-surface-200 p-3 text-center">
-              <div className="text-lg font-bold text-surface-500">{exactDuplicates.length}</div>
-              <div className="text-[10px] text-surface-400 uppercase tracking-wide">Exact Duplicates</div>
-            </div>
+                {data.warnings.map((w, i) => <li key={i} className="flex gap-1.5"><AlertTriangle size={12} className="mt-0.5 flex-shrink-0" aria-hidden="true" />{w}</li>)}
+              </ul>
+            )}
           </div>
 
-          {/* ═══ SECTION 1: Potential Matches — Needs Review ═══ */}
-          {potentialMatches.length > 0 && (
-            <div className="bg-white rounded-xl border border-orange-200 overflow-hidden">
-              <div className="p-3 border-b border-orange-100 bg-orange-50/50">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-orange-800 flex items-center gap-1.5">
-                    <HelpCircle size={13} className="text-orange-500" aria-hidden="true" />
-                    {potentialMatches.length} Potential Match{potentialMatches.length !== 1 ? 'es' : ''} — Please Review
-                    {pendingReviews > 0 && (
-                      <span className="text-[9px] bg-orange-200 text-orange-800 px-1.5 py-0.5 rounded-full ml-1">
-                        {pendingReviews} pending
-                      </span>
-                    )}
+          {/* Summary cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <SummaryCount label="New lines" value={plan.newLines.length} tone="emerald" />
+            <SummaryCount label="To update" value={plan.changedLines.length} tone="blue" />
+            <SummaryCount label="Already up to date" value={plan.unchangedLines.length} tone="surface" />
+            <SummaryCount label="Budget additions" value={plan.additions.filter(a => a.status === 'new').length} tone="purple" />
+          </div>
+
+          {nothingToDo ? (
+            <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
+              <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-500" aria-hidden="true" />
+              <p className="text-sm font-medium text-surface-700">This report is already fully imported</p>
+              <p className="text-xs text-surface-500 mt-1">All {data.totalFromFile} lines match the CMMS — nothing changed since the last import.</p>
+              <button type="button" onClick={handleReset} className="mt-3 text-xs font-medium text-brand-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Upload a different file</button>
+            </div>
+          ) : (
+            <>
+              {/* Budget additions */}
+              {plan.additions.length > 0 && (
+                <section className="bg-white rounded-xl border border-purple-200" aria-labelledby="pb-imp-add-h">
+                  <h3 id="pb-imp-add-h" className="text-xs font-bold text-purple-900 p-3 border-b border-purple-100">
+                    Budget additions from the report summary
                   </h3>
-                  <div className="flex gap-2">
-                    <button onClick={declineAllMatches}
-                      className="text-[10px] font-medium text-surface-500 hover:text-red-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-                      Skip All
-                    </button>
-                    <button onClick={acceptAllMatches}
-                      className="text-[10px] font-medium text-emerald-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-                      Import All
-                    </button>
-                  </div>
-                </div>
-                <p className="text-[10px] text-orange-600 mt-1">
-                  These entries look similar to records already in the system. Compare side-by-side and decide whether to import.
-                </p>
-              </div>
-
-              <div className="divide-y divide-surface-100 max-h-[500px] overflow-y-auto">
-                {potentialMatches.map((pm, idx) => {
-                  const decision = reviewDecisions[idx]
-                  const isExpanded = expandedReview === idx
-
-                  return (
-                    <div key={idx} className={`transition-colors ${
-                      decision === 'accepted' ? 'bg-emerald-50/40' :
-                      decision === 'declined' ? 'bg-surface-50/60 opacity-60' : ''
-                    }`}>
-                      {/* Summary row */}
-                      <div className="px-4 py-3 flex items-center gap-3">
-                        {/* Status indicator */}
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          decision === 'accepted' ? 'bg-emerald-100' :
-                          decision === 'declined' ? 'bg-surface-200' :
-                          'bg-orange-100'
-                        }`}>
-                          {decision === 'accepted' ? <Check size={12} className="text-emerald-600" aria-hidden="true" /> :
-                           decision === 'declined' ? <Ban size={12} className="text-surface-400" aria-hidden="true" /> :
-                           <HelpCircle size={12} className="text-orange-500" aria-hidden="true" />}
-                        </div>
-
-                        {/* Entry info */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className="font-semibold text-surface-900">{pm.entry.description}</span>
-                            <span className="font-bold text-surface-700">{fmt(pm.entry.amount)}</span>
-                            <span className="text-surface-400">{fmtDate(pm.entry.date)}</span>
-                          </div>
-                          <div className="text-[10px] text-surface-400 mt-0.5 flex items-center gap-1">
-                            <span>Similar to:</span>
-                            <span className="font-medium text-surface-600">{pm.match.description}</span>
-                            <span>({fmt(pm.match.amount)})</span>
-                            <span className="italic text-orange-500 ml-1">
-                              {pm.match.source === 'po' ? 'Purchase Order' : 'Budget Entry'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Expand toggle */}
-                        <button
-                          onClick={() => setExpandedReview(isExpanded ? null : idx)}
-                          className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-surface-600 flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px] min-w-[44px] inline-flex items-center justify-center"
-                          title="Compare side-by-side"
-                        >
-                          {isExpanded ? <ChevronUp size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
-                        </button>
-
-                        {/* Action buttons */}
-                        {!decision ? (
-                          <div className="flex gap-1.5 flex-shrink-0">
-                            <button onClick={() => declineMatch(idx)}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-surface-100 text-surface-600 hover:bg-red-50 hover:text-red-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
-                              title="Skip — it's a duplicate">
-                              Skip
-                            </button>
-                            <button onClick={() => acceptMatch(idx)}
-                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]"
-                              title="Import — it's a new entry">
-                              Import
-                            </button>
-                          </div>
+                  <ul className="divide-y divide-surface-100">
+                    {plan.additions.map((a, i) => (
+                      <li key={i} className="px-3 py-1 flex items-center gap-3">
+                        {a.status === 'new' ? (
+                          <label className="flex items-center gap-2 flex-1 min-h-[44px] cursor-pointer text-xs">
+                            <input type="checkbox" checked={choices.additions.has(i)} onChange={() => toggleSet('additions', i)}
+                              className="w-4 h-4 rounded border-surface-300 text-brand-600" />
+                            <span className="font-medium text-surface-900">{a.description}</span>
+                            <span className="text-surface-500">added to the budget as Income/Grant</span>
+                          </label>
                         ) : (
-                          <button onClick={() => resetMatch(idx)}
-                            className="px-2.5 py-1.5 rounded-lg text-[10px] font-medium text-surface-400 hover:text-surface-600 hover:bg-surface-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-                            Undo
-                          </button>
+                          <span className="flex-1 text-xs text-surface-500 min-h-[44px] flex items-center gap-2">
+                            <Check size={12} className="text-emerald-600" aria-hidden="true" /> {a.description} — already in the CMMS
+                          </span>
                         )}
-                      </div>
+                        <span className="text-xs font-bold text-emerald-700">+{fmt(a.amount)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
 
-                      {/* Expanded side-by-side comparison */}
-                      {isExpanded && (
-                        <div className="px-4 pb-4">
-                          <div className="grid grid-cols-2 gap-3">
-                            {/* From Spreadsheet */}
-                            <div className="bg-blue-50 rounded-lg border border-blue-200 p-3">
-                              <div className="text-[9px] font-bold text-blue-600 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                <FileSpreadsheet size={10} aria-hidden="true" /> From Spreadsheet
-                              </div>
-                              <CompareField label="Vendor" value={pm.entry.description} otherValue={pm.match.description} />
-                              <CompareField label="Amount" value={fmt(pm.entry.amount)} otherValue={fmt(pm.match.amount)} />
-                              <CompareField label="Date" value={fmtDate(pm.entry.date)} otherValue={fmtDate(pm.match.date)} />
-                              <CompareField label="Reference" value={pm.entry.reference || '—'} otherValue={pm.match.reference || '—'} />
-                              {pm.entry.objectCode && (
-                                <div className="text-[10px] mt-1">
-                                  <span className="text-surface-500">Code:</span>{' '}
-                                  <span className="font-mono text-surface-700">{pm.entry.objectCode}</span>
-                                </div>
-                              )}
-                              {pm.entry.paymentStatus && (
-                                <div className="mt-1">
-                                  <PaymentStatusBadge status={pm.entry.paymentStatus} />
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Existing in Database */}
-                            <div className="bg-surface-50 rounded-lg border border-surface-200 p-3">
-                              <div className="text-[9px] font-bold text-surface-500 uppercase tracking-wide mb-2 flex items-center gap-1">
-                                <Receipt size={10} aria-hidden="true" /> Existing in Database
-                                <span className="text-[8px] font-normal ml-auto bg-surface-200 px-1.5 py-0.5 rounded-full">
-                                  {pm.match.source === 'po' ? 'Purchase Order' : 'Budget Entry'}
-                                </span>
-                              </div>
-                              <CompareField label="Vendor" value={pm.match.description} otherValue={pm.entry.description} reverse />
-                              <CompareField label="Amount" value={fmt(pm.match.amount)} otherValue={fmt(pm.entry.amount)} reverse />
-                              <CompareField label="Date" value={fmtDate(pm.match.date)} otherValue={fmtDate(pm.entry.date)} reverse />
-                              <CompareField label="Reference" value={pm.match.reference || '—'} otherValue={pm.entry.reference || '—'} reverse />
-                              {pm.match.type && (
-                                <div className="text-[10px] mt-1">
-                                  <span className="text-surface-500">Type:</span>{' '}
-                                  <span className="text-surface-700">{pm.match.type}</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Quick decision from expanded view */}
-                          {!decision && (
-                            <div className="flex justify-center gap-3 mt-3">
-                              <button onClick={() => declineMatch(idx)}
-                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-surface-100 text-surface-600 hover:bg-red-50 hover:text-red-600 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-                                <Ban size={12} aria-hidden="true" /> Same entry — Skip
-                              </button>
-                              <button onClick={() => acceptMatch(idx)}
-                                className="px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 flex items-center gap-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-                                <Check size={12} aria-hidden="true" /> Different entry — Import
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
+              {/* New lines */}
+              {plan.newLines.length > 0 && (
+                <section className="bg-white rounded-xl border border-surface-200 overflow-hidden" aria-labelledby="pb-imp-new-h">
+                  <div className="p-3 border-b border-surface-100 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 id="pb-imp-new-h" className="text-xs font-bold text-surface-900">
+                        New lines <span className="font-normal text-surface-500">({newCount} of {plan.newLines.length} selected)</span>
+                      </h3>
+                      <p className="text-[11px] text-surface-500 mt-0.5">
+                        Suggested CMMS orders are already ticked. Untick any that aren&rsquo;t part of that college line — they will stay under &ldquo;Not yet on college report&rdquo; and can be linked later.
+                        {checkCount > 0 && <> <strong className="text-amber-800">{checkCount} link{checkCount === 1 ? '' : 's'} marked &ldquo;Check&rdquo;</strong> have amounts that differ more than usual.</>}
+                      </p>
                     </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* ═══ SECTION 2: Exact Duplicates (collapsed) ═══ */}
-          {exactDuplicates.length > 0 && (
-            <div className="bg-surface-50 border border-surface-200 rounded-xl p-4">
-              <h3 className="text-xs font-bold text-surface-500 mb-2 flex items-center gap-1.5">
-                <CheckCircle2 size={13} className="text-surface-400" aria-hidden="true" />
-                {exactDuplicates.length} Exact Duplicate{exactDuplicates.length !== 1 ? 's' : ''} (auto-skipped)
-              </h3>
-              <div className="space-y-1 max-h-32 overflow-y-auto">
-                {exactDuplicates.map((d, i) => (
-                  <div key={i} className="text-xs text-surface-500 flex gap-2">
-                    <span className="font-medium">{d.entry.description}</span>
-                    <span>{fmt(d.entry.amount)}</span>
-                    <span className="text-surface-400">— matches {d.match.source === 'po' ? 'PO' : 'budget entry'}: {d.match.description}</span>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setAllNew(true)} className="text-[11px] font-medium text-brand-700 hover:underline min-h-[44px] px-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 rounded">Select all</button>
+                      <button type="button" onClick={() => setAllNew(false)} className="text-[11px] font-medium text-surface-600 hover:underline min-h-[44px] px-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 rounded">Deselect all</button>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ═══ SECTION 3: New Entries to Import ═══ */}
-          {(newEntries.length > 0 || acceptedFromReview.length > 0) ? (
-            <div className="bg-white rounded-xl border border-surface-200 overflow-hidden">
-              <div className="p-3 border-b border-surface-100 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-surface-900">
-                  Entries to Import
-                  <span className="font-normal text-surface-400 ml-1.5">
-                    {newEntries.length > 0 && `${selectedRows.size} of ${newEntries.length} new selected`}
-                    {acceptedFromReview.length > 0 && (newEntries.length > 0 ? ' + ' : '') + `${acceptedFromReview.length} from review`}
-                  </span>
-                </h3>
-                {newEntries.length > 0 && (
-                  <div className="flex gap-2">
-                    <button onClick={selectAll} className="text-[10px] font-medium text-brand-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Select All</button>
-                    <button onClick={selectNone} className="text-[10px] font-medium text-surface-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Deselect All</button>
+                  <div className="max-h-[560px] overflow-auto">
+                    <table className="w-full text-xs">
+                      <caption className="sr-only">New lines from the college report and the CMMS orders each one covers</caption>
+                      <thead className="bg-surface-50 sticky top-0 z-[1]">
+                        <tr>
+                          <th scope="col" className="w-10 p-2"><span className="sr-only">Import</span></th>
+                          <th scope="col" className="text-left p-2 font-semibold text-surface-500">Date</th>
+                          <th scope="col" className="text-left p-2 font-semibold text-surface-500">College line</th>
+                          <th scope="col" className="text-left p-2 font-semibold text-surface-500">Status</th>
+                          <th scope="col" className="text-right p-2 font-semibold text-surface-500">Amount</th>
+                          <th scope="col" className="text-left p-2 font-semibold text-surface-500">Covers CMMS orders</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {plan.newLines.map((n, idx) => {
+                          const c = choices.newLines[idx] || { include: false, orderIds: [] }
+                          const l = n.line
+                          const lineLabel = `${l.description} ${refLabel(l.reference)}`
+                          return (
+                            <tr key={idx} className={`border-t border-surface-100 align-top ${c.include ? '' : 'opacity-60'}`}>
+                              <td className="p-1 text-center">
+                                <label className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] cursor-pointer">
+                                  <input type="checkbox" checked={!!c.include} onChange={() => toggleLine(idx)}
+                                    aria-label={`Import ${lineLabel}, ${fmt(l.amount)}`}
+                                    className="w-4 h-4 rounded border-surface-300 text-brand-600" />
+                                </label>
+                              </td>
+                              <td className="p-2 whitespace-nowrap text-surface-600">{l.date ? fmtEntryDate(`${l.date}T12:00:00Z`) : '—'}</td>
+                              <td className="p-2">
+                                <div className="font-medium text-surface-900">{l.description}</div>
+                                <div className="text-[10px] text-surface-500">{refLabel(l.reference) || '—'}{l.objectCode ? ` · Code ${l.objectCode}` : ''}</div>
+                              </td>
+                              <td className="p-2">
+                                <PaymentStatusBadge status={l.paymentStatus} />
+                                {l.paymentStatus === 'Encumbered' && l.paidAmount > 0 && (
+                                  <div className="text-[10px] text-surface-500 mt-0.5">paid {fmt(l.paidAmount)} so far</div>
+                                )}
+                                {!l.epRaw && <div className="text-[10px] text-surface-500 mt-0.5">E/P blank</div>}
+                              </td>
+                              <td className="p-2 text-right font-bold text-surface-900 whitespace-nowrap">{fmt(l.amount)}</td>
+                              <td className="p-2">
+                                {n.linkedOrders.length === 0 ? (
+                                  <span className="text-[11px] text-surface-500">None — not a CMMS order</span>
+                                ) : (
+                                  <div className="space-y-0.5">
+                                    {n.linkedOrders.map(o => (
+                                      <label key={o.order_id} className="flex items-center gap-2 min-h-[44px] cursor-pointer">
+                                        <input type="checkbox" checked={c.orderIds.includes(o.order_id)} disabled={!c.include}
+                                          onChange={() => toggleLink(idx, o.order_id)}
+                                          className="w-4 h-4 rounded border-surface-300 text-brand-600" />
+                                        <span className="text-[11px]">
+                                          <span className="font-medium text-surface-900">{o.order_id}</span>{' '}
+                                          <span className="text-surface-600">{o.vendor_name || o.other_vendor} · {fmt(parseFloat(o.total) || 0)} · {fmtLocalDate(o.ordered_date || o.order_date)}</span>
+                                        </span>
+                                      </label>
+                                    ))}
+                                    <div className="text-[10px] text-surface-500">
+                                      Matched by {LINK_HOW_LABEL[n.linkHow] || 'vendor'}
+                                      {n.sharedWithRows.length > 0 && ` (shared with report row ${n.sharedWithRows.join(', ')})`}
+                                      {Math.abs(n.diff) >= 0.01 && <> · college {n.diff > 0 ? 'higher' : 'lower'} by {fmt(Math.abs(n.diff))}</>}
+                                    </div>
+                                    {n.needsCheck && (
+                                      <div className="text-[10px] font-semibold text-amber-800 flex items-center gap-1">
+                                        <AlertTriangle size={10} aria-hidden="true" /> Check: amounts differ by {fmt(Math.abs(n.diff))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                )}
-              </div>
+                </section>
+              )}
 
-              <div className="max-h-[400px] overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-surface-50 sticky top-0">
-                    <tr>
-                      <th scope="col" className="w-8 p-2"></th>
-                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Date</th>
-                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Description</th>
-                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Reference</th>
-                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Code</th>
-                      <th scope="col" className="text-left p-2 font-semibold text-surface-500">Status</th>
-                      <th scope="col" className="text-right p-2 font-semibold text-surface-500">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {/* New entries (selectable) */}
-                    {newEntries.map((entry, idx) => (
-                      <tr key={`new-${idx}`}
-                        onClick={() => toggleRow(idx)}
-                        className={`cursor-pointer border-t border-surface-50 transition-colors ${
-                          selectedRows.has(idx) ? 'bg-brand-50/50' : 'hover:bg-surface-50'
-                        }`}>
-                        <td className="p-2 text-center">
-                          <input type="checkbox" checked={selectedRows.has(idx)} aria-label={`Select ${entry.description || 'entry'} for import`}
-                            onChange={() => toggleRow(idx)} onClick={e => e.stopPropagation()}
-                            className="w-3.5 h-3.5 rounded border-surface-300 text-brand-600" />
-                        </td>
-                        <td className="p-2 text-surface-600 whitespace-nowrap">{fmtDate(entry.date)}</td>
-                        <td className="p-2 font-medium text-surface-900">{entry.description}</td>
-                        <td className="p-2 text-surface-500 font-mono">{entry.reference || '—'}</td>
-                        <td className="p-2 text-surface-500 font-mono">{entry.objectCode || '—'}</td>
-                        <td className="p-2">
-                          {entry.paymentStatus ? (
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${getPaymentStatusColor(entry.paymentStatus)}`}>
-                              {entry.paymentStatus}
+              {/* Updated lines */}
+              {plan.changedLines.length > 0 && (
+                <section className="bg-white rounded-xl border border-blue-200" aria-labelledby="pb-imp-upd-h">
+                  <h3 id="pb-imp-upd-h" className="text-xs font-bold text-blue-900 p-3 border-b border-blue-100">
+                    Lines already in the CMMS that changed on this report <span className="font-normal text-surface-500">({changedCount} of {plan.changedLines.length} selected)</span>
+                  </h3>
+                  <ul className="divide-y divide-surface-100">
+                    {plan.changedLines.map((ch, i) => (
+                      <li key={i} className="px-3 py-1">
+                        <label className="flex items-start gap-2 min-h-[44px] cursor-pointer text-xs py-2">
+                          <input type="checkbox" checked={choices.changed.has(i)} onChange={() => toggleSet('changed', i)}
+                            className="w-4 h-4 mt-0.5 rounded border-surface-300 text-brand-600" />
+                          <span className="flex-1">
+                            <span className="font-medium text-surface-900">{ch.line.description} {refLabel(ch.line.reference)}</span>
+                            <span className="block text-[11px] text-surface-600">
+                              {ch.changes.map((c, k) => (
+                                <span key={k} className="mr-3">
+                                  {c.label}: {typeof c.from === 'number' ? fmt(c.from) : c.from} → <strong>{typeof c.to === 'number' ? fmt(c.to) : c.to}</strong>
+                                </span>
+                              ))}
+                              {ch.becomesCollege && ch.changes.length === 0 && <span className="mr-3">Mark as a college report line</span>}
+                              {ch.clearRelease && <span className="text-blue-800 font-semibold">Clears the release request</span>}
                             </span>
-                          ) : '—'}
-                        </td>
-                        <td className="p-2 text-right font-bold text-surface-900">{fmt(entry.amount)}</td>
-                      </tr>
+                          </span>
+                        </label>
+                      </li>
                     ))}
+                  </ul>
+                </section>
+              )}
 
-                    {/* Accepted from review (always included, shown with green indicator) */}
-                    {acceptedFromReview.map((entry, idx) => (
-                      <tr key={`review-${idx}`}
-                        className="border-t border-surface-50 bg-emerald-50/30">
-                        <td className="p-2 text-center">
-                          <Check size={12} className="text-emerald-500 mx-auto" aria-hidden="true" />
-                        </td>
-                        <td className="p-2 text-surface-600 whitespace-nowrap">{fmtDate(entry.date)}</td>
-                        <td className="p-2 font-medium text-surface-900">
-                          {entry.description}
-                          <span className="text-[9px] ml-1.5 text-emerald-600 bg-emerald-100 px-1 py-0.5 rounded">from review</span>
-                        </td>
-                        <td className="p-2 text-surface-500 font-mono">{entry.reference || '—'}</td>
-                        <td className="p-2 text-surface-500 font-mono">{entry.objectCode || '—'}</td>
-                        <td className="p-2">
-                          {entry.paymentStatus ? (
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${getPaymentStatusColor(entry.paymentStatus)}`}>
-                              {entry.paymentStatus}
-                            </span>
-                          ) : '—'}
-                        </td>
-                        <td className="p-2 text-right font-bold text-surface-900">{fmt(entry.amount)}</td>
-                      </tr>
+              {/* Unchanged + informational lists */}
+              {plan.unchangedLines.length > 0 && (
+                <details className="bg-surface-50 border border-surface-200 rounded-xl p-3">
+                  <summary className="text-xs font-semibold text-surface-600 cursor-pointer min-h-[44px] flex items-center">
+                    {plan.unchangedLines.length} line{plan.unchangedLines.length === 1 ? '' : 's'} already up to date (skipped)
+                  </summary>
+                  <ul className="mt-1 space-y-0.5 max-h-40 overflow-y-auto">
+                    {plan.unchangedLines.map((u, i) => (
+                      <li key={i} className="text-[11px] text-surface-600 flex justify-between gap-2">
+                        <span>{u.line.description} {refLabel(u.line.reference)}</span><span>{fmt(u.line.amount)}</span>
+                      </li>
                     ))}
-                  </tbody>
-                  <tfoot className="bg-surface-50 border-t border-surface-200">
-                    <tr>
-                      <td colSpan={6} className="p-2 text-right font-semibold text-surface-600">
-                        Import Total:
-                      </td>
-                      <td className="p-2 text-right font-bold text-surface-900">
-                        {fmt(
-                          newEntries.filter((_, i) => selectedRows.has(i)).reduce((sum, e) => sum + e.amount, 0) +
-                          acceptedFromReview.reduce((sum, e) => sum + e.amount, 0)
-                        )}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+                  </ul>
+                </details>
+              )}
+              {plan.unlinkedOrders.length > 0 && (
+                <details className="bg-surface-50 border border-surface-200 rounded-xl p-3">
+                  <summary className="text-xs font-semibold text-surface-600 cursor-pointer min-h-[44px] flex items-center">
+                    {plan.unlinkedOrders.length} approved CMMS order{plan.unlinkedOrders.length === 1 ? '' : 's'} not on this report — will stay under &ldquo;Not yet on college report&rdquo;
+                  </summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {plan.unlinkedOrders.map(o => (
+                      <li key={o.order_id} className="text-[11px] text-surface-600 flex justify-between gap-2">
+                        <span>{o.order_id} · {o.vendor_name || o.other_vendor} · {o.status} · {fmtLocalDate(o.ordered_date || o.order_date)}</span><span>{fmt(parseFloat(o.total) || 0)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              {plan.missingFromReport.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                  <p className="text-xs font-semibold text-amber-900 flex items-center gap-1.5">
+                    <AlertTriangle size={12} aria-hidden="true" /> {plan.missingFromReport.length} college line{plan.missingFromReport.length === 1 ? ' is' : 's are'} in the CMMS but not on this report
+                  </p>
+                  <p className="text-[11px] text-amber-900 mt-0.5">Nothing is changed. If the college removed or cancelled them, void them on the Transactions tab.</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {plan.missingFromReport.map(e => (
+                      <li key={e.id} className="text-[11px] text-amber-900 flex justify-between gap-2">
+                        <span>{e.description} {refLabel(e.reference)}</span><span>{fmt(parseFloat(e.amount) || 0)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Action bar */}
-              <div className="p-3 border-t border-surface-200 bg-surface-50 flex items-center justify-between">
-                <button onClick={handleReset}
-                  className="px-4 py-2 rounded-lg bg-surface-200 text-surface-600 text-xs font-medium hover:bg-surface-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+              <div className="bg-white rounded-xl border border-surface-200 p-3 flex flex-wrap items-center justify-between gap-3">
+                <button type="button" onClick={handleReset}
+                  className="px-4 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
                   <X size={12} className="inline mr-1" aria-hidden="true" /> Cancel
                 </button>
-                <div className="flex items-center gap-3">
-                  {pendingReviews > 0 && (
-                    <span className="text-[10px] text-orange-600 flex items-center gap-1">
-                      <AlertTriangle size={10} aria-hidden="true" /> {pendingReviews} match{pendingReviews !== 1 ? 'es' : ''} still need review
-                    </span>
-                  )}
-                  <button onClick={handleImport}
-                    disabled={actions.saving || (selectedRows.size === 0 && acceptedFromReview.length === 0)}
-                    className="px-5 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="text-[11px] text-surface-600">
+                    {newCount} new · {changedCount} updates · {additionCount} additions · {linkCount} order link{linkCount === 1 ? '' : 's'}
+                  </span>
+                  <button type="button" onClick={handleImport}
+                    disabled={actions.saving || (!newCount && !changedCount && !additionCount)}
+                    className="px-5 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 flex items-center gap-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
                     {actions.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Upload size={14} aria-hidden="true" />}
-                    Import {selectedRows.size + acceptedFromReview.length} Entr{(selectedRows.size + acceptedFromReview.length) === 1 ? 'y' : 'ies'}
+                    Import
                   </button>
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
-              <CheckCircle2 size={32} className="mx-auto mb-2 text-emerald-400" aria-hidden="true" />
-              <p className="text-sm font-medium text-surface-700">
-                {potentialMatches.length > 0
-                  ? 'Review the potential matches above, then import any accepted entries.'
-                  : 'All entries already exist in the database'}
-              </p>
-              <p className="text-xs text-surface-400 mt-1">Nothing new to import</p>
-              <button onClick={handleReset} className="mt-3 text-xs font-medium text-brand-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">Upload a different file</button>
-            </div>
+              {result && !result.ok && (
+                <p role="alert" className="text-xs text-red-700">The import stopped part-way. Re-import the same file — lines already saved will show as up to date and only the rest will be added.</p>
+              )}
+            </>
           )}
         </>
       )}
 
       {/* Step: Done */}
-      {step === 'done' && (
+      {step === 'done' && result && (
         <div className="bg-white rounded-xl border border-surface-200 p-8 text-center">
           <CheckCircle2 size={40} className="mx-auto mb-3 text-emerald-500" aria-hidden="true" />
           <h3 className="text-sm font-bold text-surface-900 mb-1">Import Complete</h3>
-          <p className="text-xs text-surface-500 mb-4">
-            Successfully imported entries into the {schoolYear} budget.
+          <p className="text-xs text-surface-600 mb-4">
+            {result.added} new line{result.added === 1 ? '' : 's'}, {result.updated} updated, {result.additions} budget addition{result.additions === 1 ? '' : 's'} and {result.linked} CMMS order link{result.linked === 1 ? '' : 's'} saved to the {schoolYear} budget.
           </p>
           <div className="flex gap-3 justify-center">
-            <button onClick={handleReset}
-              className="px-4 py-2 rounded-lg bg-surface-100 text-surface-600 text-xs font-medium hover:bg-surface-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-              Import More
+            <button type="button" onClick={handleReset}
+              className="px-4 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              Import another file
             </button>
-            <button onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]">
-              View Budget
-            </button>
+            {onViewOverview && (
+              <button type="button" onClick={onViewOverview}
+                className="px-4 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+                View Budget
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -1372,29 +1625,21 @@ function ImportTab({ schoolYear, onImported }) {
   )
 }
 
-/** Side-by-side field comparison — highlights differences */
-function CompareField({ label, value, otherValue, reverse = false }) {
-  const isDifferent = value !== otherValue && value !== '—' && otherValue !== '—'
+function SummaryCount({ label, value, tone }) {
+  const tones = {
+    emerald: 'bg-emerald-50 border-emerald-200 text-emerald-800',
+    blue: 'bg-blue-50 border-blue-200 text-blue-800',
+    surface: 'bg-surface-50 border-surface-200 text-surface-700',
+    purple: 'bg-purple-50 border-purple-200 text-purple-800',
+  }
   return (
-    <div className="text-[10px] mt-1 flex items-baseline gap-1.5">
-      <span className="text-surface-400 w-14 flex-shrink-0">{label}:</span>
-      <span className={`font-medium ${
-        isDifferent
-          ? (reverse ? 'text-surface-700' : 'text-blue-800')
-          : 'text-surface-700'
-      }`}>
-        {value}
-      </span>
-      {isDifferent && (
-        <span className={`text-[9px] px-1 py-0.5 rounded ${
-          reverse ? 'bg-blue-100 text-blue-600' : 'bg-surface-200 text-surface-500'
-        }`}>
-          ≠
-        </span>
-      )}
+    <div className={`rounded-xl border p-3 text-center ${tones[tone]}`}>
+      <div className="text-lg font-bold">{value}</div>
+      <div className="text-[10px] uppercase tracking-wide">{label}</div>
     </div>
   )
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // YEAR MANAGEMENT TAB
@@ -1509,9 +1754,9 @@ function YearManagementTab({ onRefresh, refreshKey }) {
                 {/* Stats grid */}
                 <div className="p-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <YearStat label="Budget" value={fmt(s.totalBudget)} />
-                  <YearStat label="Manual" value={fmt(s.manualExpenses)} className="text-red-600" />
-                  <YearStat label={`POs (${s.poCount})`} value={fmt(s.poExpenses)} className="text-amber-600" />
-                  <YearStat label="Remaining" value={fmt(s.remaining)} className={remainColor} />
+                  <YearStat label="Ledger expenses" value={fmt(s.manualExpenses)} className="text-red-600" />
+                  <YearStat label={`CMMS orders not on report (${s.poCount})`} value={fmt(s.poExpenses)} className="text-amber-600" />
+                  <YearStat label="Available" value={fmt(s.remaining)} className={remainColor} />
                 </div>
 
                 {/* Mini progress */}
@@ -1561,7 +1806,7 @@ function BalanceItem({ label, value, className = 'text-surface-900' }) {
   )
 }
 
-function MetricCard({ icon: Icon, label, value, color }) {
+function MetricCard({ icon: Icon, label, value, color, sub }) {
   return (
     <div className="bg-white rounded-xl border border-surface-200 p-3">
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-2 ${color}`}>
@@ -1569,6 +1814,7 @@ function MetricCard({ icon: Icon, label, value, color }) {
       </div>
       <div className="text-[10px] text-surface-500 uppercase tracking-wide">{label}</div>
       <div className="text-sm font-bold text-surface-900 mt-0.5">{value}</div>
+      {sub && <div className="text-[10px] text-surface-500 mt-0.5">{sub}</div>}
     </div>
   )
 }
@@ -1588,9 +1834,12 @@ function TypeBadge({ type }) {
   )
 }
 
-function SourceBadge({ source, notes }) {
+function SourceBadge({ source, notes, ledgerSource }) {
   if (source === 'po') return (
-    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">PO</span>
+    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">CMMS Order</span>
+  )
+  if (ledgerSource === 'college_report') return (
+    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">College Report</span>
   )
   if ((notes || '').includes('Imported from spreadsheet')) return (
     <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">Excel Import</span>

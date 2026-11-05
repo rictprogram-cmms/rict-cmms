@@ -4,7 +4,7 @@ import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 import { supabase } from '@/lib/supabase'
-import { mustData } from '@/lib/supabaseData'
+import { mustData, assertWrite } from '@/lib/supabaseData'
 import { usePODashboard, usePOList, usePODetail, useVendors, usePOActions, useLowStockItems } from '@/hooks/usePurchaseOrders'
 import { usePOBudgetSummary } from '@/hooks/usePOBudgetSummary'
 import toast from 'react-hot-toast'
@@ -85,7 +85,7 @@ function lineItemHaystack(li) {
 function orderHaystack(o) {
   return [
     o.order_id, o.vendor_name, o.other_vendor, o.ordered_by, o.status,
-    o.notes, o.work_order_id, o.rejection_reason,
+    o.notes, o.work_order_id, o.rejection_reason, o.college_po,
     o.total != null ? fmtMoney(o.total) : '',
     o.total != null ? String(o.total) : '',
     fmtDate(o.order_date),
@@ -1166,6 +1166,78 @@ function OrdersTab({ onViewOrder, hasPerm, selectedAYStart, setSelectedAYStart }
 // ORDER DETAIL VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ─── College PO # (set by the business office) ───────────────────────────────
+// Optional. When filled in, the Program Budget import links this order to the
+// college report line with the same PO number exactly, instead of suggesting a
+// match. Editable by anyone who can approve POs.
+function CollegePoField({ order, canEdit, onSaved }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(order.college_po || '')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const inputId = `po-college-po-${order.order_id}`
+
+  useEffect(() => { if (!editing) setValue(order.college_po || '') }, [order.college_po, editing])
+
+  const save = async (e) => {
+    e.preventDefault()
+    const v = value.trim()
+    if (v && !/^[A-Za-z0-9-]{3,20}$/.test(v)) { setMsg('Use letters, numbers or dashes only (3–20 characters).'); return }
+    setSaving(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('orders').update({ college_po: v || null }).eq('order_id', order.order_id).select('order_id'),
+        'orders.update'
+      )
+      if (error) throw error
+      setMsg(v ? `College PO # saved as ${v}.` : 'College PO # cleared.')
+      toast.success(v ? 'College PO # saved' : 'College PO # cleared')
+      setEditing(false)
+      onSaved?.()
+    } catch (err) {
+      setMsg(`Could not save: ${err.message}`)
+      toast.error(`Could not save College PO #: ${err.message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <span className="text-xs text-surface-400 block" id={`${inputId}-label`}>College PO #</span>
+      {editing ? (
+        <form onSubmit={save} className="flex flex-wrap items-center gap-1 mt-0.5">
+          <label htmlFor={inputId} className="sr-only">College PO number for {order.order_id}</label>
+          <input id={inputId} type="text" inputMode="numeric" value={value} onChange={e => setValue(e.target.value)}
+            className="input text-sm w-28 min-h-[44px]" placeholder="e.g. 123431" autoFocus
+            aria-describedby={msg ? `${inputId}-msg` : undefined} />
+          <button type="submit" disabled={saving}
+            className="px-3 rounded-lg bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 disabled:opacity-50 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button type="button" onClick={() => { setEditing(false); setMsg('') }} disabled={saving}
+            className="px-3 rounded-lg bg-surface-100 text-surface-700 text-xs font-medium hover:bg-surface-200 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+            Cancel
+          </button>
+        </form>
+      ) : (
+        <div className="flex items-center gap-1">
+          <span className="font-medium">{order.college_po || '—'}</span>
+          {canEdit && (
+            <button type="button" onClick={() => { setEditing(true); setMsg('') }}
+              aria-label={order.college_po ? `Edit College PO number for ${order.order_id}` : `Add College PO number for ${order.order_id}`}
+              title={order.college_po ? 'Edit College PO #' : 'Add College PO #'}
+              className="p-1.5 rounded-lg hover:bg-surface-100 text-surface-400 hover:text-brand-600 min-h-[44px] min-w-[44px] inline-flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1">
+              <Pencil size={12} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
+      <p id={`${inputId}-msg`} className={msg ? 'text-[11px] text-surface-600 mt-0.5' : 'sr-only'} role="status" aria-live="polite">{msg}</p>
+    </div>
+  )
+}
+
 function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false, onViewOrder }) {
   const { profile } = useAuth()
   const { order, lineItems, loading, refresh } = usePODetail(orderId)
@@ -1736,7 +1808,8 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false, onView
         message={
           <>
             This will permanently remove this purchase order and <strong>all related records</strong> including
-            line items, work log entries, audit log entries, and program budget entries.{' '}
+            line items, work log entries, audit log entries, and program budget entries that reference this order
+            (college budget report lines are kept and only unlinked from it).{' '}
             <strong>This cannot be undone.</strong>
           </>
         }
@@ -1749,10 +1822,11 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false, onView
 
       {/* Order Info */}
       <div className="bg-white rounded-xl border border-surface-200 p-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
           <div><span className="text-xs text-surface-400 block">Total</span><span className="font-bold text-lg">{fmtMoney(order.total)}</span></div>
           <div><span className="text-xs text-surface-400 block">Ordered By</span><span className="font-medium">{order.ordered_by || '—'}</span></div>
           <div><span className="text-xs text-surface-400 block">Order Date</span><span>{fmtDate(order.order_date)}</span></div>
+          <CollegePoField order={order} canEdit={canApprove} onSaved={refresh} />
           <div><span className="text-xs text-surface-400 block">WO Links</span><span className="font-medium">{
             (() => {
               const woIds = [...new Set(lineItems.map(li => li.wo_id).filter(Boolean))]

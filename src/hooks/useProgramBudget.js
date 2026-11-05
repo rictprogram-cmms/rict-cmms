@@ -4,6 +4,19 @@ import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
+import {
+  computeBudget, buildMonthlyTrend, lineMoney,
+  COMMITTED_ORDER_STATUSES, BUDGET_ORDER_STATUSES, ORDER_BUDGET_COLUMNS,
+  orderInSchoolYear, orderBudgetDate, orderVendor,
+} from '@/lib/budgetMath'
+import { parseBudgetRows, planImport, fiscalYearToSchoolYear } from '@/lib/budgetImport'
+
+/** Local wall-clock time stored with a +00 offset (fake-UTC convention). */
+function localToUtcIso(date) {
+  const d = date || new Date()
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}+00`
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SCHOOL YEAR HELPERS
@@ -71,7 +84,7 @@ export function objectCodeToCategory(code) {
 // PAYMENT STATUS HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const PAYMENT_STATUSES = ['Paid', 'Encumbered', 'Partial', 'Pending']
+export const PAYMENT_STATUSES = ['Paid', 'Encumbered', 'Partial', 'Pending', 'Liquidated']
 
 export function getPaymentStatusColor(status) {
   switch (status) {
@@ -79,6 +92,7 @@ export function getPaymentStatusColor(status) {
     case 'Encumbered': return 'bg-amber-50 text-amber-700'
     case 'Partial': return 'bg-blue-50 text-blue-700'
     case 'Pending': return 'bg-surface-100 text-surface-600'
+    case 'Liquidated': return 'bg-slate-100 text-slate-600'
     default: return 'bg-surface-100 text-surface-600'
   }
 }
@@ -103,167 +117,60 @@ function parseNumber(val) {
   return isNaN(num) ? 0 : num
 }
 
-/**
- * Safely parse a date from a cell value that may be:
- *  - a JS Date object (from cellDates: true)
- *  - a formatted date string ("10/31/2025", "2025-10-31")
- *  - an Excel serial number
- *  - null/undefined/empty
- * Returns ISO date string "YYYY-MM-DD" or null
- */
-function parseDate(val) {
-  if (!val) return null
+// ═══════════════════════════════════════════════════════════════════════════════
+// useBudgetOverview  –  balances, encumbrances, orders not yet on the college
+// report, category totals, monthly trend. All math is in src/lib/budgetMath.js.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  // Already a Date object
-  if (val instanceof Date) {
-    if (isNaN(val.getTime())) return null
-    return val.toISOString().split('T')[0]
+/** Fetch everything computeBudget() needs for one school year. */
+async function fetchBudgetInputs(sy) {
+  const [entries, orders] = await Promise.all([
+    supabase.from('program_budget').select('*').eq('school_year', sy),
+    supabase.from('orders').select(ORDER_BUDGET_COLUMNS).in('status', BUDGET_ORDER_STATUSES),
+  ])
+  return {
+    entries: mustData(entries, 'program_budget.select') || [],
+    orders: mustData(orders, 'orders.select') || [],
   }
-
-  // Raw Excel serial number (numeric type, not string)
-  if (typeof val === 'number' && val > 30000 && val < 70000) {
-    const excelEpoch = new Date(1899, 11, 30) // Excel epoch
-    const msPerDay = 86400000
-    const jsDate = new Date(excelEpoch.getTime() + val * msPerDay)
-    if (!isNaN(jsDate.getTime())) {
-      return jsDate.toISOString().split('T')[0]
-    }
-  }
-
-  const str = String(val).trim()
-  if (!str) return null
-
-  // Try direct parse
-  const d = new Date(str)
-  if (!isNaN(d.getTime())) {
-    // Guard against year-only or garbage dates
-    if (d.getFullYear() >= 2000 && d.getFullYear() <= 2100) {
-      return d.toISOString().split('T')[0]
-    }
-  }
-
-  // Try Excel serial number (string representation e.g. "45930")
-  const serial = parseFloat(str)
-  if (!isNaN(serial) && serial > 30000 && serial < 70000) {
-    const excelEpoch = new Date(1899, 11, 30)
-    const msPerDay = 86400000
-    const jsDate = new Date(excelEpoch.getTime() + serial * msPerDay)
-    if (!isNaN(jsDate.getTime())) {
-      return jsDate.toISOString().split('T')[0]
-    }
-  }
-
-  return null
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// useBudgetOverview  –  hero card, category totals, monthly trend
-// ═══════════════════════════════════════════════════════════════════════════════
 
 export function useBudgetOverview(schoolYear) {
   const [overview, setOverview] = useState(null)
   const [availableYears, setAvailableYears] = useState([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const hasLoadedRef = useRef(false)
 
   const fetch = useCallback(async () => {
     if (!hasLoadedRef.current) setLoading(true)
     try {
       const sy = schoolYear || getCurrentSchoolYear()
-
-      // 1) Manual budget entries for this school year
-      const { data: entries, error: eErr } = await supabase
-        .from('program_budget')
-        .select('*')
-        .eq('school_year', sy)
-        .neq('status', 'Voided')
-
-      if (eErr) throw eErr
-
-      let startingBalance = 0, manualExpenses = 0, adjustments = 0, income = 0
-      let paidTotal = 0, encumberedTotal = 0, partialTotal = 0
-      const categoryTotals = {}
-      const monthlyManual = {}
-
-      ;(entries || []).forEach(e => {
-        const amt = parseFloat(e.amount) || 0
-        const cat = e.category || 'Other'
-        const mk = e.entry_date ? monthKey(e.entry_date) : ''
-
-        switch (e.type) {
-          case 'Starting Balance': startingBalance += amt; break
-          case 'Manual Expense':
-            manualExpenses += amt
-            categoryTotals[cat] = (categoryTotals[cat] || 0) + amt
-            if (mk) monthlyManual[mk] = (monthlyManual[mk] || 0) + amt
-            // Track payment status totals
-            switch (e.payment_status) {
-              case 'Paid': paidTotal += amt; break
-              case 'Encumbered': encumberedTotal += amt; break
-              case 'Partial': partialTotal += amt; break
-              default: paidTotal += amt; break  // Default to paid if no status
-            }
-            break
-          case 'Adjustment': adjustments += amt; break
-          case 'Income/Grant': income += amt; break
-        }
-      })
-
-      // 2) Purchase Orders (Ordered / Partial / Received) within school year
-      const dates = parseSchoolYearDates(sy)
-      const { data: orders, error: oErr } = await supabase
-        .from('orders')
-        .select('order_id, vendor_name, other_vendor, order_date, ordered_date, ordered_by, status, total, notes')
-        .in('status', ['Ordered', 'Partial', 'Received'])
-
-      if (oErr) throw oErr
-
-      let poExpenses = 0, poCount = 0
-      const poOrders = []
-
-      ;(orders || []).forEach(o => {
-        const d = new Date(o.ordered_date || o.order_date)
-        if (isNaN(d.getTime()) || d < dates.start || d > dates.end) return
-        const total = parseFloat(o.total) || 0
-        poExpenses += total
-        poCount++
-        categoryTotals['Purchase Orders'] = (categoryTotals['Purchase Orders'] || 0) + total
-        const mk2 = monthKey(d)
-        monthlyManual[mk2] = (monthlyManual[mk2] || 0) + total // reuse bucket
-        poOrders.push({
-          orderId: o.order_id,
-          vendor: o.vendor_name || o.other_vendor || 'Unknown',
-          date: d.toISOString(),
-          orderedBy: o.ordered_by,
-          status: o.status,
-          total,
-          notes: o.notes,
-        })
-      })
-
-      // 3) Monthly trend (ordered Jul→Jun)
-      const monthlyTrend = buildMonthlyTrend(dates, monthlyManual)
-
-      const totalBudget = startingBalance + income + adjustments
-      const totalSpent = manualExpenses + poExpenses
-      const remaining = totalBudget - totalSpent
-      const percentUsed = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0
-
-      // 4) Available years
+      const { entries, orders } = await fetchBudgetInputs(sy)
+      const b = computeBudget({ entries, orders, schoolYear: sy })
       const years = await getAvailableYears()
 
+      // College lines available as link targets (for "Link to college line")
+      const collegeLines = entries
+        .filter(e => e.status !== 'Voided' && e.type === 'Manual Expense')
+        .map(e => ({ id: e.id, description: e.description, reference: e.reference || '', amount: parseFloat(e.amount) || 0, date: e.entry_date, linkedOrderIds: e.linked_order_ids || [] }))
+        .sort((a, b2) => String(b2.date).localeCompare(String(a.date)))
+
       setOverview({
-        schoolYear: sy,
-        startingBalance, income, adjustments, totalBudget,
-        manualExpenses, poExpenses, totalSpent, remaining, percentUsed,
-        poCount, entryCount: (entries || []).length,
-        categoryTotals, monthlyTrend, poOrders,
-        paidTotal, encumberedTotal, partialTotal,
+        ...b,
+        // Back-compatible names
+        paidTotal: b.paid,
+        encumberedTotal: b.encumberedOpen,
+        partialTotal: b.partialPaid,
+        entryCount: entries.length,
+        monthlyTrend: buildMonthlyTrend(sy, b.monthly),
+        collegeLines,
       })
       setAvailableYears(years)
+      setLoadError(null)
       hasLoadedRef.current = true
     } catch (err) {
       console.error('Budget overview error:', err)
+      setLoadError(err.message || 'Failed to load budget overview')
       if (!hasLoadedRef.current) toast.error('Failed to load budget overview')
     } finally {
       setLoading(false)
@@ -274,17 +181,18 @@ export function useBudgetOverview(schoolYear) {
 
   // Real-time: refresh when program_budget or orders change
   useEffect(() => {
-    return subscribeWithReconnect('budget-overview-changes', ch => ch
+    return subscribeWithReconnect(`budget-overview-changes-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
     , { tag: 'ProgramBudget', onReconnect: fetch })
   }, [fetch])
 
-  return { overview, availableYears, loading, refresh: fetch }
+  return { overview, availableYears, loading, loadError, refresh: fetch }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// useBudgetTransactions  –  combined manual + PO entries
+// useBudgetTransactions  –  ledger lines + CMMS orders (linked orders are shown
+// but do not count — their college line does)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function useBudgetTransactions(schoolYear) {
@@ -296,58 +204,78 @@ export function useBudgetTransactions(schoolYear) {
     if (!hasLoadedRef.current) setLoading(true)
     try {
       const sy = schoolYear || getCurrentSchoolYear()
-      const dates = parseSchoolYearDates(sy)
 
-      // Manual entries
+      // Ledger entries
       const entries = mustData(await supabase
         .from('program_budget')
         .select('*')
         .eq('school_year', sy)
         .order('entry_date', { ascending: false }), 'program_budget.select')
 
-      const txns = (entries || []).map(e => ({
-        id: e.id,
-        entryId: e.entry_id,
-        source: 'manual',
-        type: e.type,
-        description: e.description,
-        reference: e.reference,
-        amount: parseFloat(e.amount) || 0,
-        date: e.entry_date,
-        createdBy: e.created_by,
-        category: e.category || 'Other',
-        notes: e.notes,
-        status: e.status || 'Active',
-        isCredit: ['Starting Balance', 'Income/Grant', 'Adjustment'].includes(e.type),
-        paymentStatus: e.payment_status || '',
-        objectCode: e.object_code || '',
-      }))
+      const lineByOrder = {}
+      ;(entries || []).forEach(e => {
+        if (e.status === 'Voided') return
+        ;(e.linked_order_ids || []).forEach(id => { if (!lineByOrder[id]) lineByOrder[id] = e })
+      })
 
-      // POs
+      const txns = (entries || []).map(e => {
+        const m = lineMoney(e)
+        return {
+          id: e.id,
+          entryId: e.entry_id,
+          source: 'manual',
+          ledgerSource: e.source || 'manual',
+          type: e.type,
+          description: e.description,
+          reference: e.reference,
+          amount: parseFloat(e.amount) || 0,
+          date: e.entry_date,
+          createdBy: e.created_by,
+          category: e.category || 'Other',
+          notes: e.notes,
+          status: e.status || 'Active',
+          isCredit: ['Starting Balance', 'Income/Grant', 'Adjustment'].includes(e.type),
+          paymentStatus: e.payment_status || '',
+          objectCode: e.object_code || '',
+          paidAmount: e.type === 'Manual Expense' ? m.paid : 0,
+          openAmount: e.type === 'Manual Expense' ? m.open : 0,
+          linkedOrderIds: e.linked_order_ids || [],
+          releaseRequestedAt: e.release_requested_at || null,
+          releaseAmount: parseFloat(e.release_amount) || 0,
+          reportAsOf: e.report_as_of || null,
+          countsInBalance: true,
+        }
+      })
+
+      // CMMS orders (Approved and later) in this school year
       const orders = mustData(await supabase
         .from('orders')
-        .select('order_id, vendor_name, other_vendor, order_date, ordered_date, ordered_by, status, total, notes')
-        .in('status', ['Ordered', 'Partial', 'Received']), 'orders.select')
+        .select(ORDER_BUDGET_COLUMNS)
+        .in('status', COMMITTED_ORDER_STATUSES), 'orders.select')
 
       ;(orders || []).forEach(o => {
-        const d = new Date(o.ordered_date || o.order_date)
-        if (isNaN(d.getTime()) || d < dates.start || d > dates.end) return
+        if (!orderInSchoolYear(o, sy)) return
+        const d = orderBudgetDate(o)
+        const line = lineByOrder[o.order_id]
         txns.push({
           id: o.order_id,
           entryId: o.order_id,
           source: 'po',
           type: 'Purchase Order',
-          description: `PO to ${o.vendor_name || o.other_vendor || 'Unknown'}`,
+          description: `PO to ${orderVendor(o)}`,
           reference: o.order_id,
           amount: parseFloat(o.total) || 0,
-          date: d.toISOString(),
+          date: d ? d.toISOString() : null,
           createdBy: o.ordered_by,
           category: 'Purchase Orders',
           notes: o.notes || '',
           status: o.status,
           isCredit: false,
-          paymentStatus: o.status === 'Received' ? 'Paid' : 'Encumbered',
+          paymentStatus: '',
           objectCode: '',
+          collegePo: o.college_po || '',
+          linkedTo: line ? { id: line.id, reference: line.reference || '', description: line.description } : null,
+          countsInBalance: !line,
         })
       })
 
@@ -367,7 +295,7 @@ export function useBudgetTransactions(schoolYear) {
 
   // Real-time: refresh when program_budget or orders change
   useEffect(() => {
-    return subscribeWithReconnect('budget-transactions-changes', ch => ch
+    return subscribeWithReconnect(`budget-transactions-changes-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
     , { tag: 'ProgramBudget', onReconnect: fetch })
@@ -375,6 +303,7 @@ export function useBudgetTransactions(schoolYear) {
 
   return { transactions, loading, refresh: fetch }
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // useBudgetActions  –  add / edit / void entries, set starting balance
@@ -439,6 +368,7 @@ export function useBudgetActions() {
       if (updates.type !== undefined) clean.type = updates.type
       if (updates.paymentStatus !== undefined) clean.payment_status = updates.paymentStatus
       if (updates.objectCode !== undefined) clean.object_code = updates.objectCode
+      if (updates.paidAmount !== undefined) clean.paid_amount = Math.max(parseFloat(updates.paidAmount) || 0, 0)
 
       const { error } = assertWrite(
       await supabase.from('program_budget').update(clean).eq('id', id).select(),
@@ -595,11 +525,216 @@ export function useBudgetActions() {
     }
   }
 
-  return { addEntry, editEntry, voidEntry, deleteEntry, setStartingBalance, bulkImport, saving }
+
+  // ─── College report import (add + update + link) ───────────────────────────
+  /**
+   * @param {object} args
+   * @param {object} args.plan        planImport() result
+   * @param {object} args.parsed      parseBudgetRows() result
+   * @param {object} args.choices     { additions: Set<idx>, newLines: { [idx]: { include, orderIds } }, changed: Set<idx> }
+   * @param {string} args.schoolYear
+   * @returns {Promise<{ ok: boolean, added: number, updated: number, linked: number, additions: number }>}
+   */
+  const applyCollegeImport = async ({ plan, parsed, choices, schoolYear }) => {
+    const sy = schoolYear || getCurrentSchoolYear()
+    const asOf = parsed?.meta?.balancedAsOf || parsed?.meta?.reportDate || null
+    const isCollege = parsed?.format === 'RICT'
+    const sourceTag = isCollege ? 'college_report' : 'manual'
+    const asOfLabel = asOf ? new Date(`${asOf}T00:00:00`).toLocaleDateString('en-US') : ''
+    const note = isCollege
+      ? `Imported from spreadsheet (college report${asOfLabel ? ` balanced as of ${asOfLabel}` : ''})`
+      : 'Imported from spreadsheet'
+    const by = userName || 'Import'
+    const result = { ok: false, added: 0, updated: 0, linked: 0, additions: 0 }
+
+    setSaving(true)
+    try {
+      const inserts = []
+
+      plan.additions.forEach((a, i) => {
+        if (a.status !== 'new' || !choices.additions.has(i)) return
+        inserts.push({
+          school_year: sy,
+          type: a.credit === false ? 'Adjustment' : 'Income/Grant',
+          description: a.description,
+          reference: a.reference || '',
+          amount: a.amount,
+          entry_date: `${asOf || new Date().toISOString().slice(0, 10)}T12:00:00Z`,
+          created_by: by,
+          category: 'Budget',
+          notes: note,
+          status: 'Active',
+          source: sourceTag,
+          report_as_of: asOf,
+        })
+        result.additions++
+      })
+
+      plan.newLines.forEach((n, i) => {
+        const c = choices.newLines[i]
+        if (!c?.include) return
+        const l = n.line
+        const orderIds = [...new Set(c.orderIds || [])]
+        inserts.push({
+          school_year: sy,
+          type: l.isCredit ? 'Adjustment' : 'Manual Expense',
+          description: l.description,
+          reference: l.reference || '',
+          amount: l.amount,
+          entry_date: `${l.date || asOf || new Date().toISOString().slice(0, 10)}T12:00:00Z`,
+          created_by: by,
+          category: l.category || 'Other',
+          notes: note,
+          status: 'Active',
+          payment_status: l.paymentStatus || null,
+          paid_amount: l.paymentStatus === 'Encumbered' ? l.paidAmount : l.amount,
+          object_code: l.objectCode || null,
+          linked_order_ids: orderIds,
+          source: sourceTag,
+          report_as_of: asOf,
+        })
+        result.linked += orderIds.length
+      })
+
+      for (let i = 0; i < inserts.length; i += 50) {
+        const batch = inserts.slice(i, i + 50)
+        const { data, error } = assertWrite(
+          await supabase.from('program_budget').insert(batch).select('id'),
+          'program_budget.insert'
+        )
+        if (error) throw error
+        if ((data || []).length !== batch.length) throw new Error(`Only ${(data || []).length} of ${batch.length} rows were saved`)
+        result.added += batch.length
+      }
+      result.added -= result.additions
+
+      for (let i = 0; i < plan.changedLines.length; i++) {
+        if (!choices.changed.has(i)) continue
+        const ch = plan.changedLines[i]
+        const upd = { source: 'college_report', report_as_of: asOf }
+        for (const c of ch.changes) upd[c.field] = c.to
+        if (!ch.changes.some(c => c.field === 'paid_amount')) {
+          const status = upd.payment_status || ch.existing.payment_status
+          const amount = upd.amount ?? (parseFloat(ch.existing.amount) || 0)
+          if (status !== 'Encumbered' && status !== 'Partial') upd.paid_amount = amount
+        }
+        if (ch.clearRelease) {
+          upd.release_requested_at = null
+          upd.release_requested_by = null
+          upd.release_amount = null
+          upd.release_note = null
+        }
+        const { error } = assertWrite(
+          await supabase.from('program_budget').update(upd).eq('id', ch.existing.id).select('id'),
+          'program_budget.update'
+        )
+        if (error) throw error
+        result.updated++
+      }
+
+      result.ok = true
+      const parts = []
+      if (result.added) parts.push(`${result.added} new line${result.added === 1 ? '' : 's'}`)
+      if (result.updated) parts.push(`${result.updated} updated`)
+      if (result.additions) parts.push(`${result.additions} budget addition${result.additions === 1 ? '' : 's'}`)
+      toast.success(parts.length ? `Imported: ${parts.join(', ')}` : 'Nothing to import')
+      return result
+    } catch (err) {
+      console.error('College import error:', err)
+      const done = result.added + result.additions
+      toast.error(`Import stopped: ${err.message}${done || result.updated ? ` (${done} added, ${result.updated} updated before the error — re-import the same file to finish)` : ''}`)
+      return result
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ─── Link / unlink CMMS orders to a college line ───────────────────────────
+  const setLinkedOrders = async (entryId, mutate, successMsg) => {
+    setSaving(true)
+    try {
+      const row = mustData(await supabase
+        .from('program_budget')
+        .select('id, linked_order_ids')
+        .eq('id', entryId)
+        .single(), 'program_budget.select')
+      const next = [...new Set(mutate(row.linked_order_ids || []))]
+      const { error } = assertWrite(
+        await supabase.from('program_budget').update({ linked_order_ids: next }).eq('id', entryId).select('id'),
+        'program_budget.update'
+      )
+      if (error) throw error
+      toast.success(successMsg)
+      return true
+    } catch (err) {
+      toast.error(`Could not update the link: ${err.message}`)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const linkOrders = (entryId, orderIds) =>
+    setLinkedOrders(entryId, ids => [...ids, ...orderIds], `Linked ${orderIds.join(', ')}`)
+
+  const unlinkOrder = (entryId, orderId) =>
+    setLinkedOrders(entryId, ids => ids.filter(id => id !== orderId), `Unlinked ${orderId}`)
+
+  // ─── Release requests on open encumbrances ─────────────────────────────────
+  const requestRelease = async (entryId, { amount, note }) => {
+    const amt = parseFloat(amount)
+    if (!amt || amt <= 0) { toast.error('Enter an amount greater than $0'); return false }
+    setSaving(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('program_budget').update({
+          release_requested_at: localToUtcIso(new Date()),
+          release_requested_by: userName,
+          release_amount: Math.round(amt * 100) / 100,
+          release_note: (note || '').trim() || null,
+        }).eq('id', entryId).select('id'),
+        'program_budget.update'
+      )
+      if (error) throw error
+      toast.success('Release request recorded')
+      return true
+    } catch (err) {
+      toast.error(`Could not record the release request: ${err.message}`)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancelRelease = async (entryId) => {
+    setSaving(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('program_budget').update({
+          release_requested_at: null, release_requested_by: null, release_amount: null, release_note: null,
+        }).eq('id', entryId).select('id'),
+        'program_budget.update'
+      )
+      if (error) throw error
+      toast.success('Release request cancelled')
+      return true
+    } catch (err) {
+      toast.error(`Could not cancel the release request: ${err.message}`)
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return {
+    addEntry, editEntry, voidEntry, deleteEntry, setStartingBalance, bulkImport,
+    applyCollegeImport, linkOrders, unlinkOrder, requestRelease, cancelRelease,
+    saving,
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// useBudgetYearSummary  –  year-over-year comparison
+// useBudgetYearSummary  –  year-over-year comparison (same math as Overview)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function useBudgetYearSummary() {
@@ -609,68 +744,44 @@ export function useBudgetYearSummary() {
   const fetch = useCallback(async () => {
     setLoading(true)
     try {
-      // Get all budget entries
       const entries = mustData(await supabase
         .from('program_budget')
         .select('*')
         .neq('status', 'Voided'), 'program_budget.select')
 
-      // Group by school year
-      const yearMap = {}
-      ;(entries || []).forEach(e => {
-        const sy = e.school_year
-        if (!sy) return
-        if (!yearMap[sy]) yearMap[sy] = { entries: [], poExpenses: 0, poCount: 0 }
-        yearMap[sy].entries.push(e)
-      })
-
-      // Get POs for each year
       const orders = mustData(await supabase
         .from('orders')
-        .select('order_id, order_date, ordered_date, status, total')
-        .in('status', ['Ordered', 'Partial', 'Received']), 'orders.select')
+        .select(ORDER_BUDGET_COLUMNS)
+        .in('status', BUDGET_ORDER_STATUSES), 'orders.select')
 
+      const years = new Set()
+      ;(entries || []).forEach(e => { if (e.school_year?.includes('-')) years.add(e.school_year) })
       ;(orders || []).forEach(o => {
-        const d = new Date(o.ordered_date || o.order_date)
-        if (isNaN(d.getTime())) return
-        const sy = getSchoolYearForDate(d)
-        if (!yearMap[sy]) yearMap[sy] = { entries: [], poExpenses: 0, poCount: 0 }
-        yearMap[sy].poExpenses += parseFloat(o.total) || 0
-        yearMap[sy].poCount++
+        const d = orderBudgetDate(o)
+        if (d && COMMITTED_ORDER_STATUSES.includes(o.status)) years.add(getSchoolYearForDate(d))
       })
 
       const currentYear = getCurrentSchoolYear()
-      const results = Object.entries(yearMap).map(([sy, data]) => {
-        let startingBalance = 0, manualExpenses = 0, income = 0, adjustments = 0
-        data.entries.forEach(e => {
-          const amt = parseFloat(e.amount) || 0
-          switch (e.type) {
-            case 'Starting Balance': startingBalance += amt; break
-            case 'Manual Expense': manualExpenses += amt; break
-            case 'Income/Grant': income += amt; break
-            case 'Adjustment': adjustments += amt; break
-          }
-        })
-        const totalBudget = startingBalance + income + adjustments
-        const totalSpent = manualExpenses + data.poExpenses
+      const results = [...years].map(sy => {
+        const b = computeBudget({ entries: (entries || []).filter(e => e.school_year === sy), orders: orders || [], schoolYear: sy })
         return {
           schoolYear: sy,
           isCurrent: sy === currentYear,
-          startingBalance,
-          income,
-          adjustments,
-          totalBudget,
-          manualExpenses,
-          poExpenses: data.poExpenses,
-          poCount: data.poCount,
-          totalSpent,
-          remaining: totalBudget - totalSpent,
-          percentUsed: totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0,
+          startingBalance: b.startingBalance,
+          income: b.income,
+          adjustments: b.adjustments,
+          totalBudget: b.totalBudget,
+          manualExpenses: b.manualExpenses,
+          poExpenses: b.committedOrders,
+          poCount: b.committedOrderCount,
+          totalSpent: b.totalSpent,
+          remaining: b.availableAfterEnc,
+          encumberedOpen: b.encumberedOpen,
+          percentUsed: b.percentUsed,
         }
       })
 
       results.sort((a, b) => b.schoolYear.localeCompare(a.schoolYear))
-
       setSummaries(results)
     } catch (err) {
       console.error('Year summary error:', err)
@@ -683,7 +794,7 @@ export function useBudgetYearSummary() {
 
   // Real-time: refresh when program_budget or orders change
   useEffect(() => {
-    return subscribeWithReconnect('budget-year-summary-changes', ch => ch
+    return subscribeWithReconnect(`budget-year-summary-changes-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => { fetch() })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => { fetch() })
     , { tag: 'ProgramBudget', onReconnect: fetch })
@@ -693,11 +804,12 @@ export function useBudgetYearSummary() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// useSpreadsheetImport  –  parse Excel/CSV, detect duplicates, preview
+// useSpreadsheetImport  –  read the file, plan adds/updates/links (preview only;
+// nothing is written until applyCollegeImport runs)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function useSpreadsheetImport(schoolYear) {
-  const [parsed, setParsed] = useState(null)     // { entries, meta, duplicates, newEntries }
+  const [parsed, setParsed] = useState(null)     // { parsed, plan, ... }
   const [parsing, setParsing] = useState(false)
   const [error, setError] = useState(null)
 
@@ -726,39 +838,41 @@ export function useSpreadsheetImport(schoolYear) {
         throw new Error('Unsupported file type. Please use .csv, .xls, or .xlsx')
       }
 
-      // Detect the RICT budget format
-      const result = detectAndParseRICTFormat(rawData)
+      const result = parseBudgetRows(rawData)
+      if (result.format === 'Unknown') {
+        throw new Error('No column headings were found. The sheet needs a heading row with Date, Company (or Vendor/Description) and Dollar Value (or Amount).')
+      }
+      if (result.lines.length === 0 && result.additions.length === 0) {
+        throw new Error(`No budget rows were read. The heading row was found on row ${result.headerRow}, but no row below it had a company and an amount. Check that the amounts are in the "Dollar Value" column.`)
+      }
 
-      // Now check for duplicates against existing DB entries AND purchase orders
       const sy = schoolYear || getCurrentSchoolYear()
-      const dates = parseSchoolYearDates(sy)
-
-      const existing = mustData(await supabase
-        .from('program_budget')
-        .select('description, amount, entry_date, reference, status')
-        .eq('school_year', sy)
-        .neq('status', 'Voided'), 'program_budget.select')
-
-      // Also fetch PO orders within this school year to catch PO-sourced duplicates
-      const orders = mustData(await supabase
-        .from('orders')
-        .select('order_id, vendor_name, other_vendor, order_date, ordered_date, status, total, notes')
-        .in('status', ['Ordered', 'Partial', 'Received']), 'orders.select')
-
-      // Filter orders to current school year
-      const yearOrders = (orders || []).filter(o => {
-        const d = new Date(o.ordered_date || o.order_date)
-        return !isNaN(d.getTime()) && d >= dates.start && d <= dates.end
+      const [existing, orders] = await Promise.all([
+        supabase.from('program_budget').select('*').eq('school_year', sy),
+        supabase.from('orders').select(ORDER_BUDGET_COLUMNS).in('status', COMMITTED_ORDER_STATUSES),
+      ])
+      const existingRows = mustData(existing, 'program_budget.select') || []
+      const plan = planImport({
+        parsed: result,
+        existing: existingRows,
+        orders: mustData(orders, 'orders.select') || [],
+        schoolYear: sy,
       })
 
-      const { exactDuplicates, potentialMatches, newEntries } = detectDuplicates(result.entries, existing || [], yearOrders)
+      const fySchoolYear = fiscalYearToSchoolYear(result.meta.fiscalYear)
+      const starting = existingRows
+        .filter(e => e.type === 'Starting Balance' && e.status !== 'Voided')
+        .reduce((s, e) => s + (parseFloat(e.amount) || 0), 0)
 
       setParsed({
-        ...result,
-        exactDuplicates,
-        potentialMatches,
-        newEntries,
-        totalFromFile: result.entries.length,
+        parsed: result,
+        plan,
+        meta: result.meta,
+        format: result.format,
+        warnings: result.warnings,
+        totalFromFile: result.lines.length,
+        yearMismatch: fySchoolYear && fySchoolYear !== sy ? fySchoolYear : null,
+        startingBalance: starting,
       })
     } catch (err) {
       console.error('Parse error:', err)
@@ -776,329 +890,10 @@ export function useSpreadsheetImport(schoolYear) {
   return { parsed, parsing, error, parseFile, reset }
 }
 
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// SPREADSHEET PARSING HELPERS
+// SPREADSHEET PARSING HELPERS (row parsing and matching live in src/lib/budgetImport.js)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/** Detect and parse the RICT budget spreadsheet format */
-function detectAndParseRICTFormat(rows) {
-  const meta = {
-    program: '',
-    fiscalYear: '',
-    account: '',
-    beginningBalance: 0,
-    marketing: 0,
-    currentBalance: 0,
-    presentBalance: 0,
-  }
-
-  // Try to detect RICT format from header rows
-  let headerRowIdx = -1
-  let isRICTFormat = false
-
-  for (let i = 0; i < Math.min(rows.length, 15); i++) {
-    const row = rows[i]
-    if (!row) continue
-    const joined = row.filter(Boolean).map(c => String(c).toLowerCase()).join(' ')
-
-    // Look for program name
-    if (joined.includes('robotics') || joined.includes('fy20')) {
-      const rowStr = row.filter(Boolean).map(String)
-      meta.program = rowStr.find(s => /^[A-Z]+$/.test(s.trim())) || ''
-      meta.fiscalYear = rowStr.find(s => /FY\d{4}/i.test(s)) || ''
-      isRICTFormat = true
-    }
-
-    // Look for account number
-    if (joined.includes('010603') || joined.match(/\d{6}/)) {
-      const found = row.filter(Boolean).map(String).find(s => /^\d{6}$/.test(s.trim()))
-      if (found) meta.account = found
-    }
-
-    // Balance lines - use parseNumber for safety
-    if (joined.includes('beginning balance')) {
-      const num = row.find(c => typeof c === 'number' || (c && !isNaN(parseFloat(String(c).replace(/[$,]/g, '')))))
-      if (num) meta.beginningBalance = parseNumber(num)
-    }
-    if (joined.includes('marketing')) {
-      const num = row.find(c => typeof c === 'number' || (c && !isNaN(parseFloat(String(c).replace(/[$,]/g, '')))))
-      if (num) meta.marketing = parseNumber(num)
-    }
-    if (joined.includes('current balance')) {
-      const num = row.find(c => typeof c === 'number' || (c && !isNaN(parseFloat(String(c).replace(/[$,]/g, '')))))
-      if (num) meta.currentBalance = parseNumber(num)
-    }
-    if (joined.includes('present balance')) {
-      const num = row.find(c => typeof c === 'number' || (c && !isNaN(parseFloat(String(c).replace(/[$,]/g, '')))))
-      if (num) meta.presentBalance = parseNumber(num)
-    }
-
-    // Find header row: "Date ... Company ... Dollar Value"
-    if (joined.includes('date') && (joined.includes('company') || joined.includes('dollar'))) {
-      headerRowIdx = i
-    }
-  }
-
-  const entries = []
-
-  if (isRICTFormat && headerRowIdx >= 0) {
-    // Parse RICT format: columns are Date, _, PO No, _, Company, E/P, Code, _, Dollar Value, Partial Paid
-    let lastDate = null
-    let hitTotals = false
-
-    for (let i = headerRowIdx + 1; i < rows.length; i++) {
-      const row = rows[i]
-      if (!row) continue
-
-      const company = row[4] ? String(row[4]).trim() : ''
-
-      // Stop parsing when we hit the TOTALS row — everything below is
-      // summary/backorder data, not regular budget entries
-      if (company === 'TOTALS') {
-        hitTotals = true
-        continue
-      }
-
-      // Skip everything after TOTALS (backorders, summaries, etc.)
-      if (hitTotals) continue
-
-      // Skip empty company rows
-      if (!company) continue
-
-      const dateVal = row[0]
-      const poNo = row[2] ? String(row[2]).trim() : ''
-      const ep = row[5] ? String(row[5]).trim() : ''
-      const rawCode = row[6]
-      // Object code: could be number 3000 or string "3000" — normalize to string without decimals
-      const code = rawCode != null ? String(rawCode).trim().replace(/\.0+$/, '') : ''
-      const dollarVal = row[8]
-      const partialPaid = row[9]
-
-      // Parse date using robust helper
-      let entryDate = parseDate(dateVal)
-      if (entryDate) {
-        lastDate = entryDate
-      } else {
-        entryDate = lastDate
-      }
-
-      // Parse amounts using robust helper (handles commas, $, etc.)
-      const amount = parseNumber(dollarVal)
-      const partial = parseNumber(partialPaid) || null
-
-      // Skip rows with zero amount and no meaningful data
-      if (amount === 0 && !partial) continue
-
-      // Map E/P to payment status
-      let paymentStatus = ''
-      const epLower = ep.toLowerCase()
-      if (epLower === 'p' || epLower === 'paid') paymentStatus = 'Paid'
-      else if (epLower === 'e' || epLower === 'encumbered') paymentStatus = 'Encumbered'
-      else if (epLower === 'done' || epLower === 'complete') paymentStatus = 'Paid'
-      else if (partial) paymentStatus = 'Partial'
-
-      // Build notes
-      const notesParts = []
-      if (code) notesParts.push(`Object Code: ${code}`)
-      if (partial) notesParts.push(`Partial Paid: $${partial.toFixed(2)}`)
-      notesParts.push('Imported from spreadsheet')
-
-      entries.push({
-        date: entryDate ? `${entryDate}T12:00:00Z` : new Date().toISOString(),
-        description: company,
-        reference: poNo,
-        amount,
-        type: amount < 0 ? 'Adjustment' : 'Manual Expense',
-        category: objectCodeToCategory(code),
-        objectCode: code,
-        paymentStatus,
-        notes: notesParts.join(' | '),
-        _raw: { ep, code, partialPaid: partial },
-      })
-    }
-  } else {
-    // Try generic CSV/spreadsheet format
-    // Look for columns by name
-    const header = rows[0] || []
-    const colMap = {}
-    header.forEach((h, i) => {
-      if (!h) return
-      const hl = String(h).toLowerCase().trim()
-      if (hl.includes('date')) colMap.date = i
-      if (hl.includes('description') || hl.includes('company') || hl.includes('vendor')) colMap.description = i
-      if (hl.includes('amount') || hl.includes('dollar') || hl.includes('value')) colMap.amount = i
-      if (hl.includes('reference') || hl.includes('po') || hl.includes('ref')) colMap.reference = i
-      if (hl.includes('category') || hl.includes('cat')) colMap.category = i
-      if (hl.includes('type')) colMap.type = i
-      if (hl.includes('code') || hl.includes('object')) colMap.objectCode = i
-      if (hl.includes('payment') || hl.includes('status') || hl.includes('e/p')) colMap.paymentStatus = i
-      if (hl.includes('note')) colMap.notes = i
-    })
-
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i]
-      if (!row) continue
-
-      const desc = colMap.description !== undefined ? String(row[colMap.description] || '').trim() : ''
-      if (!desc) continue
-
-      const amount = colMap.amount !== undefined ? parseNumber(row[colMap.amount]) : 0
-      let dateStr = colMap.date !== undefined ? parseDate(row[colMap.date]) : null
-
-      entries.push({
-        date: dateStr ? `${dateStr}T12:00:00Z` : new Date().toISOString(),
-        description: desc,
-        reference: colMap.reference !== undefined ? String(row[colMap.reference] || '').trim() : '',
-        amount,
-        type: amount < 0 ? 'Adjustment' : 'Manual Expense',
-        category: colMap.category !== undefined ? String(row[colMap.category] || '').trim() : 'Other',
-        objectCode: colMap.objectCode !== undefined ? String(row[colMap.objectCode] || '').trim() : '',
-        paymentStatus: colMap.paymentStatus !== undefined ? String(row[colMap.paymentStatus] || '').trim() : '',
-        notes: colMap.notes !== undefined ? String(row[colMap.notes] || '').trim() : 'Imported from spreadsheet',
-      })
-    }
-  }
-
-  return { entries, meta, format: isRICTFormat ? 'RICT' : 'Generic' }
-}
-
-/**
- * Three-tier duplicate detection:
- *  1. exactDuplicates  – high-confidence match, auto-skipped
- *  2. potentialMatches – similar entries that need user review (side-by-side)
- *  3. newEntries       – no match found, safe to import
- *
- * Matching is done against both program_budget rows AND PO orders.
- */
-function detectDuplicates(parsed, existingBudget, existingOrders) {
-  const normalize = s => (s || '').toLowerCase().trim().replace(/[-\s]/g, '')
-  const exactDuplicates = []
-  const potentialMatches = []
-  const newEntries = []
-
-  // Build a unified pool of existing records for comparison
-  const existingPool = []
-
-  // From program_budget
-  ;(existingBudget || []).forEach(ex => {
-    existingPool.push({
-      source: 'budget',
-      description: ex.description || '',
-      amount: parseFloat(ex.amount) || 0,
-      date: ex.entry_date || '',
-      reference: ex.reference || '',
-      type: ex.type || 'Manual Expense',
-    })
-  })
-
-  // From orders (POs)
-  ;(existingOrders || []).forEach(po => {
-    const vendor = po.vendor_name || po.other_vendor || ''
-    existingPool.push({
-      source: 'po',
-      description: vendor,
-      amount: parseFloat(po.total) || 0,
-      date: po.ordered_date || po.order_date || '',
-      reference: po.order_id || '',
-      type: 'Purchase Order',
-      poVendor: vendor,
-    })
-  })
-
-  for (const entry of parsed) {
-    const entryDesc = normalize(entry.description)
-    const entryAmt = entry.amount || 0
-    const entryRef = normalize(entry.reference)
-    const entryDate = entry.date ? new Date(entry.date) : null
-
-    let bestMatch = null
-    let matchType = null // 'exact' | 'potential'
-
-    for (const ex of existingPool) {
-      const exDesc = normalize(ex.description)
-      const exAmt = ex.amount
-      const exRef = normalize(ex.reference)
-      const exDate = ex.date ? new Date(ex.date) : null
-
-      const amtExact = Math.abs(entryAmt - exAmt) < 0.01
-      const descExact = entryDesc && exDesc && entryDesc === exDesc
-      const descContains = entryDesc && exDesc && (entryDesc.includes(exDesc) || exDesc.includes(entryDesc))
-      const refExact = entryRef && exRef && entryRef === exRef
-
-      // Also match "PO to <vendor>" patterns from the orders table
-      const exPoDesc = normalize(ex.poVendor || '')
-      const descMatchesPO = exPoDesc && entryDesc && (
-        entryDesc.includes(exPoDesc) || exPoDesc.includes(entryDesc)
-      )
-
-      // ── EXACT MATCH ─────────────────────────────────────────────
-      // Same amount + exact description or reference match
-      if (amtExact && (descExact || refExact)) {
-        bestMatch = ex
-        matchType = 'exact'
-        break // No need to check further
-      }
-
-      // Same amount + description contains the other (e.g. "Postal Charges" vs "Postal Charge")
-      if (amtExact && (descContains || descMatchesPO)) {
-        bestMatch = ex
-        matchType = 'exact'
-        break
-      }
-
-      // ── POTENTIAL MATCH ─────────────────────────────────────────
-      // Same amount + similar vendor name (first 4+ chars match)
-      if (amtExact && entryDesc && exDesc) {
-        const shortEntry = entryDesc.slice(0, 4)
-        const shortEx = exDesc.slice(0, 4)
-        const shortPO = exPoDesc ? exPoDesc.slice(0, 4) : ''
-        if (shortEntry === shortEx || (shortPO && shortEntry === shortPO)) {
-          if (!bestMatch || matchType !== 'exact') {
-            bestMatch = ex
-            matchType = 'potential'
-          }
-          continue
-        }
-      }
-
-      // Same amount + dates within 7 days
-      if (amtExact && entryDate && exDate && !isNaN(entryDate) && !isNaN(exDate)) {
-        const daysDiff = Math.abs(entryDate - exDate) / (1000 * 60 * 60 * 24)
-        if (daysDiff <= 7) {
-          if (!bestMatch || matchType !== 'exact') {
-            bestMatch = ex
-            matchType = 'potential'
-          }
-          continue
-        }
-      }
-
-      // Similar vendor + close amount (within 10%)
-      if (descContains || descMatchesPO) {
-        const amtRatio = entryAmt > 0 && exAmt > 0
-          ? Math.min(entryAmt, exAmt) / Math.max(entryAmt, exAmt)
-          : 0
-        if (amtRatio > 0.90) {
-          if (!bestMatch || matchType !== 'exact') {
-            bestMatch = ex
-            matchType = 'potential'
-          }
-          continue
-        }
-      }
-    }
-
-    if (matchType === 'exact') {
-      exactDuplicates.push({ entry, match: bestMatch })
-    } else if (matchType === 'potential') {
-      potentialMatches.push({ entry, match: bestMatch })
-    } else if (entryAmt > 0) {
-      newEntries.push(entry)
-    }
-  }
-
-  return { exactDuplicates, potentialMatches, newEntries }
-}
 
 /** Parse CSV text into array of arrays */
 function parseCSVText(text) {
@@ -1120,29 +915,6 @@ function parseCSVText(text) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // INTERNAL HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function monthKey(date) {
-  const d = new Date(date)
-  return `${d.getMonth() + 1}/${d.getFullYear()}`
-}
-
-function buildMonthlyTrend(dates, monthlyData) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-  const trend = []
-  const now = new Date()
-  const d = new Date(dates.start)
-  while (d <= dates.end && d <= now) {
-    const mk = `${d.getMonth() + 1}/${d.getFullYear()}`
-    trend.push({
-      label: `${months[d.getMonth()]} ${d.getFullYear()}`,
-      shortLabel: months[d.getMonth()],
-      amount: monthlyData[mk] || 0,
-    })
-    d.setMonth(d.getMonth() + 1)
-  }
-  return trend
-}
-
 async function getAvailableYears() {
   const years = new Set()
   const current = getCurrentSchoolYear()

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { mustData } from '@/lib/supabaseData'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
+import { computeBudget, BUDGET_ORDER_STATUSES, ORDER_BUDGET_COLUMNS } from '@/lib/budgetMath'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // usePOBudgetSummary
@@ -8,23 +10,18 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 // Lean budget summary hook for the Purchase Orders dashboard "Budget Remaining"
 // tile. Returns just the at-a-glance numbers for a given academic year.
 //
-// Mirrors the calculation used by useBudgetOverview in useProgramBudget.js so
-// the numbers shown on the PO dashboard always match the Program Budget page:
+// Uses computeBudget() from src/lib/budgetMath.js — the same function the
+// Program Budget page uses — so the two pages always show the same numbers:
 //
 //   totalBudget   = startingBalance + income + adjustments
-//   totalSpent    = manualExpenses + poExpenses
-//   remaining     = totalBudget - totalSpent
+//   totalSpent    = ledger expenses + CMMS orders (Approved+) not yet linked
+//                   to a college budget line
+//   remaining     = available after encumbrances (college "Present Balance",
+//                   kept current with CMMS orders not yet on the report)
 //   percentUsed   = round((totalSpent / totalBudget) * 100)
 //
-// PO contribution: orders with status Ordered, Partial, or Received whose
-// ordered_date (or order_date if not yet ordered) falls inside the AY date range.
-// Manual budget entries: program_budget rows for the matching school_year string,
-// excluding rows with status = 'Voided'.
-//
-// Why not reuse useBudgetOverview?
-//   This hook deliberately skips category breakdowns, monthly trends, payment
-//   status totals, and PO order detail arrays — none of which the at-a-glance
-//   tile needs. The full hook still exists for the Program Budget page.
+// Also returns availableBeforeEnc (left if every open encumbrance were
+// released), encumberedOpen and requestedOrders (Pending, not subtracted).
 //
 // @param {number|null} ayStartYear - Academic year start year (e.g. 2025 for
 //   AY 2025-26). Pass null when the caller lacks the spend permission to
@@ -32,7 +29,8 @@ import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 // @returns { summary, loading, refresh }
 //   summary is null while loading or when ayStartYear is null. Otherwise:
 //   { startingBalance, income, adjustments, manualExpenses, poExpenses,
-//     totalBudget, totalSpent, remaining, percentUsed, schoolYear }
+//     totalBudget, totalSpent, remaining, percentUsed, schoolYear,
+//     availableBeforeEnc, encumberedOpen, requestedOrders }
 // ═══════════════════════════════════════════════════════════════════════════════
 export function usePOBudgetSummary(ayStartYear) {
   const [summary, setSummary] = useState(null)
@@ -55,76 +53,36 @@ export function usePOBudgetSummary(ayStartYear) {
       // convert here so we never alter the budget schema.
       const schoolYear = `${ayStartYear}-${ayStartYear + 1}`
 
-      // Academic year date range: Jul 1 ayStartYear → Jul 1 (ayStartYear + 1)
-      // Half-open interval (>= start, < end) matches the convention used by
-      // isInAcademicYear() on the PO page itself.
-      const ayStart = new Date(ayStartYear, 6, 1, 0, 0, 0)
-      const ayEnd = new Date(ayStartYear + 1, 6, 1, 0, 0, 0)
-
       const [budgetRes, ordersRes] = await Promise.all([
         supabase
           .from('program_budget')
-          .select('type, amount')
+          .select('type, amount, status, payment_status, paid_amount, linked_order_ids, entry_date, category, description, reference')
           .eq('school_year', schoolYear)
           .neq('status', 'Voided'),
         supabase
           .from('orders')
-          .select('ordered_date, order_date, total, status')
-          .in('status', ['Ordered', 'Partial', 'Received']),
+          .select(ORDER_BUDGET_COLUMNS)
+          .in('status', BUDGET_ORDER_STATUSES),
       ])
 
-      if (budgetRes.error) throw budgetRes.error
-      if (ordersRes.error) throw ordersRes.error
-
-      const entries = budgetRes.data || []
-      const orders = ordersRes.data || []
-
-      // Categorize manual budget entries
-      let startingBalance = 0
-      let manualExpenses = 0
-      let income = 0
-      let adjustments = 0
-      entries.forEach(e => {
-        const amt = parseFloat(e.amount) || 0
-        switch (e.type) {
-          case 'Starting Balance': startingBalance += amt; break
-          case 'Manual Expense':   manualExpenses += amt; break
-          case 'Income/Grant':     income += amt; break
-          case 'Adjustment':       adjustments += amt; break
-          default: /* ignore unknown types */ break
-        }
-      })
-
-      // Sum PO expenses within the AY date range
-      let poExpenses = 0
-      orders.forEach(o => {
-        const raw = o.ordered_date || o.order_date
-        if (!raw) return
-        const d = new Date(raw)
-        if (isNaN(d.getTime())) return
-        if (d >= ayStart && d < ayEnd) {
-          poExpenses += parseFloat(o.total) || 0
-        }
-      })
-
-      const totalBudget = startingBalance + income + adjustments
-      const totalSpent = manualExpenses + poExpenses
-      const remaining = totalBudget - totalSpent
-      const percentUsed = totalBudget > 0
-        ? Math.round((totalSpent / totalBudget) * 100)
-        : 0
+      const entries = mustData(budgetRes, 'program_budget.select') || []
+      const orders = mustData(ordersRes, 'orders.select') || []
+      const b = computeBudget({ entries, orders, schoolYear })
 
       setSummary({
         schoolYear,
-        startingBalance,
-        income,
-        adjustments,
-        manualExpenses,
-        poExpenses,
-        totalBudget,
-        totalSpent,
-        remaining,
-        percentUsed,
+        startingBalance: b.startingBalance,
+        income: b.income,
+        adjustments: b.adjustments,
+        manualExpenses: b.manualExpenses,
+        poExpenses: b.committedOrders,
+        totalBudget: b.totalBudget,
+        totalSpent: b.totalSpent,
+        remaining: b.availableAfterEnc,
+        percentUsed: b.percentUsed,
+        availableBeforeEnc: b.availableBeforeEnc,
+        encumberedOpen: b.encumberedOpen,
+        requestedOrders: b.requestedOrders,
       })
       hasLoadedRef.current = true
     } catch (err) {
@@ -145,7 +103,7 @@ export function usePOBudgetSummary(ayStartYear) {
   // selected year gets its own subscription scope cleanly.
   useEffect(() => {
     if (ayStartYear == null) return
-    return subscribeWithReconnect(`po-budget-summary-${ayStartYear}`, ch => ch
+    return subscribeWithReconnect(`po-budget-summary-${ayStartYear}-${Date.now()}`, ch => ch
       .on('postgres_changes', { event: '*', schema: 'public', table: 'program_budget' }, () => fetch())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => fetch())
     , { tag: 'POBudgetSummary', onReconnect: fetch })
