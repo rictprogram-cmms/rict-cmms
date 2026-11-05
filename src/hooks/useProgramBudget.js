@@ -549,11 +549,18 @@ export function useBudgetActions() {
 
     setSaving(true)
     try {
-      const inserts = []
+      // Every row in one insert must carry the SAME columns: PostgREST fills a
+      // column missing from one row with NULL, which NOT NULL columns
+      // (paid_amount, linked_order_ids) reject — and the whole batch fails.
+      // defaultToNull:false makes missing columns use their defaults as a
+      // second safeguard. Additions and lines are saved as separate inserts.
+      const additionRows = []
+      const lineRows = []
+      let linksQueued = 0
 
       plan.additions.forEach((a, i) => {
         if (a.status !== 'new' || !choices.additions.has(i)) return
-        inserts.push({
+        additionRows.push({
           school_year: sy,
           type: a.credit === false ? 'Adjustment' : 'Income/Grant',
           description: a.description,
@@ -564,10 +571,13 @@ export function useBudgetActions() {
           category: 'Budget',
           notes: note,
           status: 'Active',
+          payment_status: null,
+          paid_amount: 0,
+          object_code: null,
+          linked_order_ids: [],
           source: sourceTag,
           report_as_of: asOf,
         })
-        result.additions++
       })
 
       plan.newLines.forEach((n, i) => {
@@ -575,7 +585,7 @@ export function useBudgetActions() {
         if (!c?.include) return
         const l = n.line
         const orderIds = [...new Set(c.orderIds || [])]
-        inserts.push({
+        lineRows.push({
           school_year: sy,
           type: l.isCredit ? 'Adjustment' : 'Manual Expense',
           description: l.description,
@@ -593,20 +603,30 @@ export function useBudgetActions() {
           source: sourceTag,
           report_as_of: asOf,
         })
-        result.linked += orderIds.length
+        linksQueued += orderIds.length
       })
 
-      for (let i = 0; i < inserts.length; i += 50) {
-        const batch = inserts.slice(i, i + 50)
-        const { data, error } = assertWrite(
-          await supabase.from('program_budget').insert(batch).select('id'),
-          'program_budget.insert'
-        )
-        if (error) throw error
-        if ((data || []).length !== batch.length) throw new Error(`Only ${(data || []).length} of ${batch.length} rows were saved`)
-        result.added += batch.length
+      // Each insert is one statement: it saves all of its rows or none.
+      const insertRows = async (rows) => {
+        let saved = 0
+        for (let i = 0; i < rows.length; i += 50) {
+          const batch = rows.slice(i, i + 50)
+          const { data, error } = assertWrite(
+            await supabase.from('program_budget').insert(batch, { defaultToNull: false }).select('id'),
+            'program_budget.insert'
+          )
+          if (error) throw error
+          if ((data || []).length !== batch.length) throw new Error(`Only ${(data || []).length} of ${batch.length} rows were saved`)
+          saved += batch.length
+          if (rows === lineRows) result.added = saved
+          else result.additions = saved
+        }
+        return saved
       }
-      result.added -= result.additions
+
+      await insertRows(additionRows)
+      await insertRows(lineRows)
+      result.linked = linksQueued
 
       for (let i = 0; i < plan.changedLines.length; i++) {
         if (!choices.changed.has(i)) continue
