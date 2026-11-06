@@ -1830,12 +1830,16 @@ function TVSlidesTab() {
   // leaves a shared image in place.
   // A slide with no Show From date would start showing immediately, so its
   // copy is saved Inactive and the user is told to set a start date.
+  // Returns { ok, sharedImage } so the delete dialog's "Duplicate for next
+  // year & delete" path knows whether the copy succeeded and whether the
+  // copy is still pointing at the original image file.
   const duplicateForNextYear = async (sl) => {
-    if (duplicatingId) return
+    if (duplicatingId) return { ok: false }
     setDuplicatingId(sl.slide_id)
     setLiveMsg(`Duplicating ${sl.title || sl.slide_id} for next year…`)
     try {
       let imageUrl = sl.image_url || null
+      let sharedImage = !!imageUrl
       if (imageUrl && imageUrl.includes('/tv-slides/')) {
         try {
           const srcPath = decodeURIComponent(imageUrl.split('/tv-slides/')[1].split('?')[0])
@@ -1844,7 +1848,7 @@ function TVSlidesTab() {
           const { error: cpErr } = await supabase.storage.from('tv-slides').copy(srcPath, destPath)
           if (!cpErr) {
             const { data: urlData } = supabase.storage.from('tv-slides').getPublicUrl(destPath)
-            if (urlData?.publicUrl) imageUrl = urlData.publicUrl
+            if (urlData?.publicUrl) { imageUrl = urlData.publicUrl; sharedImage = false }
           } else {
             console.warn('[TVSlides] image copy failed, sharing original image:', cpErr.message)
           }
@@ -1876,7 +1880,7 @@ function TVSlidesTab() {
       if (error || !rows || rows.length === 0) {
         toast.error('Duplicate failed — you may not have permission.')
         setLiveMsg('Duplicate failed.')
-        return
+        return { ok: false }
       }
       audit('Duplicated TV slide for next year', slideId, `${sl.title || ''} (copied from ${sl.slide_id})`)
       const range = fmtDateRange(rows[0]) || 'no dates'
@@ -1888,12 +1892,19 @@ function TVSlidesTab() {
         setLiveMsg(`Copied as ${slideId}. It is inactive until you set a Show From date and turn it on.`)
       }
       load()
+      return { ok: true, sharedImage }
+    } catch (e) {
+      console.error('[TVSlides] duplicate error:', e)
+      toast.error('Duplicate failed.')
+      setLiveMsg('Duplicate failed.')
+      return { ok: false }
     } finally {
       setDuplicatingId(null)
     }
   }
 
-  const confirmDelete = async () => {
+  // keepImage: true when a just-made duplicate still uses this slide's image
+  const confirmDelete = async ({ keepImage = false } = {}) => {
     const sl = deleting
     if (!sl) return
     setBusy(true)
@@ -1906,8 +1917,8 @@ function TVSlidesTab() {
     }
     // Best-effort cleanup of the stored image — skipped when another slide
     // still uses the same image (e.g. a next-year duplicate sharing it).
-    const imageShared = !!sl.image_url &&
-      slides.some(o => o.slide_id !== sl.slide_id && o.image_url === sl.image_url)
+    const imageShared = keepImage || (!!sl.image_url &&
+      slides.some(o => o.slide_id !== sl.slide_id && o.image_url === sl.image_url))
     if (sl.image_url && sl.image_url.includes('/tv-slides/') && !imageShared) {
       try {
         const path = sl.image_url.split('/tv-slides/')[1]
@@ -2079,9 +2090,15 @@ function TVSlidesTab() {
       {deleting && (
         <SlideDeleteConfirm
           slide={deleting}
-          busy={busy}
+          busy={busy || !!duplicatingId}
           onCancel={() => setDeleting(null)}
-          onConfirm={confirmDelete}
+          onConfirm={() => confirmDelete()}
+          onDuplicateAndDelete={async () => {
+            // Copy first; only delete the original if the copy was created,
+            // so a failed copy never loses the slide.
+            const res = await duplicateForNextYear(deleting)
+            if (res?.ok) await confirmDelete({ keepImage: !!res.sharedImage })
+          }}
         />
       )}
     </div>
@@ -2433,31 +2450,54 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
 }
 
 // ─── Delete confirm ───────────────────────────────────────────────────────────
-function SlideDeleteConfirm({ slide, busy, onCancel, onConfirm }) {
+// Delete confirmation. A slide with a date window also gets a
+// "Duplicate for next year & delete" choice, so yearly slides (holidays,
+// closures) can be rolled forward in the same step as cleaning up.
+function SlideDeleteConfirm({ slide, busy, onCancel, onConfirm, onDuplicateAndDelete }) {
   const dialogRef = useDialogA11y(true, onCancel)
+  const canDuplicate = !!(slide.start_date || slide.end_date) && !!onDuplicateAndDelete
+  const fy = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const nextStart = addOneYear(slide.start_date)
+  const nextEnd = addOneYear(slide.end_date)
+  const nextRange = nextStart && nextEnd ? `${fy(nextStart)}, 12:00 AM \u2013 ${fy(nextEnd)}, 11:59 PM`
+    : nextStart ? `starting ${fy(nextStart)}, 12:00 AM`
+    : nextEnd ? `until ${fy(nextEnd)}, 11:59 PM` : ''
+  const btnBase = 'inline-flex items-center justify-center gap-2 min-h-[44px] px-4 text-sm rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed'
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="slide-delete-title"
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="slide-delete-title" aria-describedby="slide-delete-desc"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
         <div className="flex items-start gap-3 mb-4">
           <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
             <Trash2 size={17} className="text-red-500" aria-hidden="true" />
           </div>
-          <div>
+          <div id="slide-delete-desc">
             <h3 id="slide-delete-title" className="font-bold text-surface-900 text-sm">Delete Slide?</h3>
             <p className="text-sm text-surface-500 mt-0.5">
               Delete <span className="font-semibold text-surface-700">"{slide.title || slide.slide_id}"</span>?
               It will disappear from the TV rotation immediately. This cannot be undone.
             </p>
+            {canDuplicate && (
+              <p className="text-sm text-surface-600 mt-2">
+                Need it again next year? <span className="font-semibold">Duplicate for next year &amp; delete</span> saves
+                a copy scheduled {nextRange}{!slide.start_date && ' (saved Inactive — set a Show From date, then turn it on)'}, then deletes this one.
+              </p>
+            )}
           </div>
         </div>
-        <div className="flex justify-end gap-2 mt-5">
+        <div className="flex flex-wrap justify-end gap-2 mt-5">
           <button onClick={onCancel} disabled={busy}
-            className="px-4 py-2 text-sm font-medium text-surface-700 bg-white border border-surface-200 rounded-lg hover:bg-surface-50 transition-colors">
+            className={`${btnBase} font-medium text-surface-700 bg-white border border-surface-200 hover:bg-surface-50 focus-visible:ring-brand-500`}>
             Cancel
           </button>
+          {canDuplicate && (
+            <button onClick={onDuplicateAndDelete} disabled={busy}
+              className={`${btnBase} font-semibold text-white bg-brand-600 hover:bg-brand-700 focus-visible:ring-brand-500`}>
+              {busy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <CopyPlus size={13} aria-hidden="true" />} Duplicate for next year &amp; delete
+            </button>
+          )}
           <button onClick={onConfirm} disabled={busy}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50">
+            className={`${btnBase} font-semibold text-white bg-red-600 hover:bg-red-700 focus-visible:ring-red-500`}>
             {busy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Trash2 size={13} aria-hidden="true" />} Delete
           </button>
         </div>
