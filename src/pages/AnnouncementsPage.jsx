@@ -10,7 +10,7 @@ import {
   CheckCircle2, Mail, MailOpen, Clock, Users, ChevronDown, ChevronUp,
   Bell, RefreshCw, Plus, FileText, Save, Edit3, Eye, EyeOff, Archive, Undo2, Pin, Inbox,
   ShieldAlert, Info,
-  MonitorPlay, ImagePlus, ArrowUp, ArrowDown, ImageIcon, CalendarDays,
+  MonitorPlay, ImagePlus, ArrowUp, ArrowDown, ImageIcon, CalendarDays, CopyPlus,
 } from 'lucide-react'
 import { useDialogA11y } from '@/hooks/useDialogA11y'
 import StudentHoldsTab from '@/components/holds/StudentHoldsTab'
@@ -1710,6 +1710,15 @@ const SLIDE_PAD = 4
 
 // Collision-safe slide ID: get_next_id RPC first, MAX+1 fallback with
 // counter write-back (standard CMMS ID pattern).
+// 'YYYY-MM-DD' → same month/day one year later. Feb 29 becomes Feb 28 so a
+// leap-day slide never rolls into March. Pure string math — no timezone shift.
+function addOneYear(d) {
+  if (!d) return null
+  const [y, m, day] = d.split('-')
+  const nd = (m === '02' && day === '29') ? '28' : day
+  return `${parseInt(y, 10) + 1}-${m}-${nd}`
+}
+
 async function generateSlideId() {
   let id = null
   let numericId = NaN
@@ -1744,6 +1753,8 @@ function TVSlidesTab() {
   const [editing, setEditing] = useState(null)      // null | {} (new) | slide row
   const [deleting, setDeleting] = useState(null)    // slide row pending delete confirm
   const [busy, setBusy] = useState(false)
+  const [duplicatingId, setDuplicatingId] = useState(null) // slide_id being copied
+  const [liveMsg, setLiveMsg] = useState('')               // screen-reader status
 
   const load = useCallback(async () => {
     const { data, error } = await supabase
@@ -1810,6 +1821,78 @@ function TVSlidesTab() {
     load()
   }
 
+  // ── Duplicate an ended slide for next year ──────────────────────────
+  // One click: copies the slide (layout, text, size, duration, image) with
+  // Show From / Show Until moved forward one year and adds it to the end of
+  // the rotation. The image file is copied too, so deleting the old slide
+  // later never removes the new slide's picture. If the copy can't be made
+  // the new slide shares the original image, and confirmDelete() below
+  // leaves a shared image in place.
+  // A slide with no Show From date would start showing immediately, so its
+  // copy is saved Inactive and the user is told to set a start date.
+  const duplicateForNextYear = async (sl) => {
+    if (duplicatingId) return
+    setDuplicatingId(sl.slide_id)
+    setLiveMsg(`Duplicating ${sl.title || sl.slide_id} for next year…`)
+    try {
+      let imageUrl = sl.image_url || null
+      if (imageUrl && imageUrl.includes('/tv-slides/')) {
+        try {
+          const srcPath = decodeURIComponent(imageUrl.split('/tv-slides/')[1].split('?')[0])
+          const ext = (srcPath.split('.').pop() || 'png').toLowerCase()
+          const destPath = `slide-${Date.now()}.${ext}`
+          const { error: cpErr } = await supabase.storage.from('tv-slides').copy(srcPath, destPath)
+          if (!cpErr) {
+            const { data: urlData } = supabase.storage.from('tv-slides').getPublicUrl(destPath)
+            if (urlData?.publicUrl) imageUrl = urlData.publicUrl
+          } else {
+            console.warn('[TVSlides] image copy failed, sharing original image:', cpErr.message)
+          }
+        } catch (e) { console.warn('[TVSlides] image copy failed, sharing original image:', e) }
+      }
+
+      const hasStart = !!sl.start_date
+      const now = new Date().toISOString()
+      const slideId = await generateSlideId()
+      const { data: ordRows } = await supabase.from('tv_slides').select('display_order')
+      const nextOrder = ((ordRows || []).reduce((m, r) => Math.max(m, r.display_order || 0), 0)) + 1
+      const { data: rows, error } = await supabase.from('tv_slides').insert({
+        slide_id: slideId,
+        display_order: nextOrder,
+        title: sl.title || '',
+        body: sl.body || '',
+        layout: sl.layout,
+        text_size: sl.text_size || 'auto',
+        duration_seconds: sl.duration_seconds ?? null,
+        start_date: addOneYear(sl.start_date),
+        end_date: addOneYear(sl.end_date),
+        status: hasStart ? 'active' : 'inactive',
+        image_url: imageUrl,
+        created_at: now,
+        created_by: profile?.email || '',
+        updated_at: now,
+        updated_by: profile?.email || '',
+      }).select()
+      if (error || !rows || rows.length === 0) {
+        toast.error('Duplicate failed — you may not have permission.')
+        setLiveMsg('Duplicate failed.')
+        return
+      }
+      audit('Duplicated TV slide for next year', slideId, `${sl.title || ''} (copied from ${sl.slide_id})`)
+      const range = fmtDateRange(rows[0]) || 'no dates'
+      if (hasStart) {
+        toast.success(`Copied as ${slideId} — ${range}`)
+        setLiveMsg(`Copied as ${slideId}, scheduled ${range}.`)
+      } else {
+        toast.success(`Copied as ${slideId} (Inactive). Set a Show From date, then turn it on.`, { duration: 6000 })
+        setLiveMsg(`Copied as ${slideId}. It is inactive until you set a Show From date and turn it on.`)
+      }
+      load()
+    } finally {
+      setDuplicatingId(null)
+    }
+  }
+
   const confirmDelete = async () => {
     const sl = deleting
     if (!sl) return
@@ -1821,8 +1904,11 @@ function TVSlidesTab() {
       setBusy(false)
       return
     }
-    // Best-effort cleanup of the stored image
-    if (sl.image_url && sl.image_url.includes('/tv-slides/')) {
+    // Best-effort cleanup of the stored image — skipped when another slide
+    // still uses the same image (e.g. a next-year duplicate sharing it).
+    const imageShared = !!sl.image_url &&
+      slides.some(o => o.slide_id !== sl.slide_id && o.image_url === sl.image_url)
+    if (sl.image_url && sl.image_url.includes('/tv-slides/') && !imageShared) {
       try {
         const path = sl.image_url.split('/tv-slides/')[1]
         if (path) await supabase.storage.from('tv-slides').remove([decodeURIComponent(path)])
@@ -1835,10 +1921,16 @@ function TVSlidesTab() {
     load()
   }
 
+  // Date windows are whole days in the TV's local (Central) time: a slide
+  // starts at 12:00 AM on Show From and stops at the end of Show Until
+  // (11:59 PM — the TV drops it at midnight). Times are shown so anyone
+  // reading the list knows exactly when a slide comes on and goes off.
   const fmtDateRange = (sl) => {
     if (!sl.start_date && !sl.end_date) return null
-    const f = (d) => d ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '\u2026'
-    return `${f(sl.start_date)} \u2013 ${f(sl.end_date)}`
+    const f = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    if (sl.start_date && sl.end_date) return `${f(sl.start_date)}, 12:00 AM \u2013 ${f(sl.end_date)}, 11:59 PM`
+    if (sl.start_date) return `Starts ${f(sl.start_date)}, 12:00 AM`
+    return `Until ${f(sl.end_date)}, 11:59 PM`
   }
 
   const todayStr = (() => {
@@ -1848,9 +1940,16 @@ function TVSlidesTab() {
   const isLive = (sl) => sl.status === 'active' &&
     (!sl.start_date || sl.start_date <= todayStr) &&
     (!sl.end_date || sl.end_date >= todayStr)
+  // Which side of its date window an active slide is on (for the list hint)
+  const windowState = (sl) => {
+    if (sl.start_date && sl.start_date > todayStr) return 'upcoming'
+    if (sl.end_date && sl.end_date < todayStr) return 'ended'
+    return 'live'
+  }
 
   return (
     <div className="space-y-3">
+      <div role="status" aria-live="polite" className="sr-only">{liveMsg}</div>
       {/* Header row */}
       <div className="flex items-center justify-between">
         <p className="text-xs text-surface-500">
@@ -1921,13 +2020,27 @@ function TVSlidesTab() {
                     <span className="flex items-center gap-1"><CalendarDays size={11} aria-hidden="true" />{fmtDateRange(sl)}</span>
                   )}
                   {sl.status === 'active' && !isLive(sl) && (
-                    <span className="text-amber-500">outside date window</span>
+                    <span className="text-amber-700">
+                      {windowState(sl) === 'upcoming' ? 'Not showing yet' : windowState(sl) === 'ended' ? 'Ended \u2014 no longer showing' : 'Outside date window'}
+                    </span>
                   )}
                 </div>
               </div>
 
               {/* Actions */}
               <div className="flex items-center gap-1.5 shrink-0">
+                {windowState(sl) === 'ended' && (
+                  <button onClick={() => duplicateForNextYear(sl)}
+                    disabled={!!duplicatingId}
+                    aria-label={`Duplicate slide "${sl.title || sl.slide_id}" for next year`}
+                    title="Copy this slide with its dates moved forward one year"
+                    className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-lg text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                    {duplicatingId === sl.slide_id
+                      ? <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                      : <CopyPlus size={14} aria-hidden="true" />}
+                    <span>Duplicate for next year</span>
+                  </button>
+                )}
                 <button onClick={() => toggleStatus(sl)}
                   role="switch" aria-checked={sl.status === 'active'}
                   aria-label={`Slide "${sl.title || sl.slide_id}" active`}
@@ -2039,6 +2152,12 @@ function SlidePreviewBody({ body, textSize }) {
 }
 
 // ─── Slide Edit / New Modal ───────────────────────────────────────────────────
+// 'YYYY-MM-DD' → 'Wed, Nov 11' for the Show From / Show Until hints.
+// Parsed as local midnight so the date never shifts a day in Central time.
+function fmtFormDate(d) {
+  return new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
 function SlideEditModal({ slide, onClose, onSaved, audit }) {
   const { profile } = useAuth()
   const dialogRef = useDialogA11y(true, onClose)
@@ -2231,13 +2350,21 @@ function SlideEditModal({ slide, onClose, onSaved, audit }) {
                 <label htmlFor="slide-start" className="block text-xs font-semibold text-surface-700 mb-1.5">
                   Show From <span className="font-normal text-surface-400">(optional)</span>
                 </label>
-                <input id="slide-start" type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)} className={inputCls} />
+                <input id="slide-start" type="date" value={form.start_date} onChange={e => set('start_date', e.target.value)}
+                  aria-describedby="slide-start-hint" className={inputCls} />
+                <p id="slide-start-hint" className="text-[11px] text-surface-500 mt-1">
+                  {form.start_date ? `Starts ${fmtFormDate(form.start_date)} at 12:00 AM` : 'Blank = starts right away'}
+                </p>
               </div>
               <div>
                 <label htmlFor="slide-end" className="block text-xs font-semibold text-surface-700 mb-1.5">
                   Show Until <span className="font-normal text-surface-400">(optional)</span>
                 </label>
-                <input id="slide-end" type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)} className={inputCls} />
+                <input id="slide-end" type="date" value={form.end_date} onChange={e => set('end_date', e.target.value)}
+                  aria-describedby="slide-end-hint" className={inputCls} />
+                <p id="slide-end-hint" className="text-[11px] text-surface-500 mt-1">
+                  {form.end_date ? `Shows through ${fmtFormDate(form.end_date)} at 11:59 PM \u2014 off the TV at midnight` : 'Blank = no end date'}
+                </p>
               </div>
             </div>
 
