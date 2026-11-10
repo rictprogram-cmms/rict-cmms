@@ -6,6 +6,7 @@ import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { fetchLabVisibleDays, weekEndOffsetFromDays, getCachedWeekEndOffset } from '@/hooks/useLabDays'
+import { cancelUnstartedSignups } from '@/lib/allDoneSignups'
 import toast from 'react-hot-toast'
 
 // ─── Timestamp Helper ────────────────────────────────────────────────────────
@@ -699,32 +700,21 @@ export function useLabTrackerActions() {
         }
       }
 
-      // 3. Cancel future lab signups for this week (dates after today through week end)
-      const todayStr = new Date().toISOString().substring(0, 10)
-      let latestWeekEnd = todayStr
-
-      for (const cls of classInfos) {
-        if (cls.weekEndDate) {
-          const endStr = new Date(cls.weekEndDate).toISOString().substring(0, 10)
-          if (endStr > latestWeekEnd) latestWeekEnd = endStr
-        }
-      }
-
-      // Cancel remaining signups for today and the rest of the week
-      // (student is done — no reason to keep any Confirmed signups)
+      // 3. Cancel this week's sign-ups that haven't started yet (2026-11-10).
+      // Today's earlier hours were worked and stay Confirmed; past days are
+      // never touched. "Today" is the LOCAL date — the old code used UTC,
+      // which after 6 PM Central was already tomorrow.
       {
-        const { error: signupError } = assertWrite(
-      await supabase
-          .from('lab_signup')
-          .update({ status: 'Cancelled' })
-          .eq('user_email', userEmail)
-          .eq('status', 'Confirmed')
-          .gte('date', todayStr)
-          .lte('date', latestWeekEnd).select(),
-      'lab_signup.update'
-    )
-
-        if (signupError) {
+        let latestWeekEnd = ''
+        for (const cls of classInfos) {
+          if (cls.weekEndDate) {
+            const endStr = String(cls.weekEndDate).substring(0, 10)
+            if (endStr > latestWeekEnd) latestWeekEnd = endStr
+          }
+        }
+        try {
+          if (latestWeekEnd) await cancelUnstartedSignups({ email: userEmail, weekEndKey: latestWeekEnd })
+        } catch (signupError) {
           console.error('Error cancelling future signups:', signupError)
         }
       }

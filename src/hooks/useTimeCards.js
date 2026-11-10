@@ -10,6 +10,7 @@ import { fetchLabVisibleDays, weekEndOffsetFromDays } from '@/hooks/useLabDays'
 import { generateSafeTcId } from '@/utils/generateSafeTcId'
 import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
 import { fetchClosureOverlay, weekBaseRequirement, mondayKeyOf } from '@/lib/closureProration'
+import { cancelUnstartedSignups } from '@/lib/allDoneSignups'
 import toast from 'react-hot-toast'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2607,23 +2608,16 @@ export function useTimeEntryActions({ canEdit = false } = {}) {
         failureMessage: 'Connection problem — All Done was not saved. Please check your signal and try again.',
       })
 
-      // Optional: cancel the student's remaining Confirmed sign-ups this week,
-      // today onward — the same thing the badge swipe does. Past days are never
+      // Optional: cancel the student's remaining Confirmed sign-ups this week
+      // that haven't started yet — the same thing the badge swipe does. Past days are never
       // touched so no-show history stays intact. Failure here does not undo
       // the All Done.
       let cancelledCount = 0
       if (cancelSignups && todayStr >= weekStart && todayStr <= weekEnd && st.email) {
         try {
-          const { data, error } = await supabase
-            .from('lab_signup')
-            .update({ status: 'Cancelled' })
-            .eq('user_email', st.email)
-            .eq('status', 'Confirmed')
-            .gte('date', todayStr)
-            .lte('date', weekEnd + 'T23:59:59')
-            .select('signup_id')
-          if (error) throw error
-          cancelledCount = (data || []).length
+          // Only sign-ups that haven't started yet (2026-11-10) — today's
+          // earlier hours were worked and stay Confirmed.
+          cancelledCount = await cancelUnstartedSignups({ email: st.email, weekEndKey: weekEnd })
         } catch (signupErr) {
           console.error('markWeekAllDone: cancelling sign-ups failed:', signupErr)
           say.err('All Done saved, but their remaining sign-ups could not be cancelled — please cancel them on Lab Signup.')
