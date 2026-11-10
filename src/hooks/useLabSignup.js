@@ -696,23 +696,39 @@ export function useLabCalendarActions() {
   }
 
   /**
-   * Find existing (non-cancelled) signups for `dateStr` whose time slot overlaps
-   * any of the given closure blocks. Returns an array of affected signup rows
-   * shaped for display in the conflict-warning modal.
+   * Find existing (non-cancelled) signups for `dateStr` that a closure would
+   * strand. Returns an array of affected signup rows shaped for display in the
+   * conflict-warning modal.
+   *
+   *   • Partial closure (default): signups whose time slot overlaps any of the
+   *     given closure blocks.
+   *   • Whole day ({ wholeDay: true }): EVERY active signup that day — used when
+   *     a day is set to Closed or removed from the calendar. Before 2026-11-10
+   *     these were skipped, which left students holding sign-ups on a closed
+   *     day (and over-counted their weekly hours, since a Closed day prorates
+   *     the requirement down).
+   *
+   * The day is matched as a local-midnight → next-local-midnight range rather
+   * than an exact timestamp, so a row written with a slightly different time
+   * component (older paths, DST edges) is still caught.
    *
    * Pure read — does NOT modify any data.
    */
-  const findConflictingSignups = async (dateStr, closedBlocks) => {
+  const findConflictingSignups = async (dateStr, closedBlocks, opts = {}) => {
+    const wholeDay = !!opts.wholeDay
+    const wholeDayReason = (opts.reason && String(opts.reason).trim()) || 'Lab closed'
     const blocks = normalizeClosedBlocks(closedBlocks)
-    if (blocks.length === 0) return []
+    if (!wholeDay && blocks.length === 0) return []
     try {
-      const targetDate = new Date(dateStr + 'T12:00:00')
-      const { data, error } = await supabase
+      const dayStart = new Date(dateStr + 'T00:00:00')
+      const dayEnd = new Date(dayStart)
+      dayEnd.setDate(dayEnd.getDate() + 1)
+      const data = mustData(await supabase
         .from('lab_signup')
         .select('signup_id, user_name, user_email, class_id, start_time, end_time, status, date')
-        .eq('date', targetDate.toISOString())
-        .neq('status', 'Cancelled')
-      if (error) throw error
+        .gte('date', dayStart.toISOString())
+        .lt('date', dayEnd.toISOString())
+        .neq('status', 'Cancelled'), 'lab_signup.closure-conflicts')
 
       return (data || [])
         .map(row => {
@@ -720,7 +736,7 @@ export function useLabCalendarActions() {
           // end_time may be missing for older rows; fall back to start + 60 min
           const eMin = timeToMinutes(row.end_time) ?? (sMin != null ? sMin + 60 : null)
           if (sMin == null || eMin == null) return null
-          const reason = findOverlappingClosure(sMin, eMin, blocks)
+          const reason = wholeDay ? wholeDayReason : findOverlappingClosure(sMin, eMin, blocks)
           if (!reason) return null
           return {
             signupId:  row.signup_id,
@@ -739,26 +755,33 @@ export function useLabCalendarActions() {
         .sort((a, b) => a.startMin - b.startMin || a.userName.localeCompare(b.userName))
     } catch (err) {
       console.error('findConflictingSignups error:', err)
-      toast.error('Could not check for conflicts: ' + err.message)
-      return []
+      toast.error('Could not check for existing sign-ups — nothing was saved. ' + err.message)
+      // null (not []) so the caller stops instead of saving a closure that
+      // would silently strand sign-ups it never got to see.
+      return null
     }
   }
 
   /**
-   * Cancel a list of signups (by signup_id) with status='Cancelled' and a
-   * rejection_reason note. Optionally fires the send-closure-notification
-   * Edge Function to email each affected student.
+   * Cancel a list of signups (by signup_id) with status='Cancelled'. When
+   * `sendEmail` is on (the modal's "Notify each student" checkbox) it also:
+   *   • puts one notice per student in their notification bell
+   *     (announcements, notification_type 'lab_closure'), and
+   *   • fires the send-closure-notification Edge Function to email them.
+   * `fullDay` tells the email/notice the whole day is closed (or removed),
+   * not just part of it.
    *
-   * Returns { cancelled, emailed, emailFailed, errors }
+   * Returns { cancelled, emailed, emailFailed, notified, errors }
    */
   const cancelSignupsForClosure = async ({
     dateStr,
     blockReason,
     affectedSignups,
     sendEmail,
+    fullDay = false,
   }) => {
     if (!Array.isArray(affectedSignups) || affectedSignups.length === 0) {
-      return { cancelled: 0, emailed: 0, emailFailed: 0, errors: [] }
+      return { cancelled: 0, emailed: 0, emailFailed: 0, notified: 0, errors: [] }
     }
     setSaving(true)
     try {
@@ -776,11 +799,66 @@ export function useLabCalendarActions() {
 
       let emailed = 0
       let emailFailed = 0
+      let notified = 0
       const errors = []
       const failedEmails = new Set()   // per-student email failures, for the audit rows
       let emailFnDown = false          // whole Edge Function call failed
+      // Only tell students about sign-ups that really were cancelled.
+      const doneSignups = affectedSignups.filter(s => cancelledIds.has(s.signupId))
 
       if (sendEmail) {
+        // ── In-app notice: one per student, listing every hour cancelled ──
+        // Non-critical: a failure is logged and the email still goes out.
+        try {
+          const dateLabelShort = formatDateLabel(dateStr)
+          const reasonLine = blockReason || 'Lab closed'
+          const byStudent = new Map()
+          for (const s of doneSignups) {
+            const key = String(s.userEmail || '').trim().toLowerCase()
+            if (!key) continue
+            if (!byStudent.has(key)) byStudent.set(key, [])
+            byStudent.get(key).push(s)
+          }
+          const senderName = profile
+            ? `${profile.first_name || ''} ${(profile.last_name || '').charAt(0)}.`.trim()
+            : 'Instructor'
+          const notices = [...byStudent.entries()].map(([email, list]) => {
+            const times = list
+              .slice()
+              .sort((a, b) => (timeToMinutes(a.startTime) ?? 0) - (timeToMinutes(b.startTime) ?? 0))
+              .map(s => `• ${formatTimeLabel(s.startTime)}–${formatTimeLabel(s.endTime)}${s.classId ? ` (${s.classId})` : ''}`)
+              .join('\n')
+            const opening = fullDay
+              ? `The lab is closed on ${dateLabelShort}, so your lab sign-up${list.length === 1 ? ' was' : 's were'} cancelled:`
+              : `Part of the lab was closed on ${dateLabelShort}, so your lab sign-up${list.length === 1 ? ' was' : 's were'} cancelled:`
+            return {
+              recipient_email: email,
+              sender_email: profile?.email || '',
+              sender_name: senderName || 'Instructor',
+              subject: `Lab sign-up cancelled — ${dateLabelShort}`,
+              body: `${opening}\n${times}\n\nReason: ${reasonLine}\n\nThese hours no longer count toward your week. Sign up for another time on the Lab Sign Up page if you still need hours.`,
+              read: false,
+              notification_type: 'lab_closure',
+              created_at: new Date().toISOString(),
+            }
+          })
+          if (notices.length > 0) {
+            const { data: noticeRows, error: noticeErr } = assertWrite(
+              await supabase.from('announcements').insert(notices).select('id'),
+              'announcements.insert'
+            )
+            if (noticeErr) {
+              console.warn('Closure in-app notice failed (non-critical):', noticeErr.message)
+              errors.push(`In-app notice: ${noticeErr.message}`)
+            } else {
+              notified = noticeRows.length
+            }
+          }
+        } catch (e) {
+          console.warn('Closure in-app notice threw (non-critical):', e?.message || e)
+          errors.push(`In-app notice: ${e?.message || e}`)
+        }
+
         try {
           const { data: fnData, error: fnErr } = await supabase.functions.invoke(
             'send-closure-notification',
@@ -788,7 +866,8 @@ export function useLabCalendarActions() {
               body: {
                 date:    dateStr,
                 reason:  blockReason || 'Lab closed',
-                signups: affectedSignups.map(s => ({
+                fullDay: !!fullDay,
+                signups: doneSignups.map(s => ({
                   email:     s.userEmail,
                   name:      s.userName,
                   startTime: s.startTime,
@@ -800,7 +879,7 @@ export function useLabCalendarActions() {
           )
           if (fnErr) {
             // Edge function fully failed (network, deployment, auth, etc.)
-            emailFailed = ids.length
+            emailFailed = doneSignups.length
             emailFnDown = true
             errors.push(fnErr.message || String(fnErr))
           } else if (fnData) {
@@ -814,7 +893,7 @@ export function useLabCalendarActions() {
             }
           }
         } catch (err) {
-          emailFailed = ids.length
+          emailFailed = doneSignups.length
           emailFnDown = true
           errors.push(err.message || String(err))
         }
@@ -823,8 +902,7 @@ export function useLabCalendarActions() {
       // Audit — one row per cancelled signup so each student's record has a trail
       const dateLabel = formatDateLabel(dateStr)
       const reasonText = blockReason || 'Lab closed'
-      await writeAudit(profile, affectedSignups
-        .filter(s => cancelledIds.has(s.signupId))
+      await writeAudit(profile, doneSignups
         .map(s => {
           let emailNote = ''
           if (sendEmail) {
@@ -842,10 +920,10 @@ export function useLabCalendarActions() {
           }
         }))
 
-      return { cancelled: cancelledRows.length, emailed, emailFailed, errors }
+      return { cancelled: cancelledRows.length, emailed, emailFailed, notified, errors }
     } catch (err) {
       toast.error('Error cancelling signups: ' + err.message)
-      return { cancelled: 0, emailed: 0, emailFailed: 0, errors: [err.message || String(err)] }
+      return { cancelled: 0, emailed: 0, emailFailed: 0, notified: 0, errors: [err.message || String(err)] }
     } finally {
       setSaving(false)
     }

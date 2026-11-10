@@ -1442,6 +1442,10 @@ function LabCalendarTab() {
     return { ok: true, blocks }
   }
 
+  // Today's local date key — a closure on a day that has already passed
+  // defaults the "notify" checkbox OFF (there's no time left to rebook).
+  const isPastDay = (dateStr) => dateStr < formatDateKey(new Date())
+
   const handleSave = async () => {
     if (!editingDay) return
 
@@ -1452,10 +1456,34 @@ function LabCalendarTab() {
       return
     }
 
-    // If the day is fully closed OR there are no closure blocks, no conflict
-    // check needed — save directly.
     const blocks = v.blocks
-    if (editingDay.status !== 'Open' || blocks.length === 0) {
+
+    // ── Whole day Closed ────────────────────────────────────────────────
+    // Every active sign-up that day is stranded, so warn + cancel them all
+    // (before 2026-11-10 this path saved straight through and left students
+    // holding sign-ups on a closed day that they couldn't cancel).
+    if (editingDay.status !== 'Open') {
+      const reason = (editingDay.notes || '').trim() || 'Lab closed'
+      const conflicts = await findConflictingSignups(editingDay.date, [], { wholeDay: true, reason })
+      if (conflicts === null) return            // read failed — nothing saved (toast already shown)
+      if (conflicts.length === 0) {
+        await saveDay({ ...editingDay, closedBlocks: [] })
+        setEditingDay(null)
+        refresh()
+        return
+      }
+      setConflictModal({
+        mode: 'closeDay',
+        day: { ...editingDay, closedBlocks: [] },
+        conflicts,
+        reason,
+        sendEmail: !isPastDay(editingDay.date),
+      })
+      return
+    }
+
+    // ── Open day with no closure blocks — nothing to cancel ─────────────
+    if (blocks.length === 0) {
       await saveDay({ ...editingDay, closedBlocks: [] })
       setEditingDay(null)
       refresh()
@@ -1468,6 +1496,7 @@ function LabCalendarTab() {
     // signups still active. This way the modal correctly reflects what will
     // actually be cancelled when Save is pressed.
     const conflicts = await findConflictingSignups(editingDay.date, blocks)
+    if (conflicts === null) return              // read failed — nothing saved (toast already shown)
     if (conflicts.length === 0) {
       await saveDay({ ...editingDay, closedBlocks: blocks })
       setEditingDay(null)
@@ -1477,39 +1506,48 @@ function LabCalendarTab() {
 
     // Open conflict modal to confirm + offer to email
     setConflictModal({
+      mode: 'blocks',
       day: { ...editingDay, closedBlocks: blocks },
       conflicts,
-      sendEmail: true,
+      reason: (blocks.find(b => (b.reason || '').trim())?.reason || 'Lab closed'),
+      sendEmail: !isPastDay(editingDay.date),
     })
   }
 
   // Called from the conflict modal's Confirm button
   const handleConfirmConflict = async () => {
     if (!conflictModal) return
-    const { day, conflicts, sendEmail } = conflictModal
+    const { mode, day, conflicts, sendEmail, reason } = conflictModal
+    const fullDay = mode === 'closeDay' || mode === 'removeDay'
 
-    // Cancel signups (and optionally email) BEFORE persisting the closure so
+    // Cancel signups (and optionally notify) BEFORE persisting the closure so
     // that, even if persistence fails, students don't see a stale signup that
     // was supposedly cancelled.
-    const blockReason = (day.closedBlocks.find(b => (b.reason || '').trim())?.reason || 'Lab closed')
     const result = await cancelSignupsForClosure({
       dateStr:         day.date,
-      blockReason:     blockReason,
+      blockReason:     reason || 'Lab closed',
       affectedSignups: conflicts,
       sendEmail,
+      fullDay,
     })
 
-    // Persist the calendar day with closures
-    await saveDay(day)
+    // Persist the calendar change
+    if (mode === 'removeDay') {
+      await deleteDay(day.date)
+    } else {
+      await saveDay(day)
+    }
 
+    const n = result.cancelled
+    const cancelledText = `Cancelled ${n} sign-up${n === 1 ? '' : 's'}`
     if (sendEmail) {
       if (result.emailFailed > 0) {
-        toast.error(`Cancelled ${result.cancelled}, but ${result.emailFailed} email${result.emailFailed === 1 ? '' : 's'} failed to send`)
+        toast.error(`${cancelledText}, but ${result.emailFailed} email${result.emailFailed === 1 ? '' : 's'} failed to send`)
       } else {
-        toast.success(`Cancelled ${result.cancelled} signup${result.cancelled === 1 ? '' : 's'} and sent ${result.emailed} notification${result.emailed === 1 ? '' : 's'}`)
+        toast.success(`${cancelledText}, sent ${result.emailed} email${result.emailed === 1 ? '' : 's'} and ${result.notified} bell notice${result.notified === 1 ? '' : 's'}`)
       }
     } else {
-      toast.success(`Cancelled ${result.cancelled} signup${result.cancelled === 1 ? '' : 's'}`)
+      toast.success(cancelledText)
     }
 
     setConflictModal(null)
@@ -1519,6 +1557,21 @@ function LabCalendarTab() {
 
   const handleDelete = async () => {
     if (!editingDay) return
+    // Removing a day leaves it un-bookable, so any sign-ups on it are stranded
+    // just like a Closed day — warn + cancel them first.
+    const reason = (editingDay.notes || '').trim() || 'Lab day removed from the calendar'
+    const conflicts = await findConflictingSignups(editingDay.date, [], { wholeDay: true, reason })
+    if (conflicts === null) return              // read failed — nothing removed (toast already shown)
+    if (conflicts.length > 0) {
+      setConflictModal({
+        mode: 'removeDay',
+        day: { ...editingDay },
+        conflicts,
+        reason,
+        sendEmail: !isPastDay(editingDay.date),
+      })
+      return
+    }
     await deleteDay(editingDay.date)
     setEditingDay(null)
     refresh()
@@ -1921,13 +1974,32 @@ function ClosedPeriodsEditor({ blocks, dayStartTime, dayEndTime, onChange }) {
 
 // ─── Closure Conflict Warning Modal ────────────────────────────────────────
 //
-// Shown when an instructor tries to save closure(s) that overlap existing
+// Shown when an instructor's calendar change would strand existing
 // (non-cancelled) student signups. Lists every affected student and offers
-// to email them when their signup is cancelled.
+// to notify them (email + notification bell) when their signup is cancelled.
+//   mode 'blocks'    — closed period(s) added inside an Open day
+//   mode 'closeDay'  — the whole day set to Closed
+//   mode 'removeDay' — the day removed from the lab calendar
 
 function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmail }) {
   const dialogRef = useDialogA11y(true, onCancel)
-  const { conflicts, sendEmail, day } = modal
+  const { conflicts, sendEmail, day, mode = 'blocks', reason = '' } = modal
+  const n = conflicts.length
+  const studentCount = useMemo(
+    () => new Set(conflicts.map(c => String(c.userEmail || '').toLowerCase())).size,
+    [conflicts]
+  )
+  const dayLabel = (() => {
+    const d = new Date(String(day.date).substring(0, 10) + 'T00:00:00')
+    return isNaN(d.getTime())
+      ? day.date
+      : d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })
+  })()
+  const confirmLabel = mode === 'closeDay'
+    ? `Cancel ${n} sign-up${n === 1 ? '' : 's'} & close day`
+    : mode === 'removeDay'
+      ? `Cancel ${n} sign-up${n === 1 ? '' : 's'} & remove day`
+      : `Cancel ${n} signup${n === 1 ? '' : 's'} & save closure`
 
   // Group conflicts by hour for display
   const grouped = useMemo(() => {
@@ -1979,12 +2051,22 @@ function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmai
         </div>
 
         <div className="p-4 space-y-3 overflow-y-auto">
-          <p id="closure-conflict-desc" className="text-xs text-surface-600 leading-relaxed">
-            <strong>{conflicts.length}</strong> student signup{conflicts.length === 1 ? '' : 's'} on{' '}
-            <strong>{day.date}</strong> overlap{conflicts.length === 1 ? 's' : ''} the closure period
-            {(day.closedBlocks || []).length === 1 ? '' : 's'} you've added. Saving will cancel
-            {conflicts.length === 1 ? ' this signup' : ' these signups'} so {conflicts.length === 1 ? 'the student' : 'students'} can pick a different time.
-          </p>
+          {mode === 'blocks' ? (
+            <p id="closure-conflict-desc" className="text-xs text-surface-600 leading-relaxed">
+              <strong>{n}</strong> student signup{n === 1 ? '' : 's'} on{' '}
+              <strong>{day.date}</strong> overlap{n === 1 ? 's' : ''} the closure period
+              {(day.closedBlocks || []).length === 1 ? '' : 's'} you've added. Saving will cancel
+              {n === 1 ? ' this signup' : ' these signups'} so {n === 1 ? 'the student' : 'students'} can pick a different time.
+            </p>
+          ) : (
+            <p id="closure-conflict-desc" className="text-xs text-surface-600 leading-relaxed">
+              <strong>{dayLabel}</strong> has <strong>{n}</strong> hour{n === 1 ? '' : 's'} signed up
+              by <strong>{studentCount}</strong> student{studentCount === 1 ? '' : 's'}.{' '}
+              {mode === 'closeDay' ? 'Closing the day' : 'Removing the day'} will cancel every one of them,
+              so they stop counting toward the students' weekly hours.
+              {reason ? <> Reason given to students: <strong>{reason}</strong>.</> : null}
+            </p>
+          )}
 
           <div className="border border-surface-200 rounded-lg divide-y divide-surface-100 max-h-[40vh] overflow-y-auto">
             {grouped.map(group => (
@@ -2021,10 +2103,10 @@ function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmai
             />
             <span className="flex-1">
               <span className="flex items-center gap-1.5 text-xs font-medium text-surface-800">
-                <Mail size={12} aria-hidden="true" /> Email each student about the cancellation
+                <Mail size={12} aria-hidden="true" /> Notify each student about the cancellation
               </span>
               <span id="closure-email-help" className="text-[10px] text-surface-500 block mt-0.5">
-                Sends an automated note explaining their signup was cancelled and asking them to pick another time.
+                Sends an email and a notification-bell notice listing the cancelled hours and the reason, and asks them to pick another time if they still need hours.
               </span>
             </span>
           </label>
@@ -2044,8 +2126,11 @@ function ClosureConflictModal({ modal, saving, onCancel, onConfirm, onToggleEmai
             className="px-4 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 inline-flex items-center gap-1.5 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
           >
             {saving ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <CheckCircle2 size={12} aria-hidden="true" />}
-            {saving ? 'Working…' : `Cancel ${conflicts.length} signup${conflicts.length === 1 ? '' : 's'} & save closure`}
+            {saving ? 'Working…' : confirmLabel}
           </button>
+          <span className="sr-only" role="status" aria-live="polite">
+            {saving ? 'Cancelling sign-ups, please wait.' : ''}
+          </span>
         </div>
       </div>
     </div>
