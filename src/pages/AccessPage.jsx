@@ -54,6 +54,7 @@ const PAGE_ICONS = {
   'Program Budget': 'account_balance',
   'Weekly Labs': 'grading',
   'Volunteer Hours': 'volunteer_activism',
+  'Suggestion Box': 'lightbulb',
   'Request History': 'manage_search',
   'Users': 'people',
   'Settings': 'settings',
@@ -266,6 +267,12 @@ const DEFAULT_PERMISSIONS = [
   ['P0E0', 'Volunteer Hours', 'view_page', true, true, true, 'Can access Volunteer Hours page'],
   ['P0E1', 'Volunteer Hours', 'view_all_students', false, false, true, 'Can view all students volunteer progress'],
   ['P0E2', 'Volunteer Hours', 'approve_entries', false, false, true, 'Can approve or reject volunteer submissions'],
+
+  // Suggestion Box (RICT Club) — seeded by 20261110_suggestion_box.sql
+  ['PSB1', 'Suggestion Box', 'view_page', true, true, true, 'Can open the Suggestion Box page'],
+  ['PSB2', 'Suggestion Box', 'submit', true, true, true, 'Can send suggestions (named or anonymous)'],
+  ['PSB3', 'Suggestion Box', 'manage', false, false, true, 'Can see every suggestion, set status, reply, delete, and close out a school year'],
+  ['PSB4', 'Suggestion Box', 'manage_viewers', false, false, true, 'Can choose who is on the Suggestion Box viewer list'],
 
   // Request History
   ['P0F0', 'Request History', 'view_page', true, true, true, 'Can access Request History page'],

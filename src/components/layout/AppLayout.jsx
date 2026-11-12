@@ -62,6 +62,7 @@ import {
   History,
   BookOpen,
   ClipboardCheck,
+  Lightbulb,
 } from 'lucide-react'
 import { useMaintenanceWindow, formatMaintenanceDateTime } from '@/hooks/useMaintenanceWindow'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
@@ -100,6 +101,8 @@ const navSections = [
       { name: 'Time Cards', href: '/time-cards', icon: Clock, permPage: 'Reports', roles: ['Student', 'Work Study', 'Instructor'] },
       // Weekly Labs Tracker retired 2026-09 (labs tracked in D2L). All Done now lives on Time Cards.
       { name: 'Volunteer Hours', href: '/volunteer-hours', icon: Heart, permPage: 'Volunteer Hours', roles: ['Student', 'Work Study', 'Instructor'] },
+      // RICT Club Suggestion Box (2026-11-10) — permissions seeded by 20261110_suggestion_box.sql
+      { name: 'Suggestion Box', href: '/suggestion-box', icon: Lightbulb, permPage: 'Suggestion Box', roles: ['Student', 'Work Study', 'Instructor'] },
       { name: 'Attendance Reports', href: '/attendance-reports', icon: BarChart3, permPage: null, roles: ['Instructor'] },
       // Renamed 2026-10-08 (was "Accountability Report"). permPageLegacy is checked only
       // while the permission rows still carry the old name (before 20261008_metrics_report_rename.sql).

@@ -88,6 +88,7 @@ const AccessPage = lazyPage(() => import('@/pages/AccessPage'))
 const AuditLogPage = lazyPage(() => import('@/pages/AuditLogPage'))
 const WOCRatioPage = lazyPage(() => import('@/pages/WOCRatioPage'))
 const VolunteerHoursPage = lazyPage(() => import('@/pages/VolunteerHoursPage'))
+const SuggestionBoxPage = lazyPage(() => import('@/pages/SuggestionBoxPage'))
 const SOPsPage = lazyPage(() => import('@/pages/SOPsPage'))
 const InstructorToolsPage = lazyPage(() => import('@/pages/InstructorToolsPage'))
 const ProgramPlannerPage = lazyPage(() => import('@/pages/ProgramPlannerPage'))
@@ -508,6 +509,7 @@ function AppRoutes() {
             {/* Weekly Labs Tracker retired 2026-09 (labs in D2L). All Done lives on Time Cards; keep old bookmarks working. */}
             <Route path="/weekly-labs" element={<Navigate to="/time-cards" replace />} />
             <Route path="/volunteer-hours" element={<Lazy><VolunteerHoursPage /></Lazy>} />
+            <Route path="/suggestion-box" element={<Lazy><SuggestionBoxPage /></Lazy>} />
             <Route path="/attendance-reports" element={<Lazy><AttendanceReportsPage /></Lazy>} />
             <Route path="/metrics-report" element={<Lazy><AccountabilityReportPage /></Lazy>} />
             {/* Renamed 2026-10-08 (was "Accountability Report"). Keep old bookmarks and links working, ?student=/&term= included. */}

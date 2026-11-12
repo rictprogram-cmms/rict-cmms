@@ -709,6 +709,8 @@ export default function NotificationBell() {
       const isWODue = a.notification_type === 'wo_due_reminder';
       const isIpReleased = a.notification_type === 'ip_released';
       const isStudentMsg = a.notification_type === 'student_message';
+      const isSuggestionNew = a.notification_type === 'suggestion_new';
+      const isSuggestionUpdate = a.notification_type === 'suggestion_update';
       // Type / icon / color matrix:
       //   wo_assignment  → orange clipboard ('assignment_ind')
       //   student_message → green chat bubble ('forum') — visually distinct from
@@ -743,6 +745,23 @@ export default function NotificationBell() {
         color = '#dc2626';
         title = a.subject || 'Your IP address was released';
         subtitle = 'Remove the static IP setting from your device';
+      } else if (isSuggestionNew) {
+        // suggestion_new → amber lightbulb, written by submit_suggestion() for
+        // each Suggestion Box viewer. Sender is always "Suggestion Box" — an
+        // anonymous suggestion never names its author here.
+        type = 'suggestion_new';
+        icon = 'lightbulb';
+        color = '#f59f00';
+        title = a.subject || 'New suggestion';
+        subtitle = (a.body || '').split('\n')[0] || 'A new suggestion is in the box';
+      } else if (isSuggestionUpdate) {
+        // suggestion_update → violet, written by update_suggestion() for the
+        // author of a NAMED suggestion when its status or reply changes.
+        type = 'suggestion_update';
+        icon = 'tips_and_updates';
+        color = '#7048e8';
+        title = a.subject || 'Update on your suggestion';
+        subtitle = (a.body || '').split('\n')[0] || 'Your suggestion was updated';
       } else if (isStudentMsg) {
         type = 'student_message';
         icon = 'forum';
@@ -1908,6 +1927,8 @@ export default function NotificationBell() {
     wo_assignment: 'WORK ORDER ASSIGNED',
     wo_due_reminder: 'WORK ORDER DUE SOON',
     ip_released: 'IP ADDRESS RELEASED',
+    suggestion_new: 'NEW SUGGESTION',
+    suggestion_update: 'SUGGESTION UPDATE',
     help: 'NEEDS HELP',
     netchg: 'NETWORK CHANGE',
     absence: 'ABSENCE REQUEST',
@@ -1937,6 +1958,16 @@ export default function NotificationBell() {
       await supabase.from('announcements').update({ read: true }).eq('id', item.raw.id);
     } catch {}
     navigate('/network-map');
+  };
+
+  // Suggestion Box notices: mark read and open the Suggestion Box on the
+  // right section ('all' for viewers, 'mine' for the author of a named one).
+  const viewSuggestion = async (item, view) => {
+    setOpen(false);
+    try {
+      await supabase.from('announcements').update({ read: true }).eq('id', item.raw.id);
+    } catch {}
+    navigate('/suggestion-box', { state: { view } });
   };
 
   // Navigate to the Network Map page so the instructor can review pending changes.
@@ -1971,6 +2002,8 @@ export default function NotificationBell() {
       case 'wo_assignment': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewWOAssignment(item)}><span className="material-icons" aria-hidden="true">assignment_ind</span>View WO</button>);
       case 'wo_due_reminder': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#b45309' }} onClick={() => viewWOAssignment(item)} aria-label={`View work orders coming due: ${item.title}`}><span className="material-icons" aria-hidden="true">schedule</span>View WO</button>);
       case 'ip_released': return (<><button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#b91c1c' }} onClick={() => viewIpReleased(item)} aria-label={`Open the Network Map: ${item.title}`}><span className="material-icons" aria-hidden="true">router</span>Network Map</button><button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" onClick={() => viewAnnouncement(item)} aria-label={`Read the full message: ${item.title}`}><span className="material-icons" aria-hidden="true">visibility</span>View</button></>);
+      case 'suggestion_new': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#b45309' }} onClick={() => viewSuggestion(item, 'all')} aria-label={`Open the Suggestion Box: ${item.title}`}><span className="material-icons" aria-hidden="true">lightbulb</span>Open Suggestion Box</button>);
+      case 'suggestion_update': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#7048e8' }} onClick={() => viewSuggestion(item, 'mine')} aria-label={`See your suggestions: ${item.title}`}><span className="material-icons" aria-hidden="true">tips_and_updates</span>See Reply</button>);
       case 'help': return (<><button className="nbtn nbtn-approve focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" disabled={disabled} onClick={() => acknowledgeHelp(item)}><span className="material-icons" aria-hidden="true">check</span>On My Way</button><button className="nbtn nbtn-secondary min-h-[44px]" disabled={disabled} onClick={() => dismissHelp(item)}><span className="material-icons" aria-hidden="true">close</span>Dismiss</button></>);
       case 'netchg': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#7c3aed' }} onClick={() => viewNetworkChange(item)} aria-label={`Review network change request for ${item.raw?.ip_address || 'device'} on the Network Map page`}><span className="material-icons" aria-hidden="true">router</span>Review on Network Map</button>);
       case 'absence': return (<button className="nbtn nbtn-view focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1 min-h-[44px]" style={{ background: '#f59f00' }} onClick={() => viewAbsenceRequest(item)} aria-label={`Review ${item.raw?.request_type === 'Late Submission' ? 'late submission' : 'absence'} request from ${item.raw?.user_name || item.raw?.user_email || 'student'} on the Absence / Late Request page`}><span className="material-icons" aria-hidden="true">event_busy</span>Review Request</button>);
