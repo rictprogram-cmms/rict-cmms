@@ -17,6 +17,14 @@
  * audit_log for a submit. The tracking code it returns is shown once and only
  * its hash is stored.
  *
+ * Emulation (2026-11-11): Emulate User only changes what the app shows — the
+ * database still sees the real Super Admin login. While emulating, this hook
+ * passes the emulated user's email as p_as_email to submit_suggestion,
+ * update_suggestion and suggestion_box_can_view_as, which accept it ONLY from
+ * the Super Admin. So each emulated user gets their own daily limit, named
+ * suggestions are signed with their name, and the list is narrowed to what
+ * that user could really see. (20261111_suggestion_box_emulation_reset.sql)
+ *
  * Timestamps: created_at / replied_at / status_changed_at are REAL UTC
  * (Convention B). created_on is a date-only string (YYYY-MM-DD, Chicago).
  *
@@ -57,8 +65,10 @@ export function friendlyError(err, fallback = 'Something went wrong. Please try 
 }
 
 export function useSuggestionBox({ canManageViewers = false } = {}) {
-  const { profile } = useAuth()
+  const { profile, isEmulating } = useAuth()
   const email = (profile?.email || '').toLowerCase()
+  // Only sent while the Super Admin is emulating; the database refuses it from anyone else.
+  const asEmail = isEmulating && email ? email : null
 
   const [suggestions, setSuggestions] = useState([])
   const [canView, setCanView] = useState(false)
@@ -77,11 +87,16 @@ export function useSuggestionBox({ canManageViewers = false } = {}) {
     if (!email) return
     try {
       const [viewRes, sugRes] = await Promise.all([
-        supabase.rpc('suggestion_box_can_view'),
+        supabase.rpc('suggestion_box_can_view_as', { p_as_email: asEmail }),
         supabase.from('suggestions').select(SUGGESTION_COLS).order('id', { ascending: false }),
       ])
       const viewFlag = mustData(viewRes, 'suggestion_box_can_view') === true
-      const rows = mustData(sugRes, 'suggestions.select') || []
+      let rows = mustData(sugRes, 'suggestions.select') || []
+      // RLS sees the Super Admin (who can read everything). While emulating
+      // someone who is not a viewer, show only what they could really see.
+      if (asEmail && !viewFlag) {
+        rows = rows.filter(s => s.author_email && s.author_email.toLowerCase() === asEmail)
+      }
 
       let viewerRows = []
       let peopleRows = []
@@ -107,7 +122,7 @@ export function useSuggestionBox({ canManageViewers = false } = {}) {
     } finally {
       if (mounted.current) setLoading(false)
     }
-  }, [email, canManageViewers])
+  }, [email, asEmail, canManageViewers])
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
@@ -128,23 +143,31 @@ export function useSuggestionBox({ canManageViewers = false } = {}) {
       p_body: body,
       p_category: category,
       p_anonymous: !!anonymous,
+      p_as_email: asEmail,
     })
     if (error) throw error
     if (!data?.id) throw new Error('The suggestion was not saved.')
     fetchAll()
     return data
-  }, [fetchAll])
+  }, [fetchAll, asEmail])
 
   const update = useCallback(async (id, { status, reply }) => {
     const { data, error } = await supabase.rpc('update_suggestion', {
       p_id: id,
       p_status: status,
       p_reply: reply ?? '',
+      p_as_email: asEmail,
     })
     if (error) throw error
     if (!data?.id) throw new Error('The suggestion was not updated.')
     setSuggestions(prev => prev.map(s => (s.id === data.id ? { ...s, ...data } : s)))
     return data
+  }, [asEmail])
+
+  /** Instructors: reset today's daily limit for everyone (all-or-nothing on purpose). */
+  const resetLimits = useCallback(async () => {
+    const { error } = await supabase.rpc('reset_suggestion_limits')
+    if (error) throw error
   }, [])
 
   const remove = useCallback(async (id) => {
@@ -188,7 +211,7 @@ export function useSuggestionBox({ canManageViewers = false } = {}) {
 
   return {
     suggestions, mine, canView, viewers, people, loading, loadError,
-    refresh: fetchAll, submit, update, remove, archiveYear, lookup, addViewer, removeViewer,
+    refresh: fetchAll, submit, update, remove, resetLimits, archiveYear, lookup, addViewer, removeViewer,
   }
 }
 

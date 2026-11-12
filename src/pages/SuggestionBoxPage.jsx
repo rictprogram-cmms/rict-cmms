@@ -22,9 +22,13 @@
  * Accessibility (WCAG 2.1 AA / Section 508): labelled controls with help text
  * tied by aria-describedby, 44px targets, focus-visible rings, status badges
  * carry text (never colour alone), polite live region for send / save / copy
- * results, ConfirmDialog (useDialogA11y) for destructive actions, animation
- * skippable and replaced by a fade under prefers-reduced-motion or when the
- * "Play a fun animation" option is off.
+ * results, ConfirmDialog (useDialogA11y) for destructive actions. The send
+ * animation always plays (2026-11-11: the opt-out checkbox was removed); it
+ * stays skippable and is replaced by a fade under prefers-reduced-motion.
+ *
+ * Instructors (Suggestion Box → manage) get "Reset today's limit" on the Send
+ * view — everyone's limit at once, never per person, so nobody can see who
+ * sent suggestions today.
  *
  * File: src/pages/SuggestionBoxPage.jsx
  */
@@ -34,7 +38,7 @@ import { useLocation } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import {
   Lightbulb, Send, EyeOff, Inbox, Users, Search, Copy, Check, Loader2, AlertCircle,
-  Trash2, Archive, KeyRound, UserPlus, X, MessageSquare, Lock,
+  Trash2, Archive, KeyRound, UserPlus, X, MessageSquare, Lock, RotateCcw,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -44,8 +48,6 @@ import {
 } from '@/hooks/useSuggestionBox'
 import SubmitAnimation, { pickAnimation, captionFor } from '@/components/suggestionBox/SubmitAnimation'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-
-const ANIM_PREF_KEY = 'rict-cmms.suggestion-box.animations'
 
 const FOCUS = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1'
 
@@ -78,10 +80,6 @@ function whenText(createdOn, createdAt) {
 function personName(p) {
   if (!p) return ''
   return `${p.first_name || ''} ${p.last_name || ''}`.trim() || p.email
-}
-
-function readAnimPref() {
-  try { return localStorage.getItem(ANIM_PREF_KEY) !== 'off' } catch { return true }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -184,7 +182,7 @@ export default function SuggestionBoxPage() {
       </div>
 
       {view === 'send' && (
-        <SendView box={box} canSubmit={canSubmit} say={say} />
+        <SendView box={box} canSubmit={canSubmit} canManage={canManage} say={say} />
       )}
       {view === 'mine' && <MineView mine={box.mine} loading={box.loading} />}
       {view === 'all' && canView && (
@@ -197,11 +195,10 @@ export default function SuggestionBoxPage() {
 
 // ─── Send ────────────────────────────────────────────────────────────────────
 
-function SendView({ box, canSubmit, say }) {
+function SendView({ box, canSubmit, canManage, say }) {
   const [body, setBody] = useState('')
   const [category, setCategory] = useState('Other')
   const [anonymous, setAnonymous] = useState(false)
-  const [playAnim, setPlayAnim] = useState(readAnimPref)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [anim, setAnim] = useState(null)              // { kind, note }
@@ -216,9 +213,20 @@ function SendView({ box, canSubmit, say }) {
   const tooShort = trimmed.length < 3
   const remaining = SUGGESTION_MAX_LEN - body.length
 
-  const togglePlayAnim = (on) => {
-    setPlayAnim(on)
-    try { localStorage.setItem(ANIM_PREF_KEY, on ? 'on' : 'off') } catch { /* ignore */ }
+  const [resetting, setResetting] = useState(false)
+
+  const resetLimits = async () => {
+    setResetting(true)
+    try {
+      await box.resetLimits()
+      setError('')
+      toast.success("Today's suggestion limit was reset for everyone")
+      say("Today's suggestion limit was reset for everyone.")
+    } catch (err) {
+      toast.error(friendlyError(err, 'Could not reset the limit.'))
+    } finally {
+      setResetting(false)
+    }
   }
 
   const afterSend = (caption, code) => {
@@ -244,11 +252,7 @@ function SendView({ box, canSubmit, say }) {
       setCopied(false)
       setTrackingCode('')
       pendingCodeRef.current = res.tracking_code || ''
-      if (playAnim) {
-        setAnim({ kind: pickAnimation(), note })
-      } else {
-        afterSend('Your suggestion was sent.', pendingCodeRef.current)
-      }
+      setAnim({ kind: pickAnimation(), note })
     } catch (err) {
       const msg = friendlyError(err, 'Your suggestion could not be sent. Please try again.')
       setError(msg)
@@ -350,14 +354,6 @@ function SendView({ box, canSubmit, say }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <input id="sb-anim" type="checkbox" checked={playAnim} onChange={e => togglePlayAnim(e.target.checked)}
-              className="w-5 h-5 accent-amber-600 cursor-pointer" />
-            <label htmlFor="sb-anim" className="text-sm text-surface-800 cursor-pointer min-h-[28px] flex items-center">
-              Play a fun animation when I send
-            </label>
-          </div>
-
           {error && (
             <p className="flex items-start gap-2 text-sm text-red-700" role="alert">
               <AlertCircle size={15} className="mt-0.5 shrink-0" aria-hidden="true" /> {error}
@@ -374,6 +370,23 @@ function SendView({ box, canSubmit, say }) {
         <p className="bg-white border border-surface-200 rounded-2xl p-5 text-sm text-surface-700">
           You do not have permission to send suggestions.
         </p>
+      )}
+
+      {canManage && (
+        <section aria-labelledby="sb-limit-h" className="bg-white border border-surface-200 rounded-2xl p-5 flex flex-wrap items-center gap-4">
+          <div className="flex-1 min-w-[240px]">
+            <h2 id="sb-limit-h" className="text-base font-bold text-surface-900">Daily limit <span className="text-xs font-semibold text-surface-600">(instructors only)</span></h2>
+            <p className="text-sm text-surface-700 mt-0.5">
+              Each person can send {SUGGESTION_DAILY_LIMIT} suggestions a day. Resetting clears today's count for everyone —
+              it can't be done per person, so no one can see who sent suggestions today.
+            </p>
+          </div>
+          <button type="button" onClick={resetLimits} disabled={resetting}
+            className={`flex items-center gap-2 px-4 min-h-[44px] rounded-lg border border-surface-300 bg-white text-sm font-semibold text-surface-800 hover:bg-surface-50 disabled:opacity-50 ${FOCUS}`}>
+            {resetting ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : <RotateCcw size={15} aria-hidden="true" />}
+            Reset today's limit
+          </button>
+        </section>
       )}
 
       <TrackingLookup lookup={box.lookup} say={say} />

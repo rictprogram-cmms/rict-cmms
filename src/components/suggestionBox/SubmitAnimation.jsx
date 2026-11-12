@@ -14,8 +14,8 @@
  *
  * Accessibility (WCAG 2.1 AA / Section 508)
  *   • No flashing: the only bright effects fade in and out once (2.3.1).
- *   • prefers-reduced-motion, or the page's "Skip animations" setting, gets
- *     the 'gentle' variant: a quick fade and a check mark.
+ *   • prefers-reduced-motion gets the 'gentle' variant: a quick fade and a
+ *     check mark. (There is no opt-out setting — 2026-11-11.)
  *   • Under 3 s and skippable: a real "Skip animation" button (focused on
  *     open, 44px), Escape, or a click on the backdrop (2.2.2 not triggered).
  *   • The drawing itself is aria-hidden; the PAGE announces the caption plus
