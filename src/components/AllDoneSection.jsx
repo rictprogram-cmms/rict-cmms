@@ -8,6 +8,15 @@
  *   • Not yet done today → "All Done — Instructor Swipe" button → AllDoneModal
  *   • Done today          → green confirmation (who / when) + punch-out reminder
  *     while the student is still punched in
+ *
+ * Leaving choice (2026-11-12): a punched-in student picks "Punch me out now"
+ * or "Keep me punched in" in AllDoneModal before the swipe. On "Punch me out
+ * now", after mark_all_done succeeds this card re-reads the student's open
+ * punch and calls kiosk_punch_out with the same instructor badge (an
+ * instructor's card may act for any student; never marked Left Early). If
+ * the punch was already closed elsewhere it is skipped quietly; if the
+ * punch-out fails, All Done still stands and the student is told to punch
+ * out on the Time Clock.
  *   • No class week in session (break) → muted note, no button
  *
  * "Done today" is read from time_clock: a row with entry_type = 'All Done'
@@ -40,6 +49,53 @@ import { useStudentLabReport, useLabTrackerActions } from '@/hooks/useWeeklyLabs
 import AllDoneModal from '@/components/AllDoneModal'
 import { Star, CheckCircle2, Clock, Loader2, LogOut } from 'lucide-react'
 import toast from 'react-hot-toast'
+
+/** 1.5 → "1h 30m", 0.25 → "15m" */
+function formatHoursShort(h) {
+  const mins = Math.round((Number(h) || 0) * 60)
+  const hh = Math.floor(mins / 60)
+  const mm = mins % 60
+  if (hh && mm) return `${hh}h ${mm}m`
+  if (hh) return `${hh}h`
+  return `${mm}m`
+}
+
+/**
+ * Punch the student out with the instructor badge just swiped for All Done.
+ * Resolves to { status: 'out', totalHours } | { status: 'already_out' } |
+ * { status: 'failed', message }. Never throws.
+ */
+export async function punchOutAfterAllDone({ badge, email }) {
+  try {
+    // Re-read the open punch now — it may have closed while the dialog was open
+    const open = mustData(await supabase
+      .from('time_clock')
+      .select('record_id')
+      .eq('user_email', email)
+      .eq('status', 'Punched In')
+      .order('punch_in', { ascending: false })
+      .limit(1), 'time_clock.select')
+    const recordId = open?.[0]?.record_id
+    if (!recordId) return { status: 'already_out' }
+
+    const { data: res, error } = await supabase.rpc('kiosk_punch_out', {
+      p_card: badge,
+      p_email: email,
+      p_record_id: recordId,
+      p_early: false,
+      p_early_minutes: 0,
+      p_approver_card: null,
+      p_is_break: false,
+    })
+    if (error) throw error
+    if (res?.ok) return { status: 'out', totalHours: parseFloat(res.total_hours) || 0 }
+    if (res?.error === 'not_open') return { status: 'already_out' }
+    return { status: 'failed', message: res?.error || 'punch_out_failed' }
+  } catch (err) {
+    console.error('AllDoneSection: punch out after All Done failed:', err?.message || err)
+    return { status: 'failed', message: err?.message || 'punch_out_failed' }
+  }
+}
 
 /** Today's local calendar date as YYYY-MM-DD. */
 export function localTodayStr(now = new Date()) {
@@ -168,7 +224,9 @@ export default function AllDoneSection() {
     })
   }
 
-  const handleAllDone = async (instructor) => {
+  // AllDoneModal passes { badge, punchOut } — punchOut is true only when the
+  // student was punched in and chose "Punch me out now".
+  const handleAllDone = async ({ badge, punchOut = false } = {}) => {
     // Every class is 'None' now: markAllDone skips tracker rows and only
     // cancels signups + writes the time_clock marker + audit row.
     const classInfos = currentWeekInfos.map(info => ({
@@ -179,15 +237,28 @@ export default function AllDoneSection() {
       weekStartDate: info.currentWeek.startDate,
       weekEndDate: info.currentWeek.endDate,
     }))
-    const result = await markAllDone(profile?.user_id, profile?.email, studentName, classInfos, instructor)
+    const result = await markAllDone(profile?.user_id, profile?.email, studentName, classInfos, { badge })
     if (result.success) {
       // The database returns the instructor whose badge was swiped
-      const by = result.instructor || instructor || {}
+      const by = result.instructor || {}
       const who = `${by.first_name || ''} ${by.last_name || ''}`.trim() || 'instructor'
-      toast.success(`All Done — confirmed by ${who}`)
+
+      let punch = null
+      if (punchOut) punch = await punchOutAfterAllDone({ badge, email: profile?.email })
+
+      if (punch?.status === 'out') {
+        toast.success(`All Done — confirmed by ${who}. You're punched out (${formatHoursShort(punch.totalHours)} recorded).`, { duration: 6000 })
+      } else {
+        toast.success(`All Done — confirmed by ${who}`)
+      }
+
       const fresh = await fetchAllDoneToday(profile.email).catch(() => null)
       if (fresh) setStatus(fresh)
-      if (fresh?.punchedIn ?? status.punchedIn) {
+      const stillIn = fresh?.punchedIn ?? (punch?.status === 'out' ? false : status.punchedIn)
+
+      if (punch?.status === 'failed') {
+        toast.error("All Done is saved, but the punch-out didn't go through. Punch out on the Time Clock before you leave.", { duration: 10000 })
+      } else if (stillIn) {
         toast('Remember: you still need to punch out on the Time Clock before you leave.', { icon: '⏰', duration: 8000 })
       }
     }
@@ -225,7 +296,7 @@ export default function AllDoneSection() {
               ) : noWeek ? (
                 <span className="text-surface-500">No class week in session today.</span>
               ) : (
-                <span className="text-surface-600">Finished for the week? Have an instructor swipe to confirm — then punch out.</span>
+                <span className="text-surface-600">Finished for the week? Have an instructor swipe to confirm.</span>
               )}
             </p>
           </div>
@@ -257,7 +328,7 @@ export default function AllDoneSection() {
       {!loading && !status.done && !noWeek && (
         <div className="px-4 pb-3 -mt-1 text-[11px] text-surface-500 flex items-center gap-1.5">
           <Clock size={12} aria-hidden="true" />
-          All Done does not punch you out. Use the Time Clock when you leave.
+          If you're punched in, you'll choose to punch out now or stay punched in before the swipe.
         </div>
       )}
 

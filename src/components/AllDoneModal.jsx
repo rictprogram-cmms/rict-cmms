@@ -10,6 +10,8 @@
  *   • every open WO assigned to the student has a work log this week
  *   • every late WO (anyone's) has a work log this week
  *   • every weekly reminder in scope has been acknowledged
+ *   • if the student is punched in, they have chosen "Punch me out now" or
+ *     "Keep me punched in" (2026-11-12) — nothing is pre-selected
  *   Make-up hours owed this week are shown for the instructor to review.
  * The lab sign-off gate that used to sit in front of these is gone.
  *
@@ -18,21 +20,26 @@
  * (mark_all_done) to check the badge is an Active instructor's, cancel the
  * week's remaining signups, write the time_clock 'All Done' marker and the
  * audit row. Badge numbers are never downloaded to this screen (security
- * phase 3, 2026-10-06). This modal never punches the student out — a note
- * says so.
+ * phase 3, 2026-10-06).
+ *
+ * Leaving choice (2026-11-12): onAllDone also receives punchOut (true only
+ * when the student is punched in and picked "Punch me out now"). The caller
+ * punches the student out with the same instructor badge after All Done is
+ * recorded. "Keep me punched in" behaves exactly as before.
  *
  * Props
  *   isOpen, onClose
  *   studentName, studentEmail
  *   weekNumber, weekDate ("9/14 — 9/18"), weekStartDate, weekEndDate (ISO)
  *   classes    — [{ className, classId }] enrolled classes with a current week
- *   onAllDone  — async ({ badge }) => { success, error? } — error
+ *   onAllDone  — async ({ badge, punchOut }) => { success, error? } — error
  *                'badge_not_recognized' keeps the modal open with a message
- *   punchedIn  — boolean, shows the punch-out reminder wording
+ *   punchedIn  — boolean; when true the leaving choice is shown and required
  *
  * Accessibility: useDialogA11y (focus in, Tab trap, Esc, focus return),
  * role="dialog" + aria-modal, labelled badge input, 44px controls, live
- * regions on the checklist / error, role="note" reminder.
+ * regions on the checklist / error, role="note" reminder, leaving choice is a
+ * fieldset/legend radio group with 44px options and a focus-visible ring.
  *
  * File: src/components/AllDoneModal.jsx
  */
@@ -45,7 +52,7 @@ import { fetchMakeupOverlay } from '@/hooks/useMakeupHours'
 import { mondayKeyOf } from '@/lib/closureProration'
 import {
   Loader2, CheckCircle2, X, AlertTriangle, ClipboardList, Clock, Star,
-  BookOpen, UserCircle, RotateCcw,
+  BookOpen, UserCircle, RotateCcw, LogOut,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -62,6 +69,8 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
   const [loadingWOs, setLoadingWOs] = useState(true)
   const [weeklyReminders, setWeeklyReminders] = useState([])  // [{id, class_id, class_label, message}]
   const [acknowledgedIds, setAcknowledgedIds] = useState(() => new Set())
+  // Leaving choice when the student is punched in: '' (not chosen) | 'out' | 'stay'
+  const [leaveChoice, setLeaveChoice] = useState('')
   // Make-up hours owed THIS week from approved requests (absence / late submission) the week before:
   //   [{ requestId, courseId, owed, logged, windowDays: ['YYYY-MM-DD', …], complete }]
   const [makeups, setMakeups] = useState([])
@@ -242,6 +251,7 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
     setBadge('')
     setError('')
     setAcknowledgedIds(new Set())
+    setLeaveChoice('')
     processingRef.current = false
 
     async function fetchWOs() {
@@ -372,7 +382,9 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
   // All reminders must be acknowledged individually before badge swipe is allowed
   const allRemindersAcked = weeklyReminders.length === 0
     || weeklyReminders.every(r => acknowledgedIds.has(r.id))
-  const canVerify = allLabsDone && allWOsHaveLogsThisWeek && allLateWOsHaveLogs && allRemindersAcked
+  // Punched-in students must say whether they are leaving (no default)
+  const leaveChoiceMade = !punchedIn || leaveChoice === 'out' || leaveChoice === 'stay'
+  const canVerify = allLabsDone && allWOsHaveLogsThisWeek && allLateWOsHaveLogs && allRemindersAcked && leaveChoiceMade
 
   const doVerify = async (overrideValue) => {
     // Guard: if already processing, skip silently
@@ -395,7 +407,7 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
       // Security phase 3 (2026-10-06): badge numbers are no longer readable
       // here. The swiped value goes to the database, which checks it belongs to
       // an Active instructor and records All Done (see markAllDone).
-      const result = await onAllDone({ badge: badgeValue })
+      const result = await onAllDone({ badge: badgeValue, punchOut: !!punchedIn && leaveChoice === 'out' })
 
       if (result?.error === 'badge_not_recognized') {
         setError('Badge not recognized. Only instructor badges can mark All Done.')
@@ -1032,17 +1044,69 @@ export default function AllDoneModal({ isOpen, onClose, studentName, studentEmai
                       : `all ${weeklyReminders.length} instructor messages above (${acknowledgedIds.size}/${weeklyReminders.length} done)`}
                   </p>
                 )}
+                {!leaveChoiceMade && <p className="pl-4">• Choose whether to punch out now or stay punched in</p>}
               </div>
             )}
-            <div
-              className={`mb-3 px-4 py-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${punchedIn ? 'bg-blue-50 border-blue-200 text-blue-800' : 'bg-surface-50 border-surface-200 text-surface-600'}`}
-              role="note"
-            >
-              <Clock size={14} className="flex-shrink-0" aria-hidden="true" />
-              {punchedIn
-                ? 'All Done does not punch you out. Remember to punch out on the Time Clock before you leave.'
-                : 'You are not punched in right now. All Done will still be recorded for today.'}
-            </div>
+            {punchedIn ? (
+              <fieldset className="mb-3">
+                <legend className="text-sm font-semibold text-surface-900 mb-2 flex items-center gap-2">
+                  <Clock size={16} className="text-blue-700 flex-shrink-0" aria-hidden="true" />
+                  Are you leaving now?
+                  <span className="sr-only">(required — choose one)</span>
+                </legend>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    { value: 'out', label: 'Punch me out now', hint: "I'm leaving. Stop my time at this swipe.", Icon: LogOut },
+                    { value: 'stay', label: 'Keep me punched in', hint: "I'm staying to work. I'll punch out on the Time Clock later.", Icon: Clock },
+                  ].map(opt => {
+                    const selected = leaveChoice === opt.value
+                    const hintId = `all-done-leave-${opt.value}-hint`
+                    return (
+                      <label
+                        key={opt.value}
+                        className={`flex items-start gap-3 px-4 py-3 rounded-xl border-2 cursor-pointer min-h-[44px] transition focus-within:ring-2 focus-within:ring-brand-500 focus-within:ring-offset-1 ${
+                          selected
+                            ? 'border-blue-600 bg-blue-50'
+                            : leaveChoiceMade
+                              ? 'border-surface-200 bg-white hover:border-blue-300'
+                              : 'border-red-300 bg-white hover:border-blue-300'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="all-done-leave-choice"
+                          value={opt.value}
+                          checked={selected}
+                          onChange={() => { setLeaveChoice(opt.value); setError('') }}
+                          aria-describedby={hintId}
+                          className="sr-only"
+                        />
+                        <span
+                          aria-hidden="true"
+                          className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${selected ? 'border-blue-600' : 'border-surface-400'}`}
+                        >
+                          {selected && <span className="w-2.5 h-2.5 rounded-full bg-blue-600" />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="flex items-center gap-1.5 text-sm font-semibold text-surface-900">
+                            <opt.Icon size={14} aria-hidden="true" /> {opt.label}
+                          </span>
+                          <span id={hintId} className="block text-xs text-surface-600 mt-0.5">{opt.hint}</span>
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </fieldset>
+            ) : (
+              <div
+                className="mb-3 px-4 py-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 bg-surface-50 border-surface-200 text-surface-600"
+                role="note"
+              >
+                <Clock size={14} className="flex-shrink-0" aria-hidden="true" />
+                You are not punched in right now. All Done will still be recorded for today.
+              </div>
+            )}
             <div className="relative">
               <input
                 type="text"
