@@ -67,6 +67,9 @@ import {
 import PendingAcknowledgmentModal from '@/components/PendingAcknowledgmentModal';
 import EditTempAccessDialog from '@/components/EditTempAccessDialog';
 import AccountabilityAlertsCard from '@/components/AccountabilityAlertsCard';
+import { LabWarningBadge, LabWarningPanel } from '@/components/LabWarnings';
+import { useLabWarnings, termForDate, levelLabel } from '@/hooks/useLabWarnings';
+import { useAcademicTerms } from '@/hooks/useAcademicTerms';
 import '@/styles/dashboard.css';
 
 // ─── Colours ────────────────────────────────────────────────────────────
@@ -1449,6 +1452,23 @@ function InstructorOverview({ navigate }) {
   const shortModalSummary = shortModalWeek === nextMondayKey ? nextWeekSummary
     : shortModalWeek === thisMondayKey ? thisWeekSummary
     : null;
+
+  // Lab sign-up warnings (stage 1) — the student name in the list opens the
+  // warning panel for anyone with Lab Signup → manage_warnings. Warnings are
+  // counted per term, so the term is the one covering the week on screen.
+  const { hasPerm: hasLabPerm } = usePermissions('Lab Signup');
+  const canManageWarnings = hasLabPerm('manage_warnings');
+  const { terms: academicTerms } = useAcademicTerms();
+  const shortModalTerm = useMemo(
+    () => (shortModalWeek ? termForDate(academicTerms, shortModalWeek) : null),
+    [academicTerms, shortModalWeek]
+  );
+  const { byEmail: warningsByEmail } = useLabWarnings({
+    termId: shortModalTerm?.term_id,
+    enabled: !!shortModalWeek && canManageWarnings,
+  });
+  const [warningFor, setWarningFor] = useState(null); // { email, name, weekOf, weekLabel, shortage }
+  const closeWarningPanel = useCallback(() => setWarningFor(null), []);
   const shortModalWindow = useMemo(
     () => (shortModalWeek ? describeSignupWindow(shortModalWeek, new Date(clockTick)) : null),
     [shortModalWeek, clockTick]
@@ -2177,7 +2197,30 @@ function InstructorOverview({ navigate }) {
                         .map(c => `${c.courseId || c.classId} ${formatHoursShort(Math.min(c.signed, c.required))} of ${formatHoursShort(c.required)}`);
                       return (
                         <tr key={row.email}>
-                          <th scope="row" style={{ fontWeight: 600, color: '#1a1a2e', textAlign: 'left' }}>{row.name}</th>
+                          <th scope="row" style={{ fontWeight: 600, color: '#1a1a2e', textAlign: 'left' }}>
+                            {canManageWarnings ? (() => {
+                              const w = warningsByEmail.get(String(row.email || '').toLowerCase());
+                              return (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="dash-short-name"
+                                    onClick={() => setWarningFor({
+                                      email: row.email,
+                                      name: row.name,
+                                      weekOf: shortModalWeek,
+                                      weekLabel: formatWeekLabel(shortModalWeek),
+                                      shortage: row.met ? '' : shortIn.map(s => `${s} hrs`).join('; '),
+                                    })}
+                                    aria-label={`Lab warnings for ${row.name}: ${levelLabel(w?.level || 0)}. Open to send, log or reset.`}
+                                  >
+                                    {row.name}
+                                  </button>
+                                  {w && <div><LabWarningBadge summary={w} /></div>}
+                                </>
+                              );
+                            })() : row.name}
+                          </th>
                           <td>
                             <span className={`dash-week-mark ${row.met ? 'is-met' : 'is-short'}`}>
                               <span className="material-icons" aria-hidden="true">{row.allDone ? 'verified' : row.met ? 'check_circle' : 'cancel'}</span>
@@ -2212,6 +2255,16 @@ function InstructorOverview({ navigate }) {
           </div>
         </div>
       )}
+
+      {/* ── Lab warning panel (stacks above the sign-ups list) ── */}
+      <LabWarningPanel
+        open={!!warningFor}
+        onClose={closeWarningPanel}
+        student={warningFor}
+        term={shortModalTerm}
+        context={warningFor}
+        canManage={canManageWarnings}
+      />
 
       {/* ── Temp Access History Modal ── */}
       {tempHistoryOpen && (

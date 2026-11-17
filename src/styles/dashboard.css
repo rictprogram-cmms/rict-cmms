@@ -230,6 +230,15 @@
 .dash-short-table th[scope="row"] { padding: 10px 12px; border-bottom: 1px solid #f1f3f5; background: transparent; text-transform: none; letter-spacing: 0; font-size: 0.85rem; }
 .dash-short-table td { vertical-align: middle; }
 .dash-short-open { gap: 2px; white-space: nowrap; }
+/* Student name → lab warning panel. Underlined so it reads as a control, not
+   colour alone; #1864ab on white = 6.4:1. 44px tall target. */
+.dash-short-name {
+  min-height: 44px; padding: 0 4px; margin-left: -4px; border: 0; background: none;
+  font: inherit; font-weight: 600; color: #1864ab; text-align: left; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px; border-radius: 4px;
+}
+.dash-short-name:hover { color: #0b4f8a; background: #f1f3f5; }
+.dash-short-name:focus-visible { outline: 2px solid #228be6; outline-offset: 2px; }
 @media (max-width: 600px) {
   /* Narrow screens: let the table scroll inside the modal body rather than
      squeezing the 44px action button */

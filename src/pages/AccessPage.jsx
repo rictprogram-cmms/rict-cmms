@@ -159,6 +159,7 @@ const DEFAULT_PERMISSIONS = [
   ['P053', 'Lab Signup', 'manage_others', false, false, true, 'Can manage others signups'],
   ['P054', 'Lab Signup', 'view_calendar', true, true, true, 'Can view lab calendar'],
   ['P055', 'Lab Signup', 'manage_calendar', false, false, true, 'Can manage calendar settings'],
+  ['P056', 'Lab Signup', 'manage_warnings', false, false, true, 'Can send, log and reset lab sign-up warnings'],  // seeded by 20261116_lab_warnings.sql
 
   // Equipment Scheduling
   ['P120', 'Equipment Scheduling', 'view_page',           true,  true,  true,  'Can access Equipment Scheduling page'],

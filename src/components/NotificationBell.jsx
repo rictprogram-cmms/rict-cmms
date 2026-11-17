@@ -711,6 +711,8 @@ export default function NotificationBell() {
       const isStudentMsg = a.notification_type === 'student_message';
       const isSuggestionNew = a.notification_type === 'suggestion_new';
       const isSuggestionUpdate = a.notification_type === 'suggestion_update';
+      const isLabWarning = a.notification_type === 'lab_warning';
+      const isLabWarningReset = a.notification_type === 'lab_warning_reset';
       // Type / icon / color matrix:
       //   wo_assignment  → orange clipboard ('assignment_ind')
       //   student_message → green chat bubble ('forum') — visually distinct from
@@ -762,6 +764,16 @@ export default function NotificationBell() {
         color = '#7048e8';
         title = a.subject || 'Update on your suggestion';
         subtitle = (a.body || '').split('\n')[0] || 'Your suggestion was updated';
+      } else if (isLabWarning || isLabWarningReset) {
+        // lab_warning / lab_warning_reset → written by lab_warning_send() /
+        // lab_warning_reset() (20261116_lab_warnings.sql). Kept as type
+        // 'announcement' so a click opens the Inbox like any message: the
+        // student reads the full text there, and marking it read stamps
+        // lab_warnings.seen_at (the "Opened" time instructors see).
+        icon = isLabWarning ? 'warning' : 'restart_alt';
+        color = isLabWarning ? '#c92a2a' : '#2b8a3e';
+        title = a.subject || (isLabWarning ? 'Lab sign-up warning' : 'Lab sign-up warnings reset');
+        subtitle = `From ${a.sender_name || 'Instructor'}`;
       } else if (isStudentMsg) {
         type = 'student_message';
         icon = 'forum';

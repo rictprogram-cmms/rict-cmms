@@ -71,6 +71,8 @@ import {
   CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown, ExternalLink,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { LabWarningHistory, LabWarningPanel } from '@/components/LabWarnings'
+import { useLabWarnings, levelLabel } from '@/hooks/useLabWarnings'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -616,6 +618,8 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
         {!loading && result?.errors?.length > 0 && <span className="text-amber-700">{result.errors.join(' ')}</span>}
       </div>
 
+      <LabWarningsCard student={student} term={term} studentView={studentView} />
+
       {report && !loading && (
         <>
           {/* Summary strip */}
@@ -666,6 +670,51 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
         </>
       )}
     </div>
+  )
+}
+
+// Lab sign-up warnings for one student and term — the permanent record an
+// instructor can show a student ("you were warned on…"). Students see their
+// own (read-only); instructors with Lab Signup → manage_warnings can open the
+// panel to log a past warning, send the next one, or reset.
+function LabWarningsCard({ student, term, studentView }) {
+  const { hasPerm } = usePermissions('Lab Signup')
+  const canManage = !studentView && hasPerm('manage_warnings')
+  const { byEmail, loading, error } = useLabWarnings({ termId: term?.term_id, studentEmail: student?.email, enabled: !!student?.email && !!term })
+  const summary = byEmail.get(lower(student?.email)) || null
+  const [panelOpen, setPanelOpen] = useState(false)
+  const headId = `lab-warn-${safeName(student?.email)}`
+  const name = studentName(student)
+
+  if (!studentView && !canManage && !summary) return null
+
+  return (
+    <section className="card mb-4 lab-warnings-card" aria-labelledby={headId}>
+      <div className="px-4 py-3 border-b border-surface-100 flex flex-wrap items-center justify-between gap-2">
+        <h3 id={headId} className="font-semibold text-surface-800">
+          Lab sign-up warnings <span className="text-sm font-normal text-surface-500">— {levelLabel(summary?.level || 0)}</span>
+        </h3>
+        {canManage && (
+          <button type="button" className="btn-secondary min-h-[44px] no-print" onClick={() => setPanelOpen(true)} aria-label={`Manage lab warnings for ${name}`}>
+            Manage warnings
+          </button>
+        )}
+      </div>
+      <div className="px-4 py-2">
+        {loading && <p className="text-sm text-surface-500" role="status">Loading warnings…</p>}
+        {error && <p className="text-sm text-red-700" role="alert">{error}</p>}
+        {!loading && <LabWarningHistory summary={summary} studentView={studentView} showUpcoming={!!summary?.level} />}
+      </div>
+      {canManage && (
+        <LabWarningPanel
+          open={panelOpen}
+          onClose={() => setPanelOpen(false)}
+          student={{ email: student.email, name }}
+          term={term}
+          canManage={canManage}
+        />
+      )}
+    </section>
   )
 }
 
