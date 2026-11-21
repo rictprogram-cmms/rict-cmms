@@ -6,6 +6,7 @@ import { mustData, assertWrite, isUniqueViolation, LAB_SIGNUP_UNIQUE_HOUR } from
 import { useAuth } from '@/contexts/AuthContext'
 import toast from 'react-hot-toast'
 import { fetchMakeupOverlay, getMakeupInfo, mondayKeyOf, firstTwoLabDays } from '@/hooks/useMakeupHours'
+import { parseLunch, lunchOverlapsHour, lunchPortionOfHour, formatLunchStart, formatLunchRange } from '@/lib/lunchTime'
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -230,9 +231,8 @@ function formatTimeLabel(timeStr) {
 }
 
 function formatLunchLabel(lunchHour) {
-  if (lunchHour == null || lunchHour === '') return 'None'
-  const n = parseInt(lunchHour, 10)
-  return isNaN(n) ? 'None' : formatHour(n)
+  // Handles half-hour lunches too (11.5 → '11:30 AM')
+  return formatLunchStart(lunchHour)
 }
 
 function formatBlocksLabel(blocks) {
@@ -278,8 +278,8 @@ function diffLabDay(existing, next) {
 
   cmp('Max students', Number(existing.max_students) || 24, Number(next.max_students) || 24)
 
-  const oldLunch = existing.lunch_hour == null ? null : parseInt(existing.lunch_hour, 10)
-  const newLunch = next.lunch_hour == null ? null : parseInt(next.lunch_hour, 10)
+  const oldLunch = parseLunch(existing.lunch_hour)
+  const newLunch = parseLunch(next.lunch_hour)
   cmp('Lunch hour', oldLunch, newLunch, formatLunchLabel(oldLunch), formatLunchLabel(newLunch))
 
   const oldNotes = (existing.notes || '').trim()
@@ -543,7 +543,7 @@ export function useLabCalendar(year, month) {
         endHour: getHourFromTime(row.end_time) ?? 16,
         maxStudents: row.max_students || 24,
         status: row.status || 'Open',
-        lunchHour: row.lunch_hour != null ? parseInt(row.lunch_hour) : null,
+        lunchHour: parseLunch(row.lunch_hour),
         notes: row.notes || '',
         closedBlocks: normalizeClosedBlocks(row.closed_blocks),
       }
@@ -1008,14 +1008,14 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
         const key = typeof row.date === 'string' && row.date.length >= 10 ? row.date.substring(0, 10) : formatDateKey(new Date(row.date))
         const startH = getHourFromTime(row.start_time) ?? 8
         const endH = getHourFromTime(row.end_time) ?? 16
-        const lunchH = row.lunch_hour != null ? parseInt(row.lunch_hour) : null
+        const lunchH = parseLunch(row.lunch_hour)
         calByDate[key] = {
           startHour: startH,
           endHour: endH,
           maxStudents: row.max_students || 24,
           status: row.status || 'Open',
           notes: row.notes || '',
-          lunchHour: isNaN(lunchH) ? null : lunchH,
+          lunchHour: lunchH,
           isOpen: row.status === 'Open',
           closedBlocks: normalizeClosedBlocks(row.closed_blocks),
         }
@@ -1132,7 +1132,14 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
             const key = `${dateKey}_${hour}`
             const signups = signupsByKey[key] || []
             const day = days[days.length - 1]
-            const isLunch = day.lunchHour !== null && hour === day.lunchHour
+            // True for every hour slot lunch touches — an 11:30 lunch marks
+            // both the 11 AM and 12 PM slots. Informational only (still bookable).
+            const isLunch = lunchOverlapsHour(day.lunchHour, hour)
+            const lunchRange = isLunch ? formatLunchRange(day.lunchHour) : ''
+            // Which half of the cell is lunch (null when lunch fills the whole hour
+            // or doesn't touch it) — the grid shades just that part.
+            const lunchPortion = isLunch ? lunchPortionOfHour(day.lunchHour, hour) : null
+            const lunchPartial = lunchPortion && !lunchPortion.full ? lunchPortion : null
 
             let mySignupId = ''
             let myClassId = ''
@@ -1168,6 +1175,8 @@ export function useLabSignupData(weekStart, weeksToDisplay = 4, visibleDays = [1
               // isOpen now also requires that the hour is NOT inside a closure
               isOpen: day.isOpen && withinDayHours && !isHourClosed,
               isLunch,
+              lunchRange,
+              lunchPartial,
               isAfterHours,
               isHourClosed,
               closureReason: closureReason || '',

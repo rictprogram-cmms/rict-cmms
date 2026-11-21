@@ -14,6 +14,7 @@ import { prorationForWeek, prorateHours, useClosureOverlay, mondayKeyOf, buildCl
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { supabase } from '@/lib/supabase'
 import { mustData } from '@/lib/supabaseData'
+import { LUNCH_OPTIONS, parseLunch, lunchOverlapsHour, formatLunchRange } from '@/lib/lunchTime'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { fetchStudentWeek, mergeSignupBlocks, describeWeekStatus, describeSignupWindow, formatWeekLabel, formatHoursShort, formatDayShort, weekRangeOf } from '@/lib/weeklySignupStatus'
 import toast from 'react-hot-toast'
@@ -821,6 +822,10 @@ function WeeklySignupTab() {
                         if (!slot) return <td key={key} className="px-2 py-1.5" />
 
                         const isLunch = slot.isLunch
+                        // Half-hour lunch (e.g. 11:30–12:30): only part of this
+                        // hour is lunch, so only that part is shaded.
+                        const lunchPartial = isLunch ? slot.lunchPartial : null
+                        let splitLunch = false
                         const isMine = !!slot.mySignupId
                         // An instructor booked this hour outside lab hours (Admin
                         // Sign Up). Shown so the student / instructors can see it;
@@ -852,9 +857,13 @@ function WeeklySignupTab() {
                           ) : cid
                         }
 
-                        // Helper: lunch badge overlay
+                        // Helper: lunch badge overlay. For a half-hour lunch it sits in
+                        // the half that is lunch (bottom of 11 AM, top of 12 PM for 11:30)
+                        // and says when lunch starts / ends.
                         const lunchBadge = isLunch ? (
-                          <span className="absolute top-0.5 right-0.5 text-[6px] font-bold bg-orange-400 text-white px-1 rounded leading-tight">LUNCH</span>
+                          <span className={`absolute ${lunchPartial?.part === 'bottom' ? 'bottom-0.5' : 'top-0.5'} right-0.5 text-[6px] font-bold bg-orange-400 text-white px-1 rounded leading-tight`}>
+                            {lunchPartial ? lunchPartial.label : 'LUNCH'}
+                          </span>
                         ) : null
                         // Helper: make-up badge overlay (top-left so it doesn't collide with LUNCH)
                         // Helper: after-hours badge overlay (top-right; lunch and after-hours never overlap)
@@ -902,6 +911,32 @@ function WeeklySignupTab() {
                         } else if (slot.isFull) {
                           cellClass += 'bg-red-50 text-red-400 cursor-default'
                           cellContent = 'FULL'
+                        } else if (isLunch && lunchPartial) {
+                          // Available slot that is only partly lunch (half-hour lunch):
+                          // green for the lab part, orange for the lunch part, so two
+                          // half-shaded cells read as ONE lunch hour, not two.
+                          splitLunch = true
+                          const lunchOnBottom = lunchPartial.part === 'bottom'
+                          const openTop = lunchOnBottom ? 0 : lunchPartial.heightPct
+                          const openHeight = 100 - lunchPartial.heightPct
+                          cellClass += 'bg-emerald-50 border border-emerald-200 text-emerald-700 cursor-pointer hover:bg-emerald-100 overflow-hidden'
+                          cellContent = (
+                            <>
+                              <span
+                                aria-hidden="true"
+                                className={`absolute inset-x-0 flex items-center justify-center bg-orange-100 text-orange-700 text-[7px] font-bold tracking-wide pointer-events-none border-dashed border-orange-300 ${lunchOnBottom ? 'border-t' : 'border-b'}`}
+                                style={{ top: `${lunchPartial.topPct}%`, height: `${lunchPartial.heightPct}%` }}
+                              >
+                                {lunchPartial.label}
+                              </span>
+                              <span
+                                className="absolute inset-x-0 flex items-center justify-center leading-none pointer-events-none"
+                                style={{ top: `${openTop}%`, height: `${openHeight}%` }}
+                              >
+                                {slot.availableSpots > 0 ? `${slot.availableSpots}/${slot.maxStudents}` : ''}
+                              </span>
+                            </>
+                          )
                         } else if (isLunch) {
                           // Available lunch slot — distinct styling, still clickable
                           cellClass += 'bg-orange-50 border border-orange-200 text-orange-600 cursor-pointer hover:bg-orange-100'
@@ -946,11 +981,11 @@ function WeeklySignupTab() {
                           : isInstructor ? `${slot.currentSignups}/${slot.maxStudents} signed up${afterHoursBooked ? ' after lab hours' : ''} — click for details`
                           : isMarkedCancel ? 'Click to undo cancel'
                           : isMine && afterHoursBooked ? 'After lab hours, booked by your instructor — click to cancel'
-                          : isMine && isLunch ? 'Lunch hour — click to cancel'
+                          : isMine && isLunch ? `Lunch ${slot.lunchRange || ''} — click to cancel`
                           : isMine ? `Click to cancel this signup${isMakeupSlot ? ' (make-up hour)' : ''}`
                           : isSelected ? `${owningClass}${isMakeupSlot ? ' make-up hour' : ''} — click to deselect`
                           : slot.isFull ? 'No spots available'
-                          : isLunch ? `Lunch hour — ${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} (instructor on break)`
+                          : isLunch ? `Lunch ${slot.lunchRange || ''} — ${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} (instructors on break)`
                           : `${slot.availableSpots} spot${slot.availableSpots !== 1 ? 's' : ''} open${slot.deadlinePassed && !isInstructor ? ' (requires approval)' : ''}`
 
                         return (
@@ -962,7 +997,7 @@ function WeeklySignupTab() {
                               aria-label={`${day.dayName} ${formatHour(hour)} — ${titleText}`}
                               disabled={!cellOpen}
                             >
-                              {lunchBadge}
+                              {!splitLunch && lunchBadge}
                               {afterHoursBadge}
                               {makeupBadge}
                               {cellContent}
@@ -1715,16 +1750,24 @@ function LabCalendarTab() {
                     </label>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <label className="text-xs font-medium text-surface-600">
+                    <div>
+                    <label className="text-xs font-medium text-surface-600 block">
                       Lunch Break
-                      <select value={editingDay.lunchHour ?? ''} onChange={e => setEditingDay(d => ({ ...d, lunchHour: e.target.value ? parseInt(e.target.value) : null }))}
+                      <select value={editingDay.lunchHour != null ? String(editingDay.lunchHour) : ''} onChange={e => setEditingDay(d => ({ ...d, lunchHour: parseLunch(e.target.value) }))}
+                        aria-describedby="lunch-break-hint"
                         className="mt-1 w-full px-3 py-2 border border-surface-200 rounded-lg text-sm">
                         <option value="">No Lunch</option>
-                        <option value="11">11:00 AM</option>
-                        <option value="12">12:00 PM</option>
-                        <option value="13">1:00 PM</option>
+                        {LUNCH_OPTIONS.map(o => (
+                          <option key={o.value} value={String(o.value)}>{o.label}</option>
+                        ))}
                       </select>
                     </label>
+                    <p id="lunch-break-hint" className="mt-1 text-[11px] text-surface-500">
+                      {editingDay.lunchHour != null
+                        ? `Help is off ${formatLunchRange(editingDay.lunchHour)}. Students can still sign up.`
+                        : 'One hour. Help is off during lunch; students can still sign up.'}
+                    </p>
+                    </div>
                     <label className="text-xs font-medium text-surface-600">
                       Max/Hour
                       <input type="number" min="1" value={editingDay.maxStudents} onChange={e => setEditingDay(d => ({ ...d, maxStudents: parseInt(e.target.value) || 24 }))}
@@ -2705,7 +2748,7 @@ function AdminSignupTab({ preset = null }) {
 
         const startH = getHourFromTime(calData.start_time) ?? 8
         const endH = getHourFromTime(calData.end_time) ?? 16
-        const lunchH = calData.lunch_hour != null ? parseInt(calData.lunch_hour) : null
+        const lunchH = parseLunch(calData.lunch_hour)   // 11.5 = 11:30 lunch
         const maxStudents = calData.max_students || 24
 
         // Get existing signup counts — required: a failed read would show every
@@ -2730,10 +2773,11 @@ function AdminSignupTab({ preset = null }) {
         const lastEnd = Math.max(INSTRUCTOR_LAST_END_HOUR, endH)
         for (let h = firstH; h < lastEnd; h++) {
           const inLab = h >= startH && h < endH
-          const kind = !inLab ? 'after' : (lunchH !== null && h === lunchH) ? 'lunch' : 'lab'
+          const kind = !inLab ? 'after' : lunchOverlapsHour(lunchH, h) ? 'lunch' : 'lab'
           const count = counts[h] || 0
           if (count < maxStudents) {
-            available.push({ hour: h, display: formatHour(h), available: maxStudents - count, maxStudents, kind })
+            available.push({ hour: h, display: formatHour(h), available: maxStudents - count, maxStudents, kind,
+              lunchRange: kind === 'lunch' ? formatLunchRange(lunchH) : '' })
           }
         }
         setSlots(available)
@@ -2870,7 +2914,7 @@ function AdminSignupTab({ preset = null }) {
             <Info size={14} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
             <span>
               {selectedSlotInfo.kind === 'lunch'
-                ? 'This is the lunch hour — the instructor on duty may be on break.'
+                ? `Lunch is ${selectedSlotInfo.lunchRange || 'during this hour'} — the instructor on duty may be on break.`
                 : `This time is outside lab hours. It will show on the student's sign-up grid${selectedClass ? ` and count toward ${selectedClass}` : ' but, with no class picked, will not count toward any class'}.`}
             </span>
           </p>

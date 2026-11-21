@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { subscribeWithReconnect } from '@/lib/supabaseRealtime'
 import { SUPER_ADMIN_EMAIL } from '@/lib/superAdmin'
 import { useAuth } from '@/contexts/AuthContext'
+import { parseLunch } from '@/lib/lunchTime'
 import toast from 'react-hot-toast'
 import {
   formatDateKey,
@@ -397,14 +398,14 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
           : formatDateKey(new Date(row.date))
         const startH = getHourFromTime(row.start_time) ?? 8
         const endH = getHourFromTime(row.end_time) ?? 16
-        const lunchH = row.lunch_hour != null ? parseInt(row.lunch_hour, 10) : null
+        const lunchH = parseLunch(row.lunch_hour)   // 11.5 = 11:30 lunch
         calByDate[key] = {
           startHour: startH,
           endHour: endH,
           maxStudents: row.max_students || 24,
           status: row.status || 'Open',
           notes: row.notes || '',
-          lunchHour: isNaN(lunchH) ? null : lunchH,
+          lunchHour: lunchH,
           isOpen: row.status === 'Open',
           closedBlocks: normalizeClosedBlocks(row.closed_blocks),
         }
@@ -482,7 +483,7 @@ export function useEquipmentBookingsData(weekStart, weeksToDisplay = 4, visibleD
             hasEntry: !!config,
             startMin: (config?.startHour ?? 8) * 60,
             endMin: (config?.endHour ?? 16) * 60,
-            lunchStartMin: config?.lunchHour != null ? config.lunchHour * 60 : null,
+            lunchStartMin: config?.lunchHour != null ? Math.round(config.lunchHour * 60) : null,
             closedBlocks: config?.closedBlocks || [],
           }
           days[dateKey] = dayInfo

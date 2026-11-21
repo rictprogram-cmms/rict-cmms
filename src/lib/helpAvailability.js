@@ -34,6 +34,8 @@
  * File: src/lib/helpAvailability.js
  */
 
+import { lunchStartMin } from '@/lib/lunchTime'
+
 export const AWAY_SETTING_KEYS = [
   'instructor_away_mode',
   'instructor_return_time',
@@ -192,11 +194,8 @@ export function openWindow(calendarRow) {
   }
 }
 
-function parseLunchHour(raw) {
-  if (raw == null || raw === '') return null
-  const n = parseInt(raw, 10)
-  return Number.isNaN(n) ? null : n
-}
+// Lunch can start on the hour or the half hour (lab_calendar.lunch_hour
+// 11.5 = 11:30 AM) and always lasts 60 minutes — see lib/lunchTime.js.
 
 // ── The decision ────────────────────────────────────────────────────────────
 
@@ -270,10 +269,12 @@ export function getHelpAvailability({ now = new Date(), calendarRow, away } = {}
       }
     }
 
-    // 4. Lunch hour (existing rule — same wording as before)
-    const lunchHour = parseLunchHour(calendarRow.lunch_hour)
-    if (lunchHour !== null && now.getHours() === lunchHour) {
-      const ends = formatMinutes12((lunchHour + 1) * 60)
+    // 4. Lunch (existing rule — same wording as before). Minute-based so a
+    //    half-hour lunch (11:30–12:30) locks exactly that hour.
+    const lunchStart = lunchStartMin(calendarRow.lunch_hour)
+    const lunchNowMin = now.getHours() * 60 + now.getMinutes()
+    if (lunchStart !== null && lunchNowMin >= lunchStart && lunchNowMin < lunchStart + 60) {
+      const ends = formatMinutes12(lunchStart + 60)
       return {
         locked: true, code: 'lunch', icon: '🍽️', tone: 'amber',
         title: 'Instructors are on lunch',
