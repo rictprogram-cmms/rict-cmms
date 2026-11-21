@@ -1,3 +1,6 @@
 # Keep Windows batch files CRLF on checkout and in the repo, regardless of core.autocrlf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Shell scripts run on Linux (Raspberry Pi kiosks) and break with CRLF
+*.sh text eol=lf
