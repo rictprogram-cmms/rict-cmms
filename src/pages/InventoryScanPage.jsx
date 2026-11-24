@@ -17,6 +17,8 @@
  *  - Audit log entries with actual user name/email
  *  - "Scan Next" button to scan another item without leaving the page
  *  - "Back to Inventory" navigation
+ *  - Tools (inventory.item_type = 'Tool') scan and count like parts, but show
+ *    "Tool" instead of Min / Max and are never colored as low stock
  */
 
 import { assertWrite } from '@/lib/supabaseData'
@@ -69,7 +71,7 @@ export default function InventoryScanPage() {
         .single()
 
       if (err || !data) {
-        setError({ title: 'Item Not Found', message: `Part "${targetId}" was not found in the system.` })
+        setError({ title: 'Item Not Found', message: `Item "${targetId}" was not found in the system.` })
         setItem(null)
       } else {
         setItem(data)
@@ -240,8 +242,9 @@ export default function InventoryScanPage() {
       }
     } catch {}
 
-    // Also try matching just a part ID pattern (INV followed by digits)
-    const partMatch = text.match(/INV\d+/i)
+    // Also try matching just an ID pattern: a part (INV-0001, or the older
+    // INV0001 form) or a tool (TL-0001)
+    const partMatch = text.match(/(?:INV|TL)-?\d+/i)
     if (partMatch) {
       setSearchParams({ partId: partMatch[0] })
       loadItem(partMatch[0])
@@ -265,7 +268,9 @@ export default function InventoryScanPage() {
     openScanner()
   }
 
-  const isLow = item ? (item.qty_in_stock <= (item.min_qty || 0)) : false
+  // Tools have no min/max, so a tool is never "low"
+  const isToolItem = item?.item_type === 'Tool'
+  const isLow = item && !isToolItem ? (item.qty_in_stock <= (item.min_qty || 0)) : false
   const imgUrl = item ? getImageUrl(item.image_url) : null
   const hasChanged = item ? newQty !== item.qty_in_stock : false
 
@@ -354,7 +359,7 @@ export default function InventoryScanPage() {
                 {imgUrl ? (
                   <img src={imgUrl} alt={item.part_name} referrerPolicy="no-referrer" />
                 ) : (
-                  <span className="material-icons">inventory_2</span>
+                  <span className="material-icons" aria-hidden="true">{isToolItem ? 'build' : 'inventory_2'}</span>
                 )}
               </div>
               <div className="cc-part-info">
@@ -376,13 +381,20 @@ export default function InventoryScanPage() {
               {/* Info Grid */}
               <div className="cc-info-grid">
                 <div className="cc-info-box">
-                  <div className="cc-info-label">Current Qty</div>
+                  <div className="cc-info-label">{isToolItem ? 'Qty Owned' : 'Current Qty'}</div>
                   <div className={`cc-info-value ${isLow ? 'low' : 'ok'}`}>{item.qty_in_stock}</div>
                 </div>
-                <div className="cc-info-box">
-                  <div className="cc-info-label">Min / Max</div>
-                  <div className="cc-info-value">{item.min_qty || 0} / {item.max_qty || 0}</div>
-                </div>
+                {isToolItem ? (
+                  <div className="cc-info-box">
+                    <div className="cc-info-label">Type</div>
+                    <div className="cc-info-value">Tool</div>
+                  </div>
+                ) : (
+                  <div className="cc-info-box">
+                    <div className="cc-info-label">Min / Max</div>
+                    <div className="cc-info-value">{item.min_qty || 0} / {item.max_qty || 0}</div>
+                  </div>
+                )}
               </div>
 
               {/* Quantity Adjustment */}

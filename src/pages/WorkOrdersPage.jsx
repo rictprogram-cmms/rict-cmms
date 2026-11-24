@@ -909,9 +909,11 @@ export default function WorkOrdersPage() {
       if (assignableUsers) setUsers(assignableUsers);
     } catch (e) { console.error(e); }
 
-    // Inventory (for parts modal)
+    // Inventory (for parts modal). Parts only: adding a part to a work order
+    // takes it out of stock, which must never happen to a tool
+    // (inventory.item_type = 'Tool').
     try {
-      const data = mustData(await supabase.from('inventory').select('part_id, part_name, qty_in_stock, supplier_part_number').eq('status', 'Active'), 'inventory.select');
+      const data = mustData(await supabase.from('inventory').select('part_id, part_name, qty_in_stock, supplier_part_number').eq('status', 'Active').neq('item_type', 'Tool'), 'inventory.select');
       if (data) setInventoryItems(data);
     } catch (e) { console.error(e); }
 

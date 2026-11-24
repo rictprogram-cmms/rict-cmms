@@ -15,6 +15,10 @@
  * - Adjust Quantity modal (new qty, clear order date checkbox)
  * - Print Labels modal (QR codes for Zebra ZT230 2"x1")
  * - Full permission gating via hasPerm()
+ * - Tools (inventory.item_type = 'Tool'): program-owned tools counted by
+ *   quantity. Same table, own TL- IDs (get_next_tool_id RPC), no min/max,
+ *   never low stock, kept out of purchasing and work order parts. A
+ *   Parts / Tools / All switch chooses what the page lists.
  *
  * Supabase tables: inventory, inventory_locations, vendors, inventory_suppliers
  * Storage buckets: inventory-images
@@ -36,14 +40,33 @@ import { useDialogA11y } from '@/hooks/useDialogA11y';
 const blank = (v) => v === null || v === undefined || String(v).trim() === '';
 const norm = (v) => String(v || '').trim().toLowerCase();
 
+// ---------- PARTS vs TOOLS ----------
+// A tool is program-owned equipment counted by quantity: no min/max, never
+// low stock, not ordered through Purchase Orders. Anything not marked Tool is
+// a Part, so rows from before the item_type column behave exactly as before.
+const isTool = (i) => i?.item_type === 'Tool';
+const TYPE_VIEWS = [
+  { value: 'Part', label: 'Parts' },
+  { value: 'Tool', label: 'Tools' },
+  { value: '',     label: 'All' },
+];
+const TYPE_VIEW_KEY = 'rict-inventory-type-view';
+const readTypeView = () => {
+  try {
+    const v = window.localStorage.getItem(TYPE_VIEW_KEY);
+    return v === 'Tool' || v === '' ? v : 'Part';
+  } catch { return 'Part'; }
+};
 const MISSING_OPTIONS = [
   { value: 'image',       label: 'No image',              test: (i) => blank(i.image_url) },
-  { value: 'vendor',      label: 'No vendor',             test: (i) => blank(i.primary_supplier) },
-  { value: 'vendor_part', label: 'No vendor part number', test: (i) => blank(i.supplier_part_number) },
+  // Vendor and vendor part number are optional on a tool, so a blank one is not a gap
+  { value: 'vendor',      label: 'No vendor',             test: (i) => !isTool(i) && blank(i.primary_supplier) },
+  { value: 'vendor_part', label: 'No vendor part number', test: (i) => !isTool(i) && blank(i.supplier_part_number) },
   { value: 'location',    label: 'No location',           test: (i) => blank(i.location) },
   { value: 'description', label: 'No description',        test: (i) => blank(i.description) },
   // Minimum 0 = the part is never flagged as low stock
-  { value: 'minmax',      label: 'No min/max set',        test: (i) => !((Number(i.min_qty) || 0) > 0) },
+  // (tools have no min/max at all, so they are never listed here)
+  { value: 'minmax',      label: 'No min/max set',        test: (i) => !isTool(i) && !((Number(i.min_qty) || 0) > 0) },
   { value: 'vendor_stale',   label: 'Vendor not in list',   needs: 'vendors',
     test: (i, ctx) => !blank(i.primary_supplier) && !ctx.vendorNames.has(norm(i.primary_supplier)) },
   { value: 'location_stale', label: 'Location not in list', needs: 'locations',
@@ -60,6 +83,9 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
   const [stockFilter, setStockFilter] = useState('');
+  // 'Part' | 'Tool' | '' (All). Remembered per browser; a first visit shows Parts,
+  // which is the page exactly as it was before tools existed.
+  const [typeFilter, setTypeFilter] = useState(readTypeView);
   const [missingFilter, setMissingFilter] = useState('');   // '', 'any', or a MISSING_OPTIONS value
   const [showInactive, setShowInactive] = useState(false);
   const [sortColumn, setSortColumn] = useState('');
@@ -90,7 +116,7 @@ export default function InventoryPage() {
   // Current editing
   const [currentItem, setCurrentItem] = useState(null);
   const [formData, setFormData] = useState({});
-  const [adjustData, setAdjustData] = useState({ partId: '', partName: '', currentQty: 0, newQty: 0, clearOrder: false });
+  const [adjustData, setAdjustData] = useState({ partId: '', partName: '', currentQty: 0, newQty: 0, clearOrder: false, isTool: false });
   const [selectedImage, setSelectedImage] = useState(null); // { file, preview } or { existingUrl }
   const [isDragging, setIsDragging] = useState(false); // visual feedback for image drop zone
   const [labelsData, setLabelsData] = useState([]);
@@ -231,8 +257,9 @@ export default function InventoryPage() {
         ...item,
         // Low only when a minimum is set (matches the Purchase Orders Low Stock tab);
         // a part with min 0 and qty 0 is not "low", it's simply untracked.
-        isLowStock: (item.min_qty || 0) > 0 && (item.qty_in_stock || 0) <= (item.min_qty || 0),
-        qtyNeeded: Math.max(0, (item.max_qty || 0) - (item.qty_in_stock || 0))
+        // A tool is never low stock, whatever its numbers say.
+        isLowStock: !isTool(item) && (item.min_qty || 0) > 0 && (item.qty_in_stock || 0) <= (item.min_qty || 0),
+        qtyNeeded: isTool(item) ? 0 : Math.max(0, (item.max_qty || 0) - (item.qty_in_stock || 0))
       }));
       setItems(mapped);
       hasLoadedRef.current = true;
@@ -260,7 +287,8 @@ export default function InventoryPage() {
 
   // Everything except the missing-info filter — also the base for its counts,
   // so each count is "how many of what I'm looking at have this gap".
-  const baseFilteredItems = useMemo(() => {
+  // Search, location, stock and status — everything except Parts/Tools and missing info.
+  const preTypeItems = useMemo(() => {
     return items.filter(item => {
       const matchSearch = !search ||
         item.part_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -277,6 +305,28 @@ export default function InventoryPage() {
       return matchSearch && matchLoc && matchStock && matchStatus;
     });
   }, [items, search, locationFilter, stockFilter, showInactive]);
+
+  const matchesType = useCallback((item) =>
+    !typeFilter || (typeFilter === 'Tool' ? isTool(item) : !isTool(item)), [typeFilter]);
+
+  const baseFilteredItems = useMemo(() => preTypeItems.filter(matchesType), [preTypeItems, matchesType]);
+
+  // While searching in Parts or Tools, how many matches sit in the other one —
+  // so a search for "drill" under Parts doesn't look like the drill is missing.
+  const otherTypeMatches = useMemo(() => {
+    if (!typeFilter || !search) return 0;
+    return preTypeItems.length - baseFilteredItems.length;
+  }, [typeFilter, search, preTypeItems, baseFilteredItems]);
+
+  const changeTypeView = (value) => {
+    setTypeFilter(value);
+    setSelectedIds([]);                         // a selection never carries across views
+    if (value === 'Tool') setStockFilter('');   // stock level does not apply to tools
+    try { window.localStorage.setItem(TYPE_VIEW_KEY, value); } catch { /* remembering the view is optional */ }
+  };
+
+  // Wording for whatever the page is listing
+  const viewNoun = typeFilter === 'Tool' ? 'tool' : typeFilter === 'Part' ? 'part' : 'item';
 
   const filteredItems = useMemo(() => {
     if (!missingFilter) return baseFilteredItems;
@@ -344,7 +394,8 @@ export default function InventoryPage() {
 
   // ---------- ACTIONS ----------
   const openAddModal = () => {
-    setFormData({ part_name: '', status: 'Active', description: '', primary_supplier: '', supplier_part_number: '', qty_in_stock: 0, min_qty: 0, max_qty: 0, location: '' });
+    // Adding from the Tools view starts a tool; Parts and All start a part.
+    setFormData({ item_type: typeFilter === 'Tool' ? 'Tool' : 'Part', part_name: '', status: 'Active', description: '', primary_supplier: '', supplier_part_number: '', qty_in_stock: 0, min_qty: 0, max_qty: 0, location: '' });
     setSelectedImage(null);
     setShowPartModal(true);
   };
@@ -365,12 +416,14 @@ export default function InventoryPage() {
   };
 
   const openAdjustModal = (item) => {
-    setAdjustData({ partId: item.part_id, partName: item.part_name, currentQty: item.qty_in_stock || 0, newQty: item.qty_in_stock || 0, clearOrder: false });
+    setAdjustData({ partId: item.part_id, partName: item.part_name, currentQty: item.qty_in_stock || 0, newQty: item.qty_in_stock || 0, clearOrder: false, isTool: isTool(item) });
     setShowAdjustModal(true);
   };
 
   const savePart = async () => {
-    if (!formData.part_name?.trim()) { showToast('Part name is required', 'error'); return; }
+    const tool = isTool(formData);
+    const Noun = tool ? 'Tool' : 'Part';
+    if (!formData.part_name?.trim()) { showToast(`${Noun} name is required`, 'error'); return; }
     setLoading(true);
     try {
       let imageFileId = formData.image_url || '';
@@ -393,8 +446,9 @@ export default function InventoryPage() {
         primary_supplier: formData.primary_supplier || '',
         supplier_part_number: formData.supplier_part_number || '',
         qty_in_stock: parseFloat(formData.qty_in_stock) || 0,
-        min_qty: parseFloat(formData.min_qty) || 0,
-        max_qty: parseFloat(formData.max_qty) || 0,
+        // Tools carry no min/max — 0 keeps them out of every low-stock check.
+        min_qty: tool ? 0 : (parseFloat(formData.min_qty) || 0),
+        max_qty: tool ? 0 : (parseFloat(formData.max_qty) || 0),
         location: formData.location || '',
         image_url: imageFileId,
         status: formData.status || 'Active',
@@ -411,11 +465,26 @@ export default function InventoryPage() {
           setLoading(false);
           return;
         }
-        showToast('Part updated!', 'success');
+        showToast(`${Noun} updated!`, 'success');
       } else {
-        // Create
-        const { data: idData } = await supabase.rpc('get_next_id', { p_type: 'inventory' });
-        const partId = idData || `INV${Date.now()}`;
+        // Create. The type is set here only: it decides the ID prefix, so it
+        // is not changed on a later edit.
+        let partId;
+        if (tool) {
+          // Tools have their own TL- numbers. No made-up fallback: a tool must
+          // never be saved under a part-style or timestamp ID.
+          const { data: toolId, error: idErr } = await supabase.rpc('get_next_tool_id');
+          if (idErr || !toolId) {
+            showToast('Could not get a tool ID' + (idErr?.message ? `: ${idErr.message}` : '') + '. Nothing was saved.', 'error');
+            setLoading(false);
+            return;
+          }
+          partId = toolId;
+          record.item_type = 'Tool';
+        } else {
+          const { data: idData } = await supabase.rpc('get_next_id', { p_type: 'inventory' });
+          partId = idData || `INV${Date.now()}`;
+        }
         record.part_id = partId;
         const { data: rows, error } = await supabase.from('inventory').insert([record]).select();
         if (error) throw error;
@@ -424,7 +493,7 @@ export default function InventoryPage() {
           setLoading(false);
           return;
         }
-        showToast('Part created!', 'success');
+        showToast(`${Noun} created!`, 'success');
       }
       setShowPartModal(false);
       loadInventory();
@@ -436,7 +505,7 @@ export default function InventoryPage() {
     const part = items.find(i => i.part_id === partId);
     if (!part) return;
     setConfirmModal({
-      title: 'Delete Part',
+      title: isTool(part) ? 'Delete Tool' : 'Delete Part',
       message: `Delete "${part.part_name}"? This cannot be undone.`,
       onConfirm: async () => {
         try {
@@ -448,7 +517,7 @@ export default function InventoryPage() {
             setLoading(false);
             return;
           }
-          showToast('Part deleted', 'info');
+          showToast(isTool(part) ? 'Tool deleted' : 'Part deleted', 'info');
           setShowViewModal(false);
           loadInventory();
         } catch (e) { showToast('Error: ' + e.message, 'error'); }
@@ -465,7 +534,7 @@ export default function InventoryPage() {
         updated_at: new Date().toISOString(),
         updated_by: userName()
       };
-      if (adjustData.clearOrder) {
+      if (adjustData.clearOrder && !adjustData.isTool) {
         updates.order_date = null;
       }
       const { data: rows, error } = await supabase.from('inventory').update(updates).eq('part_id', adjustData.partId).select();
@@ -572,7 +641,7 @@ export default function InventoryPage() {
 
   // ---------- LABELS ----------
   const openLabelsPreview = () => {
-    if (selectedIds.length === 0) { showToast('No parts selected', 'error'); return; }
+    if (selectedIds.length === 0) { showToast('Nothing selected', 'error'); return; }
     const selected = items.filter(i => selectedIds.includes(i.part_id));
     setLabelsData(selected);
     setShowLabelsModal(true);
@@ -653,7 +722,7 @@ export default function InventoryPage() {
         <td>${item.part_name}</td>
         <td>${item.supplier_part_number || '—'}</td>
         <td style="${qtyClass}">${item.qty_in_stock ?? 0}${onOrderStr}</td>
-        <td>${item.min_qty ?? 0} / ${item.max_qty ?? 0}</td>
+        <td>${isTool(item) ? '—' : `${item.min_qty ?? 0} / ${item.max_qty ?? 0}`}</td>
         <td>${item.location || '—'}</td>
         <td>${item.primary_supplier || '—'}</td>
         <td>${item.status}</td>
@@ -661,6 +730,7 @@ export default function InventoryPage() {
     }).join('');
 
     const filterNotes = [];
+    if (typeFilter) filterNotes.push(typeFilter === 'Tool' ? 'Tools only' : 'Parts only');
     if (search) filterNotes.push(`Search: "${search}"`);
     if (locationFilter) filterNotes.push(`Location: ${locationFilter}`);
     if (stockFilter) filterNotes.push(`Stock: ${stockFilter}`);
@@ -671,7 +741,10 @@ export default function InventoryPage() {
       : '';
 
     const w = window.open('', '_blank');
-    w.document.write(`<html><head><title>Inventory List</title><style>
+    const listTitle = typeFilter === 'Tool' ? 'Tool List' : 'Inventory List';
+    const idHead = typeFilter === 'Tool' ? 'Tool ID' : typeFilter === 'Part' ? 'Part ID' : 'ID';
+    const nameHead = typeFilter === 'Tool' ? 'Tool Name' : typeFilter === 'Part' ? 'Part Name' : 'Name';
+    w.document.write(`<html><head><title>${listTitle}</title><style>
       @page { size: landscape; margin: 0.5in; }
       body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; margin: 0; padding: 0; }
       h2 { margin: 0 0 4px; font-size: 16px; }
@@ -681,11 +754,11 @@ export default function InventoryPage() {
       th { background: #f0f0f0; font-size: 11px; text-transform: uppercase; }
       tr:nth-child(even) { background: #fafafa; }
     </style></head><body>
-      <h2>RICT CMMS — Inventory List</h2>
+      <h2>RICT CMMS — ${listTitle}</h2>
       <div class="meta">Printed ${new Date().toLocaleDateString()} · ${listData.length} item${listData.length !== 1 ? 's' : ''}</div>
       ${filterLine}
       <table>
-        <thead><tr><th scope="col">Part ID</th><th scope="col">Part Name</th><th scope="col">Supplier Part #</th><th scope="col">Qty</th><th scope="col">Min/Max</th><th scope="col">Location</th><th scope="col">Supplier</th><th scope="col">Status</th></tr></thead>
+        <thead><tr><th scope="col">${idHead}</th><th scope="col">${nameHead}</th><th scope="col">Supplier Part #</th><th scope="col">Qty</th><th scope="col">Min/Max</th><th scope="col">Location</th><th scope="col">Supplier</th><th scope="col">Status</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </body></html>`);
@@ -702,19 +775,33 @@ export default function InventoryPage() {
       {/* Toolbar */}
       <div className="page-toolbar">
         <div className="toolbar-left">
+          {/* Parts / Tools / All — what the page lists */}
+          <div className="type-switch" role="group" aria-label="Show parts, tools, or all items">
+            {TYPE_VIEWS.map(v => (
+              <button key={v.label} type="button"
+                className={`type-switch-btn${typeFilter === v.value ? ' active' : ''}`}
+                aria-pressed={typeFilter === v.value}
+                onClick={() => changeTypeView(v.value)}>
+                {v.label}
+              </button>
+            ))}
+          </div>
           <div className="search-box">
             <span className="material-icons" aria-hidden="true">search</span>
-            <input type="text" placeholder="Search parts..." aria-label="Search parts" value={search} onChange={e => setSearch(e.target.value)} />
+            <input type="text" placeholder={`Search ${viewNoun}s...`} aria-label={`Search ${viewNoun}s`} value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           <select className="filter-select" aria-label="Filter by location" value={locationFilter} onChange={e => setLocationFilter(e.target.value)}>
             <option value="">All Locations</option>
             {locations.map(l => <option key={l.location_id} value={l.location_name}>{l.location_name}</option>)}
           </select>
-          <select className="filter-select" aria-label="Filter by stock level" value={stockFilter} onChange={e => setStockFilter(e.target.value)}>
-            <option value="">All Stock Levels</option>
-            {hasPerm('view_low_stock') && <option value="low">Low Stock</option>}
-            <option value="ok">In Stock</option>
-          </select>
+          {/* Stock level is a parts idea — tools have no min/max, so it is hidden on the Tools view */}
+          {typeFilter !== 'Tool' && (
+            <select className="filter-select" aria-label="Filter by stock level" value={stockFilter} onChange={e => setStockFilter(e.target.value)}>
+              <option value="">All Stock Levels</option>
+              {hasPerm('view_low_stock') && <option value="low">Low Stock</option>}
+              <option value="ok">In Stock</option>
+            </select>
+          )}
           {/* Missing info — data clean-up. Counts follow the other filters. */}
           <select className="filter-select" aria-label="Filter by missing information" value={missingFilter} onChange={e => setMissingFilter(e.target.value)}>
             <option value="">Missing Info: Off</option>
@@ -740,7 +827,7 @@ export default function InventoryPage() {
           )}
           {hasPerm('add_items') && (
             <button className="btn btn-sm btn-primary" onClick={openAddModal}>
-              <span className="material-icons" aria-hidden="true">add</span>Add Part
+              <span className="material-icons" aria-hidden="true">add</span>{typeFilter === 'Tool' ? 'Add Tool' : typeFilter === 'Part' ? 'Add Part' : 'Add Item'}
             </button>
           )}
         </div>
@@ -754,6 +841,17 @@ export default function InventoryPage() {
           <button className="btn btn-sm btn-primary" onClick={() => navigate('/purchase-orders', { state: { tab: 'lowstock' } })}>
             <span className="material-icons" aria-hidden="true">shopping_cart</span>Purchase Orders
           </button>
+        </div>
+      )}
+
+      {/* Search found matches in the view that is not showing */}
+      {otherTypeMatches > 0 && (
+        <div className="type-hint" role="status">
+          <span className="material-icons" aria-hidden="true">info</span>
+          <span>
+            {otherTypeMatches} more match{otherTypeMatches === 1 ? '' : 'es'} for &ldquo;{search}&rdquo; in {typeFilter === 'Tool' ? 'Parts' : 'Tools'}.
+          </span>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={() => changeTypeView('')}>Show all</button>
         </div>
       )}
 
@@ -772,7 +870,11 @@ export default function InventoryPage() {
             <span className="badge">{filteredItems.length}</span>
             {/* Screen-reader announcement when the missing-info filter changes the list */}
             <span className="sr-only" aria-live="polite" aria-atomic="true">
-              {missingFilter && missingLabel ? `${filteredItems.length} part${filteredItems.length === 1 ? '' : 's'} shown: ${missingLabel}` : ''}
+              {missingFilter && missingLabel ? `${filteredItems.length} ${viewNoun}${filteredItems.length === 1 ? '' : 's'} shown: ${missingLabel}` : ''}
+            </span>
+            {/* ...and when the Parts / Tools / All switch changes it */}
+            <span className="sr-only" aria-live="polite" aria-atomic="true">
+              {typeFilter === 'Tool' ? 'Showing tools' : typeFilter === 'Part' ? 'Showing parts' : 'Showing parts and tools'}
             </span>
             {selectedIds.length > 0 && hasPerm('print_labels') && (
               <button className="btn btn-sm btn-secondary" onClick={openLabelsPreview}>
@@ -787,7 +889,7 @@ export default function InventoryPage() {
               <tr>
                 {hasPerm('print_labels') && <th scope="col" className="col-check"></th>}
                 <th scope="col" className="col-img">Image</th>
-                <th scope="col" className="sortable-th" onClick={() => handleSort('part_name')}>Part Name {sortColumn === 'part_name' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
+                <th scope="col" className="sortable-th" onClick={() => handleSort('part_name')}>{typeFilter === 'Tool' ? 'Tool Name' : typeFilter === 'Part' ? 'Part Name' : 'Name'} {sortColumn === 'part_name' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
                 <th scope="col" className="sortable-th" onClick={() => handleSort('supplier_part_number')}>Supplier Part # {sortColumn === 'supplier_part_number' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
                 <th scope="col">Qty</th>
                 <th scope="col">Min/Max</th>
@@ -800,7 +902,7 @@ export default function InventoryPage() {
               {loading ? (
                 <tr><td colSpan={hasPerm('print_labels') ? 9 : 8} className="loading-cell">Loading inventory...</td></tr>
               ) : sortedItems.length === 0 ? (
-                <tr><td colSpan={hasPerm('print_labels') ? 9 : 8} className="loading-cell">No inventory items found</td></tr>
+                <tr><td colSpan={hasPerm('print_labels') ? 9 : 8} className="loading-cell">{typeFilter === 'Tool' && items.every(i => !isTool(i)) ? 'No tools yet. Use Add Tool to start the tool inventory.' : 'No inventory items found'}</td></tr>
               ) : sortedItems.map(item => {
                 const imgUrl = item.image_url ? getImageUrl(item.image_url) : '';
                 const qtyClass = item.isLowStock ? 'low' : 'ok';
@@ -814,7 +916,7 @@ export default function InventoryPage() {
                     )}
                     <td className="col-img">
                       <div className="part-thumb">
-                        {imgUrl ? <img src={imgUrl} alt="" referrerPolicy="no-referrer" /> : <span className="material-icons" aria-hidden="true">inventory_2</span>}
+                        {imgUrl ? <img src={imgUrl} alt="" referrerPolicy="no-referrer" /> : <span className="material-icons" aria-hidden="true">{isTool(item) ? 'build' : 'inventory_2'}</span>}
                       </div>
                     </td>
                     <td onClick={() => openViewModal(item)} style={{ cursor: 'pointer' }}>
@@ -823,6 +925,8 @@ export default function InventoryPage() {
                         style={{ background: 'none', border: 'none', padding: '4px 0', minHeight: 44, cursor: 'pointer', textAlign: 'left', font: 'inherit', color: 'inherit' }}>
                         <strong>{highlightMatch(item.part_name)}</strong><br /><small style={{ color: '#868e96' }}>{highlightMatch(item.part_id)}</small>
                       </button>
+                      {/* On the All view, say which rows are tools (text, not color alone) */}
+                      {!typeFilter && isTool(item) && <span className="tool-tag">Tool</span>}
                     </td>
                     <td>{highlightMatch(item.supplier_part_number || '-')}</td>
                     <td>
@@ -834,7 +938,11 @@ export default function InventoryPage() {
                         </div>
                       )}
                     </td>
-                    <td className="min-max">{item.min_qty ?? 0} / {item.max_qty ?? 0}</td>
+                    <td className="min-max">
+                      {isTool(item)
+                        ? <><span aria-hidden="true">—</span><span className="sr-only">Not used for tools</span></>
+                        : <>{item.min_qty ?? 0} / {item.max_qty ?? 0}</>}
+                    </td>
                     <td>{highlightMatch(item.location || '-')}</td>
                     <td>{highlightMatch(item.primary_supplier || '-')}</td>
                     <td>
@@ -864,13 +972,34 @@ export default function InventoryPage() {
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowPartModal(false)}>
           <div ref={partDialogRef} role="dialog" aria-modal="true" aria-labelledby="inv-part-title" className="modal modal-lg">
             <div className="modal-header">
-              <h3 id="inv-part-title">{formData.part_id ? 'Edit Part' : 'Add New Part'}</h3>
+              <h3 id="inv-part-title">{formData.part_id ? (isTool(formData) ? 'Edit Tool' : 'Edit Part') : (isTool(formData) ? 'Add New Tool' : 'Add New Part')}</h3>
               <button type="button" className="modal-close" aria-label="Close" onClick={() => setShowPartModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
+              {/* Type: chosen when adding (it sets the ID prefix), shown but fixed afterwards */}
+              {formData.part_id ? (
+                <p className="type-fixed">
+                  Type: <strong>{isTool(formData) ? 'Tool' : 'Part'}</strong> <span>({formData.part_id})</span>
+                </p>
+              ) : (
+                <div className="form-group">
+                  <label htmlFor="inv-fld-item-type-0" className="form-label">Type</label>
+                  <select id="inv-fld-item-type-0" className="form-input" aria-describedby="inv-fld-item-type-help"
+                    value={isTool(formData) ? 'Tool' : 'Part'}
+                    onChange={e => setFormData({ ...formData, item_type: e.target.value })}>
+                    <option value="Part">Part — stocked, with min/max and ordering</option>
+                    <option value="Tool">Tool — program-owned, counted only</option>
+                  </select>
+                  <small id="inv-fld-item-type-help" className="field-help">
+                    {isTool(formData)
+                      ? 'Tools get a TL- ID, have no min/max, and are never low stock or ordered through Purchase Orders. The type cannot be changed after saving.'
+                      : 'Parts get an INV- ID. The type cannot be changed after saving.'}
+                  </small>
+                </div>
+              )}
               <div className="form-row two-col">
                 <div className="form-group">
-                  <label htmlFor="inv-fld-part-name-1" className="form-label">Part Name *</label>
+                  <label htmlFor="inv-fld-part-name-1" className="form-label">{isTool(formData) ? 'Tool Name *' : 'Part Name *'}</label>
                   <input id="inv-fld-part-name-1" type="text" className="form-input" value={formData.part_name || ''} onChange={e => setFormData({ ...formData, part_name: e.target.value })} />
                 </div>
                 <div className="form-group">
@@ -886,22 +1015,24 @@ export default function InventoryPage() {
               </div>
               <div className="form-row two-col">
                 <div className="form-group">
-                  <label htmlFor="inv-fld-primary-supplier-4" className="form-label">Primary Supplier</label>
+                  <label htmlFor="inv-fld-primary-supplier-4" className="form-label">{isTool(formData) ? 'Supplier (optional)' : 'Primary Supplier'}</label>
                   <select id="inv-fld-primary-supplier-4" className="form-input" value={formData.primary_supplier || ''} onChange={e => setFormData({ ...formData, primary_supplier: e.target.value })}>
                     <option value="">Select supplier</option>
                     {vendors.map(v => <option key={v.vendor_id} value={v.vendor_name}>{v.vendor_name}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
-                  <label htmlFor="inv-fld-supplier-part-5" className="form-label">Supplier Part #</label>
+                  <label htmlFor="inv-fld-supplier-part-5" className="form-label">{isTool(formData) ? 'Supplier Part # (optional)' : 'Supplier Part #'}</label>
                   <input id="inv-fld-supplier-part-5" type="text" className="form-input" value={formData.supplier_part_number || ''} onChange={e => setFormData({ ...formData, supplier_part_number: e.target.value })} />
                 </div>
               </div>
-              <div className="form-row three-col">
+              <div className={`form-row ${isTool(formData) ? 'two-col' : 'three-col'}`}>
                 <div className="form-group">
-                  <label htmlFor="inv-fld-qty-in-stock-6" className="form-label">Qty In Stock</label>
+                  <label htmlFor="inv-fld-qty-in-stock-6" className="form-label">{isTool(formData) ? 'Qty Owned' : 'Qty In Stock'}</label>
                   <input id="inv-fld-qty-in-stock-6" type="number" className="form-input" min="0" value={formData.qty_in_stock ?? 0} onChange={e => setFormData({ ...formData, qty_in_stock: e.target.value })} />
                 </div>
+                {/* Min / Max are a parts idea — not shown, and saved as 0, for a tool */}
+                {!isTool(formData) && (<>
                 <div className="form-group">
                   <label htmlFor="inv-fld-min-qty-7" className="form-label">Min Qty</label>
                   <input id="inv-fld-min-qty-7" type="number" className="form-input" min="0" value={formData.min_qty ?? 0} onChange={e => setFormData({ ...formData, min_qty: e.target.value })} />
@@ -910,6 +1041,7 @@ export default function InventoryPage() {
                   <label htmlFor="inv-fld-max-qty-8" className="form-label">Max Qty</label>
                   <input id="inv-fld-max-qty-8" type="number" className="form-input" min="0" value={formData.max_qty ?? 0} onChange={e => setFormData({ ...formData, max_qty: e.target.value })} />
                 </div>
+                </>)}
               </div>
               <div className="form-group">
                 <label htmlFor="inv-fld-location-9" className="form-label">Location</label>
@@ -940,7 +1072,7 @@ export default function InventoryPage() {
                   <input type="file" id="inv-image-input" accept="image/*" style={{ display: 'none' }} onChange={handleImageSelect} />
                   {selectedImage ? (
                     <div className="image-preview">
-                      <img src={selectedImage.preview || selectedImage.existingUrl} alt="Selected part image preview" referrerPolicy="no-referrer" />
+                      <img src={selectedImage.preview || selectedImage.existingUrl} alt={isTool(formData) ? 'Selected tool image preview' : 'Selected part image preview'} referrerPolicy="no-referrer" />
                       <button
                         type="button"
                         className="remove-image-btn"
@@ -961,7 +1093,7 @@ export default function InventoryPage() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowPartModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={savePart}>Save Part</button>
+              <button className="btn btn-primary" onClick={savePart}>{isTool(formData) ? 'Save Tool' : 'Save Part'}</button>
             </div>
           </div>
         </div>
@@ -972,7 +1104,7 @@ export default function InventoryPage() {
         <div className="modal-overlay visible" onClick={e => e.target === e.currentTarget && setShowViewModal(false)}>
           <div ref={viewDialogRef} role="dialog" aria-modal="true" aria-labelledby="inv-view-title" className="modal">
             <div className="modal-header">
-              <h3 id="inv-view-title">Part Details</h3>
+              <h3 id="inv-view-title">{isTool(currentItem) ? 'Tool Details' : 'Part Details'}</h3>
               <button type="button" className="modal-close" aria-label="Close" onClick={() => setShowViewModal(false)}>&times;</button>
             </div>
             <div className="modal-body">
@@ -981,7 +1113,7 @@ export default function InventoryPage() {
                   {currentItem.image_url ? (
                     <img src={getImageUrl(currentItem.image_url)} alt={currentItem.part_name} referrerPolicy="no-referrer" />
                   ) : (
-                    <span className="material-icons" aria-hidden="true">inventory_2</span>
+                    <span className="material-icons" aria-hidden="true">{isTool(currentItem) ? 'build' : 'inventory_2'}</span>
                   )}
                 </div>
                 <div style={{ flex: 1 }}>
@@ -992,7 +1124,7 @@ export default function InventoryPage() {
               </div>
               <div className="detail-grid">
                 <div className="detail-item">
-                  <label>Qty In Stock</label>
+                  <label>{isTool(currentItem) ? 'Qty Owned' : 'Qty In Stock'}</label>
                   <span className={`qty-badge ${currentItem.isLowStock ? 'low' : 'ok'}`}>{currentItem.qty_in_stock ?? 0}</span>
                   {onOrderMap[currentItem.part_id] > 0 && (
                     <div className="on-order-badge" style={{ marginTop: 6 }}>
@@ -1001,10 +1133,17 @@ export default function InventoryPage() {
                     </div>
                   )}
                 </div>
-                <div className="detail-item">
-                  <label>Min / Max</label>
-                  <span>{currentItem.min_qty ?? 0} / {currentItem.max_qty ?? 0}</span>
-                </div>
+                {isTool(currentItem) ? (
+                  <div className="detail-item">
+                    <label>Type</label>
+                    <span>Tool</span>
+                  </div>
+                ) : (
+                  <div className="detail-item">
+                    <label>Min / Max</label>
+                    <span>{currentItem.min_qty ?? 0} / {currentItem.max_qty ?? 0}</span>
+                  </div>
+                )}
                 <div className="detail-item">
                   <label>Location</label>
                   <span>{currentItem.location || '-'}</span>
@@ -1053,12 +1192,15 @@ export default function InventoryPage() {
                 <label htmlFor="inv-fld-new-qty-10" className="form-label">New Qty</label>
                 <input id="inv-fld-new-qty-10" type="number" className="form-input" min="0" value={adjustData.newQty} onChange={e => setAdjustData({ ...adjustData, newQty: e.target.value })} />
               </div>
-              <div className="form-group">
-                <label className="checkbox-filter">
-                  <input type="checkbox" checked={adjustData.clearOrder} onChange={e => setAdjustData({ ...adjustData, clearOrder: e.target.checked })} />
-                  <span>Clear order date</span>
-                </label>
-              </div>
+              {/* Tools are never on order, so there is no order date to clear */}
+              {!adjustData.isTool && (
+                <div className="form-group">
+                  <label className="checkbox-filter">
+                    <input type="checkbox" checked={adjustData.clearOrder} onChange={e => setAdjustData({ ...adjustData, clearOrder: e.target.checked })} />
+                    <span>Clear order date</span>
+                  </label>
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setShowAdjustModal(false)}>Cancel</button>
@@ -1140,6 +1282,19 @@ export default function InventoryPage() {
 
         .page-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
         .toolbar-left { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+        /* Parts / Tools / All switch */
+        .type-switch { display: inline-flex; border: 1px solid #adb5bd; border-radius: 8px; overflow: hidden; background: white; }
+        .type-switch-btn { min-height: 44px; min-width: 64px; padding: 0 16px; border: none; border-right: 1px solid #adb5bd; background: white; color: #343a40; font-size: 0.9rem; font-weight: 500; cursor: pointer; }
+        .type-switch-btn:last-child { border-right: none; }
+        .type-switch-btn:hover { background: #f1f3f5; }
+        .type-switch-btn.active { background: #1864ab; color: white; font-weight: 600; }
+        .type-switch-btn:focus-visible { outline: 3px solid #1864ab; outline-offset: -3px; box-shadow: inset 0 0 0 5px white; }
+        .type-hint { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; margin-bottom: 16px; background: #e7f5ff; border: 1px solid #a5d8ff; border-radius: 8px; color: #1c3d5a; font-size: 0.9rem; }
+        .type-hint .material-icons { font-size: 1.1rem; }
+        .tool-tag { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 10px; background: #e7f5ff; border: 1px solid #74c0fc; color: #0b4a85; font-size: 0.75rem; font-weight: 600; vertical-align: middle; }
+        .type-fixed { margin: 0 0 16px; color: #495057; font-size: 0.9rem; }
+        .type-fixed span { color: #6c757d; }
+        .field-help { display: block; margin-top: 6px; color: #495057; font-size: 0.8rem; line-height: 1.4; }
         .toolbar-right { display: flex; gap: 8px; }
         .search-box { display: flex; align-items: center; gap: 8px; background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 8px 12px; }
         .search-box input { border: none; outline: none; font-size: 0.9rem; min-width: 200px; }

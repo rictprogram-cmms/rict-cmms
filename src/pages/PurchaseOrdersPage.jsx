@@ -1451,8 +1451,9 @@ function OrderDetailView({ orderId, onBack, hasPerm, autoReceive = false, onView
   // ── Add line item helpers ────────────────────────────────────────
   const searchInventoryForAdd = async (term) => {
     if (term.length < 2) { setAddInvResults([]); return }
+    // Parts only — tools (inventory.item_type = 'Tool') are kept out of purchasing
     const { data } = await supabase.from('inventory').select('part_id, part_name, supplier_part_number, qty_in_stock')
-      .eq('status', 'Active').or(`part_name.ilike.%${term}%,part_id.ilike.%${term}%,supplier_part_number.ilike.%${term}%`).limit(10)
+      .eq('status', 'Active').neq('item_type', 'Tool').or(`part_name.ilike.%${term}%,part_id.ilike.%${term}%,supplier_part_number.ilike.%${term}%`).limit(10)
     setAddInvResults(data || [])
   }
   const selectInventoryItem = (item) => {
@@ -2227,8 +2228,9 @@ function CreatePOTab({ onCreated, hasPerm }) {
   // Inventory search
   const searchInventory = async (term) => {
     if (term.length < 2) { setInvResults([]); return }
+    // Parts only — tools (inventory.item_type = 'Tool') are kept out of purchasing
     const { data } = await supabase.from('inventory').select('part_id, part_name, supplier_part_number, qty_in_stock')
-      .eq('status', 'Active').or(`part_name.ilike.%${term}%,part_id.ilike.%${term}%`).limit(10)
+      .eq('status', 'Active').neq('item_type', 'Tool').or(`part_name.ilike.%${term}%,part_id.ilike.%${term}%`).limit(10)
     setInvResults(data || [])
   }
 

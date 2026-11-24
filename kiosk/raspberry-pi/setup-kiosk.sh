@@ -151,7 +151,14 @@ if [ -n "$OUT" ]; then
     xrandr --output "$OUT" --mode "$RESOLUTION" || true
   fi
   [ "$ROTATE" != "normal" ] && xrandr --output "$OUT" --rotate "$ROTATE" || true
+  # Some Pi 3 / Raspbian builds start X with an all-zero colour matrix (CTM):
+  # the TV reports a signal but the picture is solid black. Reset it to normal.
+  xrandr --output "$OUT" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
 fi
+# There's no desktop/window manager, so tell Chromium the exact screen size
+# (otherwise it can open at half width). "current W x H" accounts for rotation.
+SCREEN="$(xrandr --query | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1,\2/p' | head -1)"
+[ -n "$SCREEN" ] || SCREEN="1920,1080"
 
 # Wait (up to 2 min) for the network so the first load isn't an error page.
 # The watchdog fixes it anyway if it is.
@@ -176,6 +183,7 @@ while true; do
   echo "=== $(date '+%F %T') starting Chromium ===" >>"$LOG"
   "$CHROME_BIN" \
     --kiosk "$URL" \
+    --window-position=0,0 --window-size="$SCREEN" --start-fullscreen \
     --user-data-dir="$PROFILE" \
     --no-first-run --noerrdialogs --disable-infobars \
     --disable-session-crashed-bubble --disable-restore-session-state \
@@ -374,7 +382,8 @@ if command -v vcgencmd >/dev/null; then
 fi
 echo; echo "Last watchdog actions:"
 journalctl -u rict-kiosk-watchdog -n 10 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
-echo; echo "Browser restarts in log: $(grep -c 'Chromium exited' /tmp/rict-kiosk-chromium.log 2>/dev/null || echo 0)"
+N="$(grep -c 'Chromium exited' /tmp/rict-kiosk-chromium.log 2>/dev/null)"
+echo; echo "Browser restarts since boot: ${N:-0}"
 EOF
 chmod 755 /usr/local/bin/kiosk-restart /usr/local/bin/kiosk-status
 
@@ -399,7 +408,7 @@ EXISTING="$(sed -e '/# >>> rict-kiosk >>>/,/# <<< rict-kiosk <<</d' "$PROFILE_FI
 # Start the kiosk on the physical screen only (not over SSH).
 # If X ever exits, this login ends and auto-login starts it again.
 if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-  exec startx /opt/rict-kiosk/xinitrc -- -nocursor -s 0 -dpms >/tmp/rict-kiosk-x.log 2>&1
+  exec startx /opt/rict-kiosk/xinitrc -- -nocursor -s 0 >/tmp/rict-kiosk-x.log 2>&1
 fi
 # <<< rict-kiosk <<<
 EOF
@@ -423,6 +432,11 @@ Section "OutputClass"
   Option "PrimaryGPU" "true"
 EndSection
 EOF
+# On 1 GB Pis (Pi 3) turn off X's own GPU acceleration: it shares the small
+# graphics memory pool with Chromium. Chromium still uses the GPU itself.
+if [ "$MEM_MB" -lt 1500 ]; then
+  sed -i 's/^EndSection/  Option "AccelMethod" "none"\nEndSection/' /etc/X11/xorg.conf.d/99-rict-vc4.conf
+fi
 
 # ── Boot options: no console blanking, quiet boot ───────────────────────────
 CMDLINE=/boot/firmware/cmdline.txt; [ -f "$CMDLINE" ] || CMDLINE=/boot/cmdline.txt
