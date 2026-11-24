@@ -18,7 +18,9 @@
  *  - "Scan Next" button to scan another item without leaving the page
  *  - "Back to Inventory" navigation
  *  - Tools (inventory.item_type = 'Tool') scan and count like parts, but show
- *    "Tool" instead of Min / Max and are never colored as low stock
+ *    "Tool" instead of Min / Max and are never colored as low stock. A tool
+ *    also shows its condition (good / worn / broken / missing), and its count
+ *    cannot be saved below the number marked worn + broken + missing.
  */
 
 import { assertWrite } from '@/lib/supabaseData'
@@ -270,6 +272,15 @@ export default function InventoryScanPage() {
 
   // Tools have no min/max, so a tool is never "low"
   const isToolItem = item?.item_type === 'Tool'
+  // Condition counts (tools): good is what is left after worn, broken, missing
+  const toCount = (v) => Math.max(0, Math.floor(Number(v) || 0))
+  const condWorn = isToolItem ? toCount(item.qty_worn) : 0
+  const condBroken = isToolItem ? toCount(item.qty_broken) : 0
+  const condMissing = isToolItem ? toCount(item.qty_missing) : 0
+  const condFlagged = condWorn + condBroken + condMissing
+  const condGood = isToolItem ? Math.max(0, (Number(item.qty_in_stock) || 0) - condFlagged) : 0
+  // A tool's total can't drop below what is marked worn + broken + missing
+  const belowFlagged = isToolItem && newQty < condFlagged
   const isLow = item && !isToolItem ? (item.qty_in_stock <= (item.min_qty || 0)) : false
   const imgUrl = item ? getImageUrl(item.image_url) : null
   const hasChanged = item ? newQty !== item.qty_in_stock : false
@@ -397,6 +408,16 @@ export default function InventoryScanPage() {
                 )}
               </div>
 
+              {/* Condition — tools only (changed on the Inventory page) */}
+              {isToolItem && (
+                <div className="cc-condition">
+                  <span className="cc-info-label">Condition</span>
+                  <span className="cc-condition-text">
+                    {[`${condGood} good`, condWorn > 0 && `${condWorn} worn`, condBroken > 0 && `${condBroken} broken`, condMissing > 0 && `${condMissing} missing`].filter(Boolean).join(' · ')}
+                  </span>
+                </div>
+              )}
+
               {/* Quantity Adjustment */}
               <div className="cc-adjust-section">
                 <h3 className="cc-adjust-title">
@@ -416,6 +437,11 @@ export default function InventoryScanPage() {
                   />
                   <button onClick={() => adjustQty(1)} className="cc-adjust-btn cc-adjust-plus">+</button>
                 </div>
+                {belowFlagged && (
+                  <div className="cc-condition-warning" role="alert">
+                    {condFlagged} of this tool {condFlagged === 1 ? 'is' : 'are'} marked worn, broken or missing, so the count can&rsquo;t be less than {condFlagged}. Change the condition counts on the Inventory page first.
+                  </div>
+                )}
                 {hasChanged && (
                   <div className="cc-change-indicator">
                     {item.qty_in_stock} → {newQty} ({newQty > item.qty_in_stock ? '+' : ''}{newQty - item.qty_in_stock})
@@ -426,8 +452,8 @@ export default function InventoryScanPage() {
               {/* Save Button */}
               <button
                 onClick={saveQuantity}
-                disabled={saving || !hasChanged}
-                className={`cc-btn cc-btn-save ${!hasChanged ? 'disabled' : ''}`}
+                disabled={saving || !hasChanged || belowFlagged}
+                className={`cc-btn cc-btn-save ${!hasChanged || belowFlagged ? 'disabled' : ''}`}
               >
                 <span className="material-icons">save</span>
                 {saving ? 'Saving...' : !hasChanged ? 'No Changes' : 'Save Changes'}
@@ -693,6 +719,9 @@ export default function InventoryScanPage() {
           color: #1a1a2e;
         }
         .cc-info-value.low { color: #fa5252; }
+        .cc-condition { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin-bottom: 12px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; }
+        .cc-condition-text { font-size: 0.95rem; font-weight: 600; color: #212529; }
+        .cc-condition-warning { margin-top: 10px; padding: 10px 12px; background: #fff5f5; border: 1px solid #f1a5a5; border-radius: 8px; color: #a51111; font-size: 0.85rem; font-weight: 600; text-align: left; }
         .cc-info-value.ok { color: #40c057; }
 
         /* ── Adjust Section ──────────────────────────────── */

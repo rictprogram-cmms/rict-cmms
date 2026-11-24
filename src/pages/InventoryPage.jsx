@@ -19,6 +19,10 @@
  *   quantity. Same table, own TL- IDs (get_next_tool_id RPC), no min/max,
  *   never low stock, kept out of purchasing and work order parts. A
  *   Parts / Tools / All switch chooses what the page lists.
+ * - Tool condition: each tool row also holds how many of its total are worn,
+ *   broken or missing (qty_worn / qty_broken / qty_missing). Good is whatever
+ *   is left. A missing tool still counts toward the total owned. Shown in the
+ *   table, detail view and print list; edited in the tool form and Adjust.
  *
  * Supabase tables: inventory, inventory_locations, vendors, inventory_suppliers
  * Storage buckets: inventory-images
@@ -51,6 +55,43 @@ const TYPE_VIEWS = [
   { value: '',     label: 'All' },
 ];
 const TYPE_VIEW_KEY = 'rict-inventory-type-view';
+
+// ---------- TOOL CONDITION ----------
+// Whole, non-negative count from a form field or a database value
+const toCount = (v) => Math.max(0, Math.floor(Number(v) || 0));
+// { owned, worn, broken, missing, flagged, good } — good is what is left over
+const conditionOf = (i) => {
+  const owned = Number(i?.qty_in_stock) || 0;
+  const worn = toCount(i?.qty_worn);
+  const broken = toCount(i?.qty_broken);
+  const missing = toCount(i?.qty_missing);
+  const flagged = worn + broken + missing;
+  return { owned, worn, broken, missing, flagged, good: Math.max(0, owned - flagged) };
+};
+const conditionText = (i) => {
+  const c = conditionOf(i);
+  return [`${c.good} good`, c.worn && `${c.worn} worn`, c.broken && `${c.broken} broken`, c.missing && `${c.missing} missing`]
+    .filter(Boolean).join(', ');
+};
+const CONDITION_FILTERS = [
+  { value: 'worn',    label: 'Has worn',    test: (c) => c.worn > 0 },
+  { value: 'broken',  label: 'Has broken',  test: (c) => c.broken > 0 },
+  { value: 'missing', label: 'Has missing', test: (c) => c.missing > 0 },
+  { value: 'good',    label: 'All good',    test: (c) => c.flagged === 0 },
+];
+// Chips for the table and detail view. Every chip carries its word, so the
+// meaning never depends on color.
+const ConditionChips = ({ item }) => {
+  const c = conditionOf(item);
+  return (
+    <span className="cond-chips">
+      <span className="cond-chip good">{c.good} good</span>
+      {c.worn > 0 && <span className="cond-chip worn">{c.worn} worn</span>}
+      {c.broken > 0 && <span className="cond-chip broken">{c.broken} broken</span>}
+      {c.missing > 0 && <span className="cond-chip missing">{c.missing} missing</span>}
+    </span>
+  );
+};
 const readTypeView = () => {
   try {
     const v = window.localStorage.getItem(TYPE_VIEW_KEY);
@@ -86,6 +127,7 @@ export default function InventoryPage() {
   // 'Part' | 'Tool' | '' (All). Remembered per browser; a first visit shows Parts,
   // which is the page exactly as it was before tools existed.
   const [typeFilter, setTypeFilter] = useState(readTypeView);
+  const [conditionFilter, setConditionFilter] = useState('');   // '', or a CONDITION_FILTERS value (tools only)
   const [missingFilter, setMissingFilter] = useState('');   // '', 'any', or a MISSING_OPTIONS value
   const [showInactive, setShowInactive] = useState(false);
   const [sortColumn, setSortColumn] = useState('');
@@ -116,7 +158,7 @@ export default function InventoryPage() {
   // Current editing
   const [currentItem, setCurrentItem] = useState(null);
   const [formData, setFormData] = useState({});
-  const [adjustData, setAdjustData] = useState({ partId: '', partName: '', currentQty: 0, newQty: 0, clearOrder: false, isTool: false });
+  const [adjustData, setAdjustData] = useState({ partId: '', partName: '', currentQty: 0, newQty: 0, clearOrder: false, isTool: false, worn: 0, broken: 0, missing: 0 });
   const [selectedImage, setSelectedImage] = useState(null); // { file, preview } or { existingUrl }
   const [isDragging, setIsDragging] = useState(false); // visual feedback for image drop zone
   const [labelsData, setLabelsData] = useState([]);
@@ -302,9 +344,12 @@ export default function InventoryPage() {
         (stockFilter === 'low' && item.isLowStock) ||
         (stockFilter === 'ok' && !item.isLowStock);
       const matchStatus = showInactive || item.status === 'Active';
-      return matchSearch && matchLoc && matchStock && matchStatus;
+      // Condition is a tools idea: picking one lists only the tools that match.
+      const condOpt = conditionFilter && CONDITION_FILTERS.find(o => o.value === conditionFilter);
+      const matchCondition = !condOpt || (isTool(item) && condOpt.test(conditionOf(item)));
+      return matchSearch && matchLoc && matchStock && matchStatus && matchCondition;
     });
-  }, [items, search, locationFilter, stockFilter, showInactive]);
+  }, [items, search, locationFilter, stockFilter, showInactive, conditionFilter]);
 
   const matchesType = useCallback((item) =>
     !typeFilter || (typeFilter === 'Tool' ? isTool(item) : !isTool(item)), [typeFilter]);
@@ -322,11 +367,24 @@ export default function InventoryPage() {
     setTypeFilter(value);
     setSelectedIds([]);                         // a selection never carries across views
     if (value === 'Tool') setStockFilter('');   // stock level does not apply to tools
+    if (value === 'Part') setConditionFilter(''); // condition does not apply to parts
     try { window.localStorage.setItem(TYPE_VIEW_KEY, value); } catch { /* remembering the view is optional */ }
   };
 
   // Wording for whatever the page is listing
   const viewNoun = typeFilter === 'Tool' ? 'tool' : typeFilter === 'Part' ? 'part' : 'item';
+  const conditionLabel = CONDITION_FILTERS.find(o => o.value === conditionFilter)?.label || '';
+  const minMaxHead = typeFilter === 'Tool' ? 'Condition' : typeFilter === 'Part' ? 'Min/Max' : 'Min/Max or Condition';
+
+  // Worn + broken + missing can never be more than the tool's total.
+  // Returns the message to show, or '' when the numbers add up.
+  const conditionProblem = (owned, worn, broken, missing) => {
+    const total = Number(owned) || 0;
+    const flagged = toCount(worn) + toCount(broken) + toCount(missing);
+    return flagged > total
+      ? `Worn + broken + missing is ${flagged}, but only ${total} ${total === 1 ? 'is' : 'are'} owned. Raise Qty Owned or lower a count.`
+      : '';
+  };
 
   const filteredItems = useMemo(() => {
     if (!missingFilter) return baseFilteredItems;
@@ -395,7 +453,7 @@ export default function InventoryPage() {
   // ---------- ACTIONS ----------
   const openAddModal = () => {
     // Adding from the Tools view starts a tool; Parts and All start a part.
-    setFormData({ item_type: typeFilter === 'Tool' ? 'Tool' : 'Part', part_name: '', status: 'Active', description: '', primary_supplier: '', supplier_part_number: '', qty_in_stock: 0, min_qty: 0, max_qty: 0, location: '' });
+    setFormData({ item_type: typeFilter === 'Tool' ? 'Tool' : 'Part', part_name: '', status: 'Active', description: '', primary_supplier: '', supplier_part_number: '', qty_in_stock: 0, min_qty: 0, max_qty: 0, qty_worn: 0, qty_broken: 0, qty_missing: 0, location: '' });
     setSelectedImage(null);
     setShowPartModal(true);
   };
@@ -416,7 +474,7 @@ export default function InventoryPage() {
   };
 
   const openAdjustModal = (item) => {
-    setAdjustData({ partId: item.part_id, partName: item.part_name, currentQty: item.qty_in_stock || 0, newQty: item.qty_in_stock || 0, clearOrder: false, isTool: isTool(item) });
+    setAdjustData({ partId: item.part_id, partName: item.part_name, currentQty: item.qty_in_stock || 0, newQty: item.qty_in_stock || 0, clearOrder: false, isTool: isTool(item), worn: toCount(item.qty_worn), broken: toCount(item.qty_broken), missing: toCount(item.qty_missing) });
     setShowAdjustModal(true);
   };
 
@@ -424,6 +482,10 @@ export default function InventoryPage() {
     const tool = isTool(formData);
     const Noun = tool ? 'Tool' : 'Part';
     if (!formData.part_name?.trim()) { showToast(`${Noun} name is required`, 'error'); return; }
+    if (tool) {
+      const problem = conditionProblem(parseFloat(formData.qty_in_stock), formData.qty_worn, formData.qty_broken, formData.qty_missing);
+      if (problem) { showToast(problem, 'error'); return; }
+    }
     setLoading(true);
     try {
       let imageFileId = formData.image_url || '';
@@ -455,6 +517,12 @@ export default function InventoryPage() {
         updated_at: new Date().toISOString(),
         updated_by: userName()
       };
+      // Condition counts belong to tools only — a part's save never touches them.
+      if (tool) {
+        record.qty_worn = toCount(formData.qty_worn);
+        record.qty_broken = toCount(formData.qty_broken);
+        record.qty_missing = toCount(formData.qty_missing);
+      }
 
       if (formData.part_id) {
         // Update
@@ -527,6 +595,10 @@ export default function InventoryPage() {
   };
 
   const saveQtyAdjust = async () => {
+    if (adjustData.isTool) {
+      const problem = conditionProblem(parseFloat(adjustData.newQty), adjustData.worn, adjustData.broken, adjustData.missing);
+      if (problem) { showToast(problem, 'error'); return; }
+    }
     try {
       setLoading(true);
       const updates = {
@@ -534,6 +606,11 @@ export default function InventoryPage() {
         updated_at: new Date().toISOString(),
         updated_by: userName()
       };
+      if (adjustData.isTool) {
+        updates.qty_worn = toCount(adjustData.worn);
+        updates.qty_broken = toCount(adjustData.broken);
+        updates.qty_missing = toCount(adjustData.missing);
+      }
       if (adjustData.clearOrder && !adjustData.isTool) {
         updates.order_date = null;
       }
@@ -722,7 +799,7 @@ export default function InventoryPage() {
         <td>${item.part_name}</td>
         <td>${item.supplier_part_number || '—'}</td>
         <td style="${qtyClass}">${item.qty_in_stock ?? 0}${onOrderStr}</td>
-        <td>${isTool(item) ? '—' : `${item.min_qty ?? 0} / ${item.max_qty ?? 0}`}</td>
+        <td>${isTool(item) ? conditionText(item) : `${item.min_qty ?? 0} / ${item.max_qty ?? 0}`}</td>
         <td>${item.location || '—'}</td>
         <td>${item.primary_supplier || '—'}</td>
         <td>${item.status}</td>
@@ -734,6 +811,7 @@ export default function InventoryPage() {
     if (search) filterNotes.push(`Search: "${search}"`);
     if (locationFilter) filterNotes.push(`Location: ${locationFilter}`);
     if (stockFilter) filterNotes.push(`Stock: ${stockFilter}`);
+    if (conditionFilter && conditionLabel) filterNotes.push(`Condition: ${conditionLabel}`);
     if (missingFilter && missingLabel) filterNotes.push(`Missing info: ${missingLabel}`);
     if (showInactive) filterNotes.push('Including inactive');
     const filterLine = filterNotes.length > 0
@@ -758,7 +836,7 @@ export default function InventoryPage() {
       <div class="meta">Printed ${new Date().toLocaleDateString()} · ${listData.length} item${listData.length !== 1 ? 's' : ''}</div>
       ${filterLine}
       <table>
-        <thead><tr><th scope="col">${idHead}</th><th scope="col">${nameHead}</th><th scope="col">Supplier Part #</th><th scope="col">Qty</th><th scope="col">Min/Max</th><th scope="col">Location</th><th scope="col">Supplier</th><th scope="col">Status</th></tr></thead>
+        <thead><tr><th scope="col">${idHead}</th><th scope="col">${nameHead}</th><th scope="col">Supplier Part #</th><th scope="col">Qty</th><th scope="col">${minMaxHead}</th><th scope="col">Location</th><th scope="col">Supplier</th><th scope="col">Status</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </body></html>`);
@@ -800,6 +878,13 @@ export default function InventoryPage() {
               <option value="">All Stock Levels</option>
               {hasPerm('view_low_stock') && <option value="low">Low Stock</option>}
               <option value="ok">In Stock</option>
+            </select>
+          )}
+          {/* Condition is a tools idea — offered on the Tools and All views */}
+          {typeFilter !== 'Part' && (
+            <select className="filter-select" aria-label="Filter tools by condition" value={conditionFilter} onChange={e => setConditionFilter(e.target.value)}>
+              <option value="">All Conditions</option>
+              {CONDITION_FILTERS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           )}
           {/* Missing info — data clean-up. Counts follow the other filters. */}
@@ -872,6 +957,10 @@ export default function InventoryPage() {
             <span className="sr-only" aria-live="polite" aria-atomic="true">
               {missingFilter && missingLabel ? `${filteredItems.length} ${viewNoun}${filteredItems.length === 1 ? '' : 's'} shown: ${missingLabel}` : ''}
             </span>
+            {/* ...when the condition filter changes it */}
+            <span className="sr-only" aria-live="polite" aria-atomic="true">
+              {conditionFilter && conditionLabel ? `${filteredItems.length} tool${filteredItems.length === 1 ? '' : 's'} shown: ${conditionLabel}` : ''}
+            </span>
             {/* ...and when the Parts / Tools / All switch changes it */}
             <span className="sr-only" aria-live="polite" aria-atomic="true">
               {typeFilter === 'Tool' ? 'Showing tools' : typeFilter === 'Part' ? 'Showing parts' : 'Showing parts and tools'}
@@ -892,7 +981,7 @@ export default function InventoryPage() {
                 <th scope="col" className="sortable-th" onClick={() => handleSort('part_name')}>{typeFilter === 'Tool' ? 'Tool Name' : typeFilter === 'Part' ? 'Part Name' : 'Name'} {sortColumn === 'part_name' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
                 <th scope="col" className="sortable-th" onClick={() => handleSort('supplier_part_number')}>Supplier Part # {sortColumn === 'supplier_part_number' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
                 <th scope="col">Qty</th>
-                <th scope="col">Min/Max</th>
+                <th scope="col">{minMaxHead}</th>
                 <th scope="col" className="sortable-th" onClick={() => handleSort('location')}>Location {sortColumn === 'location' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
                 <th scope="col" className="sortable-th" onClick={() => handleSort('primary_supplier')}>Supplier {sortColumn === 'primary_supplier' ? (sortDirection === 'asc' ? '▲' : '▼') : '⇅'}</th>
                 <th scope="col">Actions</th>
@@ -940,7 +1029,7 @@ export default function InventoryPage() {
                     </td>
                     <td className="min-max">
                       {isTool(item)
-                        ? <><span aria-hidden="true">—</span><span className="sr-only">Not used for tools</span></>
+                        ? <ConditionChips item={item} />
                         : <>{item.min_qty ?? 0} / {item.max_qty ?? 0}</>}
                     </td>
                     <td>{highlightMatch(item.location || '-')}</td>
@@ -1043,6 +1132,34 @@ export default function InventoryPage() {
                 </div>
                 </>)}
               </div>
+              {/* Condition counts — tools only. Good is worked out, never typed. */}
+              {isTool(formData) && (
+                <fieldset className="cond-fieldset">
+                  <legend>Condition <span>(how many of the total)</span></legend>
+                  <div className="form-row three-col">
+                    <div className="form-group">
+                      <label htmlFor="inv-fld-qty-worn-11" className="form-label">Worn</label>
+                      <input id="inv-fld-qty-worn-11" type="number" className="form-input" min="0" step="1" aria-describedby="inv-cond-summary" value={formData.qty_worn ?? 0} onChange={e => setFormData({ ...formData, qty_worn: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="inv-fld-qty-broken-12" className="form-label">Broken</label>
+                      <input id="inv-fld-qty-broken-12" type="number" className="form-input" min="0" step="1" aria-describedby="inv-cond-summary" value={formData.qty_broken ?? 0} onChange={e => setFormData({ ...formData, qty_broken: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="inv-fld-qty-missing-13" className="form-label">Missing</label>
+                      <input id="inv-fld-qty-missing-13" type="number" className="form-input" min="0" step="1" aria-describedby="inv-cond-summary" value={formData.qty_missing ?? 0} onChange={e => setFormData({ ...formData, qty_missing: e.target.value })} />
+                    </div>
+                  </div>
+                  {(() => {
+                    const problem = conditionProblem(parseFloat(formData.qty_in_stock), formData.qty_worn, formData.qty_broken, formData.qty_missing);
+                    return (
+                      <p id="inv-cond-summary" className={`cond-summary${problem ? ' error' : ''}`} role="status">
+                        {problem || `Good: ${conditionOf(formData).good} of ${conditionOf(formData).owned}. A missing tool still counts in Qty Owned.`}
+                      </p>
+                    );
+                  })()}
+                </fieldset>
+              )}
               <div className="form-group">
                 <label htmlFor="inv-fld-location-9" className="form-label">Location</label>
                 <select id="inv-fld-location-9" className="form-input" value={formData.location || ''} onChange={e => setFormData({ ...formData, location: e.target.value })}>
@@ -1134,10 +1251,16 @@ export default function InventoryPage() {
                   )}
                 </div>
                 {isTool(currentItem) ? (
-                  <div className="detail-item">
-                    <label>Type</label>
-                    <span>Tool</span>
-                  </div>
+                  <>
+                    <div className="detail-item">
+                      <label>Type</label>
+                      <span>Tool</span>
+                    </div>
+                    <div className="detail-item">
+                      <label>Condition</label>
+                      <ConditionChips item={currentItem} />
+                    </div>
+                  </>
                 ) : (
                   <div className="detail-item">
                     <label>Min / Max</label>
@@ -1192,6 +1315,36 @@ export default function InventoryPage() {
                 <label htmlFor="inv-fld-new-qty-10" className="form-label">New Qty</label>
                 <input id="inv-fld-new-qty-10" type="number" className="form-input" min="0" value={adjustData.newQty} onChange={e => setAdjustData({ ...adjustData, newQty: e.target.value })} />
               </div>
+              {/* Tools: the same dialog also updates the condition counts */}
+              {adjustData.isTool && (
+                <fieldset className="cond-fieldset">
+                  <legend>Condition <span>(how many of the total)</span></legend>
+                  <div className="form-row three-col">
+                    <div className="form-group">
+                      <label htmlFor="inv-adj-worn-14" className="form-label">Worn</label>
+                      <input id="inv-adj-worn-14" type="number" className="form-input" min="0" step="1" aria-describedby="inv-adj-cond-summary" value={adjustData.worn} onChange={e => setAdjustData({ ...adjustData, worn: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="inv-adj-broken-15" className="form-label">Broken</label>
+                      <input id="inv-adj-broken-15" type="number" className="form-input" min="0" step="1" aria-describedby="inv-adj-cond-summary" value={adjustData.broken} onChange={e => setAdjustData({ ...adjustData, broken: e.target.value })} />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="inv-adj-missing-16" className="form-label">Missing</label>
+                      <input id="inv-adj-missing-16" type="number" className="form-input" min="0" step="1" aria-describedby="inv-adj-cond-summary" value={adjustData.missing} onChange={e => setAdjustData({ ...adjustData, missing: e.target.value })} />
+                    </div>
+                  </div>
+                  {(() => {
+                    const owned = parseFloat(adjustData.newQty) || 0;
+                    const problem = conditionProblem(owned, adjustData.worn, adjustData.broken, adjustData.missing);
+                    const good = Math.max(0, owned - toCount(adjustData.worn) - toCount(adjustData.broken) - toCount(adjustData.missing));
+                    return (
+                      <p id="inv-adj-cond-summary" className={`cond-summary${problem ? ' error' : ''}`} role="status">
+                        {problem || `Good: ${good} of ${owned}. A missing tool still counts in the quantity.`}
+                      </p>
+                    );
+                  })()}
+                </fieldset>
+              )}
               {/* Tools are never on order, so there is no order date to clear */}
               {!adjustData.isTool && (
                 <div className="form-group">
@@ -1292,6 +1445,18 @@ export default function InventoryPage() {
         .type-hint { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; margin-bottom: 16px; background: #e7f5ff; border: 1px solid #a5d8ff; border-radius: 8px; color: #1c3d5a; font-size: 0.9rem; }
         .type-hint .material-icons { font-size: 1.1rem; }
         .tool-tag { display: inline-block; margin-left: 8px; padding: 2px 8px; border-radius: 10px; background: #e7f5ff; border: 1px solid #74c0fc; color: #0b4a85; font-size: 0.75rem; font-weight: 600; vertical-align: middle; }
+        /* Tool condition */
+        .cond-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+        .cond-chip { padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; border: 1px solid transparent; }
+        .cond-chip.good { background: #e6f4ea; color: #1b5e20; border-color: #a5d6a7; }
+        .cond-chip.worn { background: #fff3cd; color: #6b4400; border-color: #e0b84d; }
+        .cond-chip.broken { background: #ffe3e3; color: #a51111; border-color: #f1a5a5; }
+        .cond-chip.missing { background: #e9ecef; color: #343a40; border-color: #adb5bd; }
+        .cond-fieldset { border: 1px solid #ced4da; border-radius: 8px; padding: 12px 14px 4px; margin: 0 0 16px; }
+        .cond-fieldset legend { padding: 0 6px; font-size: 0.9rem; font-weight: 600; color: #343a40; }
+        .cond-fieldset legend span { font-weight: 400; color: #495057; }
+        .cond-summary { margin: 0 0 10px; font-size: 0.85rem; color: #495057; }
+        .cond-summary.error { color: #a51111; font-weight: 600; }
         .type-fixed { margin: 0 0 16px; color: #495057; font-size: 0.9rem; }
         .type-fixed span { color: #6c757d; }
         .field-help { display: block; margin-top: 6px; color: #495057; font-size: 0.8rem; line-height: 1.4; }
