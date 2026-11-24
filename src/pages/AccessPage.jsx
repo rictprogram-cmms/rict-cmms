@@ -107,6 +107,8 @@ const DEFAULT_PERMISSIONS = [
   ['P02B', 'Inventory', 'receive_orders', false, false, true, 'Can mark orders as received (partial or full)'],
   ['P0AB', 'Inventory', 'view_low_stock', false, true,  true, 'Can view low stock filter and column on Inventory page'],
   ['PTA1', 'Inventory', 'run_tool_audit', false, false, true, 'Can run tool count audits and apply their results to the tool inventory'],
+  ['PTK1', 'Inventory', 'manage_tool_kits', false, false, true, 'Can create and change tool kits (benches, toolboxes) and their tool lists'],
+  ['PTK2', 'Inventory', 'view_tool_kits', true, true, true, 'Can see which tools belong in each tool kit (bench, toolbox) - read only'],
 
   // Assets
   ['P030', 'Assets', 'view_page', true, true, true, 'Can access Assets page'],

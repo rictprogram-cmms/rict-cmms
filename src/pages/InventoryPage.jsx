@@ -25,6 +25,11 @@
  *   table, detail view and print list; edited in the tool form and Adjust.
  * - Tool Audit button (Tools and All views, run_tool_audit permission) opens
  *   /inventory/tool-audit — the end-of-term tool count.
+ * - Tool Kits button (manage_tool_kits, run_tool_audit, or the read-only
+ *   view_tool_kits that students have) opens
+ *   /inventory/tool-kits — benches and toolboxes. A tool's detail view shows
+ *   how many of its total are assigned to kits (kit tools are part of the
+ *   total, not extra).
  *
  * Supabase tables: inventory, inventory_locations, vendors, inventory_suppliers
  * Storage buckets: inventory-images
@@ -171,6 +176,10 @@ export default function InventoryPage() {
   // On-order quantities keyed by inventory part_id
   const [onOrderMap, setOnOrderMap] = useState({});
 
+  // Tools assigned to kits, keyed by part_id: how many in total across ACTIVE
+  // kits of ACTIVE kit types. Empty for users who can't see kits.
+  const [inKitsMap, setInKitsMap] = useState({});
+
   // Track whether initial data load has completed — prevents loading spinner on tab switch
   const hasLoadedRef = useRef(false);
 
@@ -296,6 +305,30 @@ export default function InventoryPage() {
         console.warn('Could not fetch on-order data:', e);
       }
       setOnOrderMap(orderMap);
+
+      // Kit assignments (tool kits). Non-critical: without it the detail view
+      // simply leaves out the "In kits" line. Users without a kit permission
+      // get empty lists back, not an error.
+      try {
+        const [kt, kk, ki] = await Promise.all([
+          supabase.from('tool_kit_types').select('type_id, status'),
+          supabase.from('tool_kits').select('type_id, status'),
+          supabase.from('tool_kit_type_items').select('type_id, part_id, qty'),
+        ]);
+        const activeTypes = new Set((mustData(kt, 'tool_kit_types.select') || []).filter(t => t.status === 'Active').map(t => t.type_id));
+        const kitsPerType = {};
+        (mustData(kk, 'tool_kits.select') || []).forEach(k => {
+          if (k.status === 'Active' && activeTypes.has(k.type_id)) kitsPerType[k.type_id] = (kitsPerType[k.type_id] || 0) + 1;
+        });
+        const kitMap = {};
+        (mustData(ki, 'tool_kit_type_items.select') || []).forEach(it => {
+          const n = it.qty * (kitsPerType[it.type_id] || 0);
+          if (n > 0) kitMap[it.part_id] = (kitMap[it.part_id] || 0) + n;
+        });
+        setInKitsMap(kitMap);
+      } catch (e) {
+        console.warn('Could not fetch tool kit data:', e);
+      }
 
       const mapped = (data || []).map(item => ({
         ...item,
@@ -918,6 +951,12 @@ export default function InventoryPage() {
               <span className="material-icons" aria-hidden="true">fact_check</span>Tool Audit
             </button>
           )}
+          {/* Tool kits (benches, toolboxes) — staff, and students read-only (view_tool_kits) */}
+          {typeFilter !== 'Part' && (hasPerm('manage_tool_kits') || hasPerm('run_tool_audit') || hasPerm('view_tool_kits')) && (
+            <button className="btn btn-sm btn-secondary" onClick={() => navigate('/inventory/tool-kits')}>
+              <span className="material-icons" aria-hidden="true">home_repair_service</span>Tool Kits
+            </button>
+          )}
           {hasPerm('add_items') && (
             <button className="btn btn-sm btn-primary" onClick={openAddModal}>
               <span className="material-icons" aria-hidden="true">add</span>{typeFilter === 'Tool' ? 'Add Tool' : typeFilter === 'Part' ? 'Add Part' : 'Add Item'}
@@ -1268,6 +1307,20 @@ export default function InventoryPage() {
                       <label>Condition</label>
                       <ConditionChips item={currentItem} />
                     </div>
+                    {/* Kit tools are part of the total: say how the total splits */}
+                    {inKitsMap[currentItem.part_id] > 0 && (() => {
+                      const inKits = inKitsMap[currentItem.part_id];
+                      const owned = Number(currentItem.qty_in_stock) || 0;
+                      return (
+                        <div className="detail-item">
+                          <label>In kits</label>
+                          <span>{inKits} of {owned} ({Math.max(0, owned - inKits)} in general stock)</span>
+                          {inKits > owned && (
+                            <span className="kit-short">Kits need {inKits - owned} more than are owned.</span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </>
                 ) : (
                   <div className="detail-item">
@@ -1465,6 +1518,7 @@ export default function InventoryPage() {
         .cond-fieldset legend span { font-weight: 400; color: #495057; }
         .cond-summary { margin: 0 0 10px; font-size: 0.85rem; color: #495057; }
         .cond-summary.error { color: #a51111; font-weight: 600; }
+        .kit-short { display: block; margin-top: 4px; color: #a51111; font-size: 0.8rem; font-weight: 600; }
         .type-fixed { margin: 0 0 16px; color: #495057; font-size: 0.9rem; }
         .type-fixed span { color: #6c757d; }
         .field-help { display: block; margin-top: 6px; color: #495057; font-size: 0.8rem; line-height: 1.4; }

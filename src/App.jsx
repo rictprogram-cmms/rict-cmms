@@ -73,6 +73,7 @@ const AssetsPage = lazyPage(() => import('@/pages/AssetsPage'))
 const AssetCheckoutsPage = lazyPage(() => import('@/pages/AssetCheckoutsPage'))
 const InventoryPage = lazyPage(() => import('@/pages/InventoryPage'))
 const ToolAuditPage = lazyPage(() => import('@/pages/ToolAuditPage'))
+const ToolKitsPage = lazyPage(() => import('@/pages/ToolKitsPage'))
 const LabSignupPage = lazyPage(() => import('@/pages/LabSignupPage'))
 const ClassSchedulePage = lazyPage(() => import('@/pages/ClassSchedulePage'))
 const EquipmentSchedulingPage = lazyPage(() => import('@/pages/EquipmentSchedulingPage'))
@@ -491,6 +492,8 @@ function AppRoutes() {
             <Route path="/inventory" element={<Lazy><InventoryPage /></Lazy>} />
             {/* Tool count audits — instructors only (Inventory → run_tool_audit, checked in the page and the database) */}
             <Route path="/inventory/tool-audit" element={<Lazy><ToolAuditPage /></Lazy>} />
+            {/* Tool kits (benches, toolboxes) — Inventory → manage_tool_kits or run_tool_audit */}
+            <Route path="/inventory/tool-kits" element={<Lazy><ToolKitsPage /></Lazy>} />
             <Route path="/assets" element={<Lazy><AssetsPage /></Lazy>} />
             <Route path="/asset-checkouts" element={<Lazy><AssetCheckoutsPage /></Lazy>} />
             <Route path="/sops" element={<Lazy><SOPsPage /></Lazy>} />

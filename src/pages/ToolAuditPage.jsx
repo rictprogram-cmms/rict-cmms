@@ -20,8 +20,17 @@
  *             broken are updated, and tools nobody counted are left alone.
  *             After that the audit is a fixed record.
  *
- * Data: tool_audits, tool_audit_lines, start_tool_audit(), apply_tool_audit()
- * (supabase/migrations/20261124c_tool_audits.sql). Reads go through
+ * Two scopes (since tool kits, 20261124d_tool_kits.sql):
+ *   General stock — all locations or one. Expects only what is NOT assigned
+ *             to a kit (owned minus kit quantities).
+ *   One kit   — a "kit check": the audit lists that kit's tool list. Started
+ *             here or from the Tool Kits page.
+ *   Applying either one replaces only the part it covered, so the tool's
+ *   totals never double-count.
+ *
+ * Data: tool_audits, tool_audit_lines, start_tool_audit(),
+ * start_tool_kit_check(), apply_tool_audit()
+ * (supabase/migrations/20261124c_tool_audits.sql, 20261124d_tool_kits.sql). Reads go through
  * mustData(); writes through assertWrite(). No realtime channel — one person
  * counts at a time; the lists reload after every change and on Refresh.
  *
@@ -76,6 +85,8 @@ const fmtWhen = (ts) => {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 const toCount = (v) => Math.max(0, Math.floor(Number(v) || 0))
+// What an audit covers: one kit, or the general stock at a location / everywhere
+const scopeOf = (a) => (a?.kit_id ? `Kit: ${a.kit_name || a.kit_id}` : `${a?.location || 'All locations'} (general stock)`)
 const isCounted = (l) => l.counted_qty !== null && l.counted_qty !== undefined
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 const friendly = (err, fallback) => {
@@ -253,7 +264,7 @@ function AuditList({ audits, progress, onOpen, onStart, onRefresh }) {
       </div>
       {audits.length === 0 ? (
         <p className="px-4 py-8 text-sm text-surface-700 text-center">
-          No tool audits yet. Start one to count the tools at a location, or all of them.
+          No tool audits yet. Start one to count the general stock at a location (or everywhere), or to check one kit.
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -262,7 +273,7 @@ function AuditList({ audits, progress, onOpen, onStart, onRefresh }) {
               <tr className="text-left text-xs uppercase tracking-wide text-surface-600 border-b border-surface-200">
                 <th scope="col" className="px-4 py-2.5">Audit</th>
                 <th scope="col" className="px-4 py-2.5">Term</th>
-                <th scope="col" className="px-4 py-2.5">Location</th>
+                <th scope="col" className="px-4 py-2.5">Covers</th>
                 <th scope="col" className="px-4 py-2.5">Status</th>
                 <th scope="col" className="px-4 py-2.5">Progress</th>
                 <th scope="col" className="px-4 py-2.5">Started</th>
@@ -278,7 +289,7 @@ function AuditList({ audits, progress, onOpen, onStart, onRefresh }) {
                       {a.name}<br /><span className="text-xs font-normal text-surface-600">{a.audit_id}</span>
                     </th>
                     <td className="px-4 py-3 text-surface-800">{a.term || '—'}</td>
-                    <td className="px-4 py-3 text-surface-800">{a.location || 'All locations'}</td>
+                    <td className="px-4 py-3 text-surface-800">{scopeOf(a)}</td>
                     <td className="px-4 py-3"><StatusBadge audit={a} /></td>
                     <td className="px-4 py-3 text-surface-800">
                       {p ? <>{p.counted} of {p.total} counted{a.status === 'Completed' && p.short > 0 ? <><br /><span className="text-xs font-semibold text-red-800">{p.short} short</span></> : null}</>
@@ -313,25 +324,44 @@ function StartDialog({ userShort, onClose, onStarted }) {
   const [name, setName] = useState('')
   const [term, setTerm] = useState('')
   const [location, setLocation] = useState('')
+  const [scope, setScope] = useState('general')   // 'general' | 'kit'
+  const [kits, setKits] = useState([])            // active kits of active kit types, with their type name
+  const [kitItems, setKitItems] = useState([])    // every kit type's tool list
+  const [kitId, setKitId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const nameTouched = useRef(false)
+  const termName = useRef('')
 
   useEffect(() => {
     let alive = true
     ;(async () => {
       try {
-        const [t, inv] = await Promise.all([
+        const [t, inv, kt, kk, ki] = await Promise.all([
           supabase.from('academic_terms').select('term_id, name, season, year, begin_date, end_date, status'),
-          supabase.from('inventory').select('part_id, location').eq('item_type', 'Tool').eq('status', 'Active'),
+          supabase.from('inventory').select('part_id, location, qty_in_stock').eq('item_type', 'Tool').eq('status', 'Active'),
+          supabase.from('tool_kit_types').select('type_id, name, status'),
+          supabase.from('tool_kits').select('kit_id, type_id, name, location, status'),
+          supabase.from('tool_kit_type_items').select('type_id, part_id, qty'),
         ])
         const toolRows = mustData(inv, 'inventory.select') || []
+        // Kits decide what the general stock is expected to hold, so their reads must succeed too.
+        const types = mustData(kt, 'tool_kit_types.select') || []
+        const activeTypes = Object.fromEntries(types.filter(x => x.status === 'Active').map(x => [x.type_id, x.name]))
+        const kitRows = (mustData(kk, 'tool_kits.select') || [])
+          .filter(k => k.status === 'Active' && activeTypes[k.type_id])
+          .map(k => ({ ...k, type_name: activeTypes[k.type_id] }))
+          .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }))
+        const itemRows = mustData(ki, 'tool_kit_type_items.select') || []
         // Terms are optional here — a failed load just leaves the dropdown empty.
         const termRows = t.error ? [] : sortTerms((t.data || []).filter(x => x.status !== 'Archived'))
         if (!alive) return
         setTools(toolRows)
         setTerms(termRows)
+        setKits(kitRows)
+        setKitItems(itemRows)
         const cur = currentTerm(termRows)
+        termName.current = cur?.name || ''
         if (cur) { setTerm(cur.name); if (!nameTouched.current) setName(`${cur.name} tool count`) }
         else if (!nameTouched.current) setName('Tool count')
       } catch (e) {
@@ -341,18 +371,43 @@ function StartDialog({ userShort, onClose, onStarted }) {
     return () => { alive = false }
   }, [])
 
+  // Tools a general audit lists: the same rule as start_tool_audit() — a tool
+  // whose whole quantity is assigned to kits has nothing in general stock.
+  const generalTools = useMemo(() => {
+    const kitsPerType = {}
+    for (const k of kits) kitsPerType[k.type_id] = (kitsPerType[k.type_id] || 0) + 1
+    const inKits = {}
+    for (const it of kitItems) inKits[it.part_id] = (inKits[it.part_id] || 0) + it.qty * (kitsPerType[it.type_id] || 0)
+    return (tools || []).filter(t => !inKits[t.part_id] || (Number(t.qty_in_stock) || 0) > inKits[t.part_id])
+  }, [tools, kits, kitItems])
+
   const locations = useMemo(() => {
     const counts = {}
-    for (const t of tools || []) { const k = (t.location || '').trim(); if (k) counts[k] = (counts[k] || 0) + 1 }
+    for (const t of generalTools) { const k = (t.location || '').trim(); if (k) counts[k] = (counts[k] || 0) + 1 }
     return Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [tools])
-  const toolCount = location ? (locations.find(l => l[0] === location)?.[1] || 0) : (tools || []).length
+  }, [generalTools])
+  const kit = kits.find(k => k.kit_id === kitId) || null
+  const kitToolCount = kit ? kitItems.filter(it => it.type_id === kit.type_id).length : 0
+  const toolCount = scope === 'kit' ? kitToolCount
+    : location ? (locations.find(l => l[0] === location)?.[1] || 0) : generalTools.length
+
+  // Keep the suggested name in step with what is being counted, until it is typed over
+  const suggestName = (nextScope, nextKit) => {
+    if (nameTouched.current) return
+    if (nextScope === 'kit') setName(nextKit ? `${nextKit.name} check` : 'Kit check')
+    else setName(termName.current ? `${termName.current} tool count` : 'Tool count')
+  }
 
   const start = async () => {
     if (!name.trim()) { setError('Give the audit a name.'); return }
+    if (scope === 'kit' && !kit) { setError('Choose which kit to check.'); return }
     setBusy(true); setError('')
     try {
-      const id = mustData(await supabase.rpc('start_tool_audit', {
+      const id = scope === 'kit'
+        ? mustData(await supabase.rpc('start_tool_kit_check', {
+            p_kit_id: kit.kit_id, p_name: name.trim(), p_term: term, p_by: userShort,
+          }), 'start_tool_kit_check')
+        : mustData(await supabase.rpc('start_tool_audit', {
         p_name: name.trim(), p_term: term, p_location: location, p_by: userShort,
       }), 'start_tool_audit')
       if (!id) throw new Error('The audit was not created.')
@@ -377,6 +432,21 @@ function StartDialog({ userShort, onClose, onStarted }) {
           </button>
         </div>
         <div className="px-5 py-4 space-y-4">
+          <fieldset>
+            <legend className="block text-sm font-semibold text-surface-800 mb-1">What are you counting?</legend>
+            <label className="flex items-start gap-2 min-h-[44px] py-1.5 text-sm text-surface-900 cursor-pointer">
+              <input type="radio" name="ta-start-scope" className="mt-1 w-4 h-4" checked={scope === 'general'}
+                onChange={() => { setScope('general'); suggestName('general', null) }} />
+              <span><strong>General stock</strong><span className="block text-xs text-surface-700">Tools in the cabinets and cribs. Tools assigned to kits are not included.</span></span>
+            </label>
+            <label className="flex items-start gap-2 min-h-[44px] py-1.5 text-sm text-surface-900 cursor-pointer">
+              <input type="radio" name="ta-start-scope" className="mt-1 w-4 h-4" checked={scope === 'kit'} disabled={kits.length === 0}
+                onChange={() => { setScope('kit'); suggestName('kit', kit) }} />
+              <span><strong>One kit</strong><span className="block text-xs text-surface-700">
+                {kits.length === 0 ? 'No active kits yet. Add them on the Tool Kits page.' : 'A bench or toolbox, against its own tool list.'}
+              </span></span>
+            </label>
+          </fieldset>
           <div>
             <label htmlFor="ta-start-name" className="block text-sm font-semibold text-surface-800 mb-1">Audit name</label>
             <input id="ta-start-name" type="text" className={INPUT} value={name} maxLength={120}
@@ -389,6 +459,21 @@ function StartDialog({ userShort, onClose, onStarted }) {
               {terms.map(t => <option key={t.term_id} value={t.name}>{t.name}</option>)}
             </select>
           </div>
+          {scope === 'kit' ? (
+            <div>
+              <label htmlFor="ta-start-kit" className="block text-sm font-semibold text-surface-800 mb-1">Kit</label>
+              <select id="ta-start-kit" className={INPUT} value={kitId} aria-describedby="ta-start-kit-help"
+                onChange={e => { setKitId(e.target.value); suggestName('kit', kits.find(k => k.kit_id === e.target.value) || null) }}>
+                <option value="">Choose a kit…</option>
+                {kits.map(k => <option key={k.kit_id} value={k.kit_id}>{k.name} — {k.type_name}</option>)}
+              </select>
+              <p id="ta-start-kit-help" className="text-xs text-surface-700 mt-1.5">
+                {!kit ? 'The check lists the tools that kit is supposed to hold.'
+                  : toolCount === 0 ? 'This kit has no tools on its list yet. Add tools to its kit type on the Tool Kits page.'
+                  : `This check will list the ${toolCount} tool${toolCount === 1 ? '' : 's'} ${kit.name} should hold.`}
+              </p>
+            </div>
+          ) : (
           <div>
             <label htmlFor="ta-start-loc" className="block text-sm font-semibold text-surface-800 mb-1">Location</label>
             <select id="ta-start-loc" className={INPUT} value={location} aria-describedby="ta-start-loc-help"
@@ -398,15 +483,16 @@ function StartDialog({ userShort, onClose, onStarted }) {
             </select>
             <p id="ta-start-loc-help" className="text-xs text-surface-700 mt-1.5">
               {tools === null ? 'Loading tools…'
-                : toolCount === 0 ? 'There are no active tools to count here. Add tools on the Inventory page first.'
+                : toolCount === 0 ? 'There are no active tools in general stock to count here. Add tools on the Inventory page first.'
                 : `This audit will list ${toolCount} active tool${toolCount === 1 ? '' : 's'}, as the inventory stands right now.`}
             </p>
           </div>
+          )}
           {error && <p className="text-sm font-semibold text-red-800" role="alert">{error}</p>}
         </div>
         <div className="flex justify-end gap-2 px-5 py-4 border-t border-surface-200">
           <button type="button" onClick={onClose} disabled={busy} className={BTN_PLAIN}>Cancel</button>
-          <button type="button" onClick={start} disabled={busy || tools === null || toolCount === 0} className={BTN_PRIMARY}>
+          <button type="button" onClick={start} disabled={busy || tools === null || toolCount === 0 || (scope === 'kit' && !kit)} className={BTN_PRIMARY}>
             {busy && <Loader2 size={16} className="animate-spin" aria-hidden="true" />} Start audit
           </button>
         </div>
@@ -503,7 +589,7 @@ function AuditDetail({ audit, userShort, userEmail, say, onChanged }) {
           <StatusBadge audit={audit} />
         </div>
         <p className="text-sm text-surface-700 mt-1">
-          {audit.audit_id} · {audit.term || 'No term'} · {audit.location || 'All locations'} · started {fmtWhen(audit.started_at)}{audit.started_by ? ` by ${audit.started_by}` : ''}
+          {audit.audit_id} · {audit.term || 'No term'} · {scopeOf(audit)}{audit.kit_id && audit.location ? ` · at ${audit.location}` : ''} · started {fmtWhen(audit.started_at)}{audit.started_by ? ` by ${audit.started_by}` : ''}
         </p>
         {audit.completed_at && <p className="text-sm text-surface-700">Count finished {fmtWhen(audit.completed_at)}{audit.completed_by ? ` by ${audit.completed_by}` : ''}</p>}
         {audit.applied_at && <p className="text-sm text-surface-700">Applied to inventory {fmtWhen(audit.applied_at)}{audit.applied_by ? ` by ${audit.applied_by}` : ''}</p>}
@@ -548,8 +634,9 @@ function AuditDetail({ audit, userShort, userEmail, say, onChanged }) {
       {confirm === 'apply' && (
         <ConfirmDialog open variant="primary" busy={busy} title="Apply this audit to the inventory?"
           message={<>
-            This updates {sum.counted} counted tool{sum.counted === 1 ? '' : 's'}: {sum.unitsShort} will be marked missing
-            {sum.unitsOver > 0 ? <>, {sum.unitsOver} extra will be added to the totals</> : null}, and worn and broken counts are replaced with what was counted.
+            This updates {sum.counted} counted tool{sum.counted === 1 ? '' : 's'}: {sum.unitsShort} will be marked missing{audit.kit_id ? ' from this kit' : ''}
+            {sum.unitsOver > 0 && !audit.kit_id ? <>, {sum.unitsOver} extra will be added to the totals</> : null}, and worn and broken counts for {audit.kit_id ? 'this kit' : 'the general stock'} are replaced with what was counted.
+            {audit.kit_id ? ' The general stock and the other kits are not touched.' : ' What the kits\u2019 own checks recorded is kept.'}
             {sum.uncounted > 0 ? <> The {sum.uncounted} tool{sum.uncounted === 1 ? '' : 's'} not counted {sum.uncounted === 1 ? 'is' : 'are'} left unchanged.</> : null}
             {' '}This can be done once and the audit cannot be reopened afterwards.
           </>}
@@ -849,7 +936,7 @@ function ReportView({ audit, lines, sum, status, onApply, onReopen }) {
       th { background: #eee; font-size: 11px; text-transform: uppercase; } td.n { text-align: right; } td.bad { font-weight: bold; }
     </style></head><body>
       <h1>RICT CMMS — Tool audit: ${esc(audit.name)}</h1>
-      <div class="meta">${esc(audit.audit_id)} · ${esc(audit.term || 'No term')} · ${esc(audit.location || 'All locations')} · ${esc(status)} · started ${esc(fmtWhen(audit.started_at))}${audit.started_by ? ' by ' + esc(audit.started_by) : ''}<br>
+      <div class="meta">${esc(audit.audit_id)} · ${esc(audit.term || 'No term')} · ${esc(scopeOf(audit))} · ${esc(status)} · started ${esc(fmtWhen(audit.started_at))}${audit.started_by ? ' by ' + esc(audit.started_by) : ''}<br>
         ${sum.counted} of ${sum.total} tools counted · ${sum.short} short (${sum.unitsShort} missing) · ${sum.over} over (${sum.unitsOver} extra) · ${sum.worn} worn · ${sum.broken} broken${filter !== 'all' ? ' · showing: ' + esc(filter) : ''} · printed ${esc(new Date().toLocaleDateString())}</div>
       <table><thead><tr><th scope="col">Tool ID</th><th scope="col">Tool</th><th scope="col">Location</th><th scope="col">Expected</th><th scope="col">Counted</th><th scope="col">Result</th><th scope="col">Worn</th><th scope="col">Broken</th><th scope="col">Note</th></tr></thead>
       <tbody>${body}</tbody></table></body></html>`)
@@ -913,7 +1000,11 @@ function ReportView({ audit, lines, sum, status, onApply, onReopen }) {
             </button>
           ))}
         </div>
-        <p className="text-xs text-surface-700">Expected is the total owned when the audit started.</p>
+        <p className="text-xs text-surface-700">
+          {audit.kit_id
+            ? 'Expected is what this kit should hold, from its kit type\u2019s tool list when the check started.'
+            : 'Expected is the general stock when the audit started: the total owned minus what is assigned to kits.'}
+        </p>
       </div>
 
       {shown.length === 0 ? (
