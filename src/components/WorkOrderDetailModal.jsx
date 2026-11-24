@@ -14,6 +14,12 @@
  * bar) a "Save WOC Exclusion" button appears once the value differs from what
  * is stored. Everyone sees the "Excluded from WOC" badge when it is set.
  *
+ * Tools Needed: a reference list of tools for the job — the tools of every
+ * SOP linked to the work order (read-only here; change them on the SOP) plus
+ * tools added directly to this work order (edit_wo, open work orders only).
+ * It never changes a tool's quantity. The parent loads the list and does the
+ * writes; this component only holds the two "add a tool" field values.
+ *
  * File: src/components/WorkOrderDetailModal.jsx
  */
 
@@ -55,6 +61,11 @@ export default function WorkOrderDetailModal({
   pmProcedureUrl,
   pmProcedureName,
   linkedSops = [],
+  toolsNeeded = [],        // [{ key, part_id, name, qty, location, direct, source, gone }]
+  toolOptions = [],        // active tools that can be added directly
+  toolsBusy = false,
+  onAddTool,               // (partId, qty) => Promise
+  onRemoveTool,            // (partId) => Promise — direct tools only
 
   // Lookups
   assets,
@@ -92,7 +103,16 @@ export default function WorkOrderDetailModal({
   // so we always pass `true` for isOpen — the hook tears down on unmount.
   const dialogRef = useDialogA11y(true, onClose);
 
+  // "Add a tool" fields (Tools Needed). Kept above the early return so the
+  // hook order never changes.
+  const [addToolId, setAddToolId] = React.useState('');
+  const [addToolQty, setAddToolQty] = React.useState('1');
+
   if (!wo) return null;
+
+  const canEditTools = !wo.isClosed && hasPerm('edit_wo') && typeof onAddTool === 'function';
+  const directToolIds = new Set(toolsNeeded.filter(t => t.direct).map(t => t.part_id));
+  const addableTools = toolOptions.filter(o => !directToolIds.has(o.part_id));
 
   const isInstructor = profile?.role === 'Instructor' || profile?.role === 'Super Admin';
   // Privacy rule: students / work study see other people as "First L.";
@@ -567,6 +587,88 @@ export default function WorkOrderDetailModal({
                   Some SOPs may have been carried forward from PM schedule <strong>{wo.pm_id}</strong>.
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Tools Needed — from the linked SOPs, plus any added to this work order.
+              Shown when there is something to list, or when the viewer can add one. */}
+          {(toolsNeeded.length > 0 || canEditTools) && (
+            <div className="detail-section">
+              <h4>
+                <span className="material-icons" aria-hidden="true">build</span>
+                Tools Needed
+                {toolsNeeded.length > 0 && (
+                  <span style={{ marginLeft: 8, fontSize: '0.75rem', fontWeight: 400, color: '#495057' }}>
+                    {toolsNeeded.length} listed
+                  </span>
+                )}
+              </h4>
+              {toolsNeeded.length === 0 ? (
+                <p style={{ fontSize: '0.85rem', color: '#495057', margin: '0 0 8px' }}>No tools are listed for this work order.</p>
+              ) : (
+                <ul
+                  style={{ display: 'flex', flexDirection: 'column', gap: 6, listStyle: 'none', padding: 0, margin: 0 }}
+                  aria-label={`${toolsNeeded.length} tool${toolsNeeded.length === 1 ? '' : 's'} needed`}
+                >
+                  {toolsNeeded.map(t => (
+                    <li
+                      key={t.key}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px', background: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: 8 }}
+                    >
+                      <span style={{ minWidth: 34, fontWeight: 700, color: '#212529', fontSize: '0.9rem' }}>{t.qty} ×</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#212529' }}>{t.name}</div>
+                        <div style={{ fontSize: '0.75rem', color: '#495057' }}>
+                          {t.part_id}{t.location ? ` · ${t.location}` : ''} · {t.direct ? 'Added to this work order' : `From SOP: ${t.source}`}
+                          {t.gone ? ' · no longer in the tool inventory' : ''}
+                        </div>
+                      </div>
+                      {t.direct && canEditTools && (
+                        <button
+                          type="button"
+                          onClick={() => onRemoveTool(t.part_id)}
+                          disabled={toolsBusy}
+                          aria-label={`Remove ${t.name} from this work order's tools`}
+                          title="Remove"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#c92a2a', borderRadius: 6 }}
+                        >
+                          <span className="material-icons" aria-hidden="true" style={{ fontSize: '1.1rem' }}>close</span>
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canEditTools && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 8, marginTop: 10 }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <label htmlFor="wo-tool-add" style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#343a40', marginBottom: 4 }}>Add a tool to this work order</label>
+                    <select id="wo-tool-add" className="form-input" style={{ minHeight: 44 }} value={addToolId} onChange={e => setAddToolId(e.target.value)}>
+                      <option value="">{addableTools.length ? 'Choose a tool…' : 'No more tools to add'}</option>
+                      {addableTools.map(o => <option key={o.part_id} value={o.part_id}>{o.part_name} ({o.part_id})</option>)}
+                    </select>
+                  </div>
+                  <div style={{ width: 84 }}>
+                    <label htmlFor="wo-tool-add-qty" style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, color: '#343a40', marginBottom: 4 }}>Qty</label>
+                    <input id="wo-tool-add-qty" type="number" min="1" step="1" inputMode="numeric" className="form-input" style={{ minHeight: 44, textAlign: 'center' }} value={addToolQty} onChange={e => setAddToolQty(e.target.value)} />
+                  </div>
+                  <button
+                    type="button"
+                    className="wo-action-btn"
+                    style={{ minHeight: 44 }}
+                    disabled={toolsBusy || !addToolId}
+                    onClick={async () => {
+                      const ok = await onAddTool(addToolId, addToolQty);
+                      if (ok) { setAddToolId(''); setAddToolQty('1'); }
+                    }}
+                  >
+                    <span className="material-icons" aria-hidden="true">add</span>Add tool
+                  </button>
+                </div>
+              )}
+              <p style={{ fontSize: '0.72rem', color: '#495057', margin: '8px 0 0' }}>
+                A reference list only — it does not change tool counts.{toolsNeeded.some(t => !t.direct) ? ' Tools that come from an SOP are changed on the SOP.' : ''}
+              </p>
             </div>
           )}
 

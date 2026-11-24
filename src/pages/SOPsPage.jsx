@@ -13,11 +13,17 @@
  *  - Print: opens PDF in new tab for native browser printing
  *  - Real-time updates via Supabase subscription
  *  - Audit logging for all actions
+ *  - Tools Needed (sop_tools): the tools this procedure calls for, picked from
+ *    the tool inventory with a quantity. Edited with edit_sop. "Print tool
+ *    list" prints a one-page pull sheet — the SOP itself is an uploaded PDF,
+ *    so the list cannot be printed inside that document. A reference list
+ *    only: it never changes a tool's quantity. Work orders linked to the SOP
+ *    show these tools too.
  *
  * FIX (v3.1): Replaced inline permission system with usePermissions('SOPs') so that
  *             temp permission grants (e.g. SOPs: create_sop) are respected correctly.
  *
- * Supabase tables: sops, sop_assets, sop_pm_schedules, sop_work_orders
+ * Supabase tables: sops, sop_assets, sop_pm_schedules, sop_work_orders, sop_tools
  * Supabase storage bucket: sop-documents
  * Permission page key: 'SOPs'
  */
@@ -126,6 +132,14 @@ export default function SOPsPage() {
   const [linkedPMs, setLinkedPMs] = useState([])
   const [linkedWOs, setLinkedWOs] = useState([])
   const [linksLoading, setLinksLoading] = useState(false)
+
+  // Tools Needed for the selected SOP (sop_tools) + the tool picker
+  const [sopTools, setSopTools] = useState([])          // [{ part_id, qty, note, name, location, gone }]
+  const [toolOptions, setToolOptions] = useState([])    // active tools from inventory
+  const [toolsLoading, setToolsLoading] = useState(false)
+  const [toolsBusy, setToolsBusy] = useState(false)
+  const [addToolId, setAddToolId] = useState('')
+  const [addToolQty, setAddToolQty] = useState('1')
 
   // ── Closed WOs (lazy-loaded on demand to avoid bloating the linked WOs list) ──
   // Recurring PMs (e.g. quarterly Spindle Inspection) generate many closed WOs over
@@ -254,8 +268,28 @@ export default function SOPsPage() {
   // IDs are recorded so we can show a count and a "Show N closed" disclosure.
   // The full closed records are pulled on demand via loadClosedWOs() when the user
   // expands the disclosure.
+  // ── Tools Needed ──
+  // Loaded on its own so a problem here never blocks the linked items.
+  const fetchSopTools = useCallback(async (sopId) => {
+    if (!sopId) return
+    setToolsLoading(true)
+    setSopTools([])
+    setAddToolId(''); setAddToolQty('1')
+    try {
+      const rows = mustData(await supabase.from('sop_tools').select('part_id, qty, note').eq('sop_id', sopId), 'sop_tools.select') || []
+      const tools = mustData(await supabase.from('inventory').select('part_id, part_name, location, status').eq('item_type', 'Tool'), 'inventory.select') || []
+      const byId = Object.fromEntries(tools.map(t => [t.part_id, t]))
+      setToolOptions(tools.filter(t => t.status === 'Active').sort((a, b) => String(a.part_name).localeCompare(String(b.part_name), undefined, { numeric: true, sensitivity: 'base' })))
+      setSopTools(rows.map(r => ({
+        ...r, name: byId[r.part_id]?.part_name || r.part_id, location: byId[r.part_id]?.location || '', gone: !byId[r.part_id],
+      })).sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: 'base' })))
+    } catch (err) { console.error('Error fetching SOP tools:', err) }
+    finally { setToolsLoading(false) }
+  }, [])
+
   const fetchLinks = useCallback(async (sopId) => {
     if (!sopId) return
+    fetchSopTools(sopId)
     setLinksLoading(true)
     // Reset closed-WO state when switching SOPs so an open disclosure doesn't carry over
     setClosedWOIds([])
@@ -290,7 +324,7 @@ export default function SOPsPage() {
       }
     } catch (err) { console.error('Error fetching SOP links:', err) }
     finally { setLinksLoading(false) }
-  }, [])
+  }, [fetchSopTools])
 
   // ── Load CLOSED work orders on demand ──
   // Triggered when the user clicks "Show N closed work orders". Caches the result
@@ -471,6 +505,7 @@ export default function SOPsPage() {
       await supabase.from('sop_assets').delete().eq('sop_id', selectedSOP.sop_id)
       await supabase.from('sop_pm_schedules').delete().eq('sop_id', selectedSOP.sop_id)
       await supabase.from('sop_work_orders').delete().eq('sop_id', selectedSOP.sop_id)
+      await supabase.from('sop_tools').delete().eq('sop_id', selectedSOP.sop_id)
       const { error } = assertWrite(
       await supabase.from('sops').delete().eq('sop_id', selectedSOP.sop_id).select(),
       'sops.delete'
@@ -582,6 +617,81 @@ export default function SOPsPage() {
       else if (type === 'wo') { await supabase.from('sop_work_orders').delete().eq('sop_id', sopId).eq('wo_id', itemId) }
       fetchLinks(sopId)
     } catch (err) { toast.error('Error: ' + (err.message || 'Failed to unlink')) }
+  }
+
+  // ── Tools Needed handlers ──
+  const toolQty = (v) => Math.max(1, Math.floor(Number(v) || 1))
+
+  const handleAddTool = async () => {
+    if (!addToolId || !selectedSOP) return
+    const sopId = selectedSOP.sop_id
+    setToolsBusy(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('sop_tools').insert({ sop_id: sopId, part_id: addToolId, qty: toolQty(addToolQty), added_by: userName }).select(),
+        'sop_tools.insert')
+      if (error) throw error
+      const name = toolOptions.find(t => t.part_id === addToolId)?.part_name || addToolId
+      await auditLog('Add Tool', sopId, `Added tool ${name} (${addToolId}) x${toolQty(addToolQty)}`)
+      toast.success(`${name} added to the tools needed`)
+      await fetchSopTools(sopId)
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to add the tool')) }
+    setToolsBusy(false)
+  }
+
+  const handleToolQty = async (tool, value) => {
+    const qty = toolQty(value)
+    if (qty === tool.qty || !selectedSOP) return
+    const sopId = selectedSOP.sop_id
+    setToolsBusy(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('sop_tools').update({ qty }).eq('sop_id', sopId).eq('part_id', tool.part_id).select(),
+        'sop_tools.update')
+      if (error) throw error
+      toast.success(`${tool.name}: quantity saved`)
+      await fetchSopTools(sopId)
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to save the quantity')) }
+    setToolsBusy(false)
+  }
+
+  const handleRemoveTool = async (tool) => {
+    if (!selectedSOP) return
+    const sopId = selectedSOP.sop_id
+    setToolsBusy(true)
+    try {
+      const { error } = assertWrite(
+        await supabase.from('sop_tools').delete().eq('sop_id', sopId).eq('part_id', tool.part_id).select(),
+        'sop_tools.delete')
+      if (error) throw error
+      await auditLog('Remove Tool', sopId, `Removed tool ${tool.name} (${tool.part_id})`)
+      toast.success(`${tool.name} removed from the tools needed`)
+      await fetchSopTools(sopId)
+    } catch (err) { toast.error('Error: ' + (err.message || 'Failed to remove the tool')) }
+    setToolsBusy(false)
+  }
+
+  // One-page pull sheet. The SOP document is an uploaded PDF, so the tool list
+  // prints as its own sheet rather than inside that file.
+  const handlePrintTools = () => {
+    if (!selectedSOP || !sopTools.length) return
+    const esc = (v) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+    const rows = sopTools.map(t => `<tr><td class="box"></td><td class="n">${t.qty}</td><td>${esc(t.name)}</td><td>${esc(t.part_id)}</td><td>${esc(t.location || '—')}</td></tr>`).join('')
+    const w = window.open('', '_blank')
+    if (!w) { toast.error('The print window was blocked. Allow pop-ups for this site.'); return }
+    w.document.write(`<html lang="en"><head><title>Tools needed — ${esc(selectedSOP.name)}</title><style>
+      @page { margin: 0.6in; } body { font-family: Arial, Helvetica, sans-serif; font-size: 13px; margin: 0; }
+      h1 { font-size: 18px; margin: 0 0 2px; } .meta { font-size: 12px; color: #444; margin-bottom: 14px; }
+      table { width: 100%; border-collapse: collapse; } th, td { border: 1px solid #999; padding: 7px 9px; text-align: left; }
+      th { background: #eee; font-size: 11px; text-transform: uppercase; } td.n { text-align: center; font-weight: bold; }
+      td.box { width: 22px; } td.box::after { content: ''; display: block; width: 14px; height: 14px; border: 1.5px solid #333; }
+    </style></head><body>
+      <h1>Tools needed: ${esc(selectedSOP.name)}</h1>
+      <div class="meta">RICT CMMS · ${esc(selectedSOP.sop_id)} · ${sopTools.length} tool${sopTools.length === 1 ? '' : 's'} · printed ${esc(new Date().toLocaleDateString())}</div>
+      <table><thead><tr><th scope="col"><span style="font-size:0">Gathered</span></th><th scope="col">Qty</th><th scope="col">Tool</th><th scope="col">Tool ID</th><th scope="col">Kept at</th></tr></thead>
+      <tbody>${rows}</tbody></table></body></html>`)
+    w.document.close()
+    setTimeout(() => w.print(), 400)
   }
 
   // ── Print Handler ──
@@ -795,6 +905,50 @@ export default function SOPsPage() {
                   {selectedSOP.document_url && <button className="sops-btn-outline" onClick={handlePrint}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>print</span> Print</button>}
                   {hasPerm('delete_sop') && <button className="sops-btn-danger-outline" onClick={() => setShowDeleteConfirm(true)}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16 }}>delete</span> Delete SOP</button>}
                 </div>
+              </div>
+
+              {/* ── Tools Needed ── */}
+              <div className="sops-link-section">
+                <div className="sops-link-section-header">
+                  <h5 className="sops-link-section-title"><span className="material-icons" aria-hidden="true" style={{ fontSize: 18, color: '#1864ab' }}>build</span> Tools Needed ({sopTools.length})</h5>
+                  {sopTools.length > 0 && <button type="button" className="sops-btn-sm" onClick={handlePrintTools}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>print</span> Print tool list</button>}
+                </div>
+                {toolsLoading ? <p className="sops-link-empty">Loading...</p> : sopTools.length === 0 ? <p className="sops-link-empty">No tools listed for this SOP.</p> : (
+                  <ul className="sops-link-list" style={{ listStyle: 'none', padding: 0, margin: 0 }} aria-label={`${sopTools.length} tool${sopTools.length === 1 ? '' : 's'} needed`}>
+                    {sopTools.map(t => (
+                      <li key={t.part_id} className="sops-link-item">
+                        {hasPerm('edit_sop') ? (
+                          <input type="number" min="1" step="1" inputMode="numeric" className="sops-tool-qty" disabled={toolsBusy}
+                            defaultValue={t.qty} key={`${t.part_id}-${t.qty}`} aria-label={`How many ${t.name} are needed`}
+                            onBlur={(e) => handleToolQty(t, e.target.value)} />
+                        ) : (
+                          <span className="sops-tool-count">{t.qty} ×</span>
+                        )}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="sops-link-item-name">{t.name}</div>
+                          <div className="sops-link-item-sub">{t.part_id}{t.location ? ` · ${t.location}` : ''}{t.gone ? ' · no longer in the tool inventory' : ''}</div>
+                        </div>
+                        {hasPerm('edit_sop') && <button type="button" className="sops-btn-icon" disabled={toolsBusy} onClick={() => handleRemoveTool(t)} title="Remove" aria-label={`Remove ${t.name} from the tools needed`}><span className="material-icons" aria-hidden="true" style={{ fontSize: 16, color: '#c92a2a' }}>close</span></button>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {hasPerm('edit_sop') && !toolsLoading && (
+                  <div className="sops-tool-add">
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <label htmlFor="sop-tool-add" className="sops-tool-label">Add a tool</label>
+                      <select id="sop-tool-add" className="sops-input" style={{ minHeight: 44 }} value={addToolId} onChange={(e) => setAddToolId(e.target.value)}>
+                        <option value="">{toolOptions.some(o => !sopTools.some(t => t.part_id === o.part_id)) ? 'Choose a tool…' : 'No more tools to add'}</option>
+                        {toolOptions.filter(o => !sopTools.some(t => t.part_id === o.part_id)).map(o => <option key={o.part_id} value={o.part_id}>{o.part_name} ({o.part_id})</option>)}
+                      </select>
+                    </div>
+                    <div style={{ width: 84 }}>
+                      <label htmlFor="sop-tool-add-qty" className="sops-tool-label">Qty</label>
+                      <input id="sop-tool-add-qty" type="number" min="1" step="1" inputMode="numeric" className="sops-input" style={{ minHeight: 44, textAlign: 'center' }} value={addToolQty} onChange={(e) => setAddToolQty(e.target.value)} />
+                    </div>
+                    <button type="button" className="sops-btn-sm" disabled={toolsBusy || !addToolId} onClick={handleAddTool}><span className="material-icons" aria-hidden="true" style={{ fontSize: 14 }}>add</span> Add tool</button>
+                  </div>
+                )}
               </div>
 
               {/* ── Linked Assets ── */}
@@ -1336,6 +1490,12 @@ export default function SOPsPage() {
         .sops-link-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
         .sops-link-section-title { margin: 0; font-size: 0.88rem; color: #495057; display: flex; align-items: center; gap: 6px; font-weight: 600; }
         .sops-link-empty { font-size: 0.83rem; color: #adb5bd; padding: 8px 0; margin: 0; }
+        /* Tools Needed */
+        .sops-tool-qty { width: 64px; min-height: 44px; padding: 4px 6px; text-align: center; border: 1px solid #adb5bd; border-radius: 6px; font-size: 0.9rem; background: #fff; }
+        .sops-tool-qty:focus-visible, .sops-tool-add select:focus-visible, .sops-tool-add input:focus-visible { outline: 3px solid #1864ab; outline-offset: 1px; }
+        .sops-tool-count { min-width: 40px; font-weight: 700; color: #343a40; font-size: 0.9rem; }
+        .sops-tool-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 10px; }
+        .sops-tool-label { display: block; font-size: 0.78rem; font-weight: 600; color: #343a40; margin-bottom: 4px; }
         .sops-link-list { display: flex; flex-direction: column; gap: 4px; }
         .sops-link-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #f8f9fa; border-radius: 8px; border: 1px solid #f1f3f5; }
         .sops-link-item-name { font-size: 0.85rem; font-weight: 500; color: #495057; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -191,6 +191,11 @@ export default function WorkOrdersPage() {
 
   // Linked SOPs (fetched whenever a WO is opened — covers PM-inherited and direct SOP links)
   const [linkedSops, setLinkedSops] = useState([]);
+  // Tools Needed for the open WO: tools of its linked SOPs + tools added to the
+  // WO itself (work_order_tools). A reference list — never changes tool counts.
+  const [toolsNeeded, setToolsNeeded] = useState([]);
+  const [toolOptions, setToolOptions] = useState([]);
+  const [toolsBusy, setToolsBusy] = useState(false);
 
   // Generate PO modal
   const [showGeneratePO, setShowGeneratePO] = useState(false);
@@ -696,6 +701,93 @@ export default function WorkOrdersPage() {
   //   1. SOPs directly linked to a WO from the SOPs page
   //   2. SOPs that were copied forward from a PM at WO-generation time
   // Active SOPs only — paused/inactive SOPs are filtered out.
+  // Tools Needed for a work order. Self-contained (does its own SOP lookup) so
+  // it can be refreshed on its own, and a failure here never affects the SOP
+  // cards. `keep` leaves the current list on screen while reloading.
+  const fetchToolsNeeded = async (woId, { keep = false } = {}) => {
+    if (!keep) setToolsNeeded([]);
+    if (!woId) return;
+    try {
+      const [linkRes, directRes, toolRes] = await Promise.all([
+        supabase.from('sop_work_orders').select('sop_id').eq('wo_id', woId),
+        supabase.from('work_order_tools').select('part_id, qty, note').eq('wo_id', woId),
+        supabase.from('inventory').select('part_id, part_name, location, status').eq('item_type', 'Tool'),
+      ]);
+      const sopIds = [...new Set((mustData(linkRes, 'sop_work_orders.select') || []).map(l => l.sop_id).filter(Boolean))];
+      const direct = mustData(directRes, 'work_order_tools.select') || [];
+      const tools = mustData(toolRes, 'inventory.select') || [];
+      const byId = Object.fromEntries(tools.map(t => [t.part_id, t]));
+      const byName = (a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: 'base' });
+
+      let fromSops = [];
+      if (sopIds.length > 0) {
+        const [sopRes, sopToolRes] = await Promise.all([
+          supabase.from('sops').select('sop_id, name, status').in('sop_id', sopIds),
+          supabase.from('sop_tools').select('sop_id, part_id, qty').in('sop_id', sopIds),
+        ]);
+        // Same rule as the SOP cards: Active SOPs only
+        const sopName = Object.fromEntries((mustData(sopRes, 'sops.select') || []).filter(s => s.status !== 'Inactive').map(s => [s.sop_id, s.name]));
+        fromSops = (mustData(sopToolRes, 'sop_tools.select') || [])
+          .filter(r => sopName[r.sop_id])
+          .map(r => ({
+            key: `sop-${r.sop_id}-${r.part_id}`, part_id: r.part_id, qty: r.qty, direct: false, source: sopName[r.sop_id],
+            name: byId[r.part_id]?.part_name || r.part_id, location: byId[r.part_id]?.location || '', gone: !byId[r.part_id],
+          }));
+      }
+      const added = direct.map(r => ({
+        key: `wo-${r.part_id}`, part_id: r.part_id, qty: r.qty, direct: true, source: '',
+        name: byId[r.part_id]?.part_name || r.part_id, location: byId[r.part_id]?.location || '', gone: !byId[r.part_id],
+      }));
+      setToolsNeeded([...fromSops.sort(byName), ...added.sort(byName)]);
+      setToolOptions(tools.filter(t => t.status === 'Active').map(t => ({ part_id: t.part_id, part_name: t.part_name })).sort((a, b) => byName({ name: a.part_name }, { name: b.part_name })));
+    } catch (err) {
+      console.warn('Failed to fetch tools needed:', err);
+      if (!keep) setToolsNeeded([]);
+    }
+  };
+
+  // Add a tool directly to the open work order. Returns true when saved.
+  const addWoTool = async (partId, qty) => {
+    const wo = currentWORef.current;
+    if (!wo || !partId) return false;
+    setToolsBusy(true);
+    try {
+      const n = Math.max(1, Math.floor(Number(qty) || 1));
+      const { error } = assertWrite(
+        await supabase.from('work_order_tools').insert({
+          wo_id: wo.wo_id, part_id: partId, qty: n,
+          added_by: profile ? `${profile.first_name} ${profile.last_name?.charAt(0) || ''}.` : '',
+        }).select(), 'work_order_tools.insert');
+      if (error) throw error;
+      showToast('Tool added', 'success');
+      await fetchToolsNeeded(wo.wo_id, { keep: true });
+      setToolsBusy(false);
+      return true;
+    } catch (e) {
+      showToast('Could not add the tool: ' + (e.message || 'you may not have permission.'), 'error');
+      setToolsBusy(false);
+      return false;
+    }
+  };
+
+  // Remove a tool that was added directly to the open work order.
+  const removeWoTool = async (partId) => {
+    const wo = currentWORef.current;
+    if (!wo || !partId) return;
+    setToolsBusy(true);
+    try {
+      const { error } = assertWrite(
+        await supabase.from('work_order_tools').delete().eq('wo_id', wo.wo_id).eq('part_id', partId).select(),
+        'work_order_tools.delete');
+      if (error) throw error;
+      showToast('Tool removed', 'info');
+      await fetchToolsNeeded(wo.wo_id, { keep: true });
+    } catch (e) {
+      showToast('Could not remove the tool: ' + (e.message || 'you may not have permission.'), 'error');
+    }
+    setToolsBusy(false);
+  };
+
   const fetchLinkedSops = async (woId) => {
     setLinkedSops([]);
     if (!woId) return;
@@ -866,6 +958,7 @@ export default function WorkOrdersPage() {
         const changedWoId = payload.new?.wo_id || payload.old?.wo_id;
         if (wo && showViewModalRef.current && changedWoId === wo.wo_id) {
           fetchLinkedSops(wo.wo_id);
+          fetchToolsNeeded(wo.wo_id, { keep: true });   // the SOP's tools come and go with the link
         }
       })
     , {
@@ -879,6 +972,7 @@ export default function WorkOrdersPage() {
         if (wo && !wo.isClosed && showViewModalRef.current) {
           loadWODetailSilent(wo.wo_id);
           fetchLinkedSops(wo.wo_id);
+          fetchToolsNeeded(wo.wo_id, { keep: true });
         }
       },
     });
@@ -1045,6 +1139,7 @@ export default function WorkOrdersPage() {
     setPmProcedureUrl(null);
     setPmProcedureName('');
     setLinkedSops([]);
+    setToolsNeeded([]);
 
     // Update the ref synchronously so the realtime handler immediately knows which WO
     // is active. Relying solely on the useEffect means the ref can lag one render behind,
@@ -1114,6 +1209,9 @@ export default function WorkOrdersPage() {
     // Fetch SOPs linked to this WO (covers both PM-inherited and direct links)
     await fetchLinkedSops(woId);
 
+    // Tools needed: the linked SOPs' tools + tools added to this WO
+    await fetchToolsNeeded(woId);
+
     showViewModalRef.current = true;
     setShowViewModal(true);
   };
@@ -1146,6 +1244,7 @@ export default function WorkOrdersPage() {
 
         // Refresh linked SOPs (instructor may have linked/unlinked from SOPs page)
         await fetchLinkedSops(woId);
+        await fetchToolsNeeded(woId, { keep: true });
       }
 
       const logs = mustData(await supabase.from('work_log').select('*').eq('wo_id', woId).order('timestamp', { ascending: false }), 'work_log.select');
@@ -2076,6 +2175,7 @@ export default function WorkOrdersPage() {
               setLoading(true);
               await supabase.from('work_log').delete().eq('wo_id', woId).select();
               await supabase.from('work_order_parts').delete().eq('wo_id', woId).select();
+              await supabase.from('work_order_tools').delete().eq('wo_id', woId).select();   // tools-needed list (reference only)
               await supabase.from('work_order_documents').delete().eq('wo_id', woId).select();
               await supabase.from('work_order_assignments').delete().eq('wo_id', woId).select();
               const { data: woDelRows, error: woDelErr } = await supabase.from('work_orders').delete().eq('wo_id', woId).select();
@@ -2808,6 +2908,11 @@ export default function WorkOrdersPage() {
           pmProcedureUrl={pmProcedureUrl}
           pmProcedureName={pmProcedureName}
           linkedSops={linkedSops}
+          toolsNeeded={toolsNeeded}
+          toolOptions={toolOptions}
+          toolsBusy={toolsBusy}
+          onAddTool={addWoTool}
+          onRemoveTool={removeWoTool}
           // Lookups
           assets={assets}
           users={users}
