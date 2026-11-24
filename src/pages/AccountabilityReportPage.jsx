@@ -41,6 +41,14 @@
  *
  * Exports: CSV / Excel (SheetJS, dynamic import) of the class table or the
  * student's event list; Print (browser print CSS).
+ *   One-student report, instructor view (2026-11-24): CSV, Excel and Print
+ *   first ask "what do you want?" — Everything (unchanged output) or only the
+ *   rows the instructor ticks (e.g. just "Help requests — response time").
+ *   A picked-items output leaves the summary boxes and the lab sign-up
+ *   warnings card off unless they are ticked too, and says on the page / in
+ *   the file that it is a selection, not the full report. The last choice is
+ *   remembered while the page is open, so the same sheet can be run for
+ *   several students in a row. Students keep the plain buttons.
  *
  * Accessibility (WCAG 2.1 AA / Section 508)
  *   - role="tablist"/"tab"/"tabpanel" with arrow-key navigation
@@ -50,6 +58,9 @@
  *   - disclosure buttons use aria-expanded + aria-controls
  *   - aria-live="polite" status for loading / progress / errors
  *   - colour never carries meaning alone (icon + text on every severity)
+ *   - "what do you want?" dialog: useDialogA11y (focus in, Tab trap, Escape,
+ *     focus return), radio group + grouped checkboxes in <fieldset>/<legend>,
+ *     44px rows, live "N of M selected" count, confirm disabled at zero
  *
  * File: src/pages/AccountabilityReportPage.jsx
  */
@@ -68,11 +79,12 @@ import { SEVERITY_LABEL, studentFacingLabel, fmtDate, lower } from '@/lib/accoun
 import {
   Loader2, ClipboardCheck, Users, User, Download, Printer, FileSpreadsheet, RefreshCw,
   AlertTriangle, AlertOctagon, AlertCircle, Info, ChevronDown, ChevronRight, TrendingUp, TrendingDown, Minus,
-  CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown, ExternalLink,
+  CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown, ExternalLink, X,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { LabWarningHistory, LabWarningPanel } from '@/components/LabWarnings'
 import { useLabWarnings, levelLabel } from '@/hooks/useLabWarnings'
+import { useDialogA11y } from '@/hooks/useDialogA11y'
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -269,12 +281,14 @@ export default function AccountabilityReportPage() {
       )}
 
       <style>{`
+        .print-only { display: none; }
         @media print {
           body * { visibility: hidden; }
           .accountability-page, .accountability-page * { visibility: visible; }
           .accountability-page { position: absolute; left: 0; top: 0; width: 100%; }
           .no-print { display: none !important; }
           .print-open { display: block !important; }
+          .print-only { display: block !important; }
           table { font-size: 10px; }
           th, td { padding: 2px 4px; }
         }
@@ -562,21 +576,56 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
   const allIds = useMemo(() => (report?.checks || []).filter(c => c.items.length).map(c => c.id), [report])
   const label = c => (studentView ? studentFacingLabel(c) : c.label)
 
-  const exportRows = useCallback(() => {
+  // "What do you want?" dialog (instructor view): which output asked for it,
+  // the last choice made (kept while the page is open so the same selection
+  // can be run for the next student), and the selection a print is using.
+  const [picker, setPicker] = useState(null)   // null | 'print' | 'csv' | 'xlsx'
+  const [lastChoice, setLastChoice] = useState({ scope: 'all', ids: [], summary: false, warnings: false })
+  const [printSel, setPrintSel] = useState(null) // { ids:Set, summary, warnings } only while a picked-items print is up
+  useEffect(() => { setPrintSel(null) }, [student?.email, term?.term_id])
+
+  // sel = null → the whole report (unchanged output). sel = { ids, summary } → only those rows.
+  const exportRows = useCallback((sel = null) => {
     const head = ['#', 'Section', 'Check', 'Severity', 'Date', 'What happened', 'Details']
     const body = []
+    let shown = 0
     for (const s of report.sections) for (const c of s.checks) {
+      if (sel && !sel.ids.has(c.id)) continue
+      shown++
       if (!c.items.length) { body.push([c.num, s.label, label(c), SEVERITY_LABEL[c.severity], '', c.isScore ? c.summary : '0', '']); continue }
       for (const it of c.items) body.push([c.num, s.label, label(c), SEVERITY_LABEL[c.severity], it.date ? fmtDate(it.date) : '', it.label, it.detail || ''])
     }
+    const meta = [`Generated ${new Date().toLocaleString()}`]
+    if (!sel || sel.summary) meta.push(`Total events: ${report.totals.total}`, `High ${report.totals.high}`, `Medium ${report.totals.medium}`, `Low ${report.totals.low}`, `Trend: ${report.trend.direction}`)
+    if (sel) meta.push(`Selected items only: ${shown} of ${report.checks.length} — not the full report`)
     return [
       [`Metrics Report — ${studentName(student)} — ${term.name}`],
-      [`Generated ${new Date().toLocaleString()}`, `Total events: ${report.totals.total}`, `High ${report.totals.high}`, `Medium ${report.totals.medium}`, `Low ${report.totals.low}`, `Trend: ${report.trend.direction}`],
+      meta,
       [], head, ...body,
     ]
   }, [report, student, term, studentView]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fname = `metrics_report_${safeName(studentName(student))}_${safeName(term.name)}`
+
+  // Run the output the dialog was opened for, with the choice made in it.
+  const runOutput = (mode, choice) => {
+    setPicker(null)
+    setLastChoice(choice)
+    const sel = choice.scope === 'pick' ? { ids: new Set(choice.ids), summary: !!choice.summary, warnings: !!choice.warnings } : null
+    const suffix = sel ? '_selected' : ''
+    if (mode === 'csv') { downloadBlob(arrayToCSV(exportRows(sel)), `${fname}${suffix}.csv`, 'text/csv;charset=utf-8'); toast.success('CSV downloaded'); return }
+    if (mode === 'xlsx') { exportXLSX(exportRows(sel), `${fname}${suffix}.xlsx`, 'Student'); return }
+    // Print — everything: exactly what the button did before the dialog existed
+    if (!sel) { setOpenIds(new Set(allIds)); setTimeout(() => window.print(), 150); return }
+    // Print — picked rows: open just those, hide the rest for the print, then put the screen back
+    const before = openIds
+    setPrintSel(sel)
+    setOpenIds(new Set(allIds.filter(id => sel.ids.has(id))))
+    const finish = () => { window.removeEventListener('afterprint', finish); setPrintSel(null); setOpenIds(before) }
+    window.addEventListener('afterprint', finish)
+    setTimeout(() => window.print(), 150)
+  }
+  const pickedCount = printSel ? report?.checks.filter(c => printSel.ids.has(c.id)).length || 0 : 0
 
   return (
     <div>
@@ -594,7 +643,7 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
               <button type="button" className="btn-secondary min-h-[44px]" onClick={() => setOpenIds(new Set(openIds.size === allIds.length ? [] : allIds))}>
                 {openIds.size === allIds.length && allIds.length ? 'Collapse all' : 'Expand all'}
               </button>
-              {canExport && (
+              {canExport && studentView && (
                 <>
                   <button type="button" className="btn-secondary min-h-[44px]" onClick={() => { downloadBlob(arrayToCSV(exportRows()), `${fname}.csv`, 'text/csv;charset=utf-8'); toast.success('CSV downloaded') }}>
                     <Download size={16} aria-hidden="true" /> CSV
@@ -603,6 +652,19 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
                     <FileSpreadsheet size={16} aria-hidden="true" /> Excel
                   </button>
                   <button type="button" className="btn-secondary min-h-[44px]" onClick={() => { setOpenIds(new Set(allIds)); setTimeout(() => window.print(), 150) }}>
+                    <Printer size={16} aria-hidden="true" /> Print
+                  </button>
+                </>
+              )}
+              {canExport && !studentView && (
+                <>
+                  <button type="button" className="btn-secondary min-h-[44px]" aria-haspopup="dialog" onClick={() => setPicker('csv')}>
+                    <Download size={16} aria-hidden="true" /> CSV
+                  </button>
+                  <button type="button" className="btn-secondary min-h-[44px]" aria-haspopup="dialog" onClick={() => setPicker('xlsx')}>
+                    <FileSpreadsheet size={16} aria-hidden="true" /> Excel
+                  </button>
+                  <button type="button" className="btn-secondary min-h-[44px]" aria-haspopup="dialog" onClick={() => setPicker('print')}>
                     <Printer size={16} aria-hidden="true" /> Print
                   </button>
                 </>
@@ -618,12 +680,32 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
         {!loading && result?.errors?.length > 0 && <span className="text-amber-700">{result.errors.join(' ')}</span>}
       </div>
 
-      <LabWarningsCard student={student} term={term} studentView={studentView} />
+      {picker && report && (
+        <OutputPickerDialog
+          mode={picker}
+          sections={report.sections}
+          labelFor={label}
+          who={`${studentName(student)} — ${term.name}`}
+          initial={lastChoice}
+          onClose={() => setPicker(null)}
+          onConfirm={choice => runOutput(picker, choice)}
+        />
+      )}
+
+      {printSel && (
+        <p className="print-only text-sm text-surface-700 mb-3">
+          Selected items only — {pickedCount} of {report?.checks.length || 0} report items. This is not the full report.
+        </p>
+      )}
+
+      <div className={printSel && !printSel.warnings ? 'no-print' : undefined}>
+        <LabWarningsCard student={student} term={term} studentView={studentView} />
+      </div>
 
       {report && !loading && (
         <>
           {/* Summary strip */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4">
+          <div className={`grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-4${printSel && !printSel.summary ? ' no-print' : ''}`}>
             <div className="card p-4">
               <div className="text-xs uppercase text-surface-500">Total events</div>
               <div className="text-3xl font-bold text-surface-900 tabular-nums">{report.totals.total}</div>
@@ -649,13 +731,13 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
           </div>
 
           {report.sections.map(s => (
-            <section key={s.key} className="card mb-4" aria-labelledby={`sec-${s.key}`}>
+            <section key={s.key} className={`card mb-4${printSel && !s.checks.some(c => printSel.ids.has(c.id)) ? ' no-print' : ''}`} aria-labelledby={`sec-${s.key}`}>
               <h3 id={`sec-${s.key}`} className="px-4 py-3 border-b border-surface-100 font-semibold text-surface-800 flex items-center justify-between">
                 {s.label}
-                <span className="text-sm font-normal text-surface-500 tabular-nums">{s.checks.filter(c => c.counts).reduce((n, c) => n + c.count, 0)} events</span>
+                <span className={`text-sm font-normal text-surface-500 tabular-nums${printSel ? ' no-print' : ''}`}>{s.checks.filter(c => c.counts).reduce((n, c) => n + c.count, 0)} events</span>
               </h3>
               <ul className="divide-y divide-surface-100">
-                {s.checks.map(c => <CheckRow key={c.id} check={c} label={label(c)} open={openIds.has(c.id)} onToggle={() => toggle(c.id)} />)}
+                {s.checks.map(c => <CheckRow key={c.id} check={c} label={label(c)} open={openIds.has(c.id)} onToggle={() => toggle(c.id)} printHidden={!!printSel && !printSel.ids.has(c.id)} />)}
               </ul>
             </section>
           ))}
@@ -669,6 +751,127 @@ function StudentReportPanel({ student, term, studentView, canViewNotes, canExpor
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// "WHAT DO YOU WANT?" DIALOG — one student's CSV / Excel / Print (instructor)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const OUTPUT_COPY = {
+  print: { title: 'What do you want to print?',          all: 'The full report, every row opened up.', go: 'Print',          Icon: Printer },
+  csv:   { title: 'What do you want in the CSV file?',   all: 'Every row of the report.',              go: 'Download CSV',   Icon: Download },
+  xlsx:  { title: 'What do you want in the Excel file?', all: 'Every row of the report.',              go: 'Download Excel', Icon: FileSpreadsheet },
+}
+
+function OutputPickerDialog({ mode, sections, labelFor, who, initial, onClose, onConfirm }) {
+  const ids = useId()
+  const dialogRef = useDialogA11y(true, onClose)
+  const copy = OUTPUT_COPY[mode] || OUTPUT_COPY.print
+  const allCheckIds = useMemo(() => sections.flatMap(s => s.checks.map(c => c.id)), [sections])
+  const [scope, setScope] = useState(initial?.scope === 'pick' ? 'pick' : 'all')
+  const [picked, setPicked] = useState(() => new Set((initial?.ids || []).filter(id => allCheckIds.includes(id))))
+  const [summary, setSummary] = useState(!!initial?.summary)
+  const [warnings, setWarnings] = useState(!!initial?.warnings)
+
+  const toggleOne = id => setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const setMany = (list, on) => setPicked(prev => { const n = new Set(prev); for (const id of list) on ? n.add(id) : n.delete(id); return n })
+  const blocked = scope === 'pick' && picked.size === 0
+  const confirm = () => { if (!blocked) onConfirm({ scope, ids: [...picked], summary, warnings }) }
+  const BOX = 'w-5 h-5 shrink-0 rounded border-surface-300 text-brand-600 focus:ring-brand-500'
+  const RADIO = 'w-5 h-5 shrink-0 border-surface-300 text-brand-600 focus:ring-brand-500'
+
+  return (
+    <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-black/50 p-4 no-print" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={`${ids}-title`} className="bg-white rounded-xl w-full max-w-xl shadow-xl max-h-[90vh] flex flex-col">
+        <div className="flex items-start justify-between gap-3 p-4 border-b border-surface-200">
+          <div className="min-w-0">
+            <h2 id={`${ids}-title`} className="text-base font-semibold text-surface-900">{copy.title}</h2>
+            <p className="text-sm text-surface-600">{who}</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close without doing anything" className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-surface-500 hover:bg-surface-100 ${FOCUS}`}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="p-4 overflow-y-auto">
+          <fieldset>
+            <legend className="sr-only">How much of the report</legend>
+            <label className="flex items-start gap-3 min-h-[44px] py-2 cursor-pointer">
+              <input type="radio" name={`${ids}-scope`} className={`${RADIO} mt-0.5`} checked={scope === 'all'} onChange={() => setScope('all')} />
+              <span><span className="block text-sm font-medium text-surface-900">Everything</span><span className="block text-xs text-surface-600">{copy.all}</span></span>
+            </label>
+            <label className="flex items-start gap-3 min-h-[44px] py-2 cursor-pointer">
+              <input type="radio" name={`${ids}-scope`} className={`${RADIO} mt-0.5`} checked={scope === 'pick'} onChange={() => setScope('pick')} />
+              <span><span className="block text-sm font-medium text-surface-900">Only the items I pick</span><span className="block text-xs text-surface-600">Tick the rows you want. Everything else is left off.</span></span>
+            </label>
+          </fieldset>
+
+          {scope === 'pick' && (
+            <div className="mt-3 border-t border-surface-200 pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <p role="status" aria-live="polite" className={`text-sm ${blocked ? 'text-amber-800' : 'text-surface-700'}`}>
+                  {blocked ? 'Pick at least one item.' : `${picked.size} of ${allCheckIds.length} items selected`}
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" className="btn-secondary min-h-[44px]" onClick={() => setMany(allCheckIds, true)}>Select all</button>
+                  <button type="button" className="btn-secondary min-h-[44px]" onClick={() => setMany(allCheckIds, false)} disabled={picked.size === 0}>Clear</button>
+                </div>
+              </div>
+
+              {sections.filter(s => s.checks.length).map(s => {
+                const secIds = s.checks.map(c => c.id)
+                const on = secIds.filter(id => picked.has(id)).length
+                return (
+                  <fieldset key={s.key} className="mb-3 border border-surface-200 rounded-lg">
+                    <legend className="sr-only">{s.label}</legend>
+                    <label className="flex items-center gap-3 min-h-[44px] px-3 bg-surface-50 rounded-t-lg border-b border-surface-200 cursor-pointer">
+                      <input type="checkbox" className={BOX} checked={on === secIds.length}
+                        ref={el => { if (el) el.indeterminate = on > 0 && on < secIds.length }}
+                        onChange={e => setMany(secIds, e.target.checked)} />
+                      <span className="text-sm font-semibold text-surface-800">{s.label}<span className="sr-only"> — all {secIds.length} items</span></span>
+                      <span className="ml-auto text-xs text-surface-600 tabular-nums" aria-hidden="true">{on}/{secIds.length}</span>
+                    </label>
+                    <ul className="divide-y divide-surface-100">
+                      {s.checks.map(c => (
+                        <li key={c.id}>
+                          <label className="flex items-center gap-3 min-h-[44px] px-3 py-1 cursor-pointer hover:bg-surface-50">
+                            <input type="checkbox" className={BOX} checked={picked.has(c.id)} onChange={() => toggleOne(c.id)} />
+                            <span className="flex-1 min-w-0 text-sm text-surface-800">{labelFor(c)}</span>
+                            <span className="text-sm text-surface-600 tabular-nums shrink-0">{c.isScore ? `${c.count}%` : c.count}<span className="sr-only"> on the report</span></span>
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </fieldset>
+                )
+              })}
+
+              <fieldset className="border border-surface-200 rounded-lg px-3 py-1">
+                <legend className="px-1 text-sm font-semibold text-surface-800">Also include</legend>
+                <label className="flex items-center gap-3 min-h-[44px] cursor-pointer">
+                  <input type="checkbox" className={BOX} checked={summary} onChange={e => setSummary(e.target.checked)} />
+                  <span className="text-sm text-surface-800">{mode === 'print' ? 'Summary boxes (total events, trend, attendance, WOC · volunteer)' : 'Summary totals line (total events, severity split, trend)'}</span>
+                </label>
+                {mode === 'print' && (
+                  <label className="flex items-center gap-3 min-h-[44px] cursor-pointer">
+                    <input type="checkbox" className={BOX} checked={warnings} onChange={e => setWarnings(e.target.checked)} />
+                    <span className="text-sm text-surface-800">Lab sign-up warnings</span>
+                  </label>
+                )}
+              </fieldset>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 p-4 border-t border-surface-200">
+          <button type="button" className="btn-secondary min-h-[44px]" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn-primary min-h-[44px]" onClick={confirm} disabled={blocked}>
+            <copy.Icon size={16} aria-hidden="true" /> {copy.go}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -718,12 +921,12 @@ function LabWarningsCard({ student, term, studentView }) {
   )
 }
 
-function CheckRow({ check, label, open, onToggle }) {
+function CheckRow({ check, label, open, onToggle, printHidden = false }) {
   const panelId = `chk-${check.id}`
   const zero = check.counts ? check.count === 0 : check.items.length === 0
   const hasItems = check.items.length > 0
   return (
-    <li>
+    <li className={printHidden ? 'no-print' : undefined}>
       <button type="button" aria-expanded={hasItems ? open : undefined} aria-controls={hasItems ? panelId : undefined}
         onClick={hasItems ? onToggle : undefined} disabled={!hasItems}
         className={`w-full min-h-[44px] px-4 py-2 flex items-center gap-3 text-left ${hasItems ? 'hover:bg-surface-50 cursor-pointer' : 'cursor-default'} ${FOCUS}`}>
