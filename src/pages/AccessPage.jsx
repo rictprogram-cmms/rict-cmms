@@ -106,6 +106,7 @@ const DEFAULT_PERMISSIONS = [
   ['P02A', 'Inventory', 'view_orders', false, true, true, 'Can view pending and past orders'],
   ['P02B', 'Inventory', 'receive_orders', false, false, true, 'Can mark orders as received (partial or full)'],
   ['P0AB', 'Inventory', 'view_low_stock', false, true,  true, 'Can view low stock filter and column on Inventory page'],
+  ['PTA1', 'Inventory', 'run_tool_audit', false, false, true, 'Can run tool count audits and apply their results to the tool inventory'],
 
   // Assets
   ['P030', 'Assets', 'view_page', true, true, true, 'Can access Assets page'],

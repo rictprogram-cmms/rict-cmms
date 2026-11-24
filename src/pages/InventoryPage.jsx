@@ -23,6 +23,8 @@
  *   broken or missing (qty_worn / qty_broken / qty_missing). Good is whatever
  *   is left. A missing tool still counts toward the total owned. Shown in the
  *   table, detail view and print list; edited in the tool form and Adjust.
+ * - Tool Audit button (Tools and All views, run_tool_audit permission) opens
+ *   /inventory/tool-audit — the end-of-term tool count.
  *
  * Supabase tables: inventory, inventory_locations, vendors, inventory_suppliers
  * Storage buckets: inventory-images
@@ -908,6 +910,12 @@ export default function InventoryPage() {
           {hasPerm('view_low_stock') && (
             <button className="btn btn-sm btn-secondary" onClick={() => navigate('/purchase-orders', { state: { tab: 'lowstock' } })}>
               <span className="material-icons" aria-hidden="true">shopping_cart</span>Purchase Orders
+            </button>
+          )}
+          {/* Tool count audit — instructors (run_tool_audit), wherever tools are listed */}
+          {typeFilter !== 'Part' && hasPerm('run_tool_audit') && (
+            <button className="btn btn-sm btn-secondary" onClick={() => navigate('/inventory/tool-audit')}>
+              <span className="material-icons" aria-hidden="true">fact_check</span>Tool Audit
             </button>
           )}
           {hasPerm('add_items') && (
