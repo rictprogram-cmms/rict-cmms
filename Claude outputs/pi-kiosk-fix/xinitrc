@@ -1,0 +1,75 @@
+#!/bin/bash
+# Started by startx on tty1. Runs Chromium forever; if it exits, start it again.
+. /etc/rict-kiosk.conf
+PROFILE="$HOME/.config/rict-kiosk-chromium"
+LOG="/tmp/rict-kiosk-chromium.log"
+
+# Never blank or power-save the screen
+xset s off; xset s noblank; xset -dpms
+xsetroot -solid black 2>/dev/null || true
+
+OUT="$(xrandr --query | awk '/ connected/{print $1; exit}')"
+if [ -n "$OUT" ]; then
+  if [ -n "$RESOLUTION" ] && xrandr --query | grep -q "^ *$RESOLUTION "; then
+    xrandr --output "$OUT" --mode "$RESOLUTION" || true
+  fi
+  [ "$ROTATE" != "normal" ] && xrandr --output "$OUT" --rotate "$ROTATE" || true
+fi
+
+# Some Pi 3 / Raspbian builds give the HDMI output an all-zero colour matrix
+# (CTM): the TV reports a signal but the picture is solid black. It comes back
+# whenever the TV is swapped, switched on late or changes input, so check every
+# 10 s and put it back to normal. "--current" reads without re-probing the TV,
+# so the check itself never makes the screen flicker.
+(
+  while sleep 10; do
+    for O in $(xrandr --current | awk '/ connected/{print $1}'); do
+      if ! xrandr --current --prop | sed -n "/^$O /,/^[^ \t]/p" | grep -A1 'CTM:' | grep -q 'CTM:[[:space:]]*1\.0'; then
+        xrandr --output "$O" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
+      fi
+    done
+  done
+) &
+# There's no desktop/window manager, so tell Chromium the exact screen size
+# (otherwise it can open at half width). "current W x H" accounts for rotation.
+SCREEN="$(xrandr --query | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1,\2/p' | head -1)"
+[ -n "$SCREEN" ] || SCREEN="1920,1080"
+
+# Wait (up to 2 min) for the network so the first load isn't an error page.
+# The watchdog fixes it anyway if it is.
+HOST="$(echo "$URL" | sed -E 's#^[a-z]+://([^/]+).*#\1#')"
+for _ in $(seq 1 60); do
+  curl -s -o /dev/null --max-time 3 "https://$HOST" && break
+  sleep 2
+done
+
+while true; do
+  mkdir -p "$PROFILE/Default"
+  # Mark the last run as a clean exit so Chromium never shows "Restore pages?"
+  PREFS="$PROFILE/Default/Preferences"
+  if [ -f "$PREFS" ]; then
+    sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"[^"]*"/"exit_type":"Normal"/' "$PREFS"
+  fi
+  # Start each run with an empty cache (keeps the SD card from filling up)
+  rm -rf "$PROFILE/Default/Cache" "$PROFILE/Default/Code Cache" "$PROFILE/Default/GPUCache" 2>/dev/null
+  # Keep the log small
+  [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 2000000 ] && : >"$LOG"
+
+  echo "=== $(date '+%F %T') starting Chromium ===" >>"$LOG"
+  "$CHROME_BIN" \
+    --kiosk "$URL" \
+    --window-position=0,0 --window-size="$SCREEN" --start-fullscreen \
+    --user-data-dir="$PROFILE" \
+    --no-first-run --noerrdialogs --disable-infobars \
+    --disable-session-crashed-bubble --disable-restore-session-state \
+    --disable-features=Translate,TranslateUI,MediaRouter,InfiniteSessionRestore \
+    --disable-component-update --check-for-update-interval=31536000 \
+    --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT' \
+    --overscroll-history-navigation=0 --disable-pinch --hide-scrollbars \
+    --password-store=basic --autoplay-policy=no-user-gesture-required \
+    --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+    --remote-allow-origins=http://127.0.0.1:9222 \
+    >>"$LOG" 2>&1
+  echo "=== $(date '+%F %T') Chromium exited ($?) — restarting in 3 s ===" >>"$LOG"
+  sleep 3
+done

@@ -25,7 +25,14 @@
 #   • Optional --protect-sd makes the SD card read-only (power cuts can no
 #     longer corrupt it — the other common cause of "it died again").
 #
-# Re-running the script is safe; it overwrites its own files.
+#   • Every minute the Pi checks in with the CMMS (Settings → TV Displays):
+#     online/offline, page health, temperature, power warnings, memory. From
+#     there an instructor can restart the browser or reboot the Pi remotely.
+#     Needs the kiosk token from the CMMS (--kiosk-token); without it the
+#     kiosk still works, it just doesn't report in.
+#
+# Re-running the script is safe; it overwrites its own files and keeps the
+# kiosk token and CMMS key from the last run.
 # Settings live in /etc/rict-kiosk.conf — edit and reboot to change them.
 # Helper commands installed: kiosk-status, kiosk-restart
 # ============================================================================
@@ -38,6 +45,11 @@ RESOLUTION="1920x1080"     # "" = leave whatever the TV reports
 ROTATE="normal"            # normal | left | right | inverted
 REBOOT_TIME="03:30"        # "" = no nightly reboot
 PROTECT_SD="no"
+KIOSK_VERSION="2026.11.24"
+SUPABASE_URL="https://jzzfgafwyxabafaqrnho.supabase.co"
+SUPABASE_ANON_KEY=""       # public key; read from the live CMMS site if not given
+KIOSK_TOKEN=""             # from the CMMS migration output; kept between re-runs
+NO_REBOOT="no"
 
 usage() {
   sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
@@ -51,6 +63,9 @@ Options:
   --rotate DIR          normal | left | right | inverted (default normal)
   --reboot-time HH:MM   Nightly reboot time, or "off" (default 03:30)
   --protect-sd          Make the SD card read-only after setup (overlay FS)
+  --kiosk-token TOKEN   CMMS kiosk token, so the Pi shows in Settings → TV Displays
+  --anon-key KEY        CMMS public (anon) key (normally found automatically)
+  --no-reboot           Apply an update without rebooting (restarts the screen instead)
   -h, --help            Show this help
 EOF
 }
@@ -63,6 +78,9 @@ while [ $# -gt 0 ]; do
     --rotate)       ROTATE="$2"; shift 2 ;;
     --reboot-time)  REBOOT_TIME="$2"; [ "$REBOOT_TIME" = off ] && REBOOT_TIME=""; shift 2 ;;
     --protect-sd)   PROTECT_SD="yes"; shift ;;
+    --kiosk-token)  KIOSK_TOKEN="$2"; shift 2 ;;
+    --anon-key)     SUPABASE_ANON_KEY="$2"; shift 2 ;;
+    --no-reboot)    NO_REBOOT="yes"; shift ;;
     -h|--help)      usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -115,6 +133,27 @@ echo "    Chromium: $CHROME_BIN ($("$CHROME_BIN" --version 2>/dev/null || echo '
 
 usermod -aG video,render,input,tty "$KIOSK_USER" 2>/dev/null || usermod -aG video,input,tty "$KIOSK_USER"
 
+# ── CMMS check-in settings ──────────────────────────────────────────────────
+# Keep the token / key from an earlier run unless new ones were given.
+if [ -f /etc/rict-kiosk.conf ]; then
+  OLD_TOKEN="$(sed -n 's/^KIOSK_TOKEN="\(.*\)"$/\1/p' /etc/rict-kiosk.conf | head -1)"
+  OLD_KEY="$(sed -n 's/^SUPABASE_ANON_KEY="\(.*\)"$/\1/p' /etc/rict-kiosk.conf | head -1)"
+  [ -z "$KIOSK_TOKEN" ] && KIOSK_TOKEN="$OLD_TOKEN"
+  [ -z "$SUPABASE_ANON_KEY" ] && SUPABASE_ANON_KEY="$OLD_KEY"
+fi
+if [ -z "$SUPABASE_ANON_KEY" ]; then
+  # The public key ships inside the CMMS web app; read it from the live site.
+  SITE="$(echo "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')"
+  JS="$(curl -fsSL --max-time 20 "$SITE/" | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1 || true)"
+  [ -n "$JS" ] && SUPABASE_ANON_KEY="$(curl -fsSL --max-time 60 "$SITE$JS" \
+      | grep -oE 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' | head -1 || true)"
+fi
+if [ -n "$KIOSK_TOKEN" ] && [ -n "$SUPABASE_ANON_KEY" ]; then
+  echo "    CMMS check-in: on (every minute)"
+else
+  warn "CMMS check-in is OFF (no kiosk token). Re-run with --kiosk-token to show this Pi in Settings."
+fi
+
 # ── Config file ─────────────────────────────────────────────────────────────
 say "Writing /etc/rict-kiosk.conf"
 cat >/etc/rict-kiosk.conf <<EOF
@@ -127,8 +166,22 @@ RESOLUTION="$RESOLUTION"
 ROTATE="$ROTATE"
 # Restart the browser if free memory drops below this many MB.
 LOW_MEM_MB=120
+# CMMS check-in (Settings → TV Displays). Blank token = no check-in.
+DEVICE_NAME="$(hostname)"
+SUPABASE_URL="$SUPABASE_URL"
+SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
+KIOSK_TOKEN="$KIOSK_TOKEN"
+KIOSK_VERSION="$KIOSK_VERSION"
 EOF
-chmod 644 /etc/rict-kiosk.conf
+# Holds the kiosk token: readable by root and the kiosk user only
+chown root:"$KIOSK_USER" /etc/rict-kiosk.conf
+chmod 640 /etc/rict-kiosk.conf
+
+# Let the watchdog reboot the Pi when an instructor asks (nothing else)
+SYSTEMCTL_BIN="$(command -v systemctl)"
+echo "$KIOSK_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN reboot" >/etc/sudoers.d/rict-kiosk-reboot
+chmod 440 /etc/sudoers.d/rict-kiosk-reboot
+visudo -cf /etc/sudoers.d/rict-kiosk-reboot >/dev/null || { rm -f /etc/sudoers.d/rict-kiosk-reboot; warn "Could not add the remote-reboot rule; remote reboot will not work."; }
 
 mkdir -p /opt/rict-kiosk
 
@@ -151,10 +204,30 @@ if [ -n "$OUT" ]; then
     xrandr --output "$OUT" --mode "$RESOLUTION" || true
   fi
   [ "$ROTATE" != "normal" ] && xrandr --output "$OUT" --rotate "$ROTATE" || true
-  # Some Pi 3 / Raspbian builds start X with an all-zero colour matrix (CTM):
-  # the TV reports a signal but the picture is solid black. Reset it to normal.
-  xrandr --output "$OUT" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
 fi
+
+# Some Pi 3 / Raspbian builds give the HDMI output an all-zero colour matrix
+# (CTM): the TV reports a signal but the picture is solid black. It comes back
+# whenever the TV is swapped, switched on late or changes input, so check every
+# 10 s and put it back to normal. "--current" reads without re-probing the TV,
+# so the check itself never makes the screen flicker.
+# First fix at start-up isn't counted (these Pis always start that way).
+for O in $(xrandr --current | awk '/ connected/{print $1}'); do
+  xrandr --output "$O" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
+done
+echo 0 > /tmp/rict-kiosk-screen-fixes
+(
+  while sleep 10; do
+    for O in $(xrandr --current | awk '/ connected/{print $1}'); do
+      if ! xrandr --current --prop | sed -n "/^$O /,/^[^ \t]/p" | grep -A1 'CTM:' | grep -q 'CTM:[[:space:]]*1\.0'; then
+        xrandr --output "$O" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
+        # count it, so Settings → TV Displays can show how often this happens
+        N="$(cat /tmp/rict-kiosk-screen-fixes 2>/dev/null || echo 0)"
+        echo $(( N + 1 )) > /tmp/rict-kiosk-screen-fixes
+      fi
+    done
+  done
+) &
 # There's no desktop/window manager, so tell Chromium the exact screen size
 # (otherwise it can open at half width). "current W x H" accounts for rotation.
 SCREEN="$(xrandr --query | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1,\2/p' | head -1)"
@@ -214,8 +287,12 @@ doing. It fixes, in order of escalation:
   * debugging port gone for 3 minutes     -> restart Chromium
   * free memory below LOW_MEM_MB twice    -> restart Chromium
 Restarting Chromium = killing it; the session loop starts it again in ~3 s.
+
+Every 60 s it also checks in with the CMMS (Settings -> TV Displays) and
+carries out a remote command if an instructor queued one:
+  restart_browser | reboot
 """
-import json, os, re, subprocess, sys, time, urllib.request
+import json, os, re, socket, subprocess, sys, time, urllib.request
 
 try:
     import websocket  # python3-websocket
@@ -233,10 +310,22 @@ def load_conf():
 CONF = load_conf()
 URL = CONF.get("URL", "")
 LOW_MEM_MB = int(CONF.get("LOW_MEM_MB", "120") or 120)
+DEVICE = CONF.get("DEVICE_NAME") or socket.gethostname()
+SB_URL = CONF.get("SUPABASE_URL", "").rstrip("/")
+SB_KEY = CONF.get("SUPABASE_ANON_KEY", "")
+TOKEN = CONF.get("KIOSK_TOKEN", "")
+VERSION = CONF.get("KIOSK_VERSION", "")
 DEVTOOLS = "http://127.0.0.1:9222"
 INTERVAL = 30
+CHECKIN_EVERY = 60
 STARTUP_GRACE = 120
 PROFILE_MARK = "rict-kiosk-chromium"
+CHROME_LOG = "/tmp/rict-kiosk-chromium.log"
+SCREEN_FIXES = "/tmp/rict-kiosk-screen-fixes"
+
+page_state = "starting"
+last_checkin = 0.0
+checkin_ok = None
 
 def log(msg): print(time.strftime("%F %T"), msg, flush=True)
 
@@ -248,7 +337,9 @@ def mem_available_mb():
     return 99999
 
 def restart_chromium(reason):
+    global page_state
     log(f"RESTART Chromium: {reason}")
+    page_state = "starting"
     subprocess.run(["pkill", "-f", PROFILE_MARK])
     time.sleep(5)
     subprocess.run(["pkill", "-9", "-f", PROFILE_MARK])
@@ -278,9 +369,86 @@ PROBE = """JSON.stringify({
   kids: (document.getElementById('root') || document.body || {childElementCount:0}).childElementCount
 })"""
 
+# ── Health facts for the CMMS check-in ──────────────────────────────────────
+def _read(path, default=""):
+    try:
+        with open(path) as f: return f.read().strip()
+    except Exception: return default
+
+def _run(cmd):
+    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception: return ""
+
+def health():
+    d = {"page_url": URL, "page_state": page_state, "script_version": VERSION}
+    d["model"] = _read("/proc/device-tree/model").replace("\x00", "")[:80]
+    d["ip_address"] = _run(["hostname", "-I"]).split(" ")[0] if _run(["hostname", "-I"]) else ""
+    try: d["uptime_sec"] = int(float(_read("/proc/uptime", "0").split()[0]))
+    except Exception: pass
+    d["mem_free_mb"] = mem_available_mb()
+    pid = _run(["pgrep", "-o", "-f", PROFILE_MARK])
+    if pid:
+        et = _run(["ps", "-o", "etimes=", "-p", pid.split()[0]])
+        if et.isdigit(): d["browser_uptime_sec"] = int(et)
+    log_text = _read(CHROME_LOG)
+    d["browser_restarts"] = log_text.count("Chromium exited")
+    fixes = _read(SCREEN_FIXES, "0")
+    d["screen_fixes"] = int(fixes) if fixes.isdigit() else 0
+    t = _run(["vcgencmd", "measure_temp"])
+    m = re.search(r"([\d.]+)", t)
+    if m: d["cpu_temp_c"] = float(m.group(1))
+    th = _run(["vcgencmd", "get_throttled"]).split("=")[-1]
+    if th.startswith("0x"):
+        v = int(th, 16)
+        d["throttled"] = th
+        d["undervolt_now"] = bool(v & 0x1)
+        d["undervolt_since_boot"] = bool(v & 0x10000)
+        d["hot_now"] = bool(v & 0xC)   # throttled or soft temperature limit
+    return d
+
+def checkin():
+    """Send health to the CMMS; carry out a queued command. Never raises."""
+    global last_checkin, checkin_ok
+    last_checkin = time.time()
+    if not (SB_URL and SB_KEY and TOKEN):
+        return
+    body = json.dumps({"p_token": TOKEN, "p_device": DEVICE, "p_data": health()}).encode()
+    headers = {"Content-Type": "application/json", "apikey": SB_KEY}
+    if SB_KEY.startswith("eyJ"):
+        headers["Authorization"] = "Bearer " + SB_KEY
+    try:
+        req = urllib.request.Request(SB_URL + "/rest/v1/rpc/kiosk_heartbeat", data=body,
+                                     headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            res = json.load(r)
+        if checkin_ok is not True: log("CMMS check-in OK")
+        checkin_ok = True
+    except Exception as e:
+        if checkin_ok is not False: log(f"CMMS check-in failed: {e!r}")
+        checkin_ok = False
+        return
+    cmd = (res or {}).get("command")
+    if cmd == "restart_browser":
+        restart_chromium("requested from the CMMS")
+    elif cmd == "reboot":
+        log("REBOOT requested from the CMMS")
+        subprocess.run(["sudo", "-n", "systemctl", "reboot"])
+
+def nap(seconds):
+    """Sleep, but keep checking in every minute (even during grace periods)."""
+    end = time.time() + seconds
+    while True:
+        if time.time() - last_checkin >= CHECKIN_EVERY:
+            checkin()
+        left = end - time.time()
+        if left <= 0: return
+        time.sleep(min(left, 5))
+
 def main():
-    log(f"watchdog started for {URL}")
-    time.sleep(STARTUP_GRACE)
+    global page_state
+    log(f"watchdog started for {URL} as '{DEVICE}'"
+        + ("" if TOKEN else " (CMMS check-in off: no kiosk token)"))
+    nap(STARTUP_GRACE)
     no_port = 0; no_answer = 0; blank = 0; low_mem = 0
     while True:
         try:
@@ -289,7 +457,7 @@ def main():
             low_mem = low_mem + 1 if avail < LOW_MEM_MB else 0
             if low_mem >= 2:
                 restart_chromium(f"low memory ({avail} MB free)")
-                low_mem = 0; time.sleep(STARTUP_GRACE); continue
+                low_mem = 0; nap(STARTUP_GRACE); continue
 
             # Is Chromium's debugging port up?
             try:
@@ -297,12 +465,13 @@ def main():
                 no_port = 0
             except Exception:
                 no_port += 1
+                page_state = "not_answering"
                 if no_port >= 6:   # ~3 minutes
                     restart_chromium("debugging port not answering")
-                    no_port = 0; time.sleep(STARTUP_GRACE)
-                time.sleep(INTERVAL); continue
+                    no_port = 0; nap(STARTUP_GRACE)
+                nap(INTERVAL); continue
             if not target:
-                restart_chromium("no page open"); time.sleep(STARTUP_GRACE); continue
+                restart_chromium("no page open"); nap(STARTUP_GRACE); continue
             ws_url = target["webSocketDebuggerUrl"]
 
             # Ask the page what it's doing
@@ -312,30 +481,34 @@ def main():
                 no_answer = 0
             except Exception as e:
                 no_answer += 1
+                page_state = "not_answering"
                 log(f"page not answering ({no_answer}/3): {e!r}")
                 if no_answer >= 3:
                     restart_chromium("page frozen or crashed"); no_answer = 0
-                    time.sleep(STARTUP_GRACE)
+                    nap(STARTUP_GRACE)
                 else:
                     try: cdp(ws_url, "Page.reload", {"ignoreCache": True})
                     except Exception: pass
-                time.sleep(INTERVAL); continue
+                nap(INTERVAL); continue
 
             href = state.get("href", "")
             if href.startswith("chrome-error:") or not href.startswith(URL.split("?")[0].split("#")[0]):
                 log(f"wrong/error page ({href}) -> navigating back")
+                page_state = "error"
                 cdp(ws_url, "Page.navigate", {"url": URL})
                 blank = 0
             elif state.get("kids", 0) == 0:
                 blank += 1
+                page_state = "blank"
                 if blank >= 4:   # blank for ~2 minutes
                     log("page blank for 2 min -> reload")
                     cdp(ws_url, "Page.reload", {"ignoreCache": True}); blank = 0
             else:
                 blank = 0
+                page_state = "ok"
         except Exception as e:
             log(f"watchdog error: {e!r}")
-        time.sleep(INTERVAL)
+        nap(INTERVAL)
 
 if __name__ == "__main__":
     main()
@@ -370,6 +543,12 @@ echo "Page:        $URL"
 PID="$(pgrep -o -f rict-kiosk-chromium || true)"
 if [ -n "$PID" ]; then echo "Chromium:    running for $(ps -o etime= -p "$PID" | xargs)"; else echo "Chromium:    NOT running"; fi
 echo "Watchdog:    $(systemctl is-active rict-kiosk-watchdog)"
+if [ -n "$KIOSK_TOKEN" ]; then
+  C="$(journalctl -u rict-kiosk-watchdog -o cat --no-pager 2>/dev/null | grep -E 'CMMS check-in' | tail -1)"
+  echo "CMMS:        ${C:-check-in starting…}  (as '$DEVICE_NAME')"
+else
+  echo "CMMS:        check-in off (no kiosk token)"
+fi
 echo "Uptime:      $(uptime -p)"
 echo "Memory free: $(awk '/MemAvailable/{print int($2/1024)" MB"}' /proc/meminfo)"
 if command -v vcgencmd >/dev/null; then
@@ -507,6 +686,14 @@ if command -v vcgencmd >/dev/null; then
   fi
 fi
 
+if [ "$NO_REBOOT" = yes ]; then
+  say "Done. Restarting the kiosk screen and watchdog (no reboot)."
+  systemctl restart rict-kiosk-watchdog
+  systemctl restart getty@tty1
+  echo "    Boot-time settings (resolution at boot, hardware watchdog) apply at the next reboot."
+  echo "    Check with:  kiosk-status"
+  exit 0
+fi
 say "Done. Rebooting in 10 seconds into kiosk mode (Ctrl+C to cancel)."
 echo "    After reboot, over SSH:  kiosk-status   |   kiosk-restart"
 sleep 10

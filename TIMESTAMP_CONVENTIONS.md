@@ -37,7 +37,8 @@ above, including:
 `announcements`, `inventory`, `assets`, `pm_schedules`, `network_*`,
 `profiles`, `audit_log`, `counters`, `time_entry_requests`
 (`created_at`, `review_date`), `lab_signup_requests` (`submitted_date`),
-`weekly_lab_tracker.created_at`.
+`weekly_lab_tracker.created_at`, `kiosk_devices` (all timestamps — Raspberry Pi
+check-ins, shown only as "x min ago").
 
 ## Date-only strings (`YYYY-MM-DD`)
 

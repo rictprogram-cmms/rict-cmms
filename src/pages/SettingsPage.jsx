@@ -64,6 +64,7 @@ import remarkGfm from 'remark-gfm'
 import WeeklyReminderHistoryModal from '@/components/WeeklyReminderHistoryModal'
 import toast from 'react-hot-toast'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import KioskDisplayStatus from '@/components/KioskDisplayStatus'
 import { isSuperAdminEmail } from '@/lib/superAdmin'
 import { DELIVERY_OPTIONS, DEFAULT_DELIVERY, normalizeDelivery, computeRequiredHours, explainRequiredHours } from '@/lib/classDelivery'
 import { useAcademicTerms, useTermActions } from '@/hooks/useAcademicTerms'
@@ -630,6 +631,7 @@ function buildRegistry() {
   reg.push({ key: 'instructor_return_time', tab: 'general', label: 'Expected Return Time', desc: 'Time shown to students when you are away', aliases: 'meeting return time clock' })
   reg.push({ key: 'instructor_away_until', tab: 'general', label: 'Away Ends', desc: 'Turn Away Mode off automatically — 15 min to when the lab closes', aliases: 'meeting away auto off end time timer pause help disable help button' })
   reg.push({ key: 'tv_reload_requested_at', tab: 'general', label: 'Reload TVs now', desc: 'Make every TV Display reload so it picks up the latest update', aliases: 'tv display kiosk refresh reload update deploy screen' })
+  reg.push({ key: 'kiosk_display_status', tab: 'general', label: 'Display status (Raspberry Pis)', desc: 'See which TV Displays are online; restart the browser or reboot a Pi', aliases: 'tv display kiosk raspberry pi online offline status restart reboot heartbeat screen black power temperature' })
 
   // SETTING_META → registry
   Object.entries(SETTING_META).forEach(([key, m]) => {
@@ -2374,6 +2376,8 @@ function TVReloadCard() {
         </button>
         <span className="sr-only" role="status" aria-live="polite">{status}</span>
       </SettingRow>
+      {/* Raspberry Pi check-ins: status + restart / reboot (2026-11-24) */}
+      <KioskDisplayStatus />
     </SettingCard>
   )
 }
