@@ -27,7 +27,8 @@
 #
 #   • Every minute the Pi checks in with the CMMS (Settings → TV Displays):
 #     online/offline, page health, temperature, power warnings, memory. From
-#     there an instructor can restart the browser or reboot the Pi remotely.
+#     there an instructor can restart the browser, reboot or shut down the
+#     Pi, or blank the screen (black, browser closed) and show it again.
 #     Needs the kiosk token from the CMMS (--kiosk-token); without it the
 #     kiosk still works, it just doesn't report in.
 #
@@ -45,7 +46,7 @@ RESOLUTION="1920x1080"     # "" = leave whatever the TV reports
 ROTATE="normal"            # normal | left | right | inverted
 REBOOT_TIME="03:30"        # "" = no nightly reboot
 PROTECT_SD="no"
-KIOSK_VERSION="2026.11.24"
+KIOSK_VERSION="2026.11.24b"
 SUPABASE_URL="https://jzzfgafwyxabafaqrnho.supabase.co"
 SUPABASE_ANON_KEY=""       # public key; read from the live CMMS site if not given
 KIOSK_TOKEN=""             # from the CMMS migration output; kept between re-runs
@@ -177,11 +178,11 @@ EOF
 chown root:"$KIOSK_USER" /etc/rict-kiosk.conf
 chmod 640 /etc/rict-kiosk.conf
 
-# Let the watchdog reboot the Pi when an instructor asks (nothing else)
+# Let the watchdog reboot / shut down the Pi when an instructor asks (nothing else)
 SYSTEMCTL_BIN="$(command -v systemctl)"
-echo "$KIOSK_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN reboot" >/etc/sudoers.d/rict-kiosk-reboot
+echo "$KIOSK_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN reboot, $SYSTEMCTL_BIN poweroff" >/etc/sudoers.d/rict-kiosk-reboot
 chmod 440 /etc/sudoers.d/rict-kiosk-reboot
-visudo -cf /etc/sudoers.d/rict-kiosk-reboot >/dev/null || { rm -f /etc/sudoers.d/rict-kiosk-reboot; warn "Could not add the remote-reboot rule; remote reboot will not work."; }
+visudo -cf /etc/sudoers.d/rict-kiosk-reboot >/dev/null || { rm -f /etc/sudoers.d/rict-kiosk-reboot; warn "Could not add the remote reboot/shutdown rule; those buttons will not work."; }
 
 mkdir -p /opt/rict-kiosk
 
@@ -241,7 +242,10 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+rm -f /tmp/rict-kiosk-blank   # a fresh session starts showing (the CMMS re-blanks if needed)
 while true; do
+  # "Blank screen" from the CMMS: keep the browser closed (plain black screen)
+  while [ -f /tmp/rict-kiosk-blank ]; do sleep 2; done
   mkdir -p "$PROFILE/Default"
   # Mark the last run as a clean exit so Chromium never shows "Restore pages?"
   PREFS="$PROFILE/Default/Preferences"
@@ -290,7 +294,9 @@ Restarting Chromium = killing it; the session loop starts it again in ~3 s.
 
 Every 60 s it also checks in with the CMMS (Settings -> TV Displays) and
 carries out a remote command if an instructor queued one:
-  restart_browser | reboot
+  restart_browser | reboot | shutdown
+and keeps the screen blanked (browser closed, black screen) while the CMMS
+says so. While blanked, the page checks above are paused.
 """
 import json, os, re, socket, subprocess, sys, time, urllib.request
 
@@ -322,10 +328,12 @@ STARTUP_GRACE = 120
 PROFILE_MARK = "rict-kiosk-chromium"
 CHROME_LOG = "/tmp/rict-kiosk-chromium.log"
 SCREEN_FIXES = "/tmp/rict-kiosk-screen-fixes"
+BLANK_FLAG = "/tmp/rict-kiosk-blank"
 
 page_state = "starting"
 last_checkin = 0.0
 checkin_ok = None
+shown_at = 0.0        # when the screen was last un-blanked (start-up grace)
 
 def log(msg): print(time.strftime("%F %T"), msg, flush=True)
 
@@ -406,6 +414,26 @@ def health():
         d["hot_now"] = bool(v & 0xC)   # throttled or soft temperature limit
     return d
 
+def blanked():
+    return os.path.exists(BLANK_FLAG)
+
+def set_blank(want):
+    """Blank: close the browser and keep it closed. Show: let it start again."""
+    global page_state, shown_at
+    if want and not blanked():
+        log("SCREEN BLANKED from the CMMS")
+        open(BLANK_FLAG, "w").close()
+        page_state = "blanked"
+        subprocess.run(["pkill", "-f", PROFILE_MARK])
+        time.sleep(5)
+        subprocess.run(["pkill", "-9", "-f", PROFILE_MARK])
+    elif not want and blanked():
+        log("SCREEN SHOWN again from the CMMS")
+        try: os.remove(BLANK_FLAG)
+        except FileNotFoundError: pass
+        page_state = "starting"
+        shown_at = time.time()
+
 def checkin():
     """Send health to the CMMS; carry out a queued command. Never raises."""
     global last_checkin, checkin_ok
@@ -427,12 +455,18 @@ def checkin():
         if checkin_ok is not False: log(f"CMMS check-in failed: {e!r}")
         checkin_ok = False
         return
-    cmd = (res or {}).get("command")
+    res = res or {}
+    if "blank" in res:
+        set_blank(bool(res.get("blank")))
+    cmd = res.get("command")
     if cmd == "restart_browser":
-        restart_chromium("requested from the CMMS")
+        if not blanked(): restart_chromium("requested from the CMMS")
     elif cmd == "reboot":
         log("REBOOT requested from the CMMS")
         subprocess.run(["sudo", "-n", "systemctl", "reboot"])
+    elif cmd == "shutdown":
+        log("SHUTDOWN requested from the CMMS")
+        subprocess.run(["sudo", "-n", "systemctl", "poweroff"])
 
 def nap(seconds):
     """Sleep, but keep checking in every minute (even during grace periods)."""
@@ -451,6 +485,13 @@ def main():
     nap(STARTUP_GRACE)
     no_port = 0; no_answer = 0; blank = 0; low_mem = 0
     while True:
+        # Blanked from the CMMS, or just shown again: nothing to check yet
+        if blanked():
+            page_state = "blanked"
+            no_port = no_answer = blank = low_mem = 0
+            nap(INTERVAL); continue
+        if time.time() - shown_at < STARTUP_GRACE:
+            nap(INTERVAL); continue
         try:
             # Memory guard
             avail = mem_available_mb()
@@ -543,6 +584,7 @@ echo "Page:        $URL"
 PID="$(pgrep -o -f rict-kiosk-chromium || true)"
 if [ -n "$PID" ]; then echo "Chromium:    running for $(ps -o etime= -p "$PID" | xargs)"; else echo "Chromium:    NOT running"; fi
 echo "Watchdog:    $(systemctl is-active rict-kiosk-watchdog)"
+[ -f /tmp/rict-kiosk-blank ] && echo "Screen:      BLANKED from the CMMS (Settings → TV Displays → Show screen)"
 if [ -n "$KIOSK_TOKEN" ]; then
   C="$(journalctl -u rict-kiosk-watchdog -o cat --no-pager 2>/dev/null | grep -E 'CMMS check-in' | tail -1)"
   echo "CMMS:        ${C:-check-in starting…}  (as '$DEVICE_NAME')"

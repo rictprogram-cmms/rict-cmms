@@ -5,7 +5,14 @@
  * Lists every Raspberry Pi kiosk that checks in (once a minute) through
  * kiosk_heartbeat(): online / late / offline, page health, power and
  * temperature warnings, memory, uptime. Instructors can rename a display,
- * restart its browser, reboot the Pi, or remove it from the list.
+ * restart its browser, reboot or shut down the Pi, blank the screen (black,
+ * browser closed — e.g. for tours) and show it again, or remove it. "Blank
+ * all", "Show all" and "Shut down all" act on every display at once.
+ *
+ * Blank is a lasting state (kiosk_devices.screen_blanked), not a one-time
+ * command, so a reboot or "Reload TVs now" doesn't bring the picture back.
+ * Commands expire after 10 minutes (migration 20261124g), so a shutdown sent
+ * to a Pi that's already off doesn't run when it's switched back on.
  *
  * Data:   public.kiosk_devices (migration 20261124f_kiosk_device_status.sql)
  *         Real-UTC timestamps (Convention B) — only ever shown as "x min ago".
@@ -17,13 +24,15 @@
  *   - Status is text + icon, never colour alone
  *   - 44px minimum targets, focus-visible rings, aria-labels naming the display
  *   - role="status" live region announces actions and load errors
- *   - Confirm dialogs (ConfirmDialog → useDialogA11y) for reboot and remove
+ *   - Confirm dialogs (ConfirmDialog → useDialogA11y) for reboot, shut down,
+ *     remove and the "all" actions; Blank/Show uses aria-pressed
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   CheckCircle2, Clock, WifiOff, AlertTriangle, RotateCcw, Power, Trash2,
   Edit3, Check, X, Loader2, Thermometer, Zap, MemoryStick, Monitor,
+  MonitorOff, PowerOff,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
@@ -43,9 +52,27 @@ const PAGE_STATE_TEXT = {
   starting: 'Browser starting',
 }
 
+// A shut-down Pi's last check-in is the one that received the command
+const SHUTDOWN_WINDOW_SECONDS = 90
+
 const COMMAND_TEXT = {
   restart_browser: 'Restart browser',
   reboot: 'Reboot',
+  shutdown: 'Shut down',
+}
+
+function commandText(c) {
+  if (!c) return ''
+  const m = /^(\w+) \(expired\)$/.exec(c)
+  if (m) return `${COMMAND_TEXT[m[1]] || m[1]} (expired — not carried out)`
+  return COMMAND_TEXT[c] || c
+}
+
+function wasShutDown(d) {
+  if (d.last_command !== 'shutdown' || !d.last_command_sent_at || !d.last_seen_at) return false
+  const sent = new Date(d.last_command_sent_at).getTime()
+  const seen = new Date(d.last_seen_at).getTime()
+  return seen - sent < SHUTDOWN_WINDOW_SECONDS * 1000
 }
 
 function ageSeconds(iso, now) {
@@ -90,6 +117,7 @@ function connection(device, now) {
   if (age == null) return { key: 'offline', label: 'Never checked in', age }
   if (age <= ONLINE_SECONDS) return { key: 'online', label: 'Online', age }
   if (age <= LATE_SECONDS) return { key: 'late', label: 'Late', age }
+  if (wasShutDown(device)) return { key: 'shutdown', label: 'Shut down', age }
   return { key: 'offline', label: 'Offline', age }
 }
 
@@ -97,11 +125,13 @@ const BADGE = {
   online:  { Icon: CheckCircle2, cls: 'bg-emerald-50 text-emerald-800 border-emerald-300' },
   late:    { Icon: Clock,        cls: 'bg-amber-50 text-amber-800 border-amber-300' },
   offline: { Icon: WifiOff,      cls: 'bg-red-50 text-red-800 border-red-300' },
+  shutdown:{ Icon: PowerOff,     cls: 'bg-surface-100 text-surface-800 border-surface-300' },
 }
 
 function warningsFor(d, conn) {
   const w = []
-  if (conn.key === 'online' && d.page_state && d.page_state !== 'ok') {
+  if (conn.key === 'online' && d.page_state && d.page_state !== 'ok' && d.page_state !== 'blanked'
+      && !(d.screen_blanked) && !(d.page_state === 'starting' && blankRecentlyChanged(d))) {
     w.push({ Icon: AlertTriangle, text: PAGE_STATE_TEXT[d.page_state] || `Page: ${d.page_state}` })
   }
   if (d.undervolt_now) w.push({ Icon: Zap, text: 'Low power right now — check the power supply' })
@@ -110,6 +140,23 @@ function warningsFor(d, conn) {
   if (d.mem_free_mb != null && d.mem_free_mb < 150) w.push({ Icon: MemoryStick, text: `Low memory (${d.mem_free_mb} MB free)` })
   if (d.screen_fixes > 0) w.push({ Icon: Monitor, text: `Black screen fixed ${d.screen_fixes} time${d.screen_fixes === 1 ? '' : 's'} since start-up` })
   return w
+}
+
+function blankRecentlyChanged(d) {
+  if (!d.blank_changed_at) return false
+  return Date.now() - new Date(d.blank_changed_at).getTime() < 3 * 60 * 1000
+}
+
+// What the screen is doing vs what was asked for
+function screenState(d, conn) {
+  const onPi = d.page_state === 'blanked'
+  if (d.screen_blanked) {
+    if (onPi) return { text: 'Screen blanked', pending: false }
+    if (conn.key === 'online') return { text: 'Blanking at next check-in…', pending: true }
+    return { text: 'Will blank when it next checks in', pending: true }
+  }
+  if (onPi && conn.key === 'online') return { text: 'Turning screen back on at next check-in…', pending: true }
+  return null
 }
 
 const btn = 'inline-flex items-center justify-center gap-1.5 px-3 py-2 min-h-[44px] min-w-[44px] text-sm font-medium rounded-lg border focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed'
@@ -127,6 +174,7 @@ export default function KioskDisplayStatus() {
   const [labelDraft, setLabelDraft] = useState('')
   const [confirm, setConfirm] = useState(null)         // { device, action }
   const [status, setStatus] = useState('')
+  const [bulk, setBulk] = useState(null)               // null | 'blank' | 'show' | 'shutdown' (while running)
   const labelInputRef = useRef(null)
 
   const fetchDevices = useCallback(async () => {
@@ -200,9 +248,10 @@ export default function KioskDisplayStatus() {
         .eq('device_name', d.device_name)
         .select('device_name'), 'kiosk_devices.update')
       if (!rows || rows.length === 0) throw new Error('You do not have permission to control displays.')
-      await audit(command === 'reboot' ? 'Reboot Kiosk Display' : 'Restart Kiosk Browser', d,
+      await audit(command === 'reboot' ? 'Reboot Kiosk Display'
+        : command === 'shutdown' ? 'Shut Down Kiosk Display' : 'Restart Kiosk Browser', d,
         `${COMMAND_TEXT[command]} requested for ${displayName(d)}.`)
-      announce(`${COMMAND_TEXT[command]} sent to ${displayName(d)}. It happens at the display's next check-in, within about a minute.`)
+      announce(`${COMMAND_TEXT[command]} sent to ${displayName(d)}. It happens at the display's next check-in, within about a minute${command === 'shutdown' ? '. It will need its power unplugged and plugged back in to start again' : ''}.`)
       fetchDevices()
     } catch (err) {
       announce(`${COMMAND_TEXT[command]} not sent: ${err?.message || 'unknown error'}`, false)
@@ -249,6 +298,61 @@ export default function KioskDisplayStatus() {
     }
   }
 
+  const setBlank = async (d, blank) => {
+    setBusy(`${d.device_name}:blank`)
+    try {
+      const rows = mustData(await supabase
+        .from('kiosk_devices')
+        .update({ screen_blanked: blank, blank_changed_at: new Date().toISOString(), blank_changed_by: userName })
+        .eq('device_name', d.device_name)
+        .select('device_name'), 'kiosk_devices.update')
+      if (!rows || rows.length === 0) throw new Error('You do not have permission to control displays.')
+      await audit(blank ? 'Blank Kiosk Screen' : 'Show Kiosk Screen', d,
+        `${blank ? 'Blanked' : 'Showed'} the screen on ${displayName(d)}.`)
+      announce(blank
+        ? `${displayName(d)} will go black at its next check-in, within about a minute.`
+        : `${displayName(d)} will come back on at its next check-in; the page takes about 30 seconds to load.`)
+      fetchDevices()
+    } catch (err) {
+      announce(`Not changed: ${err?.message || 'unknown error'}`, false)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const bulkAction = async (action) => {
+    const list = devices || []
+    if (list.length === 0) return
+    setBulk(action)
+    const nowIso = new Date().toISOString()
+    const patch = action === 'shutdown'
+      ? { pending_command: 'shutdown', command_requested_at: nowIso, command_requested_by: userName }
+      : { screen_blanked: action === 'blank', blank_changed_at: nowIso, blank_changed_by: userName }
+    try {
+      const rows = mustData(await supabase
+        .from('kiosk_devices')
+        .update(patch)
+        .in('device_name', list.map(d => d.device_name))
+        .select('device_name'), 'kiosk_devices.update')
+      if (!rows || rows.length === 0) throw new Error('You do not have permission to control displays.')
+      const label = action === 'shutdown' ? 'Shut Down All Kiosk Displays'
+        : action === 'blank' ? 'Blank All Kiosk Screens' : 'Show All Kiosk Screens'
+      await audit(label, { device_name: 'all', label: null },
+        `${label}: ${rows.map(r => r.device_name).join(', ')}`)
+      announce(action === 'shutdown'
+        ? `Shut down sent to ${rows.length} display${rows.length === 1 ? '' : 's'}. Each one powers off at its next check-in. Displays that are off now will ignore it.`
+        : action === 'blank'
+          ? `${rows.length} display${rows.length === 1 ? '' : 's'} will go black within about a minute.`
+          : `${rows.length} display${rows.length === 1 ? '' : 's'} will come back on within about a minute.`)
+      fetchDevices()
+    } catch (err) {
+      announce(`Not sent: ${err?.message || 'unknown error'}`, false)
+    } finally {
+      setBulk(null)
+      setConfirm(null)
+    }
+  }
+
   const removeDevice = async (d) => {
     setBusy(`${d.device_name}:remove`)
     try {
@@ -272,15 +376,37 @@ export default function KioskDisplayStatus() {
   const onConfirm = () => {
     if (!confirm) return
     const { device, action } = confirm
-    if (action === 'remove') removeDevice(device)
+    if (action === 'shutdown_all') bulkAction('shutdown')
+    else if (action === 'remove') removeDevice(device)
     else { setConfirm(null); queueCommand(device, action) }
   }
+
+  const CONFIRM_TEXT = {
+    reboot: {
+      title: 'Reboot this display?', label: 'Reboot Pi', variant: 'primary',
+      body: (d) => <>Reboot <strong>{displayName(d)}</strong>? The screen goes dark for about two minutes while the Pi restarts. On a weak power supply a Pi 3 may not come back until it is unplugged and plugged in again.</>,
+    },
+    shutdown: {
+      title: 'Shut down this display?', label: 'Shut down Pi', variant: 'danger',
+      body: (d) => <>Shut down <strong>{displayName(d)}</strong>? It powers off at its next check-in, within about a minute. <strong>It can't be turned back on from here</strong> — someone has to unplug its power and plug it back in (or switch its smart plug off and on).</>,
+    },
+    shutdown_all: {
+      title: 'Shut down every display?', label: 'Shut down all', variant: 'danger',
+      body: () => <>Shut down all <strong>{(devices || []).length}</strong> display{(devices || []).length === 1 ? '' : 's'}? Each powers off at its next check-in. <strong>They can't be turned back on from here</strong> — each needs its power unplugged and plugged back in (or its smart plug switched off and on). Displays that are already off will ignore this.</>,
+    },
+    remove: {
+      title: 'Remove this display?', label: 'Remove display', variant: 'danger',
+      body: (d) => <>Remove <strong>{displayName(d)}</strong> from the list? Use this for a Pi you no longer use. If it is still running, it will reappear at its next check-in (its name will need re-entering).</>,
+    },
+  }
+  const confirmInfo = confirm ? CONFIRM_TEXT[confirm.action] : null
 
   const sorted = (devices || []).slice()
   const counts = sorted.reduce((acc, d) => {
     acc[connection(d, now).key] += 1
     return acc
-  }, { online: 0, late: 0, offline: 0 })
+  }, { online: 0, late: 0, offline: 0, shutdown: 0 })
+  const blankedCount = sorted.filter(d => d.screen_blanked).length
 
   return (
     <div id="setting-kiosk_display_status" className="px-4 py-4 border-t border-surface-200" aria-labelledby="kiosk-status-heading">
@@ -293,9 +419,34 @@ export default function KioskDisplayStatus() {
             {counts.online} online
             {counts.late > 0 && ` · ${counts.late} late`}
             {counts.offline > 0 && ` · ${counts.offline} offline`}
+            {counts.shutdown > 0 && ` · ${counts.shutdown} shut down`}
+            {blankedCount > 0 && ` · ${blankedCount} blanked`}
           </p>
         )}
       </div>
+
+      {devices && devices.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2" role="group" aria-label="Actions for all displays">
+          <button type="button" className={btnNeutral} onClick={() => bulkAction('blank')}
+            disabled={!!bulk || blankedCount === sorted.length}
+            aria-label="Blank every display (black screen, for tours)">
+            {bulk === 'blank' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <MonitorOff size={16} aria-hidden="true" />}
+            Blank all
+          </button>
+          <button type="button" className={btnNeutral} onClick={() => bulkAction('show')}
+            disabled={!!bulk || blankedCount === 0}
+            aria-label="Show the screen on every display again">
+            {bulk === 'show' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Monitor size={16} aria-hidden="true" />}
+            Show all
+          </button>
+          <button type="button" className={btnDanger} onClick={() => setConfirm({ device: null, action: 'shutdown_all' })}
+            disabled={!!bulk}
+            aria-label="Shut down every display">
+            {bulk === 'shutdown' ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <PowerOff size={16} aria-hidden="true" />}
+            Shut down all
+          </button>
+        </div>
+      )}
 
       <span className="sr-only" role="status" aria-live="polite">{status}</span>
 
@@ -323,7 +474,8 @@ export default function KioskDisplayStatus() {
             const headingId = `kiosk-${d.device_name}-name`
             const isBusy = (a) => busy === `${d.device_name}:${a}`
             const anyBusy = busy.startsWith(`${d.device_name}:`)
-            const offline = conn.key === 'offline'
+            const offline = conn.key === 'offline' || conn.key === 'shutdown'
+            const screen = screenState(d, conn)
             return (
               <li key={d.device_name} className="rounded-lg border border-surface-200 bg-white p-3" aria-labelledby={headingId}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
@@ -384,6 +536,16 @@ export default function KioskDisplayStatus() {
                   </span>
                 </div>
 
+                {screen && (
+                  <p className="mt-2 inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-full border border-surface-300 bg-surface-900 text-white">
+                    <MonitorOff size={13} aria-hidden="true" />
+                    {screen.text}
+                    {d.screen_blanked && d.blank_changed_by && !screen.pending && (
+                      <span className="font-normal"> · by {d.blank_changed_by} {ago(ageSeconds(d.blank_changed_at, now))}</span>
+                    )}
+                  </p>
+                )}
+
                 {warns.length > 0 && (
                   <ul className="mt-2 space-y-1" aria-label={`Warnings for ${displayName(d)}`}>
                     {warns.map((w, i) => (
@@ -404,7 +566,7 @@ export default function KioskDisplayStatus() {
                 {d.pending_command ? (
                   <p className="mt-2 text-xs text-surface-700 flex flex-wrap items-center gap-2">
                     <Clock size={13} aria-hidden="true" />
-                    {COMMAND_TEXT[d.pending_command] || d.pending_command} requested
+                    {commandText(d.pending_command)} requested
                     {d.command_requested_by ? ` by ${d.command_requested_by}` : ''}
                     {' '}{ago(ageSeconds(d.command_requested_at, now))} — waiting for the display to check in.
                     <button type="button" className={btnNeutral} onClick={() => cancelCommand(d)}
@@ -415,36 +577,57 @@ export default function KioskDisplayStatus() {
                   </p>
                 ) : d.last_command && d.last_command_sent_at ? (
                   <p className="mt-2 text-xs text-surface-600">
-                    Last: {COMMAND_TEXT[d.last_command] || d.last_command} carried out {ago(ageSeconds(d.last_command_sent_at, now))}.
+                    Last: {commandText(d.last_command)}{/expired/.test(d.last_command) ? ' ' : ' carried out '}{ago(ageSeconds(d.last_command_sent_at, now))}.
                   </p>
                 ) : null}
 
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" className={btnNeutral}
+                    onClick={() => setBlank(d, !d.screen_blanked)}
+                    disabled={anyBusy || !!bulk}
+                    aria-pressed={!!d.screen_blanked}
+                    aria-label={d.screen_blanked ? `Show the screen on ${displayName(d)} again` : `Blank the screen on ${displayName(d)}`}>
+                    {isBusy('blank') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                      : d.screen_blanked ? <Monitor size={16} aria-hidden="true" /> : <MonitorOff size={16} aria-hidden="true" />}
+                    {d.screen_blanked ? 'Show screen' : 'Blank screen'}
+                  </button>
+                  <button type="button" className={btnNeutral}
                     onClick={() => queueCommand(d, 'restart_browser')}
-                    disabled={anyBusy || !!d.pending_command}
+                    disabled={anyBusy || !!bulk || !!d.pending_command || !!d.screen_blanked}
                     aria-label={`Restart the browser on ${displayName(d)}`}>
                     {isBusy('restart_browser') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <RotateCcw size={16} aria-hidden="true" />}
                     Restart browser
                   </button>
                   <button type="button" className={btnNeutral}
                     onClick={() => setConfirm({ device: d, action: 'reboot' })}
-                    disabled={anyBusy || !!d.pending_command}
+                    disabled={anyBusy || !!bulk || !!d.pending_command}
                     aria-label={`Reboot ${displayName(d)}`}>
                     {isBusy('reboot') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Power size={16} aria-hidden="true" />}
                     Reboot Pi
                   </button>
                   <button type="button" className={btnDanger}
+                    onClick={() => setConfirm({ device: d, action: 'shutdown' })}
+                    disabled={anyBusy || !!bulk || !!d.pending_command}
+                    aria-label={`Shut down ${displayName(d)}`}>
+                    {isBusy('shutdown') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <PowerOff size={16} aria-hidden="true" />}
+                    Shut down
+                  </button>
+                  <button type="button" className={btnDanger}
                     onClick={() => setConfirm({ device: d, action: 'remove' })}
-                    disabled={anyBusy}
+                    disabled={anyBusy || !!bulk}
                     aria-label={`Remove ${displayName(d)} from the list`}>
                     {isBusy('remove') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}
                     Remove
                   </button>
                 </div>
-                {offline && (
+                {conn.key === 'shutdown' ? (
                   <p className="mt-2 text-xs text-surface-600">
-                    While a display is offline, a restart or reboot waits until it checks in again.
+                    Shut down from here. To start it again, unplug its power and plug it back in.
+                  </p>
+                ) : offline && (
+                  <p className="mt-2 text-xs text-surface-600">
+                    While a display is offline, restart, reboot and shut down wait for its next
+                    check-in and are dropped after 10 minutes. Blank / Show applies whenever it next checks in.
                   </p>
                 )}
               </li>
@@ -455,16 +638,12 @@ export default function KioskDisplayStatus() {
 
       <ConfirmDialog
         open={!!confirm}
-        variant={confirm?.action === 'remove' ? 'danger' : 'primary'}
-        title={confirm?.action === 'remove' ? 'Remove this display?' : 'Reboot this display?'}
-        message={confirm ? (
-          confirm.action === 'remove'
-            ? <>Remove <strong>{displayName(confirm.device)}</strong> from the list? Use this for a Pi you no longer use. If it is still running, it will reappear at its next check-in (its name will need re-entering).</>
-            : <>Reboot <strong>{displayName(confirm.device)}</strong>? The screen goes dark for about two minutes while the Pi restarts. On a weak power supply a Pi 3 may not come back until it is unplugged and plugged in again.</>
-        ) : ''}
-        confirmLabel={confirm?.action === 'remove' ? 'Remove display' : 'Reboot Pi'}
+        variant={confirmInfo?.variant || 'primary'}
+        title={confirmInfo?.title || ''}
+        message={confirm && confirmInfo ? confirmInfo.body(confirm.device) : ''}
+        confirmLabel={confirmInfo?.label || 'Confirm'}
         cancelLabel="Cancel"
-        busy={!!confirm && isBusyRemove(busy, confirm)}
+        busy={!!confirm && (isBusyRemove(busy, confirm) || (confirm.action === 'shutdown_all' && bulk === 'shutdown'))}
         onConfirm={onConfirm}
         onClose={() => setConfirm(null)}
       />
