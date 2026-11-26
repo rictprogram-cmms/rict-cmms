@@ -46,7 +46,7 @@ RESOLUTION="1920x1080"     # "" = leave whatever the TV reports
 ROTATE="normal"            # normal | left | right | inverted
 REBOOT_TIME="03:30"        # "" = no nightly reboot
 PROTECT_SD="no"
-KIOSK_VERSION="2026.11.25"
+KIOSK_VERSION="2026.11.25b"
 SUPABASE_URL="https://jzzfgafwyxabafaqrnho.supabase.co"
 SUPABASE_ANON_KEY=""       # public key; read from the live CMMS site if not given
 KIOSK_TOKEN=""             # from the CMMS migration output; kept between re-runs
@@ -233,14 +233,22 @@ fi
 # whenever the TV is swapped, switched on late or changes input, so check every
 # 10 s and put it back to normal. "--current" reads without re-probing the TV,
 # so the check itself never makes the screen flicker.
+# Only outputs that actually have a CTM property (Pi 3). A Pi 4 / 5 has none,
+# so there is nothing to fix and nothing to count.
+ctm_outputs() {
+  local O
+  for O in $(xrandr --current | awk '/ connected/{print $1}'); do
+    xrandr --current --prop | sed -n "/^$O /,/^[^ \t]/p" | grep -q 'CTM:' && echo "$O"
+  done
+}
 # First fix at start-up isn't counted (these Pis always start that way).
-for O in $(xrandr --current | awk '/ connected/{print $1}'); do
+for O in $(ctm_outputs); do
   xrandr --output "$O" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
 done
 echo 0 > /tmp/rict-kiosk-screen-fixes
 (
   while sleep 10; do
-    for O in $(xrandr --current | awk '/ connected/{print $1}'); do
+    for O in $(ctm_outputs); do
       if ! xrandr --current --prop | sed -n "/^$O /,/^[^ \t]/p" | grep -A1 'CTM:' | grep -q 'CTM:[[:space:]]*1\.0'; then
         xrandr --output "$O" --set CTM "1,0,0,0,1,0,0,0,1" 2>/dev/null || true
         # count it, so Settings → TV Displays can show how often this happens
