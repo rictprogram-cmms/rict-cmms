@@ -46,11 +46,13 @@ RESOLUTION="1920x1080"     # "" = leave whatever the TV reports
 ROTATE="normal"            # normal | left | right | inverted
 REBOOT_TIME="03:30"        # "" = no nightly reboot
 PROTECT_SD="no"
-KIOSK_VERSION="2026.11.24b"
+KIOSK_VERSION="2026.11.25"
 SUPABASE_URL="https://jzzfgafwyxabafaqrnho.supabase.co"
 SUPABASE_ANON_KEY=""       # public key; read from the live CMMS site if not given
 KIOSK_TOKEN=""             # from the CMMS migration output; kept between re-runs
 NO_REBOOT="no"
+QUICK="no"                 # skip the apt update/upgrade (used by remote updates)
+SET_URL=""; SET_RES=""; SET_ROT=""   # which of these were given on the command line
 
 usage() {
   sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
@@ -67,21 +69,26 @@ Options:
   --kiosk-token TOKEN   CMMS kiosk token, so the Pi shows in Settings → TV Displays
   --anon-key KEY        CMMS public (anon) key (normally found automatically)
   --no-reboot           Apply an update without rebooting (restarts the screen instead)
+  --quick               Skip the system package upgrade (for remote updates)
+
+Re-running keeps the page, resolution and rotation from the last run unless
+you pass --url / --resolution / --rotate again.
   -h, --help            Show this help
 EOF
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --url)          URL="$2"; shift 2 ;;
+    --url)          URL="$2"; SET_URL=1; shift 2 ;;
     --user)         KIOSK_USER="$2"; shift 2 ;;
-    --resolution)   RESOLUTION="$2"; [ "$RESOLUTION" = auto ] && RESOLUTION=""; shift 2 ;;
-    --rotate)       ROTATE="$2"; shift 2 ;;
+    --resolution)   RESOLUTION="$2"; [ "$RESOLUTION" = auto ] && RESOLUTION=""; SET_RES=1; shift 2 ;;
+    --rotate)       ROTATE="$2"; SET_ROT=1; shift 2 ;;
     --reboot-time)  REBOOT_TIME="$2"; [ "$REBOOT_TIME" = off ] && REBOOT_TIME=""; shift 2 ;;
     --protect-sd)   PROTECT_SD="yes"; shift ;;
     --kiosk-token)  KIOSK_TOKEN="$2"; shift 2 ;;
     --anon-key)     SUPABASE_ANON_KEY="$2"; shift 2 ;;
     --no-reboot)    NO_REBOOT="yes"; shift ;;
+    --quick)        QUICK="yes"; shift ;;
     -h|--help)      usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -90,6 +97,15 @@ done
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m[!] %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
+
+# ── Keep settings from an earlier run ───────────────────────────────────────
+conf_get() { [ -f /etc/rict-kiosk.conf ] && sed -n "s/^$1=\"\(.*\)\"$/\1/p" /etc/rict-kiosk.conf | head -1 || true; }
+if [ -f /etc/rict-kiosk.conf ]; then
+  [ -z "$SET_URL" ] && [ -n "$(conf_get URL)" ] && URL="$(conf_get URL)"
+  if [ -z "$SET_RES" ] && grep -q '^RESOLUTION=' /etc/rict-kiosk.conf; then RESOLUTION="$(conf_get RESOLUTION)"; fi
+  [ -z "$SET_ROT" ] && [ -n "$(conf_get ROTATE)" ] && ROTATE="$(conf_get ROTATE)"
+  [ -z "$KIOSK_USER" ] && KIOSK_USER="$(conf_get KIOSK_USER)"
+fi
 
 # ── Sanity checks ───────────────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ] || die "Run with sudo:  sudo bash $0"
@@ -120,8 +136,12 @@ echo "    Page: $URL"
 # ── Packages ────────────────────────────────────────────────────────────────
 say "Installing packages (this takes a few minutes)"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get -y full-upgrade
+if [ "$QUICK" = yes ]; then
+  echo "    (--quick: skipping the system package upgrade)"
+else
+  apt-get update
+  apt-get -y full-upgrade
+fi
 apt-get install -y --no-install-recommends \
   xserver-xorg xserver-xorg-legacy x11-xserver-utils xinit \
   fonts-noto-color-emoji fonts-dejavu-core \
@@ -169,6 +189,7 @@ ROTATE="$ROTATE"
 LOW_MEM_MB=120
 # CMMS check-in (Settings → TV Displays). Blank token = no check-in.
 DEVICE_NAME="$(hostname)"
+KIOSK_USER="$KIOSK_USER"
 SUPABASE_URL="$SUPABASE_URL"
 SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY"
 KIOSK_TOKEN="$KIOSK_TOKEN"
@@ -178,11 +199,11 @@ EOF
 chown root:"$KIOSK_USER" /etc/rict-kiosk.conf
 chmod 640 /etc/rict-kiosk.conf
 
-# Let the watchdog reboot / shut down the Pi when an instructor asks (nothing else)
+# Let the watchdog reboot / shut down / update the Pi when an instructor asks (nothing else)
 SYSTEMCTL_BIN="$(command -v systemctl)"
-echo "$KIOSK_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN reboot, $SYSTEMCTL_BIN poweroff" >/etc/sudoers.d/rict-kiosk-reboot
+echo "$KIOSK_USER ALL=(root) NOPASSWD: $SYSTEMCTL_BIN reboot, $SYSTEMCTL_BIN poweroff, /usr/local/bin/kiosk-self-update" >/etc/sudoers.d/rict-kiosk-reboot
 chmod 440 /etc/sudoers.d/rict-kiosk-reboot
-visudo -cf /etc/sudoers.d/rict-kiosk-reboot >/dev/null || { rm -f /etc/sudoers.d/rict-kiosk-reboot; warn "Could not add the remote reboot/shutdown rule; those buttons will not work."; }
+visudo -cf /etc/sudoers.d/rict-kiosk-reboot >/dev/null || { rm -f /etc/sudoers.d/rict-kiosk-reboot; warn "Could not add the remote reboot/shutdown/update rule; those buttons will not work."; }
 
 mkdir -p /opt/rict-kiosk
 
@@ -231,8 +252,11 @@ echo 0 > /tmp/rict-kiosk-screen-fixes
 ) &
 # There's no desktop/window manager, so tell Chromium the exact screen size
 # (otherwise it can open at half width). "current W x H" accounts for rotation.
-SCREEN="$(xrandr --query | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1,\2/p' | head -1)"
-[ -n "$SCREEN" ] || SCREEN="1920,1080"
+screen_size() {
+  local S
+  S="$(xrandr --current | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1,\2/p' | head -1)"
+  echo "${S:-1920,1080}"
+}
 
 # Wait (up to 2 min) for the network so the first load isn't an error page.
 # The watchdog fixes it anyway if it is.
@@ -247,6 +271,7 @@ while true; do
   # "Blank screen" from the CMMS: keep the browser closed (plain black screen)
   while [ -f /tmp/rict-kiosk-blank ]; do sleep 2; done
   mkdir -p "$PROFILE/Default"
+  SCREEN="$(screen_size)"    # re-read each launch: the resolution can be changed from the CMMS
   # Mark the last run as a clean exit so Chromium never shows "Restore pages?"
   PREFS="$PROFILE/Default/Preferences"
   if [ -f "$PREFS" ]; then
@@ -294,11 +319,13 @@ Restarting Chromium = killing it; the session loop starts it again in ~3 s.
 
 Every 60 s it also checks in with the CMMS (Settings -> TV Displays) and
 carries out a remote command if an instructor queued one:
-  restart_browser | reboot | shutdown
-and keeps the screen blanked (browser closed, black screen) while the CMMS
-says so. While blanked, the page checks above are paused.
+  restart_browser | reboot | shutdown | screenshot | update_software
+keeps the screen blanked (browser closed, black screen) while the CMMS says
+so (page checks are paused meanwhile), reports what the screen is doing
+(TV name, resolution, modes the TV accepts, colour setting), and applies the
+resolution / rotation chosen in Settings.
 """
-import json, os, re, socket, subprocess, sys, time, urllib.request
+import base64, json, os, re, socket, subprocess, sys, time, urllib.request
 
 try:
     import websocket  # python3-websocket
@@ -334,6 +361,8 @@ page_state = "starting"
 last_checkin = 0.0
 checkin_ok = None
 shown_at = 0.0        # when the screen was last un-blanked (start-up grace)
+screen_error = ""     # last problem applying a requested screen setting
+last_screen_req = None  # (mode, rotate) last applied / attempted
 
 def log(msg): print(time.strftime("%F %T"), msg, flush=True)
 
@@ -387,6 +416,145 @@ def _run(cmd):
     try: return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout.strip()
     except Exception: return ""
 
+# ── Screen: report and apply ────────────────────────────────────────────────
+XENV = dict(os.environ, DISPLAY=":0",
+            XAUTHORITY=os.path.join(os.path.expanduser("~"), ".Xauthority"))
+
+def xrandr(*args):
+    try:
+        r = subprocess.run(["xrandr", *args], capture_output=True, text=True, timeout=10, env=XENV)
+        return r.returncode, r.stdout, r.stderr.strip()
+    except Exception as e:
+        return 1, "", str(e)
+
+def edid_name(hexstr):
+    """TV name (or maker code) from the EDID the TV sends."""
+    try:
+        b = bytes.fromhex(hexstr)
+        if len(b) < 128: return ""
+        for off in (54, 72, 90, 108):
+            blk = b[off:off + 18]
+            if blk[0:3] == b"\x00\x00\x00" and blk[3] == 0xFC:
+                return blk[5:18].decode("ascii", "ignore").split("\n")[0].strip()
+        v = (b[8] << 8) | b[9]
+        return "".join(chr(((v >> s) & 0x1F) + 64) for s in (10, 5, 0))
+    except Exception:
+        return ""
+
+def screen_info():
+    rc, out, err = xrandr("--current", "--prop")
+    info = {"error": screen_error} if screen_error else {}
+    if rc != 0:
+        info["xrandr_error"] = (err or "xrandr failed")[:200]
+        return info
+    lines = out.splitlines()
+    out_name = None
+    for i, ln in enumerate(lines):
+        m = re.match(r"^(\S+) (connected|disconnected)", ln)
+        if m:
+            if out_name is not None and m.group(2) == "disconnected":
+                continue
+            if m.group(2) == "connected" and out_name is None:
+                out_name = m.group(1)
+                info["output"] = out_name
+                info["connected"] = True
+                rot = re.search(r"\d+x\d+\+\d+\+\d+ (left|right|inverted)? ?\(", ln)
+                info["rotate"] = (rot.group(1) if rot and rot.group(1) else "normal")
+                # properties + modes until the next output line
+                hexbuf, in_edid, modes = "", False, []
+                for ln2 in lines[i + 1:]:
+                    if re.match(r"^\S", ln2): break
+                    t = ln2.strip()
+                    if t.startswith("EDID:"):
+                        in_edid = True; continue
+                    if in_edid:
+                        if re.fullmatch(r"[0-9a-f]+", t): hexbuf += t; continue
+                        in_edid = False
+                    if t.startswith("CTM:"):
+                        nums = re.findall(r"-?\d+\.\d+", t)
+                        info["colour_ok"] = bool(nums) and abs(float(nums[0]) - 1.0) < 0.01
+                    mm = re.match(r"^(\d+x\d+i?)\s+(.*)$", t)
+                    if mm:
+                        res, rates = mm.group(1), mm.group(2)
+                        if "*" in rates: info["mode"] = res; info["rate"] = (re.search(r"([\d.]+)\*", rates) or [None, ""])[1]
+                        if "+" in rates: info["preferred"] = res
+                        if res not in modes and not res.endswith("i"): modes.append(res)
+                info["modes"] = modes[:25]
+                name = edid_name(hexbuf)
+                if name: info["tv_name"] = name[:40]
+    if out_name is None:
+        info["connected"] = False
+    return info
+
+def apply_screen(req):
+    """Apply the resolution / rotation chosen in Settings (None = leave alone)."""
+    global screen_error, last_screen_req
+    mode = (req or {}).get("mode")
+    rotate = (req or {}).get("rotate")
+    if not mode and not rotate:
+        last_screen_req = None
+        return
+    info = screen_info()
+    out = info.get("output")
+    if not out:
+        return
+    target = info.get("preferred") if mode == "auto" else mode
+    need_mode = bool(target) and info.get("mode") != target
+    need_rot = bool(rotate) and info.get("rotate", "normal") != rotate
+    if not need_mode and not need_rot:
+        screen_error = ""            # what was asked for is what's showing
+        last_screen_req = (mode, rotate)
+        return
+    if last_screen_req == (mode, rotate) and screen_error:
+        return  # already tried this exact request and it failed; wait for a new choice
+    last_screen_req = (mode, rotate)
+    if mode and mode != "auto" and mode not in info.get("modes", []):
+        screen_error = f"The TV doesn't offer {mode}"
+        log(f"SCREEN: {screen_error}")
+        return
+    args = ["--output", out]
+    if need_mode: args += (["--auto"] if mode == "auto" else ["--mode", target])
+    if need_rot: args += ["--rotate", rotate]
+    rc, _, err = xrandr(*args)
+    if rc != 0:
+        screen_error = (err or "xrandr failed")[:150]
+        log(f"SCREEN: could not apply {args}: {screen_error}")
+        return
+    screen_error = ""
+    xrandr("--output", out, "--set", "CTM", "1,0,0,0,1,0,0,0,1")
+    log(f"SCREEN: applied {' '.join(args[2:])} from the CMMS")
+    if not blanked():
+        restart_chromium("screen settings changed (browser re-sizes)")
+
+def take_screenshot():
+    """Small JPEG of what the browser is drawing -> CMMS."""
+    if blanked():
+        log("SCREENSHOT skipped: screen is blanked"); return
+    try:
+        target = page_target()
+        if not target: return
+        b64 = None
+        for q in (45, 25):
+            res = cdp(target["webSocketDebuggerUrl"], "Page.captureScreenshot",
+                      {"format": "jpeg", "quality": q}, timeout=20)
+            b64 = res.get("result", {}).get("data")
+            if b64 and len(b64) < 580000: break
+        if not b64 or len(b64) >= 580000:
+            log("SCREENSHOT too large, not sent"); return
+        rpc("kiosk_upload_screenshot", {"p_token": TOKEN, "p_device": DEVICE, "p_jpeg_b64": b64})
+        log("SCREENSHOT sent")
+    except Exception as e:
+        log(f"SCREENSHOT failed: {e!r}")
+
+def rpc(name, payload, timeout=30):
+    headers = {"Content-Type": "application/json", "apikey": SB_KEY}
+    if SB_KEY.startswith("eyJ"):
+        headers["Authorization"] = "Bearer " + SB_KEY
+    req = urllib.request.Request(SB_URL + "/rest/v1/rpc/" + name, data=json.dumps(payload).encode(),
+                                 headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
 def health():
     d = {"page_url": URL, "page_state": page_state, "script_version": VERSION}
     d["model"] = _read("/proc/device-tree/model").replace("\x00", "")[:80]
@@ -411,7 +579,9 @@ def health():
         d["throttled"] = th
         d["undervolt_now"] = bool(v & 0x1)
         d["undervolt_since_boot"] = bool(v & 0x10000)
-        d["hot_now"] = bool(v & 0xC)   # throttled or soft temperature limit
+        d["hot_now"] = bool(v & 0x8)   # soft temperature limit (heat, not power)
+    try: d["screen_info"] = screen_info()
+    except Exception as e: d["screen_info"] = {"xrandr_error": repr(e)[:200]}
     return d
 
 def blanked():
@@ -440,15 +610,8 @@ def checkin():
     last_checkin = time.time()
     if not (SB_URL and SB_KEY and TOKEN):
         return
-    body = json.dumps({"p_token": TOKEN, "p_device": DEVICE, "p_data": health()}).encode()
-    headers = {"Content-Type": "application/json", "apikey": SB_KEY}
-    if SB_KEY.startswith("eyJ"):
-        headers["Authorization"] = "Bearer " + SB_KEY
     try:
-        req = urllib.request.Request(SB_URL + "/rest/v1/rpc/kiosk_heartbeat", data=body,
-                                     headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=15) as r:
-            res = json.load(r)
+        res = rpc("kiosk_heartbeat", {"p_token": TOKEN, "p_device": DEVICE, "p_data": health()}, timeout=15)
         if checkin_ok is not True: log("CMMS check-in OK")
         checkin_ok = True
     except Exception as e:
@@ -458,6 +621,9 @@ def checkin():
     res = res or {}
     if "blank" in res:
         set_blank(bool(res.get("blank")))
+    if "screen" in res and not blanked():
+        try: apply_screen(res.get("screen"))
+        except Exception as e: log(f"SCREEN: error {e!r}")
     cmd = res.get("command")
     if cmd == "restart_browser":
         if not blanked(): restart_chromium("requested from the CMMS")
@@ -467,6 +633,11 @@ def checkin():
     elif cmd == "shutdown":
         log("SHUTDOWN requested from the CMMS")
         subprocess.run(["sudo", "-n", "systemctl", "poweroff"])
+    elif cmd == "screenshot":
+        take_screenshot()
+    elif cmd == "update_software":
+        log("SOFTWARE UPDATE requested from the CMMS")
+        subprocess.run(["sudo", "-n", "/usr/local/bin/kiosk-self-update"])
 
 def nap(seconds):
     """Sleep, but keep checking in every minute (even during grace periods)."""
@@ -572,6 +743,37 @@ WantedBy=multi-user.target
 EOF
 
 # ── Helper commands ─────────────────────────────────────────────────────────
+# kiosk-self-update: "Update Pi software" in Settings. Downloads the latest
+# installer from GitHub main and runs it (--no-reboot --quick) detached, so it
+# survives the watchdog restart it causes. Root-only; the kiosk user may run
+# exactly this file through sudo (rule above). Log: /var/log/rict-kiosk-update.log
+cat >/usr/local/bin/kiosk-self-update <<'EOF'
+#!/bin/bash
+set -u
+SRC="https://raw.githubusercontent.com/rictprogram-cmms/rict-cmms/main/kiosk/raspberry-pi/setup-kiosk.sh"
+DIR=/var/lib/rict-kiosk
+LOG=/var/log/rict-kiosk-update.log
+mkdir -p "$DIR"
+{
+  echo "=== $(date '+%F %T') remote update requested ==="
+  if ! curl -fsSL --max-time 60 "$SRC" -o "$DIR/setup-kiosk.sh.new"; then
+    echo "download failed"; exit 1
+  fi
+  # Only run something that is clearly our installer and parses cleanly
+  if ! grep -q 'RICT CMMS — Raspberry Pi kiosk installer' "$DIR/setup-kiosk.sh.new" \
+     || ! bash -n "$DIR/setup-kiosk.sh.new"; then
+    echo "downloaded file is not a valid installer — not running it"; exit 1
+  fi
+  mv -f "$DIR/setup-kiosk.sh.new" "$DIR/setup-kiosk.sh"
+  echo "version: $(sed -n 's/^KIOSK_VERSION="\(.*\)"$/\1/p' "$DIR/setup-kiosk.sh" | head -1)"
+} >>"$LOG" 2>&1 || exit 1
+# Run detached from the watchdog (the installer restarts it)
+exec systemd-run --unit="rict-kiosk-update-$(date +%s)" --collect --quiet \
+  /bin/bash -c "bash $DIR/setup-kiosk.sh --no-reboot --quick >>$LOG 2>&1"
+EOF
+chmod 755 /usr/local/bin/kiosk-self-update
+chown root:root /usr/local/bin/kiosk-self-update
+
 cat >/usr/local/bin/kiosk-restart <<'EOF'
 #!/bin/bash
 # Restart the kiosk browser (it comes back in a few seconds).
@@ -585,6 +787,8 @@ PID="$(pgrep -o -f rict-kiosk-chromium || true)"
 if [ -n "$PID" ]; then echo "Chromium:    running for $(ps -o etime= -p "$PID" | xargs)"; else echo "Chromium:    NOT running"; fi
 echo "Watchdog:    $(systemctl is-active rict-kiosk-watchdog)"
 [ -f /tmp/rict-kiosk-blank ] && echo "Screen:      BLANKED from the CMMS (Settings → TV Displays → Show screen)"
+echo "Screen:      $(DISPLAY=:0 xrandr --current 2>/dev/null | awk '/ connected/{o=$1} /\*/{print o" "$1; exit}' || echo '?')"
+echo "Software:    $KIOSK_VERSION"
 if [ -n "$KIOSK_TOKEN" ]; then
   C="$(journalctl -u rict-kiosk-watchdog -o cat --no-pager 2>/dev/null | grep -E 'CMMS check-in' | tail -1)"
   echo "CMMS:        ${C:-check-in starting…}  (as '$DEVICE_NAME')"

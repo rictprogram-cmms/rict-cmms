@@ -14,6 +14,14 @@
  * Commands expire after 10 minutes (migration 20261124g), so a shutdown sent
  * to a Pi that's already off doesn't run when it's switched back on.
  *
+ * Screen tools (migration 20261125_kiosk_screen_tools.sql): each Pi reports
+ * its screen (TV name from EDID, resolution, modes the TV accepts, colour
+ * setting); Settings can pick a resolution / rotation (applied at the next
+ * check-in), request a screenshot of what the browser is drawing, and tell
+ * the Pi to download and install the latest kiosk software from GitHub.
+ * Temperatures are shown in °F. Power/heat warnings are decoded from the raw
+ * vcgencmd "throttled" value so "slowing down" names its real cause.
+ *
  * Data:   public.kiosk_devices (migration 20261124f_kiosk_device_status.sql)
  *         Real-UTC timestamps (Convention B) — only ever shown as "x min ago".
  * Access: same as "Reload TVs now" — Settings view_page (RLS mirrors it).
@@ -32,7 +40,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   CheckCircle2, Clock, WifiOff, AlertTriangle, RotateCcw, Power, Trash2,
   Edit3, Check, X, Loader2, Thermometer, Zap, MemoryStick, Monitor,
-  MonitorOff, PowerOff,
+  MonitorOff, PowerOff, Camera, Download, SlidersHorizontal, ChevronRight,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '@/lib/supabase'
@@ -59,6 +67,32 @@ const COMMAND_TEXT = {
   restart_browser: 'Restart browser',
   reboot: 'Reboot',
   shutdown: 'Shut down',
+  screenshot: 'Screenshot',
+  update_software: 'Update software',
+}
+
+const ROTATE_TEXT = { normal: 'Normal', left: 'Rotated left', right: 'Rotated right', inverted: 'Upside down' }
+
+function fmtTemp(c) {
+  if (c == null || isNaN(Number(c))) return '—'
+  return `${Math.round(Number(c) * 9 / 5 + 32)} °F`
+}
+
+function fmtMode(m) {
+  return m ? String(m).replace('x', ' × ') : ''
+}
+
+// vcgencmd get_throttled bits: 0 under-voltage now, 1 frequency capped now,
+// 2 throttled now, 3 soft temperature limit now, 16 under-voltage since boot
+function parseThrottled(raw) {
+  if (!raw || !/^0x[0-9a-f]+$/i.test(raw)) return null
+  const v = parseInt(raw, 16)
+  return {
+    uvNow: !!(v & 0x1),
+    slowNow: !!(v & 0x2) || !!(v & 0x4),
+    heatNow: !!(v & 0x8),
+    uvBoot: !!(v & 0x10000),
+  }
 }
 
 function commandText(c) {
@@ -134,9 +168,28 @@ function warningsFor(d, conn) {
       && !(d.screen_blanked) && !(d.page_state === 'starting' && blankRecentlyChanged(d))) {
     w.push({ Icon: AlertTriangle, text: PAGE_STATE_TEXT[d.page_state] || `Page: ${d.page_state}` })
   }
-  if (d.undervolt_now) w.push({ Icon: Zap, text: 'Low power right now — check the power supply' })
-  else if (d.undervolt_since_boot) w.push({ Icon: Zap, text: 'Low power since start-up — check the power supply' })
-  if (d.hot_now) w.push({ Icon: Thermometer, text: `Running hot${d.cpu_temp_c != null ? ` (${d.cpu_temp_c} °C)` : ''} — slowing itself down` })
+  const t = parseThrottled(d.throttled)
+  if (t) {
+    if (t.uvNow) {
+      w.push({ Icon: Zap, text: t.slowNow
+        ? 'Low power right now — slowing itself down to cope. Check the power supply and cable'
+        : 'Low power right now — check the power supply and cable' })
+    } else if (t.uvBoot) {
+      w.push({ Icon: Zap, text: 'Low power at some point since start-up — check the power supply and cable' })
+    }
+    if (t.heatNow) w.push({ Icon: Thermometer, text: `Running hot (${fmtTemp(d.cpu_temp_c)}) — slowing itself down` })
+    else if (t.slowNow && !t.uvNow) w.push({ Icon: Thermometer, text: 'Slowing itself down' })
+  } else {
+    if (d.undervolt_now) w.push({ Icon: Zap, text: 'Low power right now — check the power supply and cable' })
+    else if (d.undervolt_since_boot) w.push({ Icon: Zap, text: 'Low power at some point since start-up — check the power supply and cable' })
+  }
+  const si = d.screen_info
+  if (si && conn.key === 'online' && !d.screen_blanked && d.page_state !== 'blanked') {
+    if (si.connected === false) w.push({ Icon: MonitorOff, text: 'No TV detected on the HDMI port — unplugged, or the TV is off' })
+    if (si.colour_ok === false) w.push({ Icon: Monitor, text: 'Colour setting was wrong (TV would show black) — being reset automatically' })
+    if (si.xrandr_error) w.push({ Icon: AlertTriangle, text: "Couldn't read the screen settings" })
+  }
+  if (si?.error) w.push({ Icon: SlidersHorizontal, text: `Screen setting not applied: ${si.error}` })
   if (d.mem_free_mb != null && d.mem_free_mb < 150) w.push({ Icon: MemoryStick, text: `Low memory (${d.mem_free_mb} MB free)` })
   if (d.screen_fixes > 0) w.push({ Icon: Monitor, text: `Black screen fixed ${d.screen_fixes} time${d.screen_fixes === 1 ? '' : 's'} since start-up` })
   return w
@@ -248,10 +301,19 @@ export default function KioskDisplayStatus() {
         .eq('device_name', d.device_name)
         .select('device_name'), 'kiosk_devices.update')
       if (!rows || rows.length === 0) throw new Error('You do not have permission to control displays.')
-      await audit(command === 'reboot' ? 'Reboot Kiosk Display'
-        : command === 'shutdown' ? 'Shut Down Kiosk Display' : 'Restart Kiosk Browser', d,
+      const AUDIT = {
+        reboot: 'Reboot Kiosk Display', shutdown: 'Shut Down Kiosk Display',
+        screenshot: 'Kiosk Screenshot', update_software: 'Update Kiosk Software',
+        restart_browser: 'Restart Kiosk Browser',
+      }
+      await audit(AUDIT[command] || 'Kiosk Command', d,
         `${COMMAND_TEXT[command]} requested for ${displayName(d)}.`)
-      announce(`${COMMAND_TEXT[command]} sent to ${displayName(d)}. It happens at the display's next check-in, within about a minute${command === 'shutdown' ? '. It will need its power unplugged and plugged back in to start again' : ''}.`)
+      const EXTRA = {
+        shutdown: '. It will need its power unplugged and plugged back in to start again',
+        screenshot: '. The picture appears below the display when it arrives',
+        update_software: '. Installing takes 2–5 minutes; the screen restarts once',
+      }
+      announce(`${COMMAND_TEXT[command]} sent to ${displayName(d)}. It happens at the display's next check-in, within about a minute${EXTRA[command] || ''}.`)
       fetchDevices()
     } catch (err) {
       announce(`${COMMAND_TEXT[command]} not sent: ${err?.message || 'unknown error'}`, false)
@@ -320,6 +382,34 @@ export default function KioskDisplayStatus() {
     }
   }
 
+  const saveScreenSettings = async (d, mode, rotate) => {
+    setBusy(`${d.device_name}:screen`)
+    try {
+      const rows = mustData(await supabase
+        .from('kiosk_devices')
+        .update({
+          screen_mode_requested: mode || null,
+          screen_rotate_requested: rotate || null,
+          screen_settings_changed_at: new Date().toISOString(),
+          screen_settings_changed_by: userName,
+        })
+        .eq('device_name', d.device_name)
+        .select('device_name'), 'kiosk_devices.update')
+      if (!rows || rows.length === 0) throw new Error('You do not have permission to control displays.')
+      const parts = [
+        mode ? `resolution ${mode === 'auto' ? "the TV's choice" : fmtMode(mode)}` : 'resolution unchanged',
+        rotate ? `rotation ${ROTATE_TEXT[rotate].toLowerCase()}` : 'rotation unchanged',
+      ]
+      await audit('Kiosk Screen Settings', d, `${displayName(d)}: ${parts.join(', ')}.`)
+      announce(`Screen settings saved for ${displayName(d)} (${parts.join(', ')}). They apply at its next check-in, within about a minute.`)
+      fetchDevices()
+    } catch (err) {
+      announce(`Screen settings not saved: ${err?.message || 'unknown error'}`, false)
+    } finally {
+      setBusy('')
+    }
+  }
+
   const bulkAction = async (action) => {
     const list = devices || []
     if (list.length === 0) return
@@ -378,6 +468,7 @@ export default function KioskDisplayStatus() {
     const { device, action } = confirm
     if (action === 'shutdown_all') bulkAction('shutdown')
     else if (action === 'remove') removeDevice(device)
+    else if (action === 'update_software') { setConfirm(null); queueCommand(device, 'update_software') }
     else { setConfirm(null); queueCommand(device, action) }
   }
 
@@ -393,6 +484,10 @@ export default function KioskDisplayStatus() {
     shutdown_all: {
       title: 'Shut down every display?', label: 'Shut down all', variant: 'danger',
       body: () => <>Shut down all <strong>{(devices || []).length}</strong> display{(devices || []).length === 1 ? '' : 's'}? Each powers off at its next check-in. <strong>They can't be turned back on from here</strong> — each needs its power unplugged and plugged back in (or its smart plug switched off and on). Displays that are already off will ignore this.</>,
+    },
+    update_software: {
+      title: 'Update this display\'s software?', label: 'Update software', variant: 'primary',
+      body: (d) => <>Download the latest kiosk software for <strong>{displayName(d)}</strong> from the CMMS GitHub repository and install it? It starts at the display's next check-in and takes 2–5 minutes. The screen goes dark once for about a minute while it restarts; the Pi does not reboot. Its token, page and screen settings are kept.</>,
     },
     remove: {
       title: 'Remove this display?', label: 'Remove display', variant: 'danger',
@@ -527,6 +622,7 @@ export default function KioskDisplayStatus() {
                       {pageName(d.page_url)}
                       {d.model ? ` · ${d.model.replace(/^Raspberry Pi /, 'Pi ').replace(/ Rev [\d.]+$/, '')}` : ''}
                       {d.ip_address ? ` · ${d.ip_address}` : ''}
+                      {d.script_version ? ` · software ${d.script_version}` : ''}
                     </p>
                   </div>
                   <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-full border ${badge.cls}`}>
@@ -557,11 +653,17 @@ export default function KioskDisplayStatus() {
                 )}
 
                 <dl className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-xs">
-                  <div><dt className="text-surface-500">Temperature</dt><dd className="text-surface-900">{d.cpu_temp_c != null ? `${d.cpu_temp_c} °C` : '—'}</dd></div>
+                  <div><dt className="text-surface-500">Temperature</dt><dd className="text-surface-900">{fmtTemp(d.cpu_temp_c)}</dd></div>
                   <div><dt className="text-surface-500">Free memory</dt><dd className="text-surface-900">{d.mem_free_mb != null ? `${d.mem_free_mb} MB` : '—'}</dd></div>
                   <div><dt className="text-surface-500">Pi running for</dt><dd className="text-surface-900">{duration(d.uptime_sec) || '—'}</dd></div>
                   <div><dt className="text-surface-500">Browser restarts</dt><dd className="text-surface-900">{d.browser_restarts ?? '—'}{d.browser_uptime_sec != null ? ` (up ${duration(d.browser_uptime_sec)})` : ''}</dd></div>
                 </dl>
+
+                <ScreenPanel d={d} busy={isBusy('screen')} disabled={anyBusy || !!bulk}
+                  onSave={(mode, rotate) => saveScreenSettings(d, mode, rotate)}
+                  displayName={displayName(d)} now={now} />
+
+                <ScreenshotPanel d={d} displayName={displayName(d)} now={now} />
 
                 {d.pending_command ? (
                   <p className="mt-2 text-xs text-surface-700 flex flex-wrap items-center gap-2">
@@ -592,6 +694,13 @@ export default function KioskDisplayStatus() {
                     {d.screen_blanked ? 'Show screen' : 'Blank screen'}
                   </button>
                   <button type="button" className={btnNeutral}
+                    onClick={() => queueCommand(d, 'screenshot')}
+                    disabled={anyBusy || !!bulk || !!d.pending_command || !!d.screen_blanked}
+                    aria-label={`Take a screenshot of what ${displayName(d)} is showing`}>
+                    {isBusy('screenshot') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Camera size={16} aria-hidden="true" />}
+                    Screenshot
+                  </button>
+                  <button type="button" className={btnNeutral}
                     onClick={() => queueCommand(d, 'restart_browser')}
                     disabled={anyBusy || !!bulk || !!d.pending_command || !!d.screen_blanked}
                     aria-label={`Restart the browser on ${displayName(d)}`}>
@@ -604,6 +713,13 @@ export default function KioskDisplayStatus() {
                     aria-label={`Reboot ${displayName(d)}`}>
                     {isBusy('reboot') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Power size={16} aria-hidden="true" />}
                     Reboot Pi
+                  </button>
+                  <button type="button" className={btnNeutral}
+                    onClick={() => setConfirm({ device: d, action: 'update_software' })}
+                    disabled={anyBusy || !!bulk || !!d.pending_command}
+                    aria-label={`Update the kiosk software on ${displayName(d)}`}>
+                    {isBusy('update_software') ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Download size={16} aria-hidden="true" />}
+                    Update software
                   </button>
                   <button type="button" className={btnDanger}
                     onClick={() => setConfirm({ device: d, action: 'shutdown' })}
@@ -648,6 +764,154 @@ export default function KioskDisplayStatus() {
         onClose={() => setConfirm(null)}
       />
     </div>
+  )
+}
+
+// ── Screen settings: what the Pi reports + resolution / rotation picker ────
+function ScreenPanel({ d, busy, disabled, onSave, displayName, now }) {
+  const si = d.screen_info
+  const [mode, setMode] = useState(d.screen_mode_requested || '')
+  const [rotate, setRotate] = useState(d.screen_rotate_requested || '')
+  const baseId = `kiosk-screen-${d.device_name}`
+
+  // Follow changes made elsewhere (another instructor, realtime)
+  useEffect(() => { setMode(d.screen_mode_requested || '') }, [d.screen_mode_requested])
+  useEffect(() => { setRotate(d.screen_rotate_requested || '') }, [d.screen_rotate_requested])
+
+  if (!si) {
+    return (
+      <p className="mt-2 text-xs text-surface-600">
+        Screen details appear after this display's software is updated (Update software).
+      </p>
+    )
+  }
+
+  const modes = Array.isArray(si.modes) ? si.modes : []
+  const changed = mode !== (d.screen_mode_requested || '') || rotate !== (d.screen_rotate_requested || '')
+  const wantMode = d.screen_mode_requested === 'auto' ? si.preferred : d.screen_mode_requested
+  const pending = (wantMode && si.mode && wantMode !== si.mode && !si.error)
+    || (d.screen_rotate_requested && si.rotate && d.screen_rotate_requested !== si.rotate && !si.error)
+  const selectCls = 'px-3 py-2 min-h-[44px] text-sm border border-surface-300 rounded-lg bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500'
+
+  return (
+    <details className="mt-2 group">
+      <summary className="inline-flex items-center gap-1.5 min-h-[44px] cursor-pointer text-sm text-surface-800 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 px-1">
+        <ChevronRight size={14} className="transition-transform group-open:rotate-90" aria-hidden="true" />
+        <SlidersHorizontal size={14} aria-hidden="true" />
+        <span>
+          Screen:{' '}
+          {si.connected === false ? 'no TV detected'
+            : <>{si.tv_name ? `${si.tv_name} · ` : ''}{fmtMode(si.mode) || 'unknown'}{si.rate ? ` at ${Math.round(Number(si.rate))} Hz` : ''}{si.rotate && si.rotate !== 'normal' ? ` · ${ROTATE_TEXT[si.rotate]?.toLowerCase()}` : ''}</>}
+          {pending && <span className="text-surface-600"> — change waiting for next check-in</span>}
+        </span>
+      </summary>
+      <div className="mt-2 pl-6 space-y-2">
+        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1 text-xs">
+          <div><dt className="text-surface-500">TV (as it reports itself)</dt><dd className="text-surface-900">{si.tv_name || 'Not reported'}</dd></div>
+          <div><dt className="text-surface-500">TV's preferred</dt><dd className="text-surface-900">{fmtMode(si.preferred) || '—'}</dd></div>
+          <div><dt className="text-surface-500">Colour setting</dt><dd className="text-surface-900">{si.colour_ok == null ? '—' : si.colour_ok ? 'Normal' : 'Wrong (black) — resetting'}</dd></div>
+          <div><dt className="text-surface-500">HDMI output</dt><dd className="text-surface-900">{si.output || '—'}{si.connected === false ? ' (nothing connected)' : ''}</dd></div>
+        </dl>
+        <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); onSave(mode, rotate) }}>
+          <div className="flex flex-col">
+            <label htmlFor={`${baseId}-mode`} className="text-xs text-surface-600">Resolution</label>
+            <select id={`${baseId}-mode`} className={selectCls} value={mode} onChange={(e) => setMode(e.target.value)} disabled={disabled}>
+              <option value="">No change (Pi's own setting)</option>
+              <option value="auto">TV's choice{si.preferred ? ` (${fmtMode(si.preferred)})` : ''}</option>
+              {modes.map(m => <option key={m} value={m}>{fmtMode(m)}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-col">
+            <label htmlFor={`${baseId}-rot`} className="text-xs text-surface-600">Rotation</label>
+            <select id={`${baseId}-rot`} className={selectCls} value={rotate} onChange={(e) => setRotate(e.target.value)} disabled={disabled}>
+              <option value="">No change</option>
+              {Object.entries(ROTATE_TEXT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+          <button type="submit" disabled={disabled || !changed}
+            className={`${btn} border-brand-600 bg-brand-600 text-white hover:bg-brand-700`}
+            aria-label={`Apply screen settings to ${displayName}`}>
+            {busy ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Check size={16} aria-hidden="true" />}
+            Apply
+          </button>
+        </form>
+        <p className="text-xs text-surface-600">
+          Applies at the next check-in (within a minute); the browser restarts to fit the new size.
+          If the TV goes black, pick another resolution here — nothing needs touching at the TV.
+          {d.screen_settings_changed_by && d.screen_settings_changed_at
+            ? ` Last changed by ${d.screen_settings_changed_by} ${ago(ageSeconds(d.screen_settings_changed_at, now))}.` : ''}
+        </p>
+      </div>
+    </details>
+  )
+}
+
+// ── Latest screenshot (what the browser is drawing) ─────────────────────────
+function ScreenshotPanel({ d, displayName, now }) {
+  const [open, setOpen] = useState(false)
+  const [img, setImg] = useState(null)      // { src, taken_at }
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const takenAt = d.screenshot_taken_at
+
+  // Open automatically when a new screenshot arrives after the page loaded
+  const firstTakenAt = useRef(takenAt)
+  useEffect(() => {
+    if (takenAt && takenAt !== firstTakenAt.current) setOpen(true)
+  }, [takenAt])
+
+  useEffect(() => {
+    if (!open || !takenAt) return
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      try {
+        const row = mustData(await supabase
+          .from('kiosk_screenshots')
+          .select('jpeg_b64, taken_at')
+          .eq('device_name', d.device_name)
+          .maybeSingle(), 'kiosk_screenshots.select')
+        if (!cancelled) {
+          setImg(row ? { src: `data:image/jpeg;base64,${row.jpeg_b64}`, taken_at: row.taken_at } : null)
+          setError('')
+        }
+      } catch (e) {
+        if (!cancelled) setError(e?.message || 'Could not load the screenshot')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, takenAt, d.device_name])
+
+  if (!takenAt) return null
+  return (
+    <details className="mt-1 group" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="inline-flex items-center gap-1.5 min-h-[44px] cursor-pointer text-sm text-surface-800 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 px-1">
+        <ChevronRight size={14} className="transition-transform group-open:rotate-90" aria-hidden="true" />
+        <Camera size={14} aria-hidden="true" />
+        Latest screenshot <span className="text-surface-600">· taken {ago(ageSeconds(takenAt, now))}</span>
+      </summary>
+      <div className="mt-2 pl-6">
+        {loading && !img && (
+          <p className="text-xs text-surface-600 flex items-center gap-1.5">
+            <Loader2 size={13} className="animate-spin" aria-hidden="true" /> Loading screenshot…
+          </p>
+        )}
+        {error && <p className="text-xs text-red-700" role="alert">{error}</p>}
+        {img && (
+          <figure>
+            <img src={img.src}
+              alt={`Screenshot of what the browser on ${displayName} was drawing, taken ${ago(ageSeconds(img.taken_at, now))}`}
+              className="max-w-full sm:max-w-xl rounded border border-surface-300" />
+            <figcaption className="mt-1 text-xs text-surface-600">
+              This is what the browser draws. If this looks right but the TV is black, the problem is
+              between the Pi and the TV (signal, resolution, or the TV's input) rather than the page.
+            </figcaption>
+          </figure>
+        )}
+      </div>
+    </details>
   )
 }
 
